@@ -19,14 +19,12 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 import java.util.List;
 
 /**
- * <pre>
  * Provides an API for retrieving statistics related to PostgreSQL queries.
- *
+ * <p>
  * This interface defines a contract for fetching structured information about
  * database queries, enabling insights into the performance and characteristics
  * of query execution. Specifically, it supports retrieving data such as the
  * slowest queries executed in the database.
- * </pre>
  */
 public interface PostgresqlQueryStatisticsApi {
 

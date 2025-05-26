@@ -23,13 +23,12 @@ import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
-import dk.trustworks.essentials.shared.security.EssentialsSecurityRoles;
 
 import java.util.List;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasAnyEssentialsSecurityRoles;
-import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasEssentialsSecurityRole;
 
 /**
  * Default implementation of the {@link DBFencedLockApi} interface, providing methods for managing
@@ -50,9 +49,9 @@ public class DefaultDBFencedLockApi implements DBFencedLockApi {
     private final UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory;
 
     public DefaultDBFencedLockApi(EssentialsSecurityProvider securityProvider, DBFencedLockManager<? extends UnitOfWork, DBFencedLock> fencedLockManager, UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory) {
-        this.securityProvider = securityProvider;
-        this.fencedLockManager = fencedLockManager;
-        this.unitOfWorkFactory = unitOfWorkFactory;
+        this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
+        this.fencedLockManager = requireNonNull(fencedLockManager, "fencedLockManager must not be null");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
     }
 
     private void validateLockReaderRole(Object principal) {

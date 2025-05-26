@@ -19,19 +19,17 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.QueryStatistics;
 
 /**
- * <pre>
  * Represents statistics for a specific database query in an API context.
- *
+ * <p>
  * This record encapsulates details about a query, including:
  * - The query string itself.
  * - The total execution time spent on the query.
  * - The number of times the query was executed.
  * - The average execution time per query call.
- *
+ * <p>
  * The {@link #from(QueryStatistics)} method allows conversion from a
  * {@code QueryStatistics} object, providing a bridge between a domain-specific
  * representation of query statistics and the API layer.
- * </pre>
  */
 public record ApiQueryStatistics(
         String query,

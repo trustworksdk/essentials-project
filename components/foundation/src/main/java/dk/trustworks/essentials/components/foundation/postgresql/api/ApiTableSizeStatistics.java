@@ -19,18 +19,16 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.TableSizeStatistics;
 
 /**
- * <pre>
  * Represents statistics about the size of a database table in an API context.
- *
+ * <p>
  * This record provides the total size, table size, and index size as human-readable
  * strings, encapsulating critical storage statistics for a database table. The size
  * values are typically expressed in units such as "MB" or "GB", making them
  * comprehensible for display and reporting purposes.
- *
+ * <p>
  * The {@link #from(TableSizeStatistics)} method enables conversion from a
  * {@code TableSizeStatistics} object, facilitating the mapping from a domain-specific
  * representation of table size statistics to this API-focused record.
- * </pre>
  */
 public record ApiTableSizeStatistics(
         String totalSize,

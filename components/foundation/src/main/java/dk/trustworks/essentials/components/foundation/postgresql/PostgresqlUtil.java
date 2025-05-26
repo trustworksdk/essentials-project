@@ -65,6 +65,7 @@ public final class PostgresqlUtil {
     }
 
     public static boolean isPGExtensionNotLoadedException(Exception e) {
+        requireNonNull(e, "No exception provided");
         Throwable rootCause = Exceptions.getRootCause(e);
         return rootCause instanceof PSQLException && rootCause.getMessage() != null && rootCause.getMessage().contains("must be loaded via \"shared_preload_libraries\"");
     }

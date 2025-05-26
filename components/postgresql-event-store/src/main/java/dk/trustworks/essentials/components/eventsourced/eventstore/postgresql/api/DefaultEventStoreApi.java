@@ -25,6 +25,7 @@ import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import java.util.List;
 import java.util.Optional;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.ESSENTIALS_ADMIN;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.SUBSCRIPTION_READER;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasAnyEssentialsSecurityRoles;
@@ -44,9 +45,9 @@ public class DefaultEventStoreApi implements EventStoreApi {
     public DefaultEventStoreApi(EssentialsSecurityProvider essentialsSecurityProvider,
                                 EventStore eventStore,
                                 DurableSubscriptionRepository durableSubscriptionRepository) {
-        this.essentialsSecurityProvider = essentialsSecurityProvider;
-        this.eventStore = eventStore;
-        this.durableSubscriptionRepository = durableSubscriptionRepository;
+        this.essentialsSecurityProvider = requireNonNull(essentialsSecurityProvider, "EssentialsSecurityProvider must not be null");
+        this.eventStore = requireNonNull(eventStore, "EventStore must not be null");
+        this.durableSubscriptionRepository =requireNonNull(durableSubscriptionRepository, "DurableSubscriptionRepository must not be null");
     }
 
     private void validateSubscriptionReaderRoles(Object principal) {

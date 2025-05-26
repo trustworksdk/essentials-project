@@ -32,9 +32,9 @@ import java.time.OffsetDateTime;
 public interface QueuedStatisticsMessage {
 
     /**
-     * The unique queue entry id for this message
+     * Retrieves the unique identifier of the message in the queue.
      *
-     * @return
+     * @return the unique {@link QueueEntryId} associated with the message
      */
     QueueEntryId getId();
 

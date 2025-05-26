@@ -20,13 +20,13 @@ import dk.trustworks.essentials.components.foundation.postgresql.stats.TableCach
 
 /**
  * Represents the cache hit ratio for a table in an API context.
- *
+ * <p>
  * This record encapsulates the cache hit ratio as a metric indicating the
  * efficiency of a table's caching mechanism. A higher cache hit ratio
  * suggests that more queries are resolved using cached data rather than
  * requiring retrieval from the underlying storage system, which improves
  * performance.
- *
+ * <p>
  * The {@link #from(TableCacheHitRatio)} method allows conversion from a
  * {@code TableCacheHitRatio} object, serving as a bridge between domain-specific
  * statistics and the API layer representation.

@@ -17,14 +17,12 @@
 package dk.trustworks.essentials.components.foundation.postgresql.stats;
 
 /**
- * <pre>
  * Represents statistics about the size of a database table, including total size, table size,
  * and index size. These size values are typically reported as human-readable strings (e.g.,
  * "10 MB", "5 GB").
- *
+ * <p>
  * This record is intended for use in PostgreSQL database systems or any database system
  * where table and index size statistics might be queried and reported.
- *</pre>
  */
 public record TableSizeStatistics(
         String totalSize,

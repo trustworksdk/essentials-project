@@ -20,19 +20,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
 /**
- * <pre>
  * Utility class providing static helper methods related to security validation in the Essentials system.
  * This class cannot be instantiated and is designed for role-based security validations.
- *
+ * <p>
  * The primary purpose of this class is to validate that a given user (principal) has the necessary
  * security role before allowing access to certain application functionalities. The class works in
  * conjunction with the {@link EssentialsSecurityProvider} and {@link EssentialsSecurityRoles} to
  * enforce role-based access control.
- *
+ * <p>
  * Methods in this class are intended to perform checks based on the role mappings and security policies
  * defined for the application. These checks ensure reliable enforcement of access restrictions to
  * sensitive or privileged resources.
- * </pre>
  */
 public final class EssentialsSecurityValidator {
 
@@ -103,9 +101,8 @@ public final class EssentialsSecurityValidator {
     }
 
     /**
-     * <pre>
      * Checks if the given principal has the specified Essentials security role.
-     *
+     * <p>
      * This method uses the provided {@link EssentialsSecurityProvider} to validate
      * whether the principal possesses the required role by checking the role's name.
      *
@@ -114,7 +111,6 @@ public final class EssentialsSecurityValidator {
      * @param role The required security role to verify against the principal. Must not be null.
      * @return {@code true} if the principal has the specified role, {@code false} otherwise.
      * @throws IllegalArgumentException If any of the parameters are null.
-     * </pre>
      */
     public static boolean hasEssentialsSecurityRole(EssentialsSecurityProvider securityProvider, Object principal, EssentialsSecurityRoles role) {
         requireNonNull(securityProvider, "The securityProvider cannot be null");

@@ -23,13 +23,10 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import java.time.OffsetDateTime;
 
 /**
- * <pre>
  * Represents a subscription to an aggregate type for a specific subscriber.
  * This class encapsulates the details of a subscription, including the unique subscriber ID,
  * the type of aggregate being subscribed to, the current global order of the subscription,
  * and the last time the subscription was updated.
- *
- * </pre>
  *
  * @param subscriberId        Unique identifier for the subscriber.
  * @param aggregateType       The type of aggregate being subscribed to.

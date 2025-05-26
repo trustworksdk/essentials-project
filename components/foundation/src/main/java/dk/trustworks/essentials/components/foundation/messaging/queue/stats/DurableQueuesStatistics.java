@@ -23,11 +23,9 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.stats.Queu
 import java.util.Optional;
 
 /**
- * <pre>
  * Provides methods to retrieve statistical information for durable queues and their messages.
  * This interface is designed to query queue-level and message-level statistics, enabling insights
  * into the operation and performance of queues and their contents.
- * </pre>
  */
 public interface DurableQueuesStatistics {
 

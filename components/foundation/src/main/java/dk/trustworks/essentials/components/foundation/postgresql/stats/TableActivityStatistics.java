@@ -17,16 +17,14 @@
 package dk.trustworks.essentials.components.foundation.postgresql.stats;
 
 /**
- * <pre>
  * Represents activity statistics for a database table.
- *
+ * <p>
  * These statistics typically include various metrics related
  * to sequential scans, index scans, tuple operations (inserts, updates, deletes),
  * and data fetching within a PostgreSQL table.
- *
+ * <p>
  * This record is intended for use in monitoring or analyzing
  * database table activity.
- * </pre>
  */
 public record TableActivityStatistics(
         long seq_scan,

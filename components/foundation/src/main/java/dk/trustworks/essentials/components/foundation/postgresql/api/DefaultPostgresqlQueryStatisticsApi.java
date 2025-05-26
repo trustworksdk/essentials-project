@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.stats.QueryStat
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
+import dk.trustworks.essentials.shared.FailFast;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityRoles;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityValidator;
@@ -29,32 +30,31 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.ESSENTIALS_ADMIN;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.POSTGRESQL_STATS_READER;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.hasAnyEssentialsSecurityRoles;
 
 /**
- * <pre>
  * Default implementation of the {@link PostgresqlQueryStatisticsApi} interface for retrieving PostgreSQL query statistics.
  * This class provides functionality to fetch performance data of SQL queries executed in a PostgreSQL database,
  * including support for the `pg_stat_statements` extension.
- *
+ * <p>
  * The implementation attempts to initialize the `pg_stat_statements` extension and determine
  * its availability on the target database during construction.
- * </pre>
  */
 public class DefaultPostgresqlQueryStatisticsApi implements PostgresqlQueryStatisticsApi {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultPostgresqlQueryStatisticsApi.class);
 
-    private final EssentialsSecurityProvider securityProvider;
+    private final EssentialsSecurityProvider                                    securityProvider;
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private boolean                                                             pgStatementsAvailable;
 
     public DefaultPostgresqlQueryStatisticsApi(EssentialsSecurityProvider securityProvider,
                                                HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
-        this.securityProvider = securityProvider;
-        this.unitOfWorkFactory = unitOfWorkFactory;
+        this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
 
         tryAndCreatePgStatementsExtension();
         unitOfWorkFactory.usingUnitOfWork(uow -> {

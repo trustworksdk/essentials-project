@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasAnyEssentialsSecurityRoles;
 
@@ -49,9 +50,9 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
     public DefaultPostgresqlEventStoreStatisticsApi(EssentialsSecurityProvider securityProvider,
                                                     HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                     Set<String> aggregateTableNames) {
-        this.securityProvider = securityProvider;
-        this.unitOfWorkFactory = unitOfWorkFactory;
-        this.aggregateTableNames = aggregateTableNames;
+        this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
+        this.aggregateTableNames = requireNonNull(aggregateTableNames, "aggregateTableNames must not be null");
     }
 
     private void validateRoles(Object principal) {

@@ -19,17 +19,15 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.TableActivityStatistics;
 
 /**
- * <pre>
  * Represents activity statistics for a database table in an API context.
- *
+ * <p>
  * This record encapsulates various metrics related to the activity of a database
  * table, including sequential scans, index scans, and tuple (row) operations
  * such as inserts, updates, and deletes.
- *
+ * <p>
  * The {@link #from(TableActivityStatistics)} method enables conversion from
  * a {@code TableActivityStatistics} object, providing a bridge between the
  * domain-specific representation of table activity statistics and the API layer.
- * </pre>
  */
 public record ApiTableActivityStatistics(
         long seq_scan,

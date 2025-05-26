@@ -17,19 +17,17 @@
 package dk.trustworks.essentials.components.foundation.postgresql.stats;
 
 /**
- * <pre>
  * Represents statistics for specific database queries.
- *
+ * <p>
  * This record includes details about individual database queries, such as:
  * - The query string itself.
  * - The total execution time for the query.
  * - The number of times the query was called.
  * - The mean time per execution of the query.
- *
+ * <p>
  * This structure is intended for use in monitoring and analyzing query
  * performance in a PostgreSQL database, particularly in scenarios
  * where `pg_stat_statements` or other query tracking tools are utilized.
- * </pre>
  */
 public record QueryStatistics(
         String query,

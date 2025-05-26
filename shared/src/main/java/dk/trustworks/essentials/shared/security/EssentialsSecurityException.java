@@ -17,20 +17,18 @@
 package dk.trustworks.essentials.shared.security;
 
 /**
- * <pre>
  * EssentialsSecurityException represents a custom unchecked exception used within
  * the Essentials application to indicate and handle security-related errors.
- *
+ * <p>
  * This exception is typically thrown when there's a violation of security policies
  * or when access to restricted resources is denied due to insufficient permissions.
  * It serves as a useful way to manage and propagate security-specific errors across the
  * application, ensuring they can be handled appropriately.
- *
+ * <p>
  * Usage of this exception aligns with the security context established by Essentials,
  * such as roles defined in EssentialsSecurityRoles or access control mechanisms
  * provided by EssentialsSecurityProvider. It encapsulates an error message
  * describing the specific security violation.
- * </pre>
  */
 public class EssentialsSecurityException extends RuntimeException {
     public EssentialsSecurityException(String message) {

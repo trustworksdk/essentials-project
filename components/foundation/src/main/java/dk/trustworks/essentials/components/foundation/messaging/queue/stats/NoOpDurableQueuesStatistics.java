@@ -22,14 +22,12 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
 import java.util.Optional;
 
 /**
- * <pre>
  * A no-op implementation of the {@link DurableQueuesStatistics} interface.
  * This class provides stub methods that do not perform any actual operations or retrieve
  * any statistics. All methods return empty {@link Optional} instances.
  *
  * This implementation can be used as a placeholder or default implementation where queue
  * statistics are not required or applicable.
- * </pre>
  */
 public class NoOpDurableQueuesStatistics implements DurableQueuesStatistics {
 

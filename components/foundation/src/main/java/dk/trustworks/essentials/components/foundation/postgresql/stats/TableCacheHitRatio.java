@@ -17,15 +17,13 @@
 package dk.trustworks.essentials.components.foundation.postgresql.stats;
 
 /**
- * <pre>
  * Represents the cache hit ratio for a database table.
- *
+ * <p>
  * The cache hit ratio is a measurement indicating how often database queries
  * are resolved using cached data rather than needing to retrieve data from
  * the underlying storage system. Higher values suggest better cache efficiency.
- *
+ * <p>
  * This record is useful in database performance monitoring or analysis
  * to evaluate the effectiveness of caching mechanisms in a PostgreSQL system.
- * </pre>
  */
 public record TableCacheHitRatio(long cacheHitRatio) {}

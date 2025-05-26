@@ -32,26 +32,26 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.*;
 
 /**
- * <pre>
  * DefaultDurableQueuesApi is the default implementation of the DurableQueuesApi interface.
  * It provides methods for managing durable queues, handling messages,
  * retrieving queue statistics, and performing operations on dead-letter queues.
- *
+ * <p>
  * This implementation includes role-based validation to ensure proper access control
  * for queue readers and writers. Messages and queues can be queried, marked as dead letters,
  * deleted, or purged based on the principal's permissions.
- *
+ * <p>
  * Constructor Details:
  * The class requires the following dependencies:
  * - EssentialsSecurityProvider for access control and role validation.
  * - DurableQueues to interact with the underlying queue mechanism.
  * - JSONSerializer for serializing message payloads.
  * - DurableQueuesStatistics (optional) for retrieving queue statistics.
- *
+ * <p>
  * Method Overview:
  * - getQueueNames: Retrieves the set of all queue names, ensuring the principal has reader access.
  * - getQueueNameFor: Finds the queue name for a specific queue entry ID, validating reader access.
@@ -65,8 +65,6 @@ import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidat
  * - getDeadLetterMessages: Retrieves a paginated list of dead-letter messages for a queue.
  * - purgeQueue: Purges all messages from the specified queue.
  * - getQueuedStatistics: Retrieves statistics for a specific queue, if statistics are available.
- *
- * </pre>
  */
 public class DefaultDurableQueuesApi implements DurableQueuesApi {
 
@@ -79,10 +77,10 @@ public class DefaultDurableQueuesApi implements DurableQueuesApi {
                                    DurableQueues durableQueues,
                                    JSONSerializer jsonSerializer,
                                    @Autowired(required = false) @Nullable DurableQueuesStatistics durableQueuesStatistics) {
-        this.securityProvider = securityProvider;
-        this.durableQueues = durableQueues;
+        this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
+        this.durableQueues = requireNonNull(durableQueues, "durableQueues must not be null");
         this.durableQueuesStatistics = durableQueuesStatistics;
-        this.jsonSerializer = jsonSerializer;
+        this.jsonSerializer = requireNonNull(jsonSerializer, "jsonSerializer must not be null");
     }
 
     private void validateQueueReaderRole(Object principal) {

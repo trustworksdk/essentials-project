@@ -17,19 +17,17 @@
 package dk.trustworks.essentials.shared.security;
 
 /**
- * <pre>
  * Represents a set of predefined security roles used within the Essentials system.
- *
+ * <p>
  * These roles are utilized to enforce access control and permissions in various parts
  * of the application by assigning specific roles to users and verifying their access
  * to protected resources. The roles defined in this enumeration help categorize and
  * manage different levels of access, enabling fine-grained control over system operations.
- *
+ * <p>
  * Each role corresponds to a specific function or area of the system, such as
  * administration, lock management, queue operations, subscription handling, PostgreSQL
  * statistics, and scheduler management. These roles enable integration with role-based
  * access control mechanisms implemented in the application security layer.
- * </pre>
  */
 public enum EssentialsSecurityRoles {
 
