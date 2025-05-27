@@ -22,6 +22,8 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 
 import java.time.OffsetDateTime;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Represents a subscription to an aggregate type for a specific subscriber.
  * This class encapsulates the details of a subscription, including the unique subscriber ID,
@@ -41,6 +43,7 @@ public record ApiSubscription(
 ) {
 
     public static ApiSubscription from(SubscriptionResumePoint subscriptionResumePoint) {
+        requireNonNull(subscriptionResumePoint, "No subscriptionResumePoint provided");
         return new ApiSubscription(
                 subscriptionResumePoint.getSubscriberId(),
                 subscriptionResumePoint.getAggregateType(),

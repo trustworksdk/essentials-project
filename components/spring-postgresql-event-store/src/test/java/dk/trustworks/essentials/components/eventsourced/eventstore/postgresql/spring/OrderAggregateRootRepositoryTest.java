@@ -28,8 +28,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.test_data.Order;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.test_data.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.test_data.Order;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;

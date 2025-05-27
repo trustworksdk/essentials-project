@@ -19,20 +19,14 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.postgresql.stats.QueryStatistics;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
-import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
-import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
-import dk.trustworks.essentials.shared.FailFast;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
-import dk.trustworks.essentials.shared.security.EssentialsSecurityRoles;
-import dk.trustworks.essentials.shared.security.EssentialsSecurityValidator;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.slf4j.*;
 
 import java.util.List;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.ESSENTIALS_ADMIN;
-import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.POSTGRESQL_STATS_READER;
+import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.hasAnyEssentialsSecurityRoles;
 
 /**

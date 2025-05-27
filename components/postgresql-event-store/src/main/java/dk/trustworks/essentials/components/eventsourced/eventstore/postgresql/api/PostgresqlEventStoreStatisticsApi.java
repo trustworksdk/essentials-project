@@ -16,9 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api;
 
-import dk.trustworks.essentials.components.foundation.postgresql.api.ApiTableActivityStatistics;
-import dk.trustworks.essentials.components.foundation.postgresql.api.ApiTableCacheHitRatio;
-import dk.trustworks.essentials.components.foundation.postgresql.api.ApiTableSizeStatistics;
+import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 
 import java.util.Map;
 
@@ -39,6 +37,7 @@ public interface PostgresqlEventStoreStatisticsApi {
      *                  typically representing the authenticated user or system performing the action
      * @return a map where the key is the table name and the value is an {@code ApiTableSizeStatistics}
      *         object containing size details for each table
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
      */
     Map<String, ApiTableSizeStatistics> fetchTableSizeStatistics(Object principal);
 
@@ -52,6 +51,7 @@ public interface PostgresqlEventStoreStatisticsApi {
      *                  typically representing the authenticated user or system performing the action
      * @return a map where the key is the table name and the value is an {@code ApiTableActivityStatistics}
      *         object containing activity details for each table
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
      */
     Map<String, ApiTableActivityStatistics> fetchTableActivityStatistics(Object principal);
 
@@ -67,6 +67,7 @@ public interface PostgresqlEventStoreStatisticsApi {
      * @return a map where the key is the table name and the value is an
      *         {@code ApiTableCacheHitRatio} object containing cache hit ratio
      *         details for each table
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
      */
     Map<String, ApiTableCacheHitRatio> fetchTableCacheHitRatio(Object principal);
 

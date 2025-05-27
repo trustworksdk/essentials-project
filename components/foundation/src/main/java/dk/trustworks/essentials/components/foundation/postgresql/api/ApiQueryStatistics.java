@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 
 import dk.trustworks.essentials.components.foundation.postgresql.stats.QueryStatistics;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Represents statistics for a specific database query in an API context.
  * <p>
@@ -39,6 +41,7 @@ public record ApiQueryStatistics(
 ) {
 
     public static ApiQueryStatistics from(QueryStatistics queryStats) {
+        requireNonNull(queryStats, "queryStats must not be null");
         return new ApiQueryStatistics(queryStats.query(),
                 queryStats.totalTime(),
                 queryStats.calls(),

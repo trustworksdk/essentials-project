@@ -19,8 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.a
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 /**
  * EventStoreApi serves as an interface to manage and query event store-related operations,
@@ -39,6 +38,7 @@ public interface EventStoreApi {
      *                        is being requested
      * @return an {@code Optional} containing the highest {@code GlobalEventOrder} if one exists
      *         for the specified aggregate type, or an empty {@code Optional} if no events exist
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
      */
     Optional<GlobalEventOrder> findHighestGlobalEventOrderPersisted(Object principal, AggregateType aggregateType);
 
@@ -50,6 +50,7 @@ public interface EventStoreApi {
      * @param principal the principal or identity requesting the subscriptions, typically representing
      *                  the authenticated user or system performing the action
      * @return a list of {@code ApiSubscription} objects representing all active subscriptions in the system
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
      */
     List<ApiSubscription> findAllSubscriptions(Object principal);
 }

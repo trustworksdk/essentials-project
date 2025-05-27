@@ -24,10 +24,7 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.DefaultEventStoreApi;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.DefaultPostgresqlEventStoreStatisticsApi;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.PostgresqlEventStoreStatisticsApi;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
@@ -52,7 +49,6 @@ import dk.trustworks.essentials.components.foundation.reactive.command.DurableLo
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.reactive.command.*;
-import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
@@ -401,18 +397,6 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public EssentialsSecurityProvider essentialsSecurityProvider() {
-        return new EssentialsSecurityProvider.AllAccessSecurityProvider();
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    public EssentialsAuthenticatedUser essentialsAuthenticatedUser() {
-        return new EssentialsAuthenticatedUser.AllAccessAuthenticatedUser();
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
     public EventStoreApi eventStoreApi(EssentialsSecurityProvider securityProvider,
                                        EventStore eventStore,
                                        DurableSubscriptionRepository durableSubscriptionRepository) {
@@ -427,9 +411,8 @@ public class EventStoreConfiguration {
                                                                                EventStore eventStore) {
         var postgresqlEventStore = (PostgresqlEventStore<?>)eventStore;
         var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerAggregateEventStreamTableNames();
-        var tableNames = new HashSet<>(aggregateEventStreamTableNames.values());
         return new DefaultPostgresqlEventStoreStatisticsApi(securityProvider,
                 eventStore.getUnitOfWorkFactory(),
-                tableNames);
+                aggregateEventStreamTableNames);
     }
 }

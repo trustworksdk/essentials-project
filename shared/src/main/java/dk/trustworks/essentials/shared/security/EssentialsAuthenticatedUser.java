@@ -139,9 +139,9 @@ public interface EssentialsAuthenticatedUser {
     /**
      * Checks if the user has the {@link EssentialsSecurityRoles#SCHEDULER_READER} role.
      *
-     * @return true if the user has the scheduled reader role, false otherwise.
+     * @return true if the user has the scheduler reader role, false otherwise.
      */
-    default boolean hasScheduledReaderRole() {
+    default boolean hasSchedulerReaderRole() {
         return false;
     }
 
@@ -169,7 +169,7 @@ public interface EssentialsAuthenticatedUser {
 
         @Override
         public Object getPrincipal() {
-            return "AllAccessAuthenticatedUser";
+            return "Default_AllAccess";
         }
 
         @Override
@@ -187,7 +187,7 @@ public interface EssentialsAuthenticatedUser {
 
         @Override
         public Optional<String> getPrincipalName() {
-            return Optional.of("AllAccessAuthenticatedUser");
+            return Optional.of("Default_AllAccess");
         }
 
         @Override
@@ -226,7 +226,7 @@ public interface EssentialsAuthenticatedUser {
         }
 
         @Override
-        public boolean hasScheduledReaderRole() {
+        public boolean hasSchedulerReaderRole() {
             return true;
         }
 

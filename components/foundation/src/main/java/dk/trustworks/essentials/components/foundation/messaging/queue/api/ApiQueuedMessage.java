@@ -20,6 +20,8 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
 import java.time.OffsetDateTime;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Represents a message that has been queued and its associated metadata.
  * This record provides details about the enqueued message,
@@ -48,6 +50,7 @@ public record ApiQueuedMessage(
      * @return an instance of {@link ApiQueuedMessage} containing the provided payload and metadata from the {@link QueuedMessage}
      */
     public static ApiQueuedMessage from(QueuedMessage message, String payload) {
+        requireNonNull(message, "No message provided");
         return new ApiQueuedMessage(
                 message.getId(),
                 message.getQueueName(),
@@ -80,7 +83,6 @@ public record ApiQueuedMessage(
         return "ApiQueuedMessage{" +
                 "id=" + id +
                 ", queueName=" + queueName +
-                ", payload='" + payload + '\'' +
                 ", addedTimestamp=" + addedTimestamp +
                 ", nextDeliveryTimestamp=" + nextDeliveryTimestamp +
                 ", deliveryTimestamp=" + deliveryTimestamp +

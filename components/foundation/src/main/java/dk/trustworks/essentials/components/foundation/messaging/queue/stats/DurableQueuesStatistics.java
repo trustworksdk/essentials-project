@@ -16,9 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue.stats;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueEntryId;
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.QueuedStatisticsMessage.QueueStatistics;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
 import java.util.Optional;
 

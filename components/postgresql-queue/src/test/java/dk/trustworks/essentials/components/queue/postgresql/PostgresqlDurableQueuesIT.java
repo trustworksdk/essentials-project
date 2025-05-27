@@ -18,20 +18,14 @@ package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
-import dk.trustworks.essentials.components.foundation.messaging.queue.Message;
-import dk.trustworks.essentials.components.foundation.messaging.queue.MessageMetaData;
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.DurableQueuesStatistics;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.QueuedStatisticsMessage;
+import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.types.CorrelationId;
-import dk.trustworks.essentials.components.queue.postgresql.test_data.CustomerId;
-import dk.trustworks.essentials.components.queue.postgresql.test_data.OrderEvent;
-import dk.trustworks.essentials.components.queue.postgresql.test_data.OrderId;
-import dk.trustworks.essentials.components.queue.postgresql.test_data.ProductId;
+import dk.trustworks.essentials.components.queue.postgresql.test_data.*;
 import org.assertj.core.api.AssertionsForClassTypes;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
@@ -40,8 +34,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 
 import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.createDefaultObjectMapper;
 import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
@@ -130,8 +123,8 @@ abstract class PostgresqlDurableQueuesIT extends DurableQueuesIT<PostgresqlDurab
                 .untilAsserted(() -> assertThat(recordingQueueMessageHandler.getMessages()).isNotEmpty());
 
         unitOfWorkFactory.usingUnitOfWork(() -> {
-            Optional<QueuedStatisticsMessage.QueueStatistics> queueStatistics = durableQueuesStatistics.getQueueStatistics(queueName);
-            AssertionsForClassTypes.assertThat(queueStatistics.isPresent()).isTrue();
+            Optional<QueueStatistics> queueStatistics = durableQueuesStatistics.getQueueStatistics(queueName);
+            AssertionsForClassTypes.assertThat(queueStatistics).isPresent();
         });
 
         consumer.cancel();

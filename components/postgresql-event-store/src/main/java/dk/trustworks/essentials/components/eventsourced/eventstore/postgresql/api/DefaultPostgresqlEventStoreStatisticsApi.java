@@ -16,17 +16,13 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api;
 
-import dk.trustworks.essentials.components.foundation.postgresql.api.ApiTableActivityStatistics;
-import dk.trustworks.essentials.components.foundation.postgresql.api.ApiTableCacheHitRatio;
-import dk.trustworks.essentials.components.foundation.postgresql.api.ApiTableSizeStatistics;
-import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
-import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.postgresql.api.*;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.slf4j.*;
 
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -45,14 +41,14 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
 
     private final EssentialsSecurityProvider                                    securityProvider;
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
-    private final Set<String>                                                   aggregateTableNames;
+    private final Map<AggregateType, String>                                    aggregateEventStreamTableNames;
 
     public DefaultPostgresqlEventStoreStatisticsApi(EssentialsSecurityProvider securityProvider,
                                                     HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                    Set<String> aggregateTableNames) {
+                                                    Map<AggregateType, String> aggregateEventStreamTableNames) {
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
-        this.aggregateTableNames = requireNonNull(aggregateTableNames, "aggregateTableNames must not be null");
+        this.aggregateEventStreamTableNames = requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames must not be null");
     }
 
     private void validateRoles(Object principal) {
@@ -64,7 +60,7 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
 
     @Override
     public Map<String, ApiTableSizeStatistics> fetchTableSizeStatistics(Object principal) {
-        if (aggregateTableNames.isEmpty()) {
+        if (aggregateEventStreamTableNames.isEmpty()) {
             return Map.of();
         }
         validateRoles(principal);
@@ -76,26 +72,24 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
                 FROM pg_catalog.pg_statio_user_tables
                 WHERE relname IN (<tables>)
                 """;
-        return unitOfWorkFactory.withUnitOfWork(uow -> {
-            return uow.handle().createQuery(sql)
-                    .bindList("tables", aggregateTableNames)
-                    .map((rs, ctx) -> Map.entry(
-                            rs.getString("table_name"),
-                            new ApiTableSizeStatistics(
-                                    rs.getString("total_size"),
-                                    rs.getString("table_size"),
-                                    rs.getString("index_size")
-                            )
-                    ))
-                    .list()
-                    .stream()
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        });
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql)
+                                                      .bindList("tables", aggregateEventStreamTableNames.values())
+                                                      .map((rs, ctx) -> Map.entry(
+                        rs.getString("table_name"),
+                        new ApiTableSizeStatistics(
+                                rs.getString("total_size"),
+                                rs.getString("table_size"),
+                                rs.getString("index_size")
+                        )
+                ))
+                                                      .list()
+                                                      .stream()
+                                                      .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
     }
 
     @Override
     public Map<String, ApiTableActivityStatistics> fetchTableActivityStatistics(Object principal) {
-        if (aggregateTableNames.isEmpty()) {
+        if (aggregateEventStreamTableNames.isEmpty()) {
             return Map.of();
         }
         validateRoles(principal);
@@ -112,30 +106,28 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
                 FROM pg_stat_user_tables
                 WHERE relname IN (<tables>);
                 """;
-        return unitOfWorkFactory.withUnitOfWork(uow -> {
-            return uow.handle().createQuery(sql)
-                    .bindList("tables", aggregateTableNames)
-                    .map((rs, ctx) -> Map.entry(
-                            rs.getString("table_name"),
-                            new ApiTableActivityStatistics(
-                                    rs.getLong("seq_scan"),
-                                    rs.getLong("seq_tup_read"),
-                                    rs.getLong("idx_scan"),
-                                    rs.getLong("idx_tup_fetch"),
-                                    rs.getLong("n_tup_ins"),
-                                    rs.getLong("n_tup_upd"),
-                                    rs.getLong("n_tup_del")
-                            )
-                    ))
-                    .list()
-                    .stream()
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        });
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql)
+                                                      .bindList("tables", aggregateEventStreamTableNames.values())
+                                                      .map((rs, ctx) -> Map.entry(
+                        rs.getString("table_name"),
+                        new ApiTableActivityStatistics(
+                                rs.getLong("seq_scan"),
+                                rs.getLong("seq_tup_read"),
+                                rs.getLong("idx_scan"),
+                                rs.getLong("idx_tup_fetch"),
+                                rs.getLong("n_tup_ins"),
+                                rs.getLong("n_tup_upd"),
+                                rs.getLong("n_tup_del")
+                        )
+                ))
+                                                      .list()
+                                                      .stream()
+                                                      .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
     }
 
     @Override
     public Map<String, ApiTableCacheHitRatio> fetchTableCacheHitRatio(Object principal) {
-        if (aggregateTableNames.isEmpty()) {
+        if (aggregateEventStreamTableNames.isEmpty()) {
             return Map.of();
         }
         validateRoles(principal);
@@ -148,19 +140,17 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
                 FROM pg_statio_user_tables
                 WHERE relname IN (<tables>);
                 """;
-        return unitOfWorkFactory.withUnitOfWork(uow -> {
-            return uow.handle().createQuery(sql)
-                    .bindList("tables", aggregateTableNames)
-                    .map((rs, ctx) -> Map.entry(
-                            rs.getString("table_name"),
-                            new ApiTableCacheHitRatio(
-                                    rs.getLong("cache_hit_ratio")
-                            )
-                    ))
-                    .list()
-                    .stream()
-                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
-        });
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql)
+                                                      .bindList("tables", aggregateEventStreamTableNames.values())
+                                                      .map((rs, ctx) -> Map.entry(
+                        rs.getString("table_name"),
+                        new ApiTableCacheHitRatio(
+                                rs.getLong("cache_hit_ratio")
+                        )
+                ))
+                                                          .list()
+                                                          .stream()
+                                                          .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
     }
 
 }

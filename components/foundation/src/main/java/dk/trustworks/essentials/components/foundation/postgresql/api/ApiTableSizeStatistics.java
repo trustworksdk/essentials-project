@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 
 import dk.trustworks.essentials.components.foundation.postgresql.stats.TableSizeStatistics;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Represents statistics about the size of a database table in an API context.
  * <p>
@@ -37,6 +39,7 @@ public record ApiTableSizeStatistics(
 ) {
 
     public static ApiTableSizeStatistics from(TableSizeStatistics tableSizeStatistics) {
+        requireNonNull(tableSizeStatistics, "tableSizeStatistics must not be null");
         return new ApiTableSizeStatistics(
                 tableSizeStatistics.totalSize(),
                 tableSizeStatistics.tableSize(),

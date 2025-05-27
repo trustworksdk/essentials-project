@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 
 import dk.trustworks.essentials.components.foundation.postgresql.stats.TableCacheHitRatio;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Represents the cache hit ratio for a table in an API context.
  * <p>
@@ -36,6 +38,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.stats.TableCach
 public record ApiTableCacheHitRatio(long cacheHitRatio) {
 
     public static ApiTableCacheHitRatio from(TableCacheHitRatio cacheHitRatio) {
+        requireNonNull(cacheHitRatio, "cacheHitRatio must not be null");
         return new ApiTableCacheHitRatio(cacheHitRatio.cacheHitRatio());
     }
 }

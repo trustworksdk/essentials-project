@@ -426,8 +426,8 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Get the name of the table that will contain all messages (across all {@link QueueName}'s)<br>
-         * Default is {@value PostgresqlDurableQueues#DEFAULT_DURABLE_QUEUES_TABLE_NAME}<br>
+         * Get the name of the table that will contain statistics for messages (across all {@link QueueName}'s)<br>
+         * Default is {@value PostgresqlDurableQueuesStatistics#DEFAULT_DURABLE_QUEUES_TABLE_NAME}<br>
          * <br>
          * <strong>Note:</strong><br>
          * To support customization of storage table name, the {@link #getSharedQueueStatisticsTableName()} will be directly used in constructing SQL statements
@@ -455,7 +455,7 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Set the name of the table that will contain all messages (across all {@link QueueName}'s)<br>
+         * Set the name of the table that will contain statistics for messages (across all {@link QueueName}'s)<br>
          * Default is {@value PostgresqlDurableQueuesStatistics#DEFAULT_DURABLE_QUEUES_TABLE_NAME}<br>
          * <br>
          * <strong>Note:</strong><br>

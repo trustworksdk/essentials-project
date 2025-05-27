@@ -5,16 +5,17 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.api.Durabl
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
+import org.springframework.boot.autoconfigure.jdbc.*;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.util.TestPropertyValues;
+import org.springframework.test.context.*;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-public class StarterAutoConfigurationTest {
+@Testcontainers
+public class StarterAutoConfigurationIT {
 
     @Container
     private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
@@ -22,8 +23,11 @@ public class StarterAutoConfigurationTest {
             .withUsername("test-user")
             .withPassword("secret-password");
 
-    static {
-        postgreSQLContainer.start();
+    @DynamicPropertySource
+    static void setProperties(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgreSQLContainer::getJdbcUrl);
+        registry.add("spring.datasource.password", postgreSQLContainer::getPassword);
+        registry.add("spring.datasource.username", postgreSQLContainer::getUsername);
     }
 
     private final ApplicationContextRunner contextRunner =
@@ -37,7 +41,7 @@ public class StarterAutoConfigurationTest {
                             "spring.datasource.url=" + postgreSQLContainer.getJdbcUrl(),
                             "spring.datasource.username=" + postgreSQLContainer.getUsername(),
                             "spring.datasource.password=" + postgreSQLContainer.getPassword()
-                    ).applyTo(ctx.getEnvironment()));
+                    ).applyTo(ctx.getEnvironment())); // needed
 
     @Test
     void verify_api_beans() {

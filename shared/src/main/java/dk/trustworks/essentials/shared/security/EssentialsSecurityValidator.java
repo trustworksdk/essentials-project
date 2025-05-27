@@ -16,8 +16,13 @@
 
 package dk.trustworks.essentials.shared.security;
 
+
+import java.util.Arrays;
+import java.util.stream.Collectors;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.FailFast.requireTrue;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Utility class providing static helper methods related to security validation in the Essentials system.
@@ -51,7 +56,7 @@ public final class EssentialsSecurityValidator {
         requireNonNull(principal, "The principal cannot be null");
         requireNonNull(role, "The role cannot be null");
         if (!securityProvider.isAllowed(principal, role.getRoleName())) {
-            throw new EssentialsSecurityException("Unauthorized access required role is missing");
+            throw new EssentialsSecurityException(msg("Unauthorized access required role is missing, expected '{}'", role.getRoleName()));
         }
     }
 
@@ -75,7 +80,7 @@ public final class EssentialsSecurityValidator {
                 return;
             }
         }
-        throw new EssentialsSecurityException("Unauthorized access required role is missing");
+        throw new EssentialsSecurityException(msg("Unauthorized access required role is missing, expected '{}'", Arrays.stream(roles).map(EssentialsSecurityRoles::getRoleName).collect(Collectors.joining(","))));
     }
 
     /**
@@ -95,7 +100,7 @@ public final class EssentialsSecurityValidator {
         requireTrue(roles.length > 0, "At least one role must be specified");
         for (EssentialsSecurityRoles role : roles) {
             if (!securityProvider.isAllowed(principal, role.getRoleName())) {
-                throw new EssentialsSecurityException("Unauthorized access required role is missing");
+                throw new EssentialsSecurityException(msg("Unauthorized access required role is missing, expected '{}'", Arrays.stream(roles).map(EssentialsSecurityRoles::getRoleName).collect(Collectors.joining(","))));
             }
         }
     }

@@ -16,14 +16,12 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue.stats;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.MessageMetaData;
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueEntryId;
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
 import java.time.OffsetDateTime;
 import java.util.Objects;
 
-import static dk.trustworks.essentials.components.foundation.messaging.queue.QueuedMessage.*;
+import static dk.trustworks.essentials.components.foundation.messaging.queue.QueuedMessage.DeliveryMode;
 
 /**
  * Represents the default implementation of the {@link QueuedStatisticsMessage} interface.

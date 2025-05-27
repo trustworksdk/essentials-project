@@ -18,6 +18,8 @@ package dk.trustworks.essentials.components.foundation.postgresql.api;
 
 import dk.trustworks.essentials.components.foundation.postgresql.stats.TableActivityStatistics;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Represents activity statistics for a database table in an API context.
  * <p>
@@ -40,6 +42,7 @@ public record ApiTableActivityStatistics(
 ) {
 
     public static ApiTableActivityStatistics from(TableActivityStatistics tableActivityStatistics) {
+        requireNonNull(tableActivityStatistics, "tableActivityStatistics must not be null");
         return new ApiTableActivityStatistics(
                 tableActivityStatistics.seq_scan(),
                 tableActivityStatistics.seq_tup_read(),

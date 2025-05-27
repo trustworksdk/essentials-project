@@ -22,12 +22,10 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.ESSENTIALS_ADMIN;
-import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.SUBSCRIPTION_READER;
+import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasAnyEssentialsSecurityRoles;
 
 /**

@@ -17,9 +17,11 @@
 package dk.trustworks.essentials.components.foundation.messaging.queue.api;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.QueuedStatisticsMessage.QueueStatistics;
+import dk.trustworks.essentials.components.foundation.messaging.queue.stats.QueueStatistics;
 
 import java.time.OffsetDateTime;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Represents statistics for messages queued in a specific durable queue.
@@ -37,6 +39,7 @@ public record ApiQueuedStatistics(
 ) {
 
     public static ApiQueuedStatistics from(QueueStatistics queueStatistics) {
+        requireNonNull(queueStatistics, "queueStatistics cannot be null");
         return new ApiQueuedStatistics(
                 queueStatistics.queueName(),
                 queueStatistics.fromTimestamp(),

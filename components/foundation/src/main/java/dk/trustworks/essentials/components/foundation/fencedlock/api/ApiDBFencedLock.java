@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.fencedlock.api;
 
-import dk.trustworks.essentials.components.foundation.fencedlock.DBFencedLock;
+import dk.trustworks.essentials.components.foundation.fencedlock.*;
 
 import java.time.OffsetDateTime;
 
@@ -26,7 +26,7 @@ import java.time.OffsetDateTime;
  * and its associated metadata.
  */
 public record ApiDBFencedLock(
-        String lockName,
+        LockName lockName,
         Long currentToken,
         String lockedByLockManagerInstanceId,
         OffsetDateTime lockAcquiredTimestamp,
@@ -40,7 +40,7 @@ public record ApiDBFencedLock(
      * @return a new {@link ApiDBFencedLock} instance created from the given {@link DBFencedLock}
      */
     public static ApiDBFencedLock from(DBFencedLock lock) {
-        return new ApiDBFencedLock(lock.getName().toString(),
+        return new ApiDBFencedLock(lock.getName(),
                 lock.getCurrentToken(),
                 lock.getLockedByLockManagerInstanceId(),
                 lock.getLockAcquiredTimestamp(),

@@ -91,7 +91,7 @@ public interface EssentialsSecurityProvider {
 
         @Override
         public Optional<String> getPrincipalName(Object principal) {
-            return Optional.of("AllAccessSecurityProvider");
+            return Optional.of("Default_AllAccess");
         }
     }
 }

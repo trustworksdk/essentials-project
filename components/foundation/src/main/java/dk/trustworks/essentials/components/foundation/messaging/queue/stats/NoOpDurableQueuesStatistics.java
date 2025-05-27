@@ -16,8 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue.stats;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueEntryId;
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 
 import java.util.Optional;
 
@@ -25,14 +24,14 @@ import java.util.Optional;
  * A no-op implementation of the {@link DurableQueuesStatistics} interface.
  * This class provides stub methods that do not perform any actual operations or retrieve
  * any statistics. All methods return empty {@link Optional} instances.
- *
+ * <p>
  * This implementation can be used as a placeholder or default implementation where queue
  * statistics are not required or applicable.
  */
 public class NoOpDurableQueuesStatistics implements DurableQueuesStatistics {
 
     @Override
-    public Optional<QueuedStatisticsMessage.QueueStatistics> getQueueStatistics(QueueName queueName) {
+    public Optional<QueueStatistics> getQueueStatistics(QueueName queueName) {
         return Optional.empty();
     }
 

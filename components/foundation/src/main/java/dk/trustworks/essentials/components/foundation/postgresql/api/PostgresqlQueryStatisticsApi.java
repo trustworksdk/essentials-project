@@ -32,6 +32,19 @@ public interface PostgresqlQueryStatisticsApi {
      * Retrieves the top ten queries with the highest execution times within the database.
      * The returned list provides detailed statistics for each query, such as the query string,
      * total execution time, number of executions, and average execution time.
+     * <p>
+     * Note: The {@code query} property on each {@link ApiQueryStatistics} instance is
+     * populated from PostgreSQL’s {@code pg_stat_statements} view. By default, pg_stat_statements
+     * normalizes SQL by replacing literal constants with placeholders ({@code 1}, {@code 2}, …),
+     * so that similar statements are aggregated and sensitive values aren’t exposed.
+     * <p>
+     * Caveat: pg_stat_statements only retains up to
+     * {@code pg_stat_statements.max} distinct query shapes. If you issue more unique statements
+     * than this limit, older slots are deallocated and reused. In those cases, you may see the
+     * original SQL with literal values (e.g., {@code WHERE id = 42}) instead of placeholder-based
+     * normalization. To detect evictions, inspect the {@code dealloc} counter in
+     * {@code pg_stat_statements_info}, and consider increasing
+     * {@code pg_stat_statements.max} if needed.
      *
      * @return a list of the ten slowest queries, represented as {@code ApiQueryStats} objects,
      *         sorted in descending order of execution time.

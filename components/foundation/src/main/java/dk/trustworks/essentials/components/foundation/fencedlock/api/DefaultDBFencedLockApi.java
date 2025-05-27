@@ -17,11 +17,8 @@
 package dk.trustworks.essentials.components.foundation.fencedlock.api;
 
 
-import dk.trustworks.essentials.components.foundation.fencedlock.DBFencedLock;
-import dk.trustworks.essentials.components.foundation.fencedlock.DBFencedLockManager;
-import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
 import java.util.List;
