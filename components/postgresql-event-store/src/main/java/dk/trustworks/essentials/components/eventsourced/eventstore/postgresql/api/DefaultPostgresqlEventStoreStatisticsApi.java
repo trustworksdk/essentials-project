@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
@@ -49,6 +50,9 @@ public class DefaultPostgresqlEventStoreStatisticsApi implements PostgresqlEvent
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
         this.aggregateEventStreamTableNames = requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames must not be null");
+        aggregateEventStreamTableNames.forEach((aggregateType, tableName) -> {
+            PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        });
     }
 
     private void validateRoles(Object principal) {
