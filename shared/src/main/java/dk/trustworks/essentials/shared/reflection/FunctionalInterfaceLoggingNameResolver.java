@@ -84,7 +84,7 @@ public final class FunctionalInterfaceLoggingNameResolver {
         var clazz = handler.getClass();
 
         // If it's a lambda or generated proxy class
-        if (clazz.isSynthetic() || clazz.getName().contains("$$Lambda$")) {
+        if (clazz.isSynthetic() || clazz.getName().contains("$$Lambda$") || clazz.getName().contains("$$Lambda")) {
             var functionalInfo = getFunctionalInterfaceAndMethod(clazz);
             if (functionalInfo != null) {
                 return extractClassNameFromLambda(clazz.getSimpleName()) + "::" + functionalInfo.getKey();
@@ -114,12 +114,12 @@ public final class FunctionalInterfaceLoggingNameResolver {
     }
 
     public static String extractClassNameFromLambda(String lambdaString) {
-        if (!lambdaString.contains("$$Lambda$")) {
+        if (!lambdaString.contains("$$Lambda")) {
             return lambdaString;
         }
 
-        int lambdaIndex = lambdaString.indexOf("$$Lambda$");
-        return lambdaString.substring(0, lambdaIndex);
+        int lambdaIndex = lambdaString.indexOf("$$Lambda");
+        return lambdaString.substring(0, lambdaIndex).replace("$", "");
     }
 
     /**

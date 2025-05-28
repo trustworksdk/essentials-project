@@ -3,6 +3,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
+import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.jdbc.*;
@@ -37,6 +38,7 @@ public class StarterAutoConfigurationIT {
                             DataSourceTransactionManagerAutoConfiguration.class,
                             EssentialsComponentsConfiguration.class
                     ))
+                    .withBean(EssentialsSecurityProvider.AllAccessSecurityProvider.class)
                     .withInitializer(ctx -> TestPropertyValues.of(
                             "spring.datasource.url=" + postgreSQLContainer.getJdbcUrl(),
                             "spring.datasource.username=" + postgreSQLContainer.getUsername(),

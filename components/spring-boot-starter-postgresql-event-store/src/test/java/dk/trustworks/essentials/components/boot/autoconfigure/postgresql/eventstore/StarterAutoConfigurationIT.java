@@ -2,6 +2,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
+import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.jdbc.*;
@@ -37,6 +38,7 @@ public class StarterAutoConfigurationIT {
                             EssentialsComponentsConfiguration.class,
                             EventStoreConfiguration.class
                     ))
+                    .withBean(EssentialsSecurityProvider.AllAccessSecurityProvider.class)
                     .withInitializer(ctx -> TestPropertyValues.of(
                             "spring.datasource.url=" + postgreSQLContainer.getJdbcUrl(),
                             "spring.datasource.username=" + postgreSQLContainer.getUsername(),
