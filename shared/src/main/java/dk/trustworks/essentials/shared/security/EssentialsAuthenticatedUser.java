@@ -159,6 +159,11 @@ public interface EssentialsAuthenticatedUser {
      */
     void logout();
 
+    /**
+     * Represents an authenticated user with unrestricted access to all roles and permissions.
+     * This implementation of the EssentialsAuthenticatedUser interface ensures that the user
+     * is always authenticated and has access to all system roles and functionalities.
+     */
     class AllAccessAuthenticatedUser implements EssentialsAuthenticatedUser {
 
         private static final Logger logger = LoggerFactory.getLogger(AllAccessAuthenticatedUser.class);
@@ -236,5 +241,35 @@ public interface EssentialsAuthenticatedUser {
         @Override
         public void logout() {
         }
+    }
+
+    /**
+     * A specific implementation of the {@link EssentialsAuthenticatedUser} interface representing
+     * an authenticated user with no access permissions.
+     * <p>
+     * No roles are assigned, and the user is not granted privileges associated with the roles
+     * defined in the {@link EssentialsSecurityRoles}.
+     */
+    class NoAccessAuthenticatedUser implements EssentialsAuthenticatedUser {
+        private static final Logger logger = LoggerFactory.getLogger(NoAccessAuthenticatedUser.class);
+
+        public NoAccessAuthenticatedUser() {
+            logger.info("### Initializing NoAccessAuthenticatedUser ###");
+        }
+
+        @Override
+        public Object getPrincipal() {
+            return "Default_NoAccess";
+        }
+
+        @Override
+        public Optional<String> getPrincipalName() {
+            return Optional.of("Default_NoAccess");
+        }
+
+        @Override
+        public void logout() {
+        }
+
     }
 }

@@ -74,7 +74,9 @@ public interface EssentialsSecurityProvider {
     Optional<String> getPrincipalName(Object principal);
 
     /**
-     * Default All access security provider
+     * Implementation of the EssentialsSecurityProvider interface that allows all access regardless
+     * of the required role or principal provided. This provider serves as an open-access security
+     * implementation and bypasses role validation.
      */
     class AllAccessSecurityProvider implements EssentialsSecurityProvider {
 
@@ -92,6 +94,29 @@ public interface EssentialsSecurityProvider {
         @Override
         public Optional<String> getPrincipalName(Object principal) {
             return Optional.of("Default_AllAccess");
+        }
+    }
+
+    /**
+     * A security provider implementation that denies all access regardless of the provided principal
+     * or required role, ensuring no user or system is granted permission.
+     */
+    class NoAccessSecurityProvider implements EssentialsSecurityProvider {
+
+        private static final Logger logger = LoggerFactory.getLogger(NoAccessSecurityProvider.class);
+
+        public NoAccessSecurityProvider() {
+            logger.info("### Initializing NoAccessSecurityProvider ###");
+        }
+
+        @Override
+        public boolean isAllowed(Object principal, String requiredRole) {
+            return false;
+        }
+
+        @Override
+        public Optional<String> getPrincipalName(Object principal) {
+            return Optional.of("Default_NoAccess");
         }
     }
 }

@@ -503,13 +503,13 @@ public class EssentialsComponentsConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public EssentialsSecurityProvider essentialsSecurityProvider() {
-        return new EssentialsSecurityProvider.AllAccessSecurityProvider();
+        return new EssentialsSecurityProvider.NoAccessSecurityProvider();
     }
 
     @Bean
     @ConditionalOnMissingBean
     public EssentialsAuthenticatedUser essentialsAuthenticatedUser() {
-        return new EssentialsAuthenticatedUser.AllAccessAuthenticatedUser();
+        return new EssentialsAuthenticatedUser.NoAccessAuthenticatedUser();
     }
 
     @Bean
