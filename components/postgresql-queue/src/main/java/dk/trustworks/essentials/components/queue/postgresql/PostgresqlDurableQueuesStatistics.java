@@ -97,7 +97,7 @@ public class PostgresqlDurableQueuesStatistics implements DurableQueuesStatistic
                 DEFAULT_DURABLE_QUEUES_TABLE_NAME);
     }
 
-    /**statsQueueTableName
+    /**
      * Create {@link DurableQueuesStatistics} with custom jsonSerializer, durableQueueTableName, statsQueueTableName
      * <br>
      *
