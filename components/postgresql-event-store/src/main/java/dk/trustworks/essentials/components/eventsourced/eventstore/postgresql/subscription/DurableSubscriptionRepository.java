@@ -156,4 +156,21 @@ public interface DurableSubscriptionRepository {
                         forAggregateType,
                         onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder.apply(forAggregateType)));
     }
+
+    /**
+     * Finds and retrieves all existing subscription resume points.
+     *
+     * @return a list of all {@link SubscriptionResumePoint} instances stored in the repository
+     */
+    List<SubscriptionResumePoint> findAllResumePoints();
+
+    /**
+     * Retrieves a paginated list of subscription resume points starting from the specified index.
+     *
+     * @param startIndex the starting index for the pagination
+     * @param pageSize   the maximum number of subscription resume points to retrieve
+     * @return a list of {@link SubscriptionResumePoint} instances within the specified range
+     */
+    List<SubscriptionResumePoint> findAllResumePoints(long startIndex, long pageSize);
+
 }

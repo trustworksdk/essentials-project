@@ -16,7 +16,9 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql;
 
+import dk.trustworks.essentials.shared.Exceptions;
 import org.jdbi.v3.core.Handle;
+import org.postgresql.util.PSQLException;
 
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -37,6 +39,43 @@ public final class PostgresqlUtil {
         return handle.createQuery("SELECT substring(version() from 'PostgreSQL ([0-9]+)')")
                      .mapTo(Integer.class)
                      .first();
+    }
+
+    /**
+     * Checks if a specified PostgreSQL extension is available in the current database instance.
+     *
+     * @param handle   the Jdbi {@code Handle} used to execute the query; must not be null
+     * @param extension the name of the PostgreSQL extension to check; must not be null
+     * @return {@code true} if the specified extension is available, {@code false} otherwise
+     */
+    public static boolean isPGExtensionAvailable(Handle handle, String extension) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(extension, "No extension provided");
+        return handle.createQuery("""
+                                    SELECT exists(
+                                        SELECT 1
+                                        FROM pg_extension
+                                        WHERE extname = :extension
+                                    );
+                """)
+                .bind("extension", extension)
+                .mapTo(Boolean.class)
+                .first();
+    }
+
+    /**
+     * Determines whether the given exception corresponds to a PostgreSQL extension
+     * not being loaded as required by the `shared_preload_libraries` PostgreSQL configuration.
+     *
+     * @param e the exception to analyze; must not be null
+     * @return true if the root cause of the exception indicates that a PostgreSQL extension
+     *         must be loaded via `shared_preload_libraries`, false otherwise
+     * @throws IllegalArgumentException if the provided exception is null
+     */
+    public static boolean isPGExtensionNotLoadedException(Exception e) {
+        requireNonNull(e, "No exception provided");
+        Throwable rootCause = Exceptions.getRootCause(e);
+        return rootCause instanceof PSQLException && rootCause.getMessage() != null && rootCause.getMessage().contains("must be loaded via \"shared_preload_libraries\"");
     }
 
     /**

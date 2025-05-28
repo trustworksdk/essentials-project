@@ -701,10 +701,47 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
      */
     public void deleteAllLocksInDB() {
         usingUnitOfWork(uow -> lockStorage.deleteAllLocksInDB(this, uow),
-                        e -> {
-                            throw new UnitOfWorkException(msg("[{}] Failed to delete all Locks in the lock storage", lockManagerInstanceId), e);
-                        }
-                       );
+                e -> {
+                    throw new UnitOfWorkException(msg("[{}] Failed to delete all Locks in the lock storage", lockManagerInstanceId), e);
+                }
+       );
+    }
+
+    /**
+     * Retrieves all locks currently stored in the database.
+     * <p>
+     * This method performs the operation as part of a unit of work.
+     *
+     * @return a list of all locks found in the database
+     * @throws UnitOfWorkException if an error occurs while performing the unit of work
+     */
+    public List<LOCK> getAllLocksInDB() {
+        return withUnitOfWork(uow -> lockStorage.getAllLocksInDB(this, uow),
+                e -> {
+                    throw new UnitOfWorkException(msg("[{}] Failed to get all Locks in the lock storage", lockManagerInstanceId), e);
+                }
+        );
+    }
+
+    /**
+     * Releases a lock in the database specified by the provided lock name.
+     * <p>
+     * This method performs the operation as part of a unit of work.
+     *
+     * @param lockName the name of the lock to be released in the database
+     * @return {@code true} if the lock is successfully released, otherwise {@code false}
+     * @throws UnitOfWorkException if an error occurs during the unit of work execution
+     */
+    public boolean releaseLockInDB(LockName lockName) {
+        return withUnitOfWork(uow -> {
+                    return lockStorage.lookupLockInDB(this, uow, lockName)
+                            .map(lock -> lockStorage.releaseLockInDB(this, uow, lock))
+                            .orElse(Boolean.FALSE);
+                },
+                e -> {
+                    throw new UnitOfWorkException(msg("[{}] Failed to release Lock '{}' the lock storage", lockManagerInstanceId, lockName), e);
+                }
+        );
     }
 
     /**

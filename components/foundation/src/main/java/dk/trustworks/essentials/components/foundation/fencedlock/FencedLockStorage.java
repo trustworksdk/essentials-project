@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.foundation.fencedlock;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 
 import java.time.OffsetDateTime;
-import java.util.Optional;
+import java.util.*;
 
 public interface FencedLockStorage<UOW extends UnitOfWork, LOCK extends DBFencedLock> {
     /**
@@ -143,5 +143,23 @@ public interface FencedLockStorage<UOW extends UnitOfWork, LOCK extends DBFenced
      * @param uow         the unit of work
      */
     void deleteAllLocksInDB(DBFencedLockManager<UOW, LOCK> lockManager, UOW uow);
+
+    /**
+     * Get all locks in the DB.
+     *
+     * @param lockManager the lock manager
+     * @param uow         the unit of work
+     */
+    List<LOCK> getAllLocksInDB(DBFencedLockManager<UOW, LOCK> lockManager, UOW uow);
+
+    /**
+     * Get all locks in the DB.
+     *
+     * @param lockManager the lock manager
+     * @param uow         the unit of work
+     * @param startIndex  the start index
+     * @param pageSize    the page size
+     */
+    List<LOCK> getAllLocksInDB(DBFencedLockManager<UOW, LOCK> lockManager, UOW uow, long startIndex, long pageSize);
 
 }

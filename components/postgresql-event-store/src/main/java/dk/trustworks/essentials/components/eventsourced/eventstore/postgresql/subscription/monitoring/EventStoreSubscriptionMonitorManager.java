@@ -1,21 +1,16 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.slf4j.*;
+
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.collections.Lists.nullSafeList;
@@ -27,6 +22,7 @@ public class EventStoreSubscriptionMonitorManager implements Lifecycle {
     private final Duration interval;
     private final List<EventStoreSubscriptionMonitor> monitors = new ArrayList<>();
     private final EventStoreSubscriptionManager eventStoreSubscriptionManager;
+    private ScheduledExecutorService executorService;
     private ScheduledFuture<?> scheduledFuture;
 
     public EventStoreSubscriptionMonitorManager(boolean enabled,
@@ -51,11 +47,11 @@ public class EventStoreSubscriptionMonitorManager implements Lifecycle {
         }
         if (!started) {
             log.info("Starting [{}]", this.getClass().getSimpleName());
-            scheduledFuture = Executors.newSingleThreadScheduledExecutor(ThreadFactoryBuilder.builder()
-                .nameFormat("EventStoreSubscriptionMonitoring")
-                .daemon(true)
-                .build())
-                .scheduleAtFixedRate(this::executeMonitoring,
+            executorService = Executors.newSingleThreadScheduledExecutor(ThreadFactoryBuilder.builder()
+                                                                                                       .nameFormat("EventStoreSubscriptionMonitoring")
+                                                                                                       .daemon(true)
+                                                                                                       .build());
+            scheduledFuture = executorService.scheduleAtFixedRate(this::executeMonitoring,
                     interval.toMillis(),
                     interval.toMillis(),
                     TimeUnit.MILLISECONDS);
@@ -70,6 +66,10 @@ public class EventStoreSubscriptionMonitorManager implements Lifecycle {
         if (started) {
             log.info("Stopping [{}]", this.getClass().getSimpleName());
             scheduledFuture.cancel(true);
+            if (executorService != null) {
+                executorService.shutdownNow();
+                executorService = null;
+            }
             started = false;
         } else {
             log.debug("[{}] was already stopped", this.getClass().getSimpleName());

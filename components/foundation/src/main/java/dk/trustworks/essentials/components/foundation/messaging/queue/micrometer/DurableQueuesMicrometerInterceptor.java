@@ -20,13 +20,9 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
 import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
-import io.micrometer.core.instrument.Gauge;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.*;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 

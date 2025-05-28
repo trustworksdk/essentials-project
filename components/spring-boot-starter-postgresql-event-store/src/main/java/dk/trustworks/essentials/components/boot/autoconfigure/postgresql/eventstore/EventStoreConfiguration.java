@@ -24,6 +24,7 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
@@ -48,6 +49,7 @@ import dk.trustworks.essentials.components.foundation.reactive.command.DurableLo
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.reactive.command.*;
+import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
@@ -154,18 +156,25 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     public EventStoreSubscriptionManager eventStoreSubscriptionManager(EventStore eventStore,
                                                                        FencedLockManager fencedLockManager,
-                                                                       Jdbi jdbi,
+                                                                       DurableSubscriptionRepository durableSubscriptionRepository,
                                                                        EssentialsEventStoreProperties eventStoreProperties,
                                                                        EssentialsComponentsProperties essentialsComponentsProperties) {
         return EventStoreSubscriptionManager.builder()
                                             .setEventStore(eventStore)
                                             .setFencedLockManager(fencedLockManager)
-                                            .setDurableSubscriptionRepository(new PostgresqlDurableSubscriptionRepository(jdbi, eventStore))
+                                            .setDurableSubscriptionRepository(durableSubscriptionRepository)
                                             .setEventStorePollingBatchSize(eventStoreProperties.getSubscriptionManager().getEventStorePollingBatchSize())
                                             .setEventStorePollingInterval(eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval())
                                             .setSnapshotResumePointsEvery(eventStoreProperties.getSubscriptionManager().getSnapshotResumePointsEvery())
                                             .setStartLifeCycles(essentialsComponentsProperties.getLifeCycles().isStartLifeCycles())
                                             .build();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public DurableSubscriptionRepository durableSubscriptionRepository(Jdbi jdbi,
+                                                                       EventStore eventStore) {
+        return new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
     }
 
     /**
@@ -382,5 +391,28 @@ public class EventStoreConfiguration {
                                                             properties.getMetrics().isEnabled(),
                                                             properties.getMetrics().toLogThresholds(),
                                                             essentialsProperties.getTracingProperties().getModuleTag());
+    }
+
+    // # Api ##########################################################################################
+
+    @Bean
+    @ConditionalOnMissingBean
+    public EventStoreApi eventStoreApi(EssentialsSecurityProvider securityProvider,
+                                       EventStore eventStore,
+                                       DurableSubscriptionRepository durableSubscriptionRepository) {
+        return new DefaultEventStoreApi(securityProvider,
+                eventStore,
+                durableSubscriptionRepository);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi(EssentialsSecurityProvider securityProvider,
+                                                                               EventStore eventStore) {
+        var postgresqlEventStore = (PostgresqlEventStore<?>)eventStore;
+        var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerAggregateEventStreamTableNames();
+        return new DefaultPostgresqlEventStoreStatisticsApi(securityProvider,
+                eventStore.getUnitOfWorkFactory(),
+                aggregateEventStreamTableNames);
     }
 }
