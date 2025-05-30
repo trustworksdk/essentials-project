@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  ~ Copyright 2021-2024 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/base.xml" />
+    <springProperty scope="context" name="appName" source="spring.application.name"/>
+
+    <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>http://localhost:3100/loki/api/v1/push</url>
+        </http>
+        <format>
+            <label>
+                <pattern>app=${appName},host=${HOSTNAME},traceID=%X{traceId:-NONE},level=%level</pattern>
+            </label>
+            <message>
+                <pattern>${FILE_LOG_PATTERN}</pattern>
+            </message>
+            <sortByTime>true</sortByTime>
+        </format>
+    </appender>
+
+    <logger name="dk.cloudcreate.essentials" level="INFO"/>
+    <logger name="org.springframework.web.client.RestTemplate" level="INFO"/>
+    <logger name="org.springframework.web.HttpLogging" level="INFO"/>
+    <logger name="org.springframework.web.servlet.DispatcherServlet" level="INFO"/>
+    <!--<logger name="dk.cloudcreate.essentials.spring.examples.postgresql.cqrs.shipping.adapters.kafka.outgoing.ShippingEventKafkaPublisher" level="TRACE"/>
+    <logger name="dk.cloudcreate.essentials.components.foundation.transaction" level="INFO"/>
+    <logger name="dk.cloudcreate.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager" level="INFO"/>
+    <logger name="dk.cloudcreate.essentials.shared.interceptor.DefaultInterceptorChain" level="DEBUG"/>
+    <logger name="dk.cloudcreate.essentials.components.queue.postgresql.PostgresqlDurableQueues" level="INFO"/>
+    <logger name="dk.cloudcreate.essentials.components.foundation.messaging.queue.DurableQueueConsumer" level="INFO"/>
+    <logger name="dk.cloudcreate.essentials.components.foundation.messaging.queue.DurableQueueConsumer.MessageHandlingFailures" level="DEBUG"/>
+    <logger name="dk.cloudcreate.essentials.components.foundation.messaging.queue.QueuePollingOptimizer.SimpleQueuePollingOptimizer" level="DEBUG"/>
+    <logger name="dk.cloudcreate.essentials.components.eventsourced.eventstore.postgresql.subscription" level="INFO"/>
+    <logger name="dk.cloudcreate.essentials.components.eventsourced.eventstore.postgresql.subscription.PostgresqlDurableSubscriptionRepository" level="INFO"/>
+    <logger name="dk.cloudcreate.essentials.components.eventsourced.eventstore.postgresql.gap" level="INFO"/>
+    <logger name="dk.cloudcreate.essentials.components.eventsourced.eventstore.postgresql.EventStore.PollingEventStream" level="INFO"/>
+    -->
+    <root level="INFO">
+        <!--<appender-ref ref="LOKI"/>-->
+    </root>
+</configuration>
