@@ -1793,6 +1793,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
 
         @Override
+        public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
+            return unitOfWorkFactory.withUnitOfWork(interceptorChain::proceed);
+        }
+
+        @Override
         public boolean intercept(DeleteMessage operation, InterceptorChain<DeleteMessage, Boolean, DurableQueuesInterceptor> interceptorChain) {
             return unitOfWorkFactory.withUnitOfWork(interceptorChain::proceed);
         }

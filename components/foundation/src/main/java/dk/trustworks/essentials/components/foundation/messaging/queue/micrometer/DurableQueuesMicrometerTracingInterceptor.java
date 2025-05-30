@@ -110,6 +110,12 @@ public final class DurableQueuesMicrometerTracingInterceptor implements DurableQ
     }
 
     @Override
+    public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
+        restoreTraceContext(operation.getMessage(), "HandleMessage");
+        return interceptorChain.proceed();
+    }
+
+    @Override
     public QueueEntryId intercept(QueueMessageAsDeadLetterMessage operation, InterceptorChain<QueueMessageAsDeadLetterMessage, QueueEntryId, DurableQueuesInterceptor> interceptorChain) {
         storeTraceContext(operation.getMetaData());
         return Observation.createNotStarted("QueueMessageAsDeadLetterMessage:" + operation.queueName.toString(), observationRegistry)
