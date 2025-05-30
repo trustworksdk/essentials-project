@@ -462,6 +462,7 @@ public class ViewEventProcessorIT {
          */
         @MessageHandler
         public void onOrderPlaced(EventProcessorIT.OrderPlacedEvent event) {
+            eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork();
             if (event.orderDetails.startsWith("Load")) {
                 orderPlacedEventCounter.incrementAndGet();
             } else if (event.orderDetails.startsWith("Fail")) {
