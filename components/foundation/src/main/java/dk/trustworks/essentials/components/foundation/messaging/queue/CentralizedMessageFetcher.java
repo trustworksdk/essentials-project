@@ -68,7 +68,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                      List<DurableQueuesInterceptor> interceptors) {
         this.durableQueues = requireNonNull(durableQueues, "No durableQueues provided");
         this.pollingIntervalMs = pollingIntervalMs;
-        this.interceptors = new CopyOnWriteArrayList<>(requireNonNull(interceptors, "interceptors is missing"));
+        this.interceptors = requireNonNull(interceptors, "interceptors is missing");
         this.consumerRegistrations = new ConcurrentHashMap<>();
         this.inProcessOrderedKeys = new ConcurrentHashMap<>();
         this.scheduler = Executors.newScheduledThreadPool(1, r -> {
