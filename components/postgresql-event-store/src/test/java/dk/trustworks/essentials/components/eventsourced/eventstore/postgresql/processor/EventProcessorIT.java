@@ -55,6 +55,7 @@ import org.testcontainers.shaded.org.awaitility.Awaitility;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
 
@@ -336,6 +337,23 @@ public class EventProcessorIT {
         });
     }
 
+    @Test
+    public void verify_view_event_processor_with_load() {
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            IntStream.range(1, 1001).sequential().forEach(value -> {
+                var orderId = EventProcessorIT.OrderId.random();
+                var event   = new EventProcessorIT.OrderPlacedEvent(orderId, "Load Order Details " + value);
+                eventStore.appendToStream(ViewEventProcessorIT.TestOrderViewEventProcessor.TEST_ORDERS, orderId, List.of(event));
+            });
+        });
+
+        org.awaitility.Awaitility.waitAtMost(Duration.ofMinutes(2)).untilAsserted(() -> {
+            int orderPlacedEventCounter = testProcessor.getOrderPlacedEventCounter().get();
+            assert orderPlacedEventCounter == 1000;
+        });
+    }
+
+
     // --------------------------
     // Supporting classes for the test
     // --------------------------
@@ -441,6 +459,8 @@ public class EventProcessorIT {
 
         private Consumer<ConcurrentMap<AggregateType, GlobalEventOrder>> resetCallback;
 
+        private final AtomicInteger orderPlacedEventCounter = new AtomicInteger(0);
+
         public TestOrderEventProcessor(EventProcessorDependencies eventProcessorDependencies,
                                        PostgresqlEventStore<?> eventStore) {
             this(eventProcessorDependencies, eventStore,
@@ -534,7 +554,12 @@ public class EventProcessorIT {
          */
         @MessageHandler
         public void onOrderPlaced(OrderPlacedEvent event) {
+            orderPlacedEventCounter.incrementAndGet();
             getCommandBus().send(new ConfirmOrderCommand(event.orderId));
+        }
+
+        public AtomicInteger getOrderPlacedEventCounter() {
+            return orderPlacedEventCounter;
         }
     }
 
