@@ -32,6 +32,7 @@ public final class DurableQueuesMicrometerInterceptor implements DurableQueuesIn
     private static final String QUEUED_MESSAGES_GAUGE_NAME                     = "DurableQueues_QueuedMessages_Size";
     private static final String DEAD_LETTER_MESSAGES_GAUGE_NAME                = "DurableQueues_DeadLetterMessages_Size";
     public static final  String PROCESSED_QUEUED_MESSAGES_COUNTER_NAME         = "DurableQueues_QueuedMessages_Processed";
+    public static final  String HANDLED_QUEUED_MESSAGES_COUNTER_NAME           = "DurableQueues_QueuedMessages_Handled";
     public static final  String PROCESSED_QUEUED_MESSAGES_RETRIES_COUNTER_NAME = "DurableQueues_QueuedMessages_Retries";
     public static final  String PROCESSED_DEAD_LETTER_MESSAGES_COUNTER_NAME    = "DurableQueues_DeadLetterMessages_Processed";
     public static final  String QUEUE_NAME_TAG_NAME                            = "QueueName";
@@ -158,6 +159,14 @@ public final class DurableQueuesMicrometerInterceptor implements DurableQueuesIn
             updateQueueGaugeValues(queueName);
         }
         return succeeded;
+    }
+
+    @Override
+    public Void intercept(HandleQueuedMessage operation, InterceptorChain<HandleQueuedMessage, Void, DurableQueuesInterceptor> interceptorChain) {
+        interceptorChain.proceed();
+        meterRegistry.counter(HANDLED_QUEUED_MESSAGES_COUNTER_NAME, buildTagList(QUEUE_NAME_TAG_NAME, operation.message.getQueueName().toString()))
+                     .increment();
+        return null;
     }
 
     private void incProcessedQueuedMessagesCount(QueueName queueName) {
