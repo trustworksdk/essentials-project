@@ -78,26 +78,18 @@ public class AdminMainLayout extends AppLayout {
      * Creates the drawer content which contains the side navigation and the user menu.
      */
     private void createDrawerContent() {
-        // Create the side navigation.
         SideNav sideNav = createSideNav();
-        // Create the user menu.
         Component userMenu = createUserMenu();
 
-        // Create a vertical layout for the drawer content.
         VerticalLayout drawerContent = new VerticalLayout();
         drawerContent.setSizeFull();
         drawerContent.setPadding(false);
         drawerContent.setSpacing(false);
-
-        // Add the side navigation at the top.
         drawerContent.add(sideNav);
 
-        // Add a spacer to push the user menu to the bottom.
         Div spacer = new Div();
         spacer.getStyle().set("flex-grow", "1");
         drawerContent.add(spacer);
-
-        // Add the user menu at the bottom.
         drawerContent.add(userMenu);
 
         addToDrawer(drawerContent);
