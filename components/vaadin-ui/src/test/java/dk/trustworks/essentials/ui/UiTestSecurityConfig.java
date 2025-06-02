@@ -36,9 +36,9 @@ public class UiTestSecurityConfig extends VaadinWebSecurity {
     @Override
     protected void configure(HttpSecurity http) throws Exception {
         http
-            .authorizeHttpRequests(authorize -> authorize
-                    .requestMatchers("/tasks").permitAll()
-        );
+                .authorizeHttpRequests(authorize -> authorize
+                                               .requestMatchers("/tasks").permitAll()
+                                      );
 
         super.configure(http);
 
@@ -48,7 +48,7 @@ public class UiTestSecurityConfig extends VaadinWebSecurity {
     @Override
     public void configure(WebSecurity web) throws Exception {
         web.ignoring()
-                .requestMatchers("/tasks/**");
+           .requestMatchers("/tasks/**");
         super.configure(web);
     }
 
@@ -72,17 +72,17 @@ public class UiTestSecurityConfig extends VaadinWebSecurity {
     UserDetailsManager userDetailsManager() {
         String[] roles = essentialsSecurityRoles();
         UserDetails admin = User.withUsername("admin")
-                .password(passwordEncoder().encode("admin"))
-                .roles(roles)
-                .build();
+                                .password(passwordEncoder().encode("admin"))
+                                .roles(roles)
+                                .build();
         UserDetails lasse = User.withUsername("lasse")
-                .password(passwordEncoder().encode("admin"))
-                .roles(roles)
-                .build();
+                                .password(passwordEncoder().encode("admin"))
+                                .roles(roles)
+                                .build();
         UserDetails jeppe = User.withUsername("jeppe")
-                .password(passwordEncoder().encode("admin"))
-                .roles(roles)
-                .build();
+                                .password(passwordEncoder().encode("admin"))
+                                .roles(roles)
+                                .build();
 
         return new InMemoryUserDetailsManager(admin, lasse, jeppe);
     }

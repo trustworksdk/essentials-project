@@ -18,22 +18,33 @@ package dk.trustworks.essentials.ui.admin;
 
 import com.vaadin.flow.component.html.*;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
-import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
-import dk.trustworks.essentials.ui.view.AdminMainLayout;
+import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
+import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
 @UIScope
 @PermitAll
 @SpringComponent
 @Route(value = "eventprocessors", layout = AdminMainLayout.class)
-public class EventProcessorsView extends VerticalLayout {
+public class EventProcessorsView extends VerticalLayout implements BeforeEnterObserver {
 
-    public EventProcessorsView() {
+    private final EssentialsAuthenticatedUser authenticatedUser;
+
+    public EventProcessorsView(EssentialsAuthenticatedUser authenticatedUser) {
+        this.authenticatedUser = authenticatedUser;
         setSizeFull();
 
         add(new H3("EventProcessors"),
             new Paragraph("Coming soon ...")
         );
+    }
+
+    @Override
+    public void beforeEnter(BeforeEnterEvent event) {
+        if (!authenticatedUser.hasLockReaderRole() && !authenticatedUser.hasAdminRole()) {
+            event.forwardTo(AccessDeniedView.class);
+        }
     }
 }

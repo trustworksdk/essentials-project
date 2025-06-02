@@ -20,11 +20,11 @@ import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.grid.*;
 import com.vaadin.flow.component.html.*;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
-import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
-import dk.trustworks.essentials.ui.view.AdminMainLayout;
+import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
 import java.util.List;
@@ -43,7 +43,7 @@ import java.util.List;
 @PermitAll
 @SpringComponent
 @Route(value = "subscriptions", layout = AdminMainLayout.class)
-public class SubscriptionsView extends VerticalLayout {
+public class SubscriptionsView extends VerticalLayout implements BeforeEnterObserver {
 
     private final EventStoreApi               eventStoreApi;
     private final EssentialsAuthenticatedUser authenticatedUser;
@@ -104,5 +104,12 @@ public class SubscriptionsView extends VerticalLayout {
     private void updateGrid() {
         List<ApiSubscription> subscriptions = eventStoreApi.findAllSubscriptions(authenticatedUser.getPrincipal());
         grid.setItems(subscriptions);
+    }
+
+    @Override
+    public void beforeEnter(BeforeEnterEvent event) {
+        if (!authenticatedUser.hasSubscriptionReaderRole() && !authenticatedUser.hasAdminRole()) {
+            event.forwardTo(AccessDeniedView.class);
+        }
     }
 }

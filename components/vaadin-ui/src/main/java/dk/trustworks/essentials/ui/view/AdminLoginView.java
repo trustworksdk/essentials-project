@@ -29,7 +29,6 @@ import com.vaadin.flow.server.auth.AnonymousAllowed;
  * <p>
  * Annotations provide the following functionality:
  * - @Route("login"): Defines the routing path for this view.
- * - @AnonymousAllowed: Specifies that this page is accessible without authentication.
  */
 @Route("login")
 @AnonymousAllowed

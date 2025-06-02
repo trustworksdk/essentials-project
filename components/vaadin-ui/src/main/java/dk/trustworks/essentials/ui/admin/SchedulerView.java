@@ -16,26 +16,18 @@
 
 package dk.trustworks.essentials.ui.admin;
 
-import com.vaadin.flow.component.button.Button;
-import com.vaadin.flow.component.grid.Grid;
-import com.vaadin.flow.component.html.*;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
-import com.vaadin.flow.component.textfield.TextField;
-import com.vaadin.flow.data.provider.*;
-import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
-import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
-import dk.trustworks.essentials.ui.view.AdminMainLayout;
+import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
-
-import java.util.stream.Stream;
 
 
 @UIScope
 @PermitAll
 @SpringComponent
 @Route(value = "scheduler", layout = AdminMainLayout.class)
-public class SchedulerView extends VerticalLayout {
+public class SchedulerView extends VerticalLayout implements BeforeEnterObserver {
 
     // TODO: when scheduler is added
 
@@ -177,6 +169,16 @@ public class SchedulerView extends VerticalLayout {
         grid.setWidthFull();
         return grid;
     }
+
+
     */
+
+    @Override
+    public void beforeEnter(BeforeEnterEvent event) {
+//        if (!authenticatedUser.hasSchedulerReaderRole && !authenticatedUser.hasAdminRole()) {
+//            event.forwardTo(AccessDeniedView.class);
+//        }
+    }
+
 
 }

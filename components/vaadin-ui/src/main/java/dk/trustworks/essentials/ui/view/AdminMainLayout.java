@@ -25,9 +25,10 @@ import com.vaadin.flow.component.icon.*;
 import com.vaadin.flow.component.menubar.*;
 import com.vaadin.flow.component.orderedlayout.*;
 import com.vaadin.flow.component.sidenav.*;
-import com.vaadin.flow.router.Layout;
+import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
+import dk.trustworks.essentials.ui.util.SecurityUtils;
 import jakarta.annotation.security.PermitAll;
 
 import static com.vaadin.flow.theme.lumo.LumoUtility.*;
@@ -44,12 +45,15 @@ import static com.vaadin.flow.theme.lumo.LumoUtility.*;
 @UIScope
 @PermitAll
 @SpringComponent
+@PageTitle("Essentials admin")
 public class AdminMainLayout extends AppLayout {
 
     private final EssentialsAuthenticatedUser authenticatedUser;
+    private final SecurityUtils securityUtils;
 
     public AdminMainLayout(EssentialsAuthenticatedUser authenticatedUser) {
         this.authenticatedUser = authenticatedUser;
+        this.securityUtils = new SecurityUtils(authenticatedUser);
         createHeader();
         setPrimarySection(Section.DRAWER);
         createDrawerContent();
@@ -103,20 +107,20 @@ public class AdminMainLayout extends AppLayout {
         nav.addClassNames(Margin.Horizontal.MEDIUM);
         if (authenticatedUser.isAuthenticated()) {
             nav.addItem(createSideNavItem("Admin", "", VaadinIcon.HOME.create()));
-            if (authenticatedUser.hasLockReaderRole() || authenticatedUser.hasAdminRole()) {
+            if (securityUtils.canAccessLocks()) {
                 nav.addItem(createSideNavItem("Locks", "locks", VaadinIcon.LOCK.create()));
             }
-            if (authenticatedUser.hasQueueReaderRole() || authenticatedUser.hasAdminRole()) {
+            if (securityUtils.canAccessQueues()) {
                 nav.addItem(createSideNavItem("Queues", "queues", VaadinIcon.LIST.create()));
             }
-            if (authenticatedUser.hasSubscriptionReaderRole() || authenticatedUser.hasAdminRole()) {
+            if (securityUtils.canAccessSubscriptions()) {
                 nav.addItem(createSideNavItem("Subscriptions", "subscriptions", VaadinIcon.ENVELOPE.create()));
                 nav.addItem(createSideNavItem("EventProcessors", "eventprocessors", VaadinIcon.COG.create()));
             }
-            if (authenticatedUser.hasPostgresqlStatsReaderRole() || authenticatedUser.hasAdminRole()) {
+            if (securityUtils.canAccessPostgresqlStats()) {
                 nav.addItem(createSideNavItem("Postgresql stats", "postgresql", VaadinIcon.DATABASE.create()));
             }
-            if (authenticatedUser.hasSchedulerReaderRole() || authenticatedUser.hasAdminRole()) {
+            if (securityUtils.canAccessScheduler()) {
                 nav.addItem(createSideNavItem("Scheduled jobs", "scheduler", VaadinIcon.CALENDAR_CLOCK.create()));
             }
         }

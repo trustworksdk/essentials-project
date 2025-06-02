@@ -26,12 +26,13 @@ import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.data.provider.*;
-import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
-import dk.trustworks.essentials.ui.view.AdminMainLayout;
+import dk.trustworks.essentials.ui.util.SecurityUtils;
+import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
 import java.time.*;
@@ -56,12 +57,13 @@ import static dk.trustworks.essentials.components.foundation.messaging.queue.Dur
 @PermitAll
 @SpringComponent
 @Route(value = "queues", layout = AdminMainLayout.class)
-public class QueuesView extends VerticalLayout {
+public class QueuesView extends VerticalLayout implements BeforeEnterObserver {
 
     private static final int TRUNCATE_PAYLOAD_AT_LENGTH = 25;
 
     private final DurableQueuesApi            durableQueuesApi;
     private final EssentialsAuthenticatedUser authenticatedUser;
+    private final SecurityUtils               securityUtils;
 
     private final DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
@@ -87,6 +89,7 @@ public class QueuesView extends VerticalLayout {
     public QueuesView(DurableQueuesApi durableQueuesApi, EssentialsAuthenticatedUser authenticatedUser) {
         this.durableQueuesApi = durableQueuesApi;
         this.authenticatedUser = authenticatedUser;
+        this.securityUtils = new SecurityUtils(authenticatedUser);
 
         setWidthFull();
         setDefaultHorizontalComponentAlignment(Alignment.START);
@@ -284,7 +287,7 @@ public class QueuesView extends VerticalLayout {
                           .setHeader(createHeaderWithTooltip("Redelivery Attempts"));
         queuedMessagesGrid.addColumn(ApiQueuedMessage::isBeingDelivered)
                           .setHeader(createHeaderWithTooltip("Being Delivered"));
-        if (authenticatedUser.hasQueueWriterRole() || authenticatedUser.hasAdminRole()) {
+        if (securityUtils.canWriteQueues()) {
             queuedMessagesGrid.addComponentColumn(msg -> new Button("Deadletter", click -> {
                                                       durableQueuesApi.markAsDeadLetterMessage(authenticatedUser.getPrincipal(), msg.id());
                                                       Notification.show("Mark as deadletter : " + msg.id());
@@ -331,7 +334,7 @@ public class QueuesView extends VerticalLayout {
                               .setHeader(createHeaderWithTooltip("Redelivery Attempts"));
         deadLetterMessagesGrid.addColumn(ApiQueuedMessage::isBeingDelivered)
                               .setHeader(createHeaderWithTooltip("Being Delivered"));
-        if (authenticatedUser.hasQueueWriterRole() || authenticatedUser.hasAdminRole()) {
+        if (securityUtils.canWriteQueues()) {
             deadLetterMessagesGrid.addComponentColumn(msg -> new Button("Resurrect", click -> {
                                                           durableQueuesApi.resurrectDeadLetterMessage(authenticatedUser.getPrincipal(), msg.id(), Duration.ZERO);
                                                           Notification.show("Resurrected deadletter : " + msg.id());
@@ -367,5 +370,12 @@ public class QueuesView extends VerticalLayout {
 
     private String formatDateTime(OffsetDateTime dateTime) {
         return dateTime != null ? dateTimeFormatter.format(dateTime) : "";
+    }
+
+    @Override
+    public void beforeEnter(BeforeEnterEvent event) {
+        if (!authenticatedUser.hasQueueReaderRole() && !authenticatedUser.hasAdminRole()) {
+            event.forwardTo(AccessDeniedView.class);
+        }
     }
 }

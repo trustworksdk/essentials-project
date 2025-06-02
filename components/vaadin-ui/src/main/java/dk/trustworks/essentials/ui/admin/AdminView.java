@@ -20,7 +20,7 @@ import com.vaadin.flow.component.html.H3;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
-import dk.trustworks.essentials.ui.view.AdminMainLayout;
+import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
 /**

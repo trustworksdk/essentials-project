@@ -21,11 +21,12 @@ import com.vaadin.flow.component.grid.*;
 import com.vaadin.flow.component.html.H3;
 import com.vaadin.flow.component.notification.Notification;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
-import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
-import dk.trustworks.essentials.ui.view.AdminMainLayout;
+import dk.trustworks.essentials.ui.util.SecurityUtils;
+import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
 import java.time.OffsetDateTime;
@@ -49,16 +50,19 @@ import java.util.List;
 @PermitAll
 @SpringComponent
 @Route(value = "locks", layout = AdminMainLayout.class)
-public class LocksView extends VerticalLayout {
+public class LocksView extends VerticalLayout implements BeforeEnterObserver {
 
     private final EssentialsAuthenticatedUser authenticatedUser;
     private final DBFencedLockApi            dbfencedLockApi;
+    private final SecurityUtils              securityUtils;
+
     private final Grid<ApiDBFencedLock>      grid              = new Grid<>(ApiDBFencedLock.class);
 
     private final DateTimeFormatter          dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     public LocksView(EssentialsAuthenticatedUser authenticatedUser, DBFencedLockApi dbfencedLockApi) {
         this.authenticatedUser = authenticatedUser;
+        this.securityUtils = new SecurityUtils(authenticatedUser);
         this.dbfencedLockApi = dbfencedLockApi;
         configureGrid();
         add(new H3("Locks Administration"), createRefreshButton(), grid);
@@ -80,10 +84,13 @@ public class LocksView extends VerticalLayout {
         grid.addColumn(details -> formatDateTime(details.lockLastConfirmedTimestamp()))
                 .setHeader("Last Confirmed").setAutoWidth(true);
 
-        if (authenticatedUser.hasLockWriterRole() || authenticatedUser.hasAdminRole()) {
+        if (securityUtils.canWriteLocks()) {
             grid.addComponentColumn(details -> new Button("Release", click -> {
-                dbfencedLockApi.releaseLock(authenticatedUser.getPrincipal(), details.lockName());
-                Notification.show("Released lock: " + details.lockName());
+                if( dbfencedLockApi.releaseLock(authenticatedUser.getPrincipal(), details.lockName())) {
+                    Notification.show("Released lock: " + details.lockName());
+                } else {
+                    Notification.show("Could not release lock: '" + details.lockName() + "'");
+                }
                 updateGrid();
             })).setHeader("Actions");
         }
@@ -102,5 +109,12 @@ public class LocksView extends VerticalLayout {
 
     private String formatDateTime(OffsetDateTime dateTime) {
         return dateTime != null ? dateTimeFormatter.format(dateTime): "";
+    }
+
+    @Override
+    public void beforeEnter(BeforeEnterEvent event) {
+        if (!authenticatedUser.hasLockReaderRole() && !authenticatedUser.hasAdminRole()) {
+            event.forwardTo(AccessDeniedView.class);
+        }
     }
 }

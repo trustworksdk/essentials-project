@@ -20,12 +20,12 @@ import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.grid.Grid;
 import com.vaadin.flow.component.html.*;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
-import com.vaadin.flow.router.Route;
+import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.PostgresqlEventStoreStatisticsApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
-import dk.trustworks.essentials.ui.view.AdminMainLayout;
+import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
 import java.util.Map;
@@ -47,7 +47,7 @@ import java.util.Map;
 @PermitAll
 @SpringComponent
 @Route(value = "postgresql", layout = AdminMainLayout.class)
-public class PostgresqlStatisticsView extends VerticalLayout {
+public class PostgresqlStatisticsView extends VerticalLayout implements BeforeEnterObserver {
 
     private static final int TRUNCATE_SLOW_QUERY_AT_LENGTH = 25;
 
@@ -140,7 +140,7 @@ public class PostgresqlStatisticsView extends VerticalLayout {
 
     private Grid<ApiQueryStatistics> createSlowQueryGrid() {
         Grid<ApiQueryStatistics> grid = new Grid<>();
-        grid.addColumn(ApiQueryStatistics::query).setHeader("Query").setAutoWidth(true);
+        grid.addColumn(qs -> truncateSlowQuery(qs.query())).setHeader("Query").setAutoWidth(true);
         grid.addColumn(ApiQueryStatistics::totalTime).setHeader("Total Time (ms)").setAutoWidth(true);
         grid.addColumn(ApiQueryStatistics::meanTime).setHeader("Mean Time (ms)").setAutoWidth(true);
         grid.addColumn(ApiQueryStatistics::calls).setHeader("Calls").setAutoWidth(true);
@@ -155,4 +155,10 @@ public class PostgresqlStatisticsView extends VerticalLayout {
                : slowQuery;
     }
 
+    @Override
+    public void beforeEnter(BeforeEnterEvent event) {
+        if (!authenticatedUser.hasPostgresqlStatsReaderRole() && !authenticatedUser.hasAdminRole()) {
+            event.forwardTo(AccessDeniedView.class);
+        }
+    }
 }
