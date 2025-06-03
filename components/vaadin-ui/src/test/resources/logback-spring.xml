@@ -20,7 +20,7 @@
     <include resource="org/springframework/boot/logging/logback/base.xml" />
     <springProperty scope="context" name="appName" source="spring.application.name"/>
 
-    <logger name="dk.cloudcreate.trustworks" level="INFO"/>
+    <logger name="dk.trustworks.essentials" level="INFO"/>
     <root level="INFO" />
 
 </configuration>
