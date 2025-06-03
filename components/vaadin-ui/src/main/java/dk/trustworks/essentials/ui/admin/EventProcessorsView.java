@@ -21,6 +21,7 @@ import com.vaadin.flow.component.orderedlayout.VerticalLayout;
 import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
+import dk.trustworks.essentials.ui.util.SecurityUtils;
 import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
@@ -31,9 +32,11 @@ import jakarta.annotation.security.PermitAll;
 public class EventProcessorsView extends VerticalLayout implements BeforeEnterObserver {
 
     private final EssentialsAuthenticatedUser authenticatedUser;
+    private final SecurityUtils               securityUtils;
 
     public EventProcessorsView(EssentialsAuthenticatedUser authenticatedUser) {
         this.authenticatedUser = authenticatedUser;
+        this.securityUtils = new SecurityUtils(authenticatedUser);
         setSizeFull();
 
         add(new H3("EventProcessors"),
@@ -43,7 +46,7 @@ public class EventProcessorsView extends VerticalLayout implements BeforeEnterOb
 
     @Override
     public void beforeEnter(BeforeEnterEvent event) {
-        if (!authenticatedUser.hasLockReaderRole() && !authenticatedUser.hasAdminRole()) {
+        if (!securityUtils.canAccessSubscriptions()) {
             event.forwardTo(AccessDeniedView.class);
         }
     }

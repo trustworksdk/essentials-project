@@ -25,6 +25,7 @@ import com.vaadin.flow.spring.annotation.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.PostgresqlEventStoreStatisticsApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
+import dk.trustworks.essentials.ui.util.SecurityUtils;
 import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
@@ -52,6 +53,7 @@ public class PostgresqlStatisticsView extends VerticalLayout implements BeforeEn
     private static final int TRUNCATE_SLOW_QUERY_AT_LENGTH = 25;
 
     private final EssentialsAuthenticatedUser                         authenticatedUser;
+    private final SecurityUtils                                       securityUtils;
     private final PostgresqlEventStoreStatisticsApi                   postgresqlEventStoreStatisticsApi;
     private final PostgresqlQueryStatisticsApi                        postgresqlQueryStatisticsApi;
 
@@ -65,6 +67,7 @@ public class PostgresqlStatisticsView extends VerticalLayout implements BeforeEn
                                     PostgresqlQueryStatisticsApi postgresqlQueryStatisticsApi) {
 
         this.authenticatedUser = authenticatedUser;
+        this.securityUtils = new SecurityUtils(authenticatedUser);
         this.postgresqlEventStoreStatisticsApi = postgresqlEventStoreStatisticsApi;
         this.postgresqlQueryStatisticsApi = postgresqlQueryStatisticsApi;
 
@@ -157,7 +160,7 @@ public class PostgresqlStatisticsView extends VerticalLayout implements BeforeEn
 
     @Override
     public void beforeEnter(BeforeEnterEvent event) {
-        if (!authenticatedUser.hasPostgresqlStatsReaderRole() && !authenticatedUser.hasAdminRole()) {
+        if (!securityUtils.canAccessPostgresqlStats()) {
             event.forwardTo(AccessDeniedView.class);
         }
     }

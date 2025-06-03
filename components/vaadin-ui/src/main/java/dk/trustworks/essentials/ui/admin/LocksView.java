@@ -113,7 +113,7 @@ public class LocksView extends VerticalLayout implements BeforeEnterObserver {
 
     @Override
     public void beforeEnter(BeforeEnterEvent event) {
-        if (!authenticatedUser.hasLockReaderRole() && !authenticatedUser.hasAdminRole()) {
+        if (!securityUtils.canAccessLocks()) {
             event.forwardTo(AccessDeniedView.class);
         }
     }

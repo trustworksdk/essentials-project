@@ -24,6 +24,7 @@ import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
+import dk.trustworks.essentials.ui.util.SecurityUtils;
 import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
@@ -47,12 +48,14 @@ public class SubscriptionsView extends VerticalLayout implements BeforeEnterObse
 
     private final EventStoreApi               eventStoreApi;
     private final EssentialsAuthenticatedUser authenticatedUser;
+    private final SecurityUtils               securityUtils;
 
     private final Grid<ApiSubscription>       grid = new Grid<>(ApiSubscription.class);
 
     public SubscriptionsView(EventStoreApi eventStoreApi, EssentialsAuthenticatedUser authenticatedUser) {
         this.eventStoreApi = eventStoreApi;
         this.authenticatedUser = authenticatedUser;
+        this.securityUtils = new SecurityUtils(authenticatedUser);
         setSizeFull();
         configureGrid();
         add(new H3("EventStore subscriptions administration"),
@@ -108,7 +111,7 @@ public class SubscriptionsView extends VerticalLayout implements BeforeEnterObse
 
     @Override
     public void beforeEnter(BeforeEnterEvent event) {
-        if (!authenticatedUser.hasSubscriptionReaderRole() && !authenticatedUser.hasAdminRole()) {
+        if (!securityUtils.canAccessSubscriptions()) {
             event.forwardTo(AccessDeniedView.class);
         }
     }

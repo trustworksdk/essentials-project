@@ -34,6 +34,7 @@ public class SchedulerView extends VerticalLayout implements BeforeEnterObserver
     /*
     private final SchedulerApi                schedulerApi;
     private final EssentialsAuthenticatedUser authenticatedUser;
+    private final SecurityUtils               securityUtils;
 
     private final Grid<ApiPgCronJob> pgCronJobGrid;
     private final Grid<ApiPgCronJobRunDetails> pgCronJobDetailsGrid;
@@ -49,6 +50,7 @@ public class SchedulerView extends VerticalLayout implements BeforeEnterObserver
     public SchedulerView(SchedulerApi schedulerApi, EssentialsAuthenticatedUser authenticatedUser) {
         this.schedulerApi = schedulerApi;
         this.authenticatedUser = authenticatedUser;
+        this.securityUtils = new SecurityUtils(authenticatedUser);
 
         pgCronJobGrid = createPgCronJobGrid();
         setPgCronJobProvider();
@@ -175,7 +177,7 @@ public class SchedulerView extends VerticalLayout implements BeforeEnterObserver
 
     @Override
     public void beforeEnter(BeforeEnterEvent event) {
-//        if (!authenticatedUser.hasSchedulerReaderRole && !authenticatedUser.hasAdminRole()) {
+//        if (!securityUtils.canAccessScheduler()) {
 //            event.forwardTo(AccessDeniedView.class);
 //        }
     }

@@ -374,7 +374,7 @@ public class QueuesView extends VerticalLayout implements BeforeEnterObserver {
 
     @Override
     public void beforeEnter(BeforeEnterEvent event) {
-        if (!authenticatedUser.hasQueueReaderRole() && !authenticatedUser.hasAdminRole()) {
+        if (!securityUtils.canAccessQueues()) {
             event.forwardTo(AccessDeniedView.class);
         }
     }
