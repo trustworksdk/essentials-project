@@ -6,7 +6,7 @@
     <parent>
         <groupId>dk.trustworks.essentials</groupId>
         <artifactId>parent</artifactId>
-        <version>DEV-SNAPSHOT</version>
+        <version>${revision}</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
     <description>
