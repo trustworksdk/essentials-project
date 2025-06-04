@@ -1910,6 +1910,13 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
 
             @Override
             public Optional<SubscriptionResumePoint> currentResumePoint() {
+                if (resumePoint != null && !active) {
+                    // We've had a lock released, so the resume point is no longer valid - refresh the resume point
+                    log.trace("[{}-{}] Resume point is no longer valid - refreshing", subscriberId, aggregateType);
+                    resumePoint = durableSubscriptionRepository.getResumePoint(subscriberId,
+                                                                               aggregateType).orElse(null);
+
+                }
                 return Optional.ofNullable(resumePoint);
             }
 
