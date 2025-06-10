@@ -94,6 +94,7 @@ public class EssentialsComponentsProperties {
     private       boolean                               immutableJacksonModuleEnabled    = true;
     private       boolean                               reactiveBeanPostProcessorEnabled = true;
     private final EssentialsComponentsMetricsProperties metrics                          = new EssentialsComponentsMetricsProperties();
+    private final SchedulerProperties                   schedulerProperties              = new SchedulerProperties();
 
     /**
      * Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration - default is true<br>
@@ -229,6 +230,7 @@ public class EssentialsComponentsProperties {
         return this.tracingProperties;
     }
 
+    public SchedulerProperties getSchedulerProperties() { return schedulerProperties; }
 
     public static class MultiTableChangeListenerProperties {
         private Duration pollingInterval              = Duration.ofMillis(50);
@@ -1164,6 +1166,50 @@ public class EssentialsComponentsProperties {
          */
         public void setQueuedTaskCapFactor(double queuedTaskCapFactor) {
             this.queuedTaskCapFactor = queuedTaskCapFactor;
+        }
+    }
+
+    /**
+     * Configuration properties for the essentials scheduler.
+     */
+    public static class SchedulerProperties {
+        private boolean enabled         = true;
+        private int     numberOfThreads = Runtime.getRuntime().availableProcessors();
+
+        /**
+         * Checks whether the scheduler is enabled.
+         *
+         * @return {@code true} if the scheduler is enabled, {@code false} otherwise
+         */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /**
+         * Sets the enabled state of the scheduler.
+         *
+         * @param enabled {@code true} to enable the scheduler, {@code false} to disable it
+         */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        /**
+         * Retrieves the number of threads configured for the scheduler.
+         *
+         * @return the number of threads currently configured
+         */
+        public int getNumberOfThreads() {
+            return numberOfThreads;
+        }
+
+        /**
+         * Sets the number of threads configured for the scheduler.
+         *
+         * @param numberOfThreads the number of threads to be set for the scheduler
+         */
+        public void setNumberOfThreads(int numberOfThreads) {
+            this.numberOfThreads = numberOfThreads;
         }
     }
 }

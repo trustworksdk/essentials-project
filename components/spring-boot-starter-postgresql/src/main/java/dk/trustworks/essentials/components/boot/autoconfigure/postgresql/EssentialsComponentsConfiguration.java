@@ -39,6 +39,8 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
+import dk.trustworks.essentials.components.foundation.scheduler.*;
+import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.transaction.spring.jdbi.SpringTransactionAwareJdbiUnitOfWorkFactory;
@@ -498,6 +500,15 @@ public class EssentialsComponentsConfiguration {
                                                               properties.getTracingProperties().getModuleTag());
     }
 
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials", name = "scheduler-properties-enabled", havingValue = "true")
+    public EssentialsScheduler essentialsScheduler(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                                   FencedLockManager fencedLockManager,
+                                                   EssentialsComponentsProperties properties) {
+        return new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, properties.getSchedulerProperties().getNumberOfThreads());
+    }
+
     // Api ###################################################################################################
 
     @Bean
@@ -540,5 +551,16 @@ public class EssentialsComponentsConfiguration {
                                                                      HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         return new DefaultPostgresqlQueryStatisticsApi(securityProvider,
                 unitOfWorkFactory);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public SchedulerApi schedulerApi(EssentialsSecurityProvider securityProvider,
+                                     EssentialsScheduler essentialsScheduler,
+                                     EssentialsComponentsProperties properties) {
+        if (properties.getSchedulerProperties().isEnabled()) {
+            return new DefaultSchedulerApi(essentialsScheduler, securityProvider);
+        }
+        return new NoOpSchedulerApi();
     }
 }
