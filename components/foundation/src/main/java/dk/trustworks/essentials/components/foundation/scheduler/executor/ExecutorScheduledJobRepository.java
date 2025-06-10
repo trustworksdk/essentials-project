@@ -111,7 +111,7 @@ public class ExecutorScheduledJobRepository {
      * @param asc a flag indicating whether the results should be sorted in ascending order (true) or descending order (false)
      * @return a list of {@code ScheduledJobEntry} objects representing the scheduled job entries
      */
-    public List<ScheduledJobEntry> getScheduledJobEntries(long limit, long offset, boolean asc) {
+    public List<ExecutorJobEntry> fetchExecutorJobEntries(long limit, long offset, boolean asc) {
         String direction = asc ? "ASC" : "DESC";
         String sql = bind("""
                             SELECT name, initial_delay, period, time_unit, scheduled_at
@@ -131,7 +131,7 @@ public class ExecutorScheduledJobRepository {
                           long           period = rs.getLong("period");
                           TimeUnit       unit   = TimeUnit.valueOf(rs.getString("time_unit"));
                           OffsetDateTime at     = rs.getObject("scheduled_at", OffsetDateTime.class);
-                          return new ScheduledJobEntry(name, initial, period, unit, at);
+                          return new ExecutorJobEntry(name, initial, period, unit, at);
                       })
                       .list();
         });
@@ -142,7 +142,7 @@ public class ExecutorScheduledJobRepository {
      *
      * @return the total count of scheduled job entries as a {@code long}.
      */
-    public long getTotalScheduledJobEntries() {
+    public long getTotalExecutorJobEntries() {
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             var sql = bind("""
                                         SELECT COUNT(*) FROM {:tableName}""",
@@ -174,6 +174,6 @@ public class ExecutorScheduledJobRepository {
      * @param unit         the time unit of the initial delay and period
      * @param scheduledAt  the timestamp indicating when the job was initially scheduled
      */
-    public record ScheduledJobEntry(String name, long initialDelay, long period, TimeUnit unit, OffsetDateTime scheduledAt) {}
+    public record ExecutorJobEntry(String name, long initialDelay, long period, TimeUnit unit, OffsetDateTime scheduledAt) {}
 
 }

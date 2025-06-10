@@ -30,4 +30,9 @@ import dk.trustworks.essentials.components.foundation.scheduler.EssentialsSchedu
  * task executions, and the time unit of these delays.
  */
 public record ExecutorJob(String name, FixedDelay fixedDelay, Runnable task) implements EssentialsScheduledJob {
+
+    @Override
+    public String name() {
+        return name + "_" + fixedDelay.toString();
+    }
 }

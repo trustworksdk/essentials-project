@@ -16,6 +16,13 @@
 
 package dk.trustworks.essentials.components.foundation.scheduler;
 
+import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
+import dk.trustworks.essentials.components.foundation.scheduler.executor.*;
+import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorScheduledJobRepository.ExecutorJobEntry;
+import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
+
+import java.util.List;
+
 /**
  * Represents a scheduler responsible for scheduling jobs defined by the EssentialsScheduledJob interface.
  * This interface provides a method for scheduling various types of jobs.
@@ -26,13 +33,98 @@ package dk.trustworks.essentials.components.foundation.scheduler;
 public interface EssentialsScheduler {
 
     /**
-     * Schedules the specified job for execution within the scheduler. The scheduling mechanism
-     * may depend on the availability of the PostgreSQL pg_cron extension or use a simple
-     * ScheduledExecutorService as a fallback.
+     * Schedules a PostgreSQL cron job using the pg_cron extension. The job
+     * encapsulates the target database function to be executed along with
+     * the cron expression that specifies its execution schedule.
      *
-     * @param job the job to be scheduled, must implement the EssentialsScheduledJob interface
-     *            and provide a unique name for identification
-     * @return true if the job was successfully scheduled, false otherwise
+     * @param job the PgCronJob instance representing the PostgreSQL function
+     *            and its associated cron schedule to be registered for execution
      */
-    boolean scheduleJob(EssentialsScheduledJob job);
+    void schedulePgCronJob(PgCronJob job);
+
+    /**
+     * Schedules a job to be executed periodically using a fixed delay configuration. The job will be added to
+     * the list of executor jobs managed by the scheduler. If the scheduler is already started, the job will also
+     * be scheduled for execution immediately, using a scheduled executor service.
+     *
+     * @param job the ExecutorJob to be scheduled, which includes the job's name, the fixed delay configuration
+     *            specifying the scheduling parameters (initial delay, period, and time unit), and the task to
+     *            be executed
+     */
+    void scheduleExecutorJob(ExecutorJob job);
+
+    /**
+     * Checks if the PostgreSQL `pg_cron` extension is available for use.
+     * This method determines whether the `pg_cron` extension is present and properly loaded in the PostgreSQL database.
+     *
+     * @return true if the `pg_cron` extension is available and properly loaded, false otherwise
+     */
+    boolean isPgCronAvailable();
+
+    /**
+     * Retrieves the lock name associated with the current scheduling system.
+     *
+     * @return a {@code LockName} representing the name of the {@code FencedLock}.
+     */
+    LockName getLockName();
+
+    /**
+     * Fetches a paginated list of entries from the PostgreSQL `pg_cron` table.
+     * The `pg_cron` extension must be available and properly configured in the PostgreSQL database for this method to function as expected.
+     *
+     * @param startIndex the starting index of the entries to fetch
+     * @param pageSize   the number of entries to fetch per page
+     * @return a list of `PgCronEntry` objects representing the `pg_cron` jobs from the database
+     */
+    List<PgCronRepository.PgCronEntry> fetchPgCronEntries(long startIndex, long pageSize);
+
+    /**
+     * Returns the total number of entries present in the PostgreSQL `pg_cron` table.
+     * This method relies on the `pg_cron` extension being properly installed and configured
+     * in the PostgreSQL database.
+     *
+     * @return the total count of `pg_cron` entries available in the database
+     */
+    long getTotalPgCronEntries();
+
+    /**
+     * Fetches a paginated list of job run details for a specific PostgreSQL `pg_cron` job.
+     * The method retrieves details about individual execution runs of the specified job
+     * from the PostgreSQL `pg_cron` extension.
+     *
+     * @param jobId      the unique identifier of the specific `pg_cron` job for which the
+     *                   run details are to be fetched. Can be null to fetch details for all jobs.
+     * @param startIndex the starting index of the job run details to fetch
+     * @param pageSize   the number of job run details to fetch per page
+     * @return a list of `PgCronRepository.PgCronJobRunDetails` objects representing the
+     *         job run details for the specified job and pagination parameters
+     */
+    List<PgCronRepository.PgCronJobRunDetails> fetchPgCronJobRunDetails(Integer jobId, long startIndex, long pageSize);
+
+    /**
+     * Returns the total number of job run details available for a specific PostgreSQL `pg_cron` job.
+     * This method retrieves the count of all execution records associated with the specified job ID
+     * from the PostgreSQL `pg_cron` extension.
+     *
+     * @param jobId the unique identifier of the specific `pg_cron` job for which the total count
+     *              of run details is to be retrieved. Can be null to calculate the total for all jobs.
+     * @return the total count of job run details available for the specified `pg_cron` job.
+     */
+    long getTotalPgCronJobRunDetails(Integer jobId);
+
+    /**
+     * Fetches a paginated list of executor job entries managed by the scheduler.
+     *
+     * @param startIndex the starting index of the entries to fetch
+     * @param pageSize   the number of entries to fetch per page
+     * @return a list of {@code ExecutorScheduledJobRepository.ExecutorJobEntry} objects representing the executor jobs matching the pagination parameters
+     */
+    List<ExecutorJobEntry> fetchExecutorJobEntries(long startIndex, long pageSize);
+
+    /**
+     * Retrieves the total number of executor job entries managed by the scheduler.
+     *
+     * @return the total count of executor job entries.
+     */
+    long geTotalExecutorJobEntries();
 }

@@ -31,5 +31,10 @@ import java.util.concurrent.TimeUnit;
  */
 public record FixedDelay(long initialDelay, long period, TimeUnit unit) {
 
+    @Override
+    public String toString() {
+        return "delay:" + initialDelay + "_period:" + period + "_unit:" + unit.name().toLowerCase();
+    }
+
     public static FixedDelay ONE_DAY = new FixedDelay(0, 1, TimeUnit.DAYS);
 }
