@@ -104,6 +104,27 @@ public class ExecutorScheduledJobRepository {
     }
 
     /**
+     * Deletes an entry from the database table based on the specified name.
+     *
+     * @param name the name of the entry to delete; it corresponds to the `name` column in the database table.
+     * @return {@code true} if the entry was successfully deleted (i.e., at least one row was affected),
+     *         {@code false} if no entry with the specified name exists in the database.
+     */
+    public boolean delete(String name) {
+        return unitOfWorkFactory.withUnitOfWork(uow -> {
+            var sql = bind(
+                    """
+                            DELETE FROM {:tableName} WHERE name = :name)
+                            """,
+                    arg("tableName", sharedTableName));
+            Update u = uow.handle().createUpdate(sql);
+            u.bind("name", name);
+            int affectedRows = u.execute();
+            return affectedRows != 0;
+        });
+    }
+
+    /**
      * Retrieves a list of scheduled job entries from the database with pagination and sorting options.
      *
      * @param limit the maximum number of entries to retrieve

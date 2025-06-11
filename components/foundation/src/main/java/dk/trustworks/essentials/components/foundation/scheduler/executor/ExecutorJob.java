@@ -20,7 +20,7 @@ import dk.trustworks.essentials.components.foundation.scheduler.EssentialsSchedu
 
 /**
  * Represents a scheduled job that can be executed by an executor with a specified fixed delay.
- * This record encapsulates the job's name, its fixed delay configuration for scheduling,
+ * This record encapsulates the job's name that has to be unique when saved to storage name and fixed delay is combined for uniqueness, its fixed delay configuration for scheduling,
  * and the task to be executed.
  * <p>
  * This implementation conforms to the EssentialsScheduledJob interface, allowing it to
@@ -31,6 +31,12 @@ import dk.trustworks.essentials.components.foundation.scheduler.EssentialsSchedu
  */
 public record ExecutorJob(String name, FixedDelay fixedDelay, Runnable task) implements EssentialsScheduledJob {
 
+    /**
+     * Returns the name of this scheduled job concatenated with its fixed delay configuration as a string.
+     * The resulting string uniquely identifies the job and includes its name and scheduling details.
+     *
+     * @return the concatenation of the job's name and its fixed delay configuration.
+     */
     @Override
     public String name() {
         return name + "_" + fixedDelay.toString();

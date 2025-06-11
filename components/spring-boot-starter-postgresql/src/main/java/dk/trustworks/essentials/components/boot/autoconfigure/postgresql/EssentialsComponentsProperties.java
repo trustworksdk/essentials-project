@@ -94,7 +94,7 @@ public class EssentialsComponentsProperties {
     private       boolean                               immutableJacksonModuleEnabled    = true;
     private       boolean                               reactiveBeanPostProcessorEnabled = true;
     private final EssentialsComponentsMetricsProperties metrics                          = new EssentialsComponentsMetricsProperties();
-    private final SchedulerProperties                   schedulerProperties              = new SchedulerProperties();
+    private final SchedulerProperties                   scheduler                        = new SchedulerProperties();
 
     /**
      * Should the EssentialsImmutableJacksonModule be included in the ObjectMapper configuration - default is true<br>
@@ -230,7 +230,9 @@ public class EssentialsComponentsProperties {
         return this.tracingProperties;
     }
 
-    public SchedulerProperties getSchedulerProperties() { return schedulerProperties; }
+    public SchedulerProperties getScheduler() {
+        return scheduler;
+    }
 
     public static class MultiTableChangeListenerProperties {
         private Duration pollingInterval              = Duration.ofMillis(50);

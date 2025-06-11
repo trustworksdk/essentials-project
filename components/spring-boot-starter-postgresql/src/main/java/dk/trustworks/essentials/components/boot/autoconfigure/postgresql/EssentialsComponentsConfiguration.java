@@ -502,11 +502,11 @@ public class EssentialsComponentsConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials", name = "scheduler-properties-enabled", havingValue = "true")
+    @ConditionalOnProperty(prefix = "essentials.scheduler", name = "enabled", havingValue = "true")
     public EssentialsScheduler essentialsScheduler(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                    FencedLockManager fencedLockManager,
                                                    EssentialsComponentsProperties properties) {
-        return new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, properties.getSchedulerProperties().getNumberOfThreads());
+        return new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, properties.getScheduler().getNumberOfThreads());
     }
 
     // Api ###################################################################################################
@@ -555,12 +555,16 @@ public class EssentialsComponentsConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public SchedulerApi schedulerApi(EssentialsSecurityProvider securityProvider,
-                                     EssentialsScheduler essentialsScheduler,
-                                     EssentialsComponentsProperties properties) {
-        if (properties.getSchedulerProperties().isEnabled()) {
-            return new DefaultSchedulerApi(essentialsScheduler, securityProvider);
-        }
+    @ConditionalOnProperty(prefix = "essentials.scheduler", name = "enabled", havingValue = "true")
+    public SchedulerApi defaultSchedulerApi(EssentialsSecurityProvider securityProvider,
+                                     EssentialsScheduler essentialsScheduler) {
+        return new DefaultSchedulerApi(essentialsScheduler, securityProvider);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.scheduler", name = "enabled", havingValue = "false")
+    public SchedulerApi noOpSchedulerApi() {
         return new NoOpSchedulerApi();
     }
 }

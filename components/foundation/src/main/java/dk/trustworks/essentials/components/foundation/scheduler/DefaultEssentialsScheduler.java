@@ -84,7 +84,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         }
     }
 
-   @Override
+    @Override
     public void scheduleExecutorJob(ExecutorJob job) {
         log.debug("Adding ExecutorJob '{}'", job);
         executorJobs.add(job);
@@ -105,6 +105,29 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         return lockName;
     }
 
+    public boolean cancelPgCronJob(Integer jobId) {
+        log.debug("Cancelling PgCronJob '{}'", jobId);
+        try {
+            // TODO: use MultiTableChangeListener to remove in memory job
+            pgCronRepository.unschedule(jobId);
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to unschedule pg_cron jobId {}", jobId, e);
+        }
+        return false;
+    }
+
+    public boolean cancelExecutorJob(String name) {
+        log.debug("Cancelling ExecutorJob '{}'", name);
+        try {
+            // TODO: use MultiTableChangeListener to cancel future and remove in memory job executor job
+            return executorScheduledJobRepository.delete(name);
+        } catch (Exception e) {
+            log.warn("Failed to cancel executor job {}", name, e);
+        }
+        return false;
+    }
+
     private void scheduleExecutorJobInternal(ExecutorJob job) {
         ScheduledFuture<?> future = executorService.scheduleAtFixedRate(
                 job.task(), job.fixedDelay().initialDelay(), job.fixedDelay().period(), job.fixedDelay().unit());
@@ -119,6 +142,19 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
             log.info("✅ Added PgCronJob '{}' with jobId '{}'", job, jobId);
             pgCronJobIds.put(job, jobId);
         }
+    }
+
+    private Optional<PgCronJob> findJobById(Integer jobId) {
+        return pgCronJobIds.entrySet().stream()
+                           .filter(e -> e.getValue().equals(jobId))
+                           .map(Map.Entry::getKey)
+                           .findFirst();
+    }
+
+    private Optional<ExecutorJob> findJobByName(String name) {
+        return executorJobFutures.keySet().stream()
+                                 .filter(job -> job.name().equals(name))
+                                 .findFirst();
     }
 
     @Override
@@ -201,7 +237,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
         unschedulePgCronJobs();
 
-       unscheduleExecutorJobs();
+        unscheduleExecutorJobs();
     }
 
     private void scheduleJobs() {
