@@ -27,14 +27,30 @@
         <relativePath>../../pom.xml</relativePath>
     </parent>
     <description>
-        This library provides Spring Boot auto-configuration for all Postgresql focused Essentials components
+        This library provides Spring Boot auto-configuration for the Vaadin Admin UI and Postgresql Event Store
     </description>
 
     <groupId>dk.trustworks.essentials.components</groupId>
-    <artifactId>spring-boot-starter-postgresql</artifactId>
+    <artifactId>spring-boot-starter-admin-ui</artifactId>
     <packaging>jar</packaging>
 
     <dependencies>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-postgresql-event-store</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>vaadin-ui</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.vaadin</groupId>
+            <artifactId>vaadin-spring-boot-starter</artifactId>
+            <version>${vaadin.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
@@ -65,6 +81,7 @@
             <version>${spring-boot.version}</version>
             <optional>true</optional>
         </dependency>
+
         <!-- Micrometer -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -92,29 +109,10 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>types-jackson</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>immutable-jackson</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>types-jdbi</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
-            <artifactId>postgresql-distributed-fenced-lock</artifactId>
+            <artifactId>eventsourced-aggregates</artifactId>
             <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>dk.trustworks.essentials.components</groupId>
-            <artifactId>postgresql-queue</artifactId>
-            <version>${project.version}</version>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.objenesis</groupId>
@@ -218,7 +216,7 @@
                     <configuration>
                         <archive>
                             <manifestEntries>
-                                <Automatic-Module-Name>dk.trustworks.essentials.components.boot.autoconfigure.postgresql</Automatic-Module-Name>
+                                <Automatic-Module-Name>dk.trustworks.essentials.components.boot.autoconfigure.admin.ui</Automatic-Module-Name>
                             </manifestEntries>
                         </archive>
                     </configuration>

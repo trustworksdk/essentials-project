@@ -12,4 +12,10 @@ bin
 .flattened-pom.xml
 
 node_modules/
-frontend/generated
+**/frontend/generated/
+**/frontend/index.html
+package-lock.json
+webpack.generated.js
+tsconfig.json
+types.d.ts
+vite.generated.ts
