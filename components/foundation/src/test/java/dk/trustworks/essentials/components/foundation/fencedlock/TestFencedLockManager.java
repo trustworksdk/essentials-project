@@ -59,7 +59,7 @@ public class TestFencedLockManager implements FencedLockManager, Lifecycle {
     public void stop() {
         pending.values().forEach(f -> f.cancel(true));
         pending.clear();
-        for (LockName name : new ArrayList<>(lockHandles.keySet())) {
+        for (var name : new ArrayList<>(lockHandles.keySet())) {
             releaseLock(name);
         }
         executor.shutdownNow();
@@ -87,12 +87,12 @@ public class TestFencedLockManager implements FencedLockManager, Lifecycle {
 
     @Override
     public Optional<FencedLock> tryAcquireLock(LockName lockName, Duration timeout) {
-        long key = computeKey(lockName);
-        long deadline = System.nanoTime() + timeout.toNanos();
+        var key = computeKey(lockName);
+        var deadline = System.nanoTime() + timeout.toNanos();
 
         while (timeout.isZero() || System.nanoTime() < deadline) {
             // Open a fresh handle (session)
-            Handle handle = jdbi.open();
+            var handle = jdbi.open();
             boolean got;
             try {
                 got = handle.createQuery("SELECT pg_try_advisory_lock(:k)")
@@ -134,7 +134,7 @@ public class TestFencedLockManager implements FencedLockManager, Lifecycle {
 
     @Override
     public boolean isLockAcquired(LockName lockName) {
-        boolean held = lockHandles.containsKey(lockName);
+        var held = lockHandles.containsKey(lockName);
         log.debug("[{}] isLockAcquired('{}') -> {}", instanceId, lockName, held);
         return held;
     }
@@ -146,13 +146,17 @@ public class TestFencedLockManager implements FencedLockManager, Lifecycle {
 
     @Override
     public boolean isLockAcquiredByAnotherLockManagerInstance(LockName lockName) {
+        // if we ourselves hold it in lockHandles, it's not "another" instance
+        if (isLockAcquired(lockName)) {
+            return false;
+        }
+
         long key = computeKey(lockName);
-        // check pg_locks for any session (pid) other than ours holding it
         return jdbi.withHandle(h ->
                                        h.createQuery(
                                                 "SELECT EXISTS (" +
                                                         "  SELECT 1 FROM pg_locks " +
-                                                        "  WHERE locktype='advisory' AND objid=:k " +
+                                                        "  WHERE locktype='advisory' AND objid = :k " +
                                                         "    AND granted AND pid <> pg_backend_pid()" +
                                                         ")"
                                                     )
@@ -164,9 +168,9 @@ public class TestFencedLockManager implements FencedLockManager, Lifecycle {
 
     @Override
     public void acquireLockAsync(LockName lockName, LockCallback callback) {
-        Future<?> f = executor.submit(() -> {
+        var future = executor.submit(() -> {
             while (!Thread.currentThread().isInterrupted()) {
-                Optional<FencedLock> fl = tryAcquireLock(lockName);
+                var fl = tryAcquireLock(lockName);
                 if (fl.isPresent()) {
                     callback.lockAcquired(fl.get());
                     return;
@@ -175,13 +179,13 @@ public class TestFencedLockManager implements FencedLockManager, Lifecycle {
                 catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
             }
         });
-        pending.put(lockName, f);
+        pending.put(lockName, future);
     }
 
     @Override
     public void cancelAsyncLockAcquiring(LockName lockName) {
-        Future<?> f = pending.remove(lockName);
-        if (f != null) f.cancel(true);
+        var future = pending.remove(lockName);
+        if (future != null) future.cancel(true);
         if (isLockAcquired(lockName)) {
             releaseLock(lockName);
         }
@@ -193,22 +197,23 @@ public class TestFencedLockManager implements FencedLockManager, Lifecycle {
     }
 
     private void releaseLock(LockName lockName) {
-        Handle handle = lockHandles.remove(lockName);
+        var handle = lockHandles.remove(lockName);
         if (handle != null) {
-            long key = computeKey(lockName);
-            try {
+            var key = computeKey(lockName);
+            try (handle) {
                 handle.createUpdate("SELECT pg_advisory_unlock(:k)")
                       .bind("k", key)
                       .execute();
                 log.info("[{}] Released lock '{}'", instanceId, lockName);
-            } finally {
-                handle.close();
             }
         }
     }
 
     private long computeKey(LockName lockName) {
-        long key = lockName.toString().hashCode();
+        // Convert the signed 32-bit hashCode into an unsigned 32-bit value,
+        // so it always fits in PostgreSQL’s OID range.
+        int raw = lockName.toString().hashCode();
+        long key = Integer.toUnsignedLong(raw);
         log.debug("[{}] computeKey('{}') = {}", instanceId, lockName, key);
         return key;
     }

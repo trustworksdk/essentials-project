@@ -47,10 +47,10 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
 
     @Test
     public void schedule_with_1_node() {
-        JdbiUnitOfWorkFactory unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
-        FencedLockManager     fencedLockManager = new TestFencedLockManager(jdbi);
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+        var     fencedLockManager = new TestFencedLockManager(jdbi);
         fencedLockManager.start();
-        DefaultEssentialsScheduler essentialsScheduler = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, 2);
+        var essentialsScheduler = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, 2);
         essentialsScheduler.start();
 
         assertThat(essentialsScheduler.isPgCronAvailable()).isTrue();
@@ -68,7 +68,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         assertThat(rowsInTable).isEqualTo(5);
         setupTestFunction(unitOfWorkFactory);
 
-        CronExpression cron = CronExpression.TEN_SECOND;
+        var cron = CronExpression.TEN_SECOND;
         essentialsScheduler.schedulePgCronJob(new PgCronJob(TEST_FUNCTION_NAME, cron));
         waitAtMost(Duration.ofSeconds(30)).until(() -> {
             int rows = getNumberOfRowsInTable(unitOfWorkFactory);
@@ -86,15 +86,15 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
 
     @Test
     public void schedule_with_2_nodes() {
-        JdbiUnitOfWorkFactory unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
 
-        FencedLockManager fencedLockManager1 = new TestFencedLockManager(jdbi);
+        var fencedLockManager1 = new TestFencedLockManager(jdbi);
         fencedLockManager1.start();
-        FencedLockManager fencedLockManager2 = new TestFencedLockManager(jdbi);
+        var fencedLockManager2 = new TestFencedLockManager(jdbi);
         fencedLockManager2.start();
 
-        DefaultEssentialsScheduler essentialsScheduler1 = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager1, 2);
-        DefaultEssentialsScheduler essentialsScheduler2 = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager2, 2);
+        var essentialsScheduler1 = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager1, 2);
+        var essentialsScheduler2 = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager2, 2);
 
         essentialsScheduler1.start();
         essentialsScheduler2.start();
@@ -120,7 +120,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         assertThat(rowsInTable).isEqualTo(5);
         setupTestFunction(unitOfWorkFactory);
 
-        CronExpression cron = CronExpression.TEN_SECOND;
+        var cron = CronExpression.TEN_SECOND;
         essentialsScheduler1.schedulePgCronJob(new PgCronJob(TEST_FUNCTION_NAME, cron));
         essentialsScheduler2.schedulePgCronJob(new PgCronJob(TEST_FUNCTION_NAME, cron));
         waitAtMost(Duration.ofSeconds(30)).until(() -> {
@@ -141,22 +141,22 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
 
     @Test
     public void schedule_with_2_nodes_failover() {
-        JdbiUnitOfWorkFactory unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
+        var unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
 
         setupTestData(unitOfWorkFactory);
         setupTestFunction(unitOfWorkFactory);
 
-        FencedLockManager fencedLockManager1 = new TestFencedLockManager(jdbi);
+        var fencedLockManager1 = new TestFencedLockManager(jdbi);
         fencedLockManager1.start();
-        DefaultEssentialsScheduler essentialsScheduler1 =
+        var essentialsScheduler1 =
                 new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager1, 2);
         essentialsScheduler1.schedulePgCronJob(
                 new PgCronJob(TEST_FUNCTION_NAME, CronExpression.TEN_SECOND)
                                               );
 
-        FencedLockManager fencedLockManager2 = new TestFencedLockManager(jdbi);
+        var fencedLockManager2 = new TestFencedLockManager(jdbi);
         fencedLockManager2.start();
-        DefaultEssentialsScheduler essentialsScheduler2 =
+        var essentialsScheduler2 =
                 new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager2, 2);
         essentialsScheduler2.schedulePgCronJob(
                 new PgCronJob(TEST_FUNCTION_NAME, CronExpression.TEN_SECOND)

@@ -13,7 +13,7 @@ public abstract class AbstractEssentialsSchedulerTest {
 
     protected static DockerImageName pgCronImage = DockerImageName.parse("lcramontw/postgres-with-pg-cron:latest").asCompatibleSubstituteFor("postgres");
     protected static String TEST_TABLE_NAME = "pg_cron_test";
-    protected static String TEST_FUNCTION_NAME = "insert_rows_each_second_for_10_seconds()";
+    protected static String TEST_FUNCTION_NAME = "insert_rows_each_second_for_10_seconds";
     protected Jdbi jdbi;
 
     @BeforeEach
@@ -54,7 +54,7 @@ public abstract class AbstractEssentialsSchedulerTest {
 
     protected void setupTestFunction(String functionName, JdbiUnitOfWorkFactory unitOfWorkFactory) {
         String sql = bind("""
-            CREATE OR REPLACE FUNCTION {:functionName}
+            CREATE OR REPLACE FUNCTION {:functionName}()
             RETURNS void AS $$
             DECLARE
                 i INT;

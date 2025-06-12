@@ -23,14 +23,16 @@ import dk.trustworks.essentials.components.foundation.scheduler.EssentialsSchedu
  * This immutable record encapsulates the details of a job, including the
  * target function to be executed and the cron expression defining when
  * the job is to be run.
+ * Only use the function name without () or any sql, the name is validated.
+ * Function arguments are not supported yet.
  * <pre>
- *      function: sample_db_metrics()
+ *      function: sample_db_metrics
  *      cronExpression: *'/'1 * * * *
  * </pre>
  * A PgCronJob implements the EssentialsScheduledJob interface, allowing
  * it to be used with job schedulers that support this interface.
  *
- * @param function        the name of the function to be executed as part of the cron job
+ * @param function        the name of the function (without () and sql) to be executed as part of the cron job
  * @param cronExpression  the cron expression indicating the schedule of the job
  */
 public record PgCronJob(String function, CronExpression cronExpression) implements EssentialsScheduledJob {

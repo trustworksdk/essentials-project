@@ -24,11 +24,14 @@ import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronRepository.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
-import dk.trustworks.essentials.shared.Lifecycle;
+import dk.trustworks.essentials.shared.*;
 import org.slf4j.*;
 
 import java.util.*;
 import java.util.concurrent.*;
+
+import static dk.trustworks.essentials.shared.FailFast.*;
+import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
 /**
  * DefaultEssentialsScheduler is a task scheduler implementation that manages scheduling for both
@@ -65,8 +68,9 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     public DefaultEssentialsScheduler(HandleAwareUnitOfWorkFactory<?> unitOfWorkFactory,
                                       FencedLockManager lockManager,
                                       int schedulerThreads) {
-        this.unitOfWorkFactory = unitOfWorkFactory;
-        this.fencedLockManager = lockManager;
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
+        this.fencedLockManager = requireNonNull(lockManager, "lockManager cannot be null");
+        requireTrue(schedulerThreads > 0, "schedulerThreads must be greater than 0");
         this.schedulerThreads = schedulerThreads;
         this.pgCronRepository = new PgCronRepository(unitOfWorkFactory);
         this.executorScheduledJobRepository = new ExecutorScheduledJobRepository(unitOfWorkFactory);
@@ -121,7 +125,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         log.debug("Cancelling ExecutorJob '{}'", name);
         try {
             // TODO: use MultiTableChangeListener to cancel future and remove in memory job executor job
-            return executorScheduledJobRepository.delete(name);
+            return executorScheduledJobRepository.deleteAll(name);
         } catch (Exception e) {
             log.warn("Failed to cancel executor job {}", name, e);
         }
@@ -129,15 +133,19 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     }
 
     private void scheduleExecutorJobInternal(ExecutorJob job) {
-        ScheduledFuture<?> future = executorService.scheduleAtFixedRate(
-                job.task(), job.fixedDelay().initialDelay(), job.fixedDelay().period(), job.fixedDelay().unit());
-        log.info("✅ Added ExecutorJob '{}'", job);
-        executorJobFutures.put(job, future);
-        executorScheduledJobRepository.insert(job);
+        if (!executorScheduledJobRepository.existsByName(job.name())) {
+            ScheduledFuture<?> future = executorService.scheduleAtFixedRate(
+                    job.task(), job.fixedDelay().initialDelay(), job.fixedDelay().period(), job.fixedDelay().unit());
+            log.info("✅ Added ExecutorJob '{}'", job);
+            executorJobFutures.put(job, future);
+            executorScheduledJobRepository.insert(job);
+        } else {
+            log.warn("ExecutorJob '{}' already exists", job);
+        }
     }
 
     private void schedulePgCronJobInternal(PgCronJob job) {
-        Integer jobId = pgCronRepository.schedule(job);
+        var jobId = pgCronRepository.schedule(job);
         if (jobId != null) {
             log.info("✅ Added PgCronJob '{}' with jobId '{}'", job, jobId);
             pgCronJobIds.put(job, jobId);
@@ -166,7 +174,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
             tryAndCreatePgCronExtension();
             unitOfWorkFactory.usingUnitOfWork(uow -> {
-                boolean available = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_cron");
+                var available = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_cron");
                 if (available) {
                     boolean loaded = determineIfPgCronIsLoaded();
                     pgCronAvailable = loaded;
@@ -189,9 +197,9 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
     private boolean determineIfPgCronIsLoaded() {
         try {
-            pgCronRepository.schedule(new PgCronJob("test()", CronExpression.OEN_SECOND));
+            pgCronRepository.schedule(new PgCronJob("test", CronExpression.ONE_SECOND));
         } catch (Exception e) {
-            boolean notLoaded = PostgresqlUtil.isPGExtensionNotLoadedException(e);
+            var notLoaded = PostgresqlUtil.isPGExtensionNotLoadedException(e);
             if (!notLoaded) {
                 log.warn("Failed to determine if pg_cron is loaded", e);
             }
@@ -205,7 +213,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
         if (pgCronAvailable) {
             try {
-                long total = pgCronRepository.getTotalPgCronEntries();
+                var total = pgCronRepository.getTotalPgCronEntries();
                 if (total > 0) {
                     // Fetch in pages to avoid too‐large lists
                     long fetched = 0;
@@ -224,7 +232,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         }
 
         try {
-            executorScheduledJobRepository.delete();
+            executorScheduledJobRepository.deleteAll();
         } catch (Exception e) {
             log.warn("Failed to purge stale executor scheduled jobs on lock acquisition", e);
         }
@@ -235,9 +243,16 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     private void onLockReleased(FencedLock lock) {
         log.info("🚨 FencedLock '{}' was RELEASED; unscheduling all pg_cron and executor tasks immediately.", lockName);
 
+        // TODO: should we do this ?
         unschedulePgCronJobs();
 
         unscheduleExecutorJobs();
+
+        try {
+            executorScheduledJobRepository.deleteAll();
+        } catch (Exception e) {
+            log.warn("Failed to purge stale executor scheduled jobs on lock acquisition", e);
+        }
     }
 
     private void scheduleJobs() {
@@ -268,10 +283,9 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
             started = false;
             log.info("⏹ Stopping Essentials Scheduler (pg_cron available = '{}')", pgCronAvailable);
 
-            // 1) If we still hold the fence lock, unschedule all DB entries before we release
             if (fencedLockManager.isLockAcquired(lockName)) {
                 try {
-                    executorScheduledJobRepository.delete();
+                    executorScheduledJobRepository.deleteAll();
                 } catch (Exception e) {
                     log.warn("Error deleting executor scheduled jobs in stop()", e);
                 }

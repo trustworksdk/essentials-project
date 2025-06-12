@@ -41,7 +41,11 @@ public class CronExpression extends CharSequenceType<CronExpression> {
         super(value);
     }
 
-    public static final CronExpression OEN_SECOND = new CronExpression("1 seconds");
+    public static CronExpression of(String value) {
+        return new CronExpression(value);
+    }
+
+    public static final CronExpression ONE_SECOND = new CronExpression("1 seconds");
     public static final CronExpression TEN_SECOND = new CronExpression("10 seconds");
     public static final CronExpression ONE_MINUTE = new CronExpression("*/1 * * * *");
     public static final CronExpression ONE_HOUR = new CronExpression("0 * * * *");

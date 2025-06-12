@@ -8,6 +8,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
@@ -24,8 +25,8 @@ public class ExecutorScheduledJobRepository {
 
     public ExecutorScheduledJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                          String sharedTableName) {
-        this.unitOfWorkFactory = unitOfWorkFactory;
-        this.sharedTableName = sharedTableName;
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
+        this.sharedTableName = requireNonNull(sharedTableName, "sharedTableName cannot be null");
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedTableName);
         initializeTable();
     }
@@ -40,9 +41,7 @@ public class ExecutorScheduledJobRepository {
      * - `initial_delay`: the delay before the first execution (BIGINT, not null).
      * - `period`: interval between executions (BIGINT, not null).
      * - `time_unit`: the time unit of the delay and period (TEXT, not null).
-     * - `scheduled_at`: the initial scheduling timestamp (TIMESTAMPTZ, not null).
-     * <p>
-     * Additionally, an index is created on the `name` column to optimize query performance.
+     * - `scheduled_at`: when the jib was initially added to the repository (TIMESTAMPTZ, not null).
      */
     private void initializeTable() {
         String sql = bind("""
@@ -56,7 +55,6 @@ public class ExecutorScheduledJobRepository {
                 """, arg("tableName", sharedTableName));
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             uow.handle().execute(sql);
-            uow.handle().execute(bind("CREATE INDEX IF NOT EXISTS idx_{:tableName}_name ON {:tableName} (name)", arg("tableName", sharedTableName)));
         });
     }
 
@@ -110,11 +108,11 @@ public class ExecutorScheduledJobRepository {
      * @return {@code true} if the entry was successfully deleted (i.e., at least one row was affected),
      *         {@code false} if no entry with the specified name exists in the database.
      */
-    public boolean delete(String name) {
+    public boolean deleteAll(String name) {
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             var sql = bind(
                     """
-                            DELETE FROM {:tableName} WHERE name = :name)
+                            DELETE FROM {:tableName} WHERE name = :name
                             """,
                     arg("tableName", sharedTableName));
             Update u = uow.handle().createUpdate(sql);
@@ -137,7 +135,7 @@ public class ExecutorScheduledJobRepository {
         String sql = bind("""
                             SELECT name, initial_delay, period, time_unit, scheduled_at
                                                         FROM {:tableName}
-                                                        ORDER BY {:direction}
+                                                        ORDER BY scheduled_at {:direction}
                                                         LIMIT :limit OFFSET :offset
                             """, arg("tableName", sharedTableName),
                           arg("direction", direction));
@@ -177,7 +175,7 @@ public class ExecutorScheduledJobRepository {
     /**
      * Deletes all entries from the database table specified by the {@code sharedTableName} field.
      */
-    public void delete() {
+    public void deleteAll() {
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             uow.handle().execute(bind("DELETE FROM {:tableName}", arg("tableName", sharedTableName)));
         });

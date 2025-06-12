@@ -31,6 +31,7 @@ public interface SchedulerApi {
      * @param startIndex the index of the first job to retrieve in the paginated result
      * @param pageSize   the maximum number of jobs to include in the result
      * @return a list of {@link ApiPgCronJob} instances representing the PostgreSQL cron jobs
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the provided principal does not have the required permissions to access the pg_cron jobs
      */
     List<ApiPgCronJob> getPgCronJobs(Object principal, long startIndex, long pageSize);
 
@@ -39,6 +40,7 @@ public interface SchedulerApi {
      *
      * @param principal the principal object representing the user or entity querying for cron jobs
      * @return the total count of PostgreSQL cron jobs associated with the given principal
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the provided principal does not have the required permissions to access the pg_cron jobs
      */
     long getTotalPgCronJobs(Object principal);
 
@@ -52,6 +54,7 @@ public interface SchedulerApi {
      * @param startIndex the index of the first execution detail to retrieve in the paginated result
      * @param pageSize   the maximum number of execution details to include in the result
      * @return a list of {@link ApiPgCronJobRunDetails} instances representing the details of individual cron job executions
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the provided principal does not have the required permissions to access the pg_cron jobs
      */
     List<ApiPgCronJobRunDetails> getPgCronJobRunDetails(Object principal, Integer jobId, long startIndex, long pageSize);
 
@@ -61,6 +64,7 @@ public interface SchedulerApi {
      * @param principal the principal object representing the user or entity querying for cron job run details
      * @param jobId     the unique identifier of the PostgreSQL cron job for which the total run details are being requested
      * @return the total count of execution details associated with the specified PostgreSQL cron job
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the provided principal does not have the required permissions to access the pg_cron jobs
      */
     long getTotalPgCronJobRunDetails(Object principal, Integer jobId);
 
@@ -73,6 +77,7 @@ public interface SchedulerApi {
      * @param startIndex the index of the first job to retrieve in the paginated result
      * @param pageSize   the maximum number of jobs to include in the result
      * @return a list of {@link ApiExecutorJob} instances representing the API executor jobs
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the provided principal does not have the required permissions to access the pg_cron jobs
      */
     List<ApiExecutorJob> getExecutorJobs(Object principal, long startIndex, long pageSize);
 
@@ -81,6 +86,7 @@ public interface SchedulerApi {
      *
      * @param principal the principal object representing the user or entity querying for executor jobs
      * @return the total count of executor jobs associated with the given principal
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the provided principal does not have the required permissions to access the pg_cron jobs
      */
     long getTotalExecutorJobs(Object principal);
 }
