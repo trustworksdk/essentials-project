@@ -1,3 +1,19 @@
+/*
+ * Copyright 2021-2025 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package dk.trustworks.essentials.components.foundation.scheduler.executor;
 
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
@@ -12,6 +28,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
+/**
+ * A repository for managing scheduled executor jobs in a relational database. This class provides methods
+ * to create, read, update, and delete job entries stored in a database table. Each job entry contains details
+ * such as the job's name, initial delay, execution period, time unit, and the timestamp of when it was scheduled.
+ * <p>
+ * The table can either use a default name or a custom name provided at instantiation, and the table structure
+ * is validated or created if it does not exist.
+ */
 public class ExecutorScheduledJobRepository {
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
