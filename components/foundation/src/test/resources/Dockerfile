@@ -25,5 +25,5 @@ COPY --from=builder /usr/lib/postgresql /usr/lib/postgresql
 COPY --from=builder /usr/share/postgresql /usr/share/postgresql
 
 # Copy initialization script
-COPY init.sql /docker-entrypoint-initdb.d/
+COPY test-containers-init.sql /docker-entrypoint-initdb.d/
 

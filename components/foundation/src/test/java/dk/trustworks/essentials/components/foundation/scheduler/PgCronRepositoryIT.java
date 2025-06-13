@@ -25,7 +25,9 @@ public class PgCronRepositoryIT {
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")
-            .withPassword("postgres");
+            .withPassword("postgres")
+            .withInitScript("test-containers-init.sql")
+            .withReuse(true);;
 
     private static Jdbi             jdbi;
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;

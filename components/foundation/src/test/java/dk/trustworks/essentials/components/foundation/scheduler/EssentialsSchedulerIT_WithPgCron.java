@@ -37,7 +37,9 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")
-            .withPassword("postgres");
+            .withPassword("postgres")
+            .withInitScript("test-containers-init.sql")
+            .withReuse(true);
 
 
     @Override
