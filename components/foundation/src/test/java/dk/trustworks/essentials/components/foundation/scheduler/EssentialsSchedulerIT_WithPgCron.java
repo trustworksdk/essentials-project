@@ -71,7 +71,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         setupTestFunction(unitOfWorkFactory);
 
         var cron = CronExpression.TEN_SECOND;
-        essentialsScheduler.schedulePgCronJob(new PgCronJob(TEST_FUNCTION_NAME, cron));
+        essentialsScheduler.schedulePgCronJob(new PgCronJob("test", TEST_FUNCTION_NAME, cron));
         waitAtMost(Duration.ofSeconds(30)).until(() -> {
             int rows = getNumberOfRowsInTable(unitOfWorkFactory);
             return rows == 15;
@@ -123,8 +123,8 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         setupTestFunction(unitOfWorkFactory);
 
         var cron = CronExpression.TEN_SECOND;
-        essentialsScheduler1.schedulePgCronJob(new PgCronJob(TEST_FUNCTION_NAME, cron));
-        essentialsScheduler2.schedulePgCronJob(new PgCronJob(TEST_FUNCTION_NAME, cron));
+        essentialsScheduler1.schedulePgCronJob(new PgCronJob("test", TEST_FUNCTION_NAME, cron));
+        essentialsScheduler2.schedulePgCronJob(new PgCronJob("test", TEST_FUNCTION_NAME, cron));
         waitAtMost(Duration.ofSeconds(30)).until(() -> {
             int rows = getNumberOfRowsInTable(unitOfWorkFactory);
             return rows == 15;
@@ -153,7 +153,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         var essentialsScheduler1 =
                 new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager1, 2);
         essentialsScheduler1.schedulePgCronJob(
-                new PgCronJob(TEST_FUNCTION_NAME, CronExpression.TEN_SECOND)
+                new PgCronJob("test", TEST_FUNCTION_NAME, CronExpression.TEN_SECOND)
                                               );
 
         var fencedLockManager2 = new TestFencedLockManager(jdbi);
@@ -161,7 +161,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         var essentialsScheduler2 =
                 new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager2, 2);
         essentialsScheduler2.schedulePgCronJob(
-                new PgCronJob(TEST_FUNCTION_NAME, CronExpression.TEN_SECOND)
+                new PgCronJob("test", TEST_FUNCTION_NAME, CronExpression.TEN_SECOND)
                                               );
 
         essentialsScheduler1.start();

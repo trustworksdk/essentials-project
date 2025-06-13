@@ -50,7 +50,7 @@ public class PgCronRepository {
 
     private static final Logger log = LoggerFactory.getLogger(PgCronRepository.class);
 
-    private static final Pattern FN_NAME = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
+    public static final Pattern FN_NAME = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
 
@@ -65,9 +65,6 @@ public class PgCronRepository {
      */
     public PgCronRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            uow.handle().execute("CREATE UNIQUE INDEX IF NOT EXISTS cron_job_unique ON cron.job(schedule, command);");
-        });
     }
 
     /**
@@ -93,16 +90,17 @@ public class PgCronRepository {
 
         String innerQuery = "SELECT " + functionName + "();";
 
-        Integer jobExists = doesJobExist(cronExpression, innerQuery);
+        Integer jobExists = doesJobExist(cronExpression);
         if (jobExists != null) {
             return jobExists;
         }
 
-        String sql = "SELECT cron.schedule(:cron, :query)::int;";
+        String sql = "SELECT cron.schedule(:name, :cron, :query)::int;";
 
         return unitOfWorkFactory.withUnitOfWork(uow ->
                                                         uow.handle()
                                                            .createQuery(sql)
+                                                           .bind("name", job.name())
                                                            .bind("cron", cronExpression)
                                                            .bind("query", innerQuery)
                                                            .mapTo(Integer.class)
@@ -115,20 +113,33 @@ public class PgCronRepository {
      * Checks whether a job exists in the database with the specified cron expression
      * and query by querying the cron job table.
      *
-     * @param cronExpression the cron expression of the job to check; must not be null
-     * @param query the command or query associated with the job; must not be null
-     * @return the ID of the existing job as an {@code Integer}, or {@code null} if no matching job is found
+     * @param name@return the ID of the existing job as an {@code Integer}, or {@code null} if no matching job is found
      */
-    public Integer doesJobExist(String cronExpression, String query) {
+    public Integer doesJobExist(String name) {
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             return uow.handle()
-                                  .createQuery("SELECT jobid FROM cron.job WHERE schedule = :cron AND command = :query")
-                                  .bind("cron", cronExpression)
-                                  .bind("query", query)
-                                  .mapTo(Integer.class)
-                                  .findOne()
-                                  .orElse(null);
+                              .createQuery("SELECT jobid FROM cron.job WHERE jobname = :name")
+                              .bind("name", name)
+                              .mapTo(Integer.class)
+                              .findOne()
+                              .orElse(null);
 
+        });
+    }
+
+    /**
+     * Deletes jobs in the database whose names end with the specified instance ID.
+     * This is achieved by performing a SQL delete operation on the job table.
+     *
+     * @param instanceId the instance ID that is appended to the job name; only jobs with names ending in this instance ID will be deleted
+     */
+    public void deleteJobByNameEndingWithInstanceId(String instanceId) {
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            int numberOfDeletedJobs = uow.handle()
+                           .createUpdate("DELETE FROM cron.job WHERE jobname LIKE '%' ||  :instanceid")
+                           .bind("instanceid", "_" + instanceId)
+                           .execute();
+            log.debug("Deleted {} PgCronJob(s) with name ending with '{}'", numberOfDeletedJobs, instanceId);
         });
     }
 

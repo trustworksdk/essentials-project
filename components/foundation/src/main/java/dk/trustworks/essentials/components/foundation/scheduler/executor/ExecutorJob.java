@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.foundation.scheduler.executor;
 
 import dk.trustworks.essentials.components.foundation.scheduler.EssentialsScheduledJob;
+import dk.trustworks.essentials.shared.network.Network;
 
 /**
  * Represents a scheduled job that can be executed by an executor with a specified fixed delay.
@@ -31,14 +32,15 @@ import dk.trustworks.essentials.components.foundation.scheduler.EssentialsSchedu
  */
 public record ExecutorJob(String name, FixedDelay fixedDelay, Runnable task) implements EssentialsScheduledJob {
 
+
     /**
-     * Returns the name of this scheduled job concatenated with its fixed delay configuration as a string.
-     * The resulting string uniquely identifies the job and includes its name and scheduling details.
+     * Returns the unique name of the job, constructed by appending the hostname of the current machine
+     * to the job's original name, separated by an underscore.
      *
-     * @return the concatenation of the job's name and its fixed delay configuration.
+     * @return the unique job name combining the original name and the hostname of the machine.
      */
     @Override
     public String name() {
-        return name + "_" + fixedDelay.toString();
+        return name + "_" + Network.hostName();
     }
 }

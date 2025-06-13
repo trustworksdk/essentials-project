@@ -17,8 +17,10 @@
 package dk.trustworks.essentials.components.foundation.scheduler.executor;
 
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronRepository;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import org.jdbi.v3.core.statement.*;
+import org.slf4j.*;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -37,6 +39,8 @@ import static dk.trustworks.essentials.shared.MessageFormatter.bind;
  * is validated or created if it does not exist.
  */
 public class ExecutorScheduledJobRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(ExecutorScheduledJobRepository.class);
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final String                                                        sharedTableName;
@@ -132,7 +136,7 @@ public class ExecutorScheduledJobRepository {
      * @return {@code true} if the entry was successfully deleted (i.e., at least one row was affected),
      *         {@code false} if no entry with the specified name exists in the database.
      */
-    public boolean deleteAll(String name) {
+    public boolean deleteByName(String name) {
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             var sql = bind(
                     """
@@ -143,6 +147,21 @@ public class ExecutorScheduledJobRepository {
             u.bind("name", name);
             int affectedRows = u.execute();
             return affectedRows != 0;
+        });
+    }
+
+
+    public void deleteByNameEndingWithInstanceId(String instanceId) {
+         unitOfWorkFactory.usingUnitOfWork(uow -> {
+            var sql = bind(
+                    """
+                            DELETE FROM {:tableName} WHERE name LIKE '%' || :instanceid
+                            """,
+                    arg("tableName", sharedTableName));
+            Update u = uow.handle().createUpdate(sql);
+            u.bind("instanceid", instanceId);
+            int affectedRows = u.execute();
+            log.debug("Deleted {} scheduled job entries ending with instance id '{}'", affectedRows, instanceId);
         });
     }
 

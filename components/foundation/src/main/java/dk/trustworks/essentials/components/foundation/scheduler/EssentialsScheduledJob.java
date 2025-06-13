@@ -26,5 +26,12 @@ package dk.trustworks.essentials.components.foundation.scheduler;
  */
 public interface EssentialsScheduledJob {
 
+    /**
+     * Retrieves the name of the scheduled job.
+     * <p>
+     * The name has be unique and will be a combination of the given name and node instance id.
+     *
+     * @return the unique name identifying the job
+     */
     String name();
 }

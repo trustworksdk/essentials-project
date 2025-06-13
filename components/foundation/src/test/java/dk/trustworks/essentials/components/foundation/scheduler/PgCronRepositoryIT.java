@@ -3,7 +3,7 @@ package dk.trustworks.essentials.components.foundation.scheduler;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronRepository.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
-import org.assertj.core.api.Assertions;
+import dk.trustworks.essentials.shared.network.Network;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.*;
 @Testcontainers
 public class PgCronRepositoryIT {
 
-    private static DockerImageName pgCronImage = DockerImageName.parse("lcramontw/postgres-with-pg-cron:latest").asCompatibleSubstituteFor("postgres");
+    private static DockerImageName pgCronImage = DockerImageName.parse("ghcr.io/trustworksdk/postgres-with-pgcron:latest").asCompatibleSubstituteFor("postgres");
 
     @Container
     private static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(pgCronImage)
@@ -27,7 +27,7 @@ public class PgCronRepositoryIT {
             .withUsername("postgres")
             .withPassword("postgres")
             .withInitScript("test-containers-init.sql")
-            .withReuse(true);;
+            .withReuse(true);
 
     private static Jdbi             jdbi;
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
@@ -48,11 +48,11 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_schedule_and_does_job_exist() {
-        var  job     = new PgCronJob("test_fn", CronExpression.of("0 0 * * *"));
+        var  job     = new PgCronJob("test", "test_fn", CronExpression.of("0 0 * * *"));
         var    jobId = repository.schedule(job);
         assertThat(jobId).isNotNull();
 
-        var existingId = repository.doesJobExist(job.cronExpression().toString(), "SELECT test_fn();");
+        var existingId = repository.doesJobExist(job.name());
         assertThat(jobId).isEqualTo(existingId);
 
         var secondId = repository.schedule(job);
@@ -61,7 +61,7 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_fetch_and_count_entries() {
-        var job = new PgCronJob( "test_fn", CronExpression.of("0 1 * * *"));
+        var job = new PgCronJob("test", "test_fn", CronExpression.of("0 1 * * *"));
         var jobId = repository.schedule(job);
 
         var total = repository.getTotalPgCronEntries();
@@ -81,16 +81,16 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_unschedule() {
-        var job = new PgCronJob("test_fn", CronExpression.of("0 2 * * *"));
+        var job = new PgCronJob("test", "test_fn", CronExpression.of("0 2 * * *"));
         var jobId = repository.schedule(job);
         repository.unschedule(jobId);
 
-        assertThat(repository.doesJobExist(job.cronExpression().toString(), "SELECT test_fn();")).isNull();
+        assertThat(repository.doesJobExist(job.name())).isNull();
     }
 
     @Test
     void verify_job_run_details() {
-        var job = new PgCronJob( "test_fn", CronExpression.of("0 3 * * *"));
+        var job = new PgCronJob("test", "test_fn", CronExpression.of("0 3 * * *"));
         var jobId = repository.schedule(job);
 
         unitOfWorkFactory.usingUnitOfWork(uow -> {
@@ -112,8 +112,19 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_invalid_function_name_throws() {
-        var job = new PgCronJob( "invalid-fn(DROP TABLE);", CronExpression.of("0 4 * * *"));
+        var job = new PgCronJob("test", "invalid-fn(DROP TABLE);", CronExpression.of("0 4 * * *"));
         assertThatThrownBy(() -> repository.schedule(job)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void verify_delete_job_by_name_ending_with_instance_id() {
+        var instanceId = Network.hostName();
+        var job = new PgCronJob("test", "test_fn", CronExpression.of("0 2 * * *"));
+        repository.schedule(job);
+
+        repository.deleteJobByNameEndingWithInstanceId(instanceId);
+
+        assertThat(repository.getTotalPgCronEntries()).isZero();
     }
 
 }

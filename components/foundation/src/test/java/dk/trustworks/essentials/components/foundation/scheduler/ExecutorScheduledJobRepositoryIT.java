@@ -3,6 +3,7 @@ package dk.trustworks.essentials.components.foundation.scheduler;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.*;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorScheduledJobRepository.ExecutorJobEntry;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
+import dk.trustworks.essentials.shared.network.Network;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -55,7 +56,7 @@ public class ExecutorScheduledJobRepositoryIT {
         repository.insert(job);
         assertThat(repository.existsByName(job.name())).isTrue();
 
-        var deleted = repository.deleteAll(job.name());
+        var deleted = repository.deleteByName(job.name());
         assertThat(deleted).isTrue();
         assertThat(repository.existsByName(job.name())).isFalse();
     }
@@ -90,15 +91,17 @@ public class ExecutorScheduledJobRepositoryIT {
         var total = repository.getTotalExecutorJobEntries();
         assertThat(total).isEqualTo(3);
 
+        var instanceId = Network.hostName();
+
         var ascList = repository.fetchExecutorJobEntries(10, 0, true);
         assertThat(ascList).hasSize(3);
         assertThat(ascList.stream().map(ExecutorJobEntry::name))
-                .containsExactly("A_delay:10_period:20_unit:hours", "B_delay:30_period:40_unit:minutes", "C_delay:50_period:60_unit:days");
+                .containsExactly("A_" + instanceId, "B_" + instanceId, "C_" + instanceId);
 
         var descList = repository.fetchExecutorJobEntries(10, 0, false);
         assertThat(descList).hasSize(3);
         assertThat(descList.stream().map(ExecutorJobEntry::name))
-                .containsExactly("C_delay:50_period:60_unit:days", "B_delay:30_period:40_unit:minutes", "A_delay:10_period:20_unit:hours");
+                .containsExactly("C_" + instanceId, "B_" + instanceId, "A_" + instanceId);
     }
 
     @Test
@@ -112,6 +115,21 @@ public class ExecutorScheduledJobRepositoryIT {
         assertThat(repository.getTotalExecutorJobEntries()).isGreaterThan(0);
 
         repository.deleteAll();
+        assertThat(repository.getTotalExecutorJobEntries()).isZero();
+    }
+
+    @Test
+    void verify_delete_job_by_name_ending_with_instance_id() {
+        var instanceId = Network.hostName();
+        var job = new ExecutorJob(
+                "temp",
+                new FixedDelay(5L, 5L, TimeUnit.SECONDS),
+                () -> {}
+        );
+        repository.insert(job);
+
+        repository.deleteByNameEndingWithInstanceId(instanceId);
+
         assertThat(repository.getTotalExecutorJobEntries()).isZero();
     }
 

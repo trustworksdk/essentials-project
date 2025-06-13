@@ -28,7 +28,9 @@ import java.util.List;
  * This interface provides a method for scheduling various types of jobs.
  * <p>
  * ** Note: This scheduler is not intended to replace a full-fledged scheduler such as Quartz or Spring, it is a simple
- * scheduler that utilizes the postgresql pg_cron extension if available or a simple ScheduledExecutorService to schedule jobs. **
+ * scheduler that utilizes the postgresql pg_cron extension if available or a simple ScheduledExecutorService to schedule jobs.
+ * It is meant to be used internally by essentials components to schedule jobs.
+ * **
  */
 public interface EssentialsScheduler {
 
