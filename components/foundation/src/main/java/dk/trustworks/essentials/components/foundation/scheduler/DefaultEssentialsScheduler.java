@@ -190,14 +190,10 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     }
 
     private void schedulePgCronJobInternal(PgCronJob job) {
-        if (pgCronRepository.doesJobExist(job.name()) == null) {
-            var jobId = pgCronRepository.schedule(job);
-            if (jobId != null) {
-                log.info("✅ Added PgCronJob '{}' with jobId '{}'", job, jobId);
-                pgCronJobIds.put(job, jobId);
-            }
-        } else {
-            log.warn("PgCronJob '{}' already exists", job);
+        var jobId = pgCronRepository.schedule(job);
+        if (jobId != null) {
+            log.info("✅ Added PgCronJob '{}' with jobId '{}'", job, jobId);
+            pgCronJobIds.put(job, jobId);
         }
     }
 
