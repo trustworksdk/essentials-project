@@ -11,7 +11,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
 public abstract class AbstractEssentialsSchedulerTest {
 
-    private static final String IMAGE_PROP = System.getProperty("pgcron.image", "lcramontw/postgres-with-pg-cron:latest");
+    private static final String IMAGE_PROP = System.getenv().getOrDefault("PGCRON_IMAGE", "essentials-postgres-with-pgcron:latest");
     protected static DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
     protected static String TEST_TABLE_NAME = "pg_cron_test";
     protected static String TEST_FUNCTION_NAME = "insert_rows_each_second_for_10_seconds";

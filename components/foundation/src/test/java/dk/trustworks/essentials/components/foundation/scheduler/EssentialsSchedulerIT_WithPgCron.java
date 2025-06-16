@@ -29,6 +29,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.waitAtMost;
 
 
+/**
+ * When running it locally set env variable PGCRON_IMAGE=lcramontw/postgres-with-pg-cron:latest
+ */
 @Testcontainers
 public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedulerTest {
 

@@ -15,10 +15,13 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.*;
 
+/**
+ * When running it locally set env variable PGCRON_IMAGE=lcramontw/postgres-with-pg-cron:latest
+ */
 @Testcontainers
 public class PgCronRepositoryIT {
 
-    private static final String IMAGE_PROP = System.getProperty("pgcron.image", "lcramontw/postgres-with-pg-cron:latest");
+    private static final String IMAGE_PROP = System.getenv().getOrDefault("PGCRON_IMAGE", "essentials-postgres-with-pgcron:latest");
     protected static DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
 
     @Container
