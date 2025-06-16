@@ -439,6 +439,7 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
                     <configuration>
+                        <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
                         <parallel>classes</parallel>  <!-- Can also use "classes" or "both" -->
                         <threadCount>1</threadCount>
                         <forkCount>2</forkCount>  <!-- Number of JVM forks for parallel execution -->

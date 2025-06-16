@@ -99,6 +99,19 @@ jobs:
           echo '  make bootstrap'
           echo '  make release'
           exit 1
+      - name: Upload JUnit test results
+        if: always()  # ensures this step runs even if tests fail
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-results
+          path: target/surefire-reports/
+      - name: Report JUnit Test Results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: JUnit Tests
+          path: target/surefire-reports/*.xml
+          reporter: java-junit
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
