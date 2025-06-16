@@ -18,7 +18,8 @@ import static org.assertj.core.api.Assertions.*;
 @Testcontainers
 public class PgCronRepositoryIT {
 
-    private static DockerImageName pgCronImage = DockerImageName.parse("ghcr.io/trustworksdk/postgres-with-pgcron:latest").asCompatibleSubstituteFor("postgres");
+    private static final String IMAGE_PROP = System.getProperty("pgcron.image", "lcramontw/postgres-with-pg-cron:latest");
+    protected static DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
 
     @Container
     private static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(pgCronImage)
