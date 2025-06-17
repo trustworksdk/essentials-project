@@ -1039,6 +1039,7 @@ public class EssentialsComponentsProperties {
         private MetricsProperties commandBus     = new MetricsProperties();
         private MetricsProperties durableQueues  = new MetricsProperties();
         private MetricsProperties messageHandler = new MetricsProperties();
+        private MetricsProperties sql            = new MetricsProperties();
 
         /**
          * Returns the metrics properties for the command bus.
@@ -1066,6 +1067,13 @@ public class EssentialsComponentsProperties {
         public MetricsProperties getMessageHandler() {
             return messageHandler;
         }
+
+        /**
+         * Returns the metrics properties for SQL configuration.
+         *
+         * @return the SQL metrics properties.
+         */
+        public MetricsProperties getSql() { return sql; }
     }
 
 
