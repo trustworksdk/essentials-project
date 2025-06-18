@@ -32,7 +32,10 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: junit-results
-        path: '**/target/surefire-reports/'
+        path: |
+          **/target/surefire-reports/
+          **/target/failsafe-reports/
+        retention-days: 2
     #- name: Report JUnit Test Results
     #  if: always()
     #  uses: dorny/test-reporter@v1

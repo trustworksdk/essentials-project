@@ -30,7 +30,7 @@ import dk.trustworks.essentials.shared.network.Network;
  *      function: sample_db_metrics
  *      cronExpression: *'/'1 * * * *
  * </pre>
- * A PgCronJob implements the EssentialsScheduledJob interface, allowing
+ * A PgCronJob implements the {@link EssentialsScheduledJob} interface, allowing
  * it to be used with job schedulers that support this interface.
  *
  * @param name

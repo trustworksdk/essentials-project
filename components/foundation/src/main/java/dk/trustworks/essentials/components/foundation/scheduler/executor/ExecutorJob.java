@@ -24,7 +24,7 @@ import dk.trustworks.essentials.shared.network.Network;
  * This record encapsulates the job's name that has to be unique when saved to storage name and fixed delay is combined for uniqueness, its fixed delay configuration for scheduling,
  * and the task to be executed.
  * <p>
- * This implementation conforms to the EssentialsScheduledJob interface, allowing it to
+ * This implementation conforms to the {@link EssentialsScheduledJob} interface, allowing it to
  * be used within the scheduling system.
  * <p>
  * The fixed delay specifies the scheduling parameters, such as the initial delay, the period between

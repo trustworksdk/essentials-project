@@ -21,6 +21,7 @@ import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
 import java.util.List;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.validateHasAnyEssentialsSecurityRoles;
 
@@ -35,8 +36,8 @@ public class DefaultSchedulerApi implements SchedulerApi {
 
     public DefaultSchedulerApi(EssentialsScheduler essentialsScheduler,
                                EssentialsSecurityProvider securityProvider) {
-        this.essentialsScheduler = essentialsScheduler;
-        this.securityProvider = securityProvider;
+        this.essentialsScheduler = requireNonNull(essentialsScheduler, "essentialsScheduler cannot be null");
+        this.securityProvider = requireNonNull(securityProvider, "securityProvider cannot be null");
     }
 
     private void validateRoles(Object principal) {
@@ -81,6 +82,7 @@ public class DefaultSchedulerApi implements SchedulerApi {
 
     @Override
     public long getTotalExecutorJobs(Object principal) {
+        validateRoles(principal);
         return essentialsScheduler.geTotalExecutorJobEntries();
     }
 }
