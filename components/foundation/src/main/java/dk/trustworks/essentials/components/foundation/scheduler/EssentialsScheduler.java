@@ -38,6 +38,8 @@ public interface EssentialsScheduler {
      * Schedules a PostgreSQL cron job using the pg_cron extension. The job
      * encapsulates the target database function to be executed along with
      * the cron expression that specifies its execution schedule.
+     * <p>
+     * See {@link PgCronRepository} security note. To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code  PgCronJob#cronExpression} and {@code  PgCronJob#function} values
      *
      * @param job the PgCronJob instance representing the PostgreSQL function
      *            and its associated cron schedule to be registered for execution
@@ -56,7 +58,7 @@ public interface EssentialsScheduler {
     void scheduleExecutorJob(ExecutorJob job);
 
     /**
-     * Checks if the PostgreSQL `pg_cron` extension is available for use.
+     * Checks if the PostgreSQL `pg_cron` extension is available for use. Requires that the scheduler has been started to provide a valid value.
      * This method determines whether the `pg_cron` extension is present and properly loaded in the PostgreSQL database.
      *
      * @return true if the `pg_cron` extension is available and properly loaded, false otherwise
@@ -95,7 +97,7 @@ public interface EssentialsScheduler {
      * from the PostgreSQL `pg_cron` extension.
      *
      * @param jobId      the unique identifier of the specific `pg_cron` job for which the
-     *                   run details are to be fetched. Can be null to fetch details for all jobs.
+     *                   run details are to be fetched.
      * @param startIndex the starting index of the job run details to fetch
      * @param pageSize   the number of job run details to fetch per page
      * @return a list of `PgCronRepository.PgCronJobRunDetails` objects representing the
@@ -109,7 +111,7 @@ public interface EssentialsScheduler {
      * from the PostgreSQL `pg_cron` extension.
      *
      * @param jobId the unique identifier of the specific `pg_cron` job for which the total count
-     *              of run details is to be retrieved. Can be null to calculate the total for all jobs.
+     *              of run details is to be retrieved.
      * @return the total count of job run details available for the specified `pg_cron` job.
      */
     long getTotalPgCronJobRunDetails(Integer jobId);
@@ -128,5 +130,5 @@ public interface EssentialsScheduler {
      *
      * @return the total count of executor job entries.
      */
-    long geTotalExecutorJobEntries();
+    long getTotalExecutorJobEntries();
 }

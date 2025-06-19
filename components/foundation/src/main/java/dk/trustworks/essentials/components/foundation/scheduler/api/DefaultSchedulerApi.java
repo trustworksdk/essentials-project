@@ -83,6 +83,6 @@ public class DefaultSchedulerApi implements SchedulerApi {
     @Override
     public long getTotalExecutorJobs(Object principal) {
         validateRoles(principal);
-        return essentialsScheduler.geTotalExecutorJobEntries();
+        return essentialsScheduler.getTotalExecutorJobEntries();
     }
 }

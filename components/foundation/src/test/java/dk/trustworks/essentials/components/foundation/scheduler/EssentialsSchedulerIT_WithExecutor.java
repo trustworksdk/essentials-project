@@ -1,3 +1,19 @@
+/*
+ * Copyright 2021-2025 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package dk.trustworks.essentials.components.foundation.scheduler;
 
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
@@ -42,7 +58,7 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
 
                                                );
         long cronCount = essentialsScheduler.getTotalPgCronEntries();
-        long execCount = essentialsScheduler.geTotalExecutorJobEntries();
+        long execCount = essentialsScheduler.getTotalExecutorJobEntries();
         assertThat(cronCount).isEqualTo(0);
         assertThat(execCount).isEqualTo(0);
 
@@ -57,16 +73,19 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
 
         waitAtMost(Duration.ofSeconds(10)).until(() -> {
             int rows = getNumberOfRowsInTable(unitOfWorkFactory);
-            return rows == 3 || rows == 2;
+            return rows == 3 || rows == 2; // Timing in regards to the expire of the test data database rows
         });
 
         cronCount = essentialsScheduler.getTotalPgCronEntries();
-        execCount = essentialsScheduler.geTotalExecutorJobEntries();
+        execCount = essentialsScheduler.getTotalExecutorJobEntries();
         assertThat(cronCount).isEqualTo(0);
         assertThat(execCount).isEqualTo(1);
 
-        fencedLockManager.stop();
         essentialsScheduler.stop();
+        fencedLockManager.stop();
+
+        assertThat(essentialsScheduler.getTotalExecutorJobEntries()).isEqualTo(0);
+        waitAtMost(Duration.ofSeconds(5)).until(() -> !fencedLockManager.isLockAcquired(essentialsScheduler.getLockName()));
     }
 
     @Test
@@ -92,11 +111,11 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
 
                                                );
         long cronCount1 = essentialsScheduler1.getTotalPgCronEntries();
-        long execCount1 = essentialsScheduler1.geTotalExecutorJobEntries();
+        long execCount1 = essentialsScheduler1.getTotalExecutorJobEntries();
         assertThat(cronCount1).isEqualTo(0);
         assertThat(execCount1).isEqualTo(0);
         long cronCount2 = essentialsScheduler2.getTotalPgCronEntries();
-        long execCount2 = essentialsScheduler2.geTotalExecutorJobEntries();
+        long execCount2 = essentialsScheduler2.getTotalExecutorJobEntries();
         assertThat(cronCount2).isEqualTo(0);
         assertThat(execCount2).isEqualTo(0);
 
@@ -111,11 +130,11 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
 
         waitAtMost(Duration.ofSeconds(10)).until(() -> {
             int rows = getNumberOfRowsInTable(unitOfWorkFactory);
-            return rows == 3 || rows == 2;
+            return rows == 3 || rows == 2; // Timing in regards to the expire of the test data database rows
         });
 
         cronCount1 = essentialsScheduler1.getTotalPgCronEntries();
-        execCount1 = essentialsScheduler1.geTotalExecutorJobEntries();
+        execCount1 = essentialsScheduler1.getTotalExecutorJobEntries();
         assertThat(cronCount1).isEqualTo(0);
         assertThat(execCount1).isEqualTo(1);
 
@@ -158,11 +177,11 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
                                                );
 
         waitAtMost(Duration.ofSeconds(30)).until(() ->
-                                                         getNumberOfRowsInTable(unitOfWorkFactory) == 2 || getNumberOfRowsInTable(unitOfWorkFactory) == 3
+                                                         getNumberOfRowsInTable(unitOfWorkFactory) == 2 || getNumberOfRowsInTable(unitOfWorkFactory) == 3 // Timing in regards to the expire of the test data database rows
                                                 );
 
         long cronCount = essentialsScheduler1.getTotalPgCronEntries();
-        long execCount = essentialsScheduler1.geTotalExecutorJobEntries();
+        long execCount = essentialsScheduler1.getTotalExecutorJobEntries();
         assertThat(cronCount).isEqualTo(0);
         assertThat(execCount).isEqualTo(1);
 
@@ -173,10 +192,12 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
                                                          fencedLockManager2.isLockAcquired(essentialsScheduler2.getLockName())
                                                 );
 
-        waitAtMost(Duration.ofSeconds(30)).until(() -> getNumberOfRowsInTable(unitOfWorkFactory) == 1 || getNumberOfRowsInTable(unitOfWorkFactory) == 2);
+        waitAtMost(Duration.ofSeconds(30)).until(() ->
+                                                         getNumberOfRowsInTable(unitOfWorkFactory) == 1 || getNumberOfRowsInTable(unitOfWorkFactory) == 2 // Timing in regards to the expire of the test data database rows
+                                                );
 
         cronCount = essentialsScheduler2.getTotalPgCronEntries();
-        execCount = essentialsScheduler2.geTotalExecutorJobEntries();
+        execCount = essentialsScheduler2.getTotalExecutorJobEntries();
         assertThat(cronCount).isEqualTo(0);
         assertThat(execCount).isEqualTo(1);
 

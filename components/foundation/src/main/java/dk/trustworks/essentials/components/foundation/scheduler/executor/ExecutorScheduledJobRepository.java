@@ -17,8 +17,10 @@
 package dk.trustworks.essentials.components.foundation.scheduler.executor;
 
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.scheduler.JobNameResolver;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronRepository;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.shared.network.Network;
 import org.jdbi.v3.core.statement.*;
 import org.slf4j.*;
 
@@ -26,6 +28,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static dk.trustworks.essentials.components.foundation.scheduler.JobNameResolver.UNDER_SCORE;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
@@ -87,19 +90,23 @@ public class ExecutorScheduledJobRepository {
     }
 
     /**
-     * Inserts a new scheduled job into the database.
+     * Inserts a new job entry into the database for scheduling purposes. The entry
+     * is uniquely identified by a concatenation of the job's name and the instance identifier.
      *
-     * @param job the scheduled job to be inserted. Contains the job's name, its fixed delay configuration,
-     *            and other parameters such as initial delay, execution period, and time unit.
+     * @param job the job to be inserted into the scheduling repository; must not be null.
+     *            The job's details, including its name, initial delay, period, and time unit,
+     *            are used to populate the database entry.
      */
     public void insert(ExecutorJob job) {
+        requireNonNull(job, "job cannot be null");
+        var name = JobNameResolver.resolve(job.name());
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             Update u = uow.handle().createUpdate(bind(""" 
                         INSERT INTO {:tableName}
                                 (name, initial_delay, period, time_unit, scheduled_at)
                                 VALUES (:name, :initial_delay, :period, :time_unit, :scheduled_at)
                 """, arg("tableName", sharedTableName)));
-            u.bind("name", job.name())
+            u.bind("name", name)
              .bind("initial_delay", job.fixedDelay().initialDelay())
              .bind("period", job.fixedDelay().period())
              .bind("time_unit", job.fixedDelay().unit().name())
@@ -109,12 +116,15 @@ public class ExecutorScheduledJobRepository {
     }
 
     /**
-     * Checks if an entry with the given name exists in the database.
+     * Checks the existence of an entry in the database table with the specified name
+     * concatenated with the current instance's identifier.
      *
-     * @param name the name to check for existence in the database. It should match the `name` column in the table.
-     * @return {@code true} if an entry with the specified name exists, {@code false} otherwise.
+     * @param name the base name of the entry to check for existence; must not be null.
+     * @return true if an entry with the given name concatenated with the instance identifier exists; false otherwise.
      */
     public boolean existsByName(String name) {
+        requireNonNull(name, "name cannot be null");
+        var jobName = JobNameResolver.resolve(name);
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             var sql = bind(
                     """
@@ -122,7 +132,7 @@ public class ExecutorScheduledJobRepository {
                             """,
                     arg("tableName", sharedTableName));
             Query q = uow.handle().createQuery(sql);
-            return q.bind("name", name)
+            return q.bind("name", jobName)
                     .mapTo(Boolean.class)
                     .findOne()
                     .orElse(Boolean.FALSE);
@@ -137,6 +147,8 @@ public class ExecutorScheduledJobRepository {
      *         {@code false} if no entry with the specified name exists in the database.
      */
     public boolean deleteByName(String name) {
+        requireNonNull(name, "name cannot be null");
+        var jobName = JobNameResolver.resolve(name);
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             var sql = bind(
                     """
@@ -144,24 +156,24 @@ public class ExecutorScheduledJobRepository {
                             """,
                     arg("tableName", sharedTableName));
             Update u = uow.handle().createUpdate(sql);
-            u.bind("name", name);
+            u.bind("name", jobName);
             int affectedRows = u.execute();
             return affectedRows != 0;
         });
     }
 
-
     public void deleteByNameEndingWithInstanceId(String instanceId) {
-         unitOfWorkFactory.usingUnitOfWork(uow -> {
-            var sql = bind(
-                    """
-                            DELETE FROM {:tableName} WHERE name LIKE '%' || :instanceid
-                            """,
-                    arg("tableName", sharedTableName));
-            Update u = uow.handle().createUpdate(sql);
-            u.bind("instanceid", instanceId);
-            int affectedRows = u.execute();
-            log.debug("Deleted {} scheduled job entries ending with instance id '{}'", affectedRows, instanceId);
+        requireNonNull(instanceId, "instanceId cannot be null");
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+        var sql = bind(
+                """
+                        DELETE FROM {:tableName} WHERE name LIKE '%' || :instanceid
+                        """,
+                arg("tableName", sharedTableName));
+        Update u = uow.handle().createUpdate(sql);
+        u.bind("instanceid", UNDER_SCORE + instanceId);
+        int affectedRows = u.execute();
+        log.debug("Deleted {} scheduled job entries ending with instance id '{}'", affectedRows, instanceId);
         });
     }
 

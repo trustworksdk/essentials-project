@@ -40,7 +40,7 @@ public class TestFencedLockManager implements FencedLockManager, Lifecycle {
 
     private final ConcurrentMap<LockName, Handle> lockHandles = new ConcurrentHashMap<>();
 
-    private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService executor = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
     private final ConcurrentMap<LockName, Future<?>> pending = new ConcurrentHashMap<>();
 
     public TestFencedLockManager(Jdbi jdbi) {

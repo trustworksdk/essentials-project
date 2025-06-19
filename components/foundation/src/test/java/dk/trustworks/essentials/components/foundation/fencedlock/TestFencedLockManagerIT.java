@@ -1,3 +1,19 @@
+/*
+ * Copyright 2021-2025 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package dk.trustworks.essentials.components.foundation.fencedlock;
 
 import org.jdbi.v3.core.Jdbi;
@@ -55,7 +71,7 @@ public class TestFencedLockManagerIT {
         // After stop(), lock should be released
         fencedLockManager.stop();
         assertThat(fencedLockManager.isLockAcquired(lockName)).isFalse();
-        assertThat(fencedLockManager.lookupLock(lockName).isEmpty()).isTrue();
+        assertThat(fencedLockManager.lookupLock(lockName)).isEmpty();
     }
 
     @Test
@@ -66,7 +82,7 @@ public class TestFencedLockManagerIT {
         assertThat(lock).isNotNull();
         assertThat((CharSequence) lockName).isEqualTo(lock.getName());
         // lookup should see it
-        assertThat(fencedLockManager.lookupLock(lockName).isPresent()).isTrue();
+        assertThat(fencedLockManager.lookupLock(lockName)).isPresent();
     }
 
     @Test

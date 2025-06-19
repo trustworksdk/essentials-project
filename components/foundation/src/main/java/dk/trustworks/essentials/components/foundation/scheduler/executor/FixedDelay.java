@@ -16,7 +16,10 @@
 
 package dk.trustworks.essentials.components.foundation.scheduler.executor;
 
+
 import java.util.concurrent.TimeUnit;
+
+import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * Represents a fixed delay configuration for scheduling tasks. This record defines
@@ -31,9 +34,10 @@ import java.util.concurrent.TimeUnit;
  */
 public record FixedDelay(long initialDelay, long period, TimeUnit unit) {
 
-    @Override
-    public String toString() {
-        return "delay:" + initialDelay + "_period:" + period + "_unit:" + unit.name().toLowerCase();
+    public FixedDelay {
+        requireTrue(initialDelay >= 0, "Initial delay must not be negative");
+        requireTrue(period > 0, "Period must not be negative");
+        requireNonNull(unit, "TimeUnit must not be null");
     }
 
     public static FixedDelay ONE_DAY = new FixedDelay(0, 1, TimeUnit.DAYS);

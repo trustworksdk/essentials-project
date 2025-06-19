@@ -29,11 +29,11 @@ import dk.trustworks.essentials.types.CharSequenceType;
  * executing a task every day at midnight.
  * <p>
  * Defined constants are available for common scheduling intervals:
- * - OEN_SECOND: Represents a job scheduled every second.
- * - TEN_SECOND: Represents a job scheduled every ten seconds.
- * - ONE_MINUTE: Represents a job scheduled every minute.
- * - ONE_HOUR: Represents a job scheduled every hour.
- * - ONE_DAY: Represents a job scheduled every day.
+ * - {@link #ONE_SECOND}: Represents a job scheduled every second.
+ * - {@link #TEN_SECOND}: Represents a job scheduled every ten seconds.
+ * - {@link #ONE_MINUTE}: Represents a job scheduled every minute.
+ * - {@link #ONE_HOUR}: Represents a job scheduled every hour.
+ * - {@link #ONE_DAY}: Represents a job scheduled every day.
  */
 public class CronExpression extends CharSequenceType<CronExpression> {
 

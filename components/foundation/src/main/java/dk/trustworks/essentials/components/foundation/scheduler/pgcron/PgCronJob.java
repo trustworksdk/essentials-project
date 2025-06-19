@@ -17,7 +17,10 @@
 package dk.trustworks.essentials.components.foundation.scheduler.pgcron;
 
 import dk.trustworks.essentials.components.foundation.scheduler.EssentialsScheduledJob;
-import dk.trustworks.essentials.shared.network.Network;
+
+import java.util.Objects;
+
+import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * Represents a PostgreSQL cron job scheduled using the pg_cron extension.
@@ -33,21 +36,28 @@ import dk.trustworks.essentials.shared.network.Network;
  * A PgCronJob implements the {@link EssentialsScheduledJob} interface, allowing
  * it to be used with job schedulers that support this interface.
  *
- * @param name
- * @param function       the name of the function (without () and sql) to be executed as part of the cron job
- * @param cronExpression the cron expression indicating the schedule of the job
+ * @param name           the name of the job; must not be null.
+ * @param function       the name of the function (without () and sql) to be executed as part of the cron job; must not be null.
+ * @param cronExpression the cron expression indicating the schedule of the job; must not be null.
  */
 public record PgCronJob(String name, String function, CronExpression cronExpression) implements EssentialsScheduledJob {
 
-    /**
-     * Returns the unique name of the job based on its predefined name and the hostname
-     * of the machine it is being executed on. The hostname is retrieved using the
-     * Network utility class.
-     *
-     * @return a string representing the job name concatenated with the machine's hostname
-     */
+    public PgCronJob {
+        requireNonNull(name, "name cannot be null");
+        requireTrue(name.length() <= 50, "name must be <= 50 characters long");
+        requireNonNull(function, "function cannot be null");
+        requireNonNull(cronExpression, "cronExpression cannot be null");
+    }
+
     @Override
-    public String name() {
-        return name + "_" + Network.hostName();
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        PgCronJob pgCronJob = (PgCronJob) o;
+        return Objects.equals(name, pgCronJob.name);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(name);
     }
 }

@@ -19,6 +19,10 @@ package dk.trustworks.essentials.components.foundation.scheduler.executor;
 import dk.trustworks.essentials.components.foundation.scheduler.EssentialsScheduledJob;
 import dk.trustworks.essentials.shared.network.Network;
 
+import java.util.Objects;
+
+import static dk.trustworks.essentials.shared.FailFast.*;
+
 /**
  * Represents a scheduled job that can be executed by an executor with a specified fixed delay.
  * This record encapsulates the job's name that has to be unique when saved to storage name and fixed delay is combined for uniqueness, its fixed delay configuration for scheduling,
@@ -32,15 +36,22 @@ import dk.trustworks.essentials.shared.network.Network;
  */
 public record ExecutorJob(String name, FixedDelay fixedDelay, Runnable task) implements EssentialsScheduledJob {
 
+    public ExecutorJob {
+        requireNonNull(name, "name cannot be null");
+        requireTrue(name.length() <= 50, "name must be <= 50 characters long");
+        requireNonNull(fixedDelay, "fixedDelay cannot be null");
+        requireNonNull(task, "task cannot be null");
+    }
 
-    /**
-     * Returns the unique name of the job, constructed by appending the hostname of the current machine
-     * to the job's original name, separated by an underscore.
-     *
-     * @return the unique job name combining the original name and the hostname of the machine.
-     */
     @Override
-    public String name() {
-        return name + "_" + Network.hostName();
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        ExecutorJob that = (ExecutorJob) o;
+        return Objects.equals(name, that.name);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(name);
     }
 }

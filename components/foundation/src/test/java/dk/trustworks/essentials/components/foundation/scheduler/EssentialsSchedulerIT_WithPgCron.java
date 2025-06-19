@@ -64,7 +64,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
 
                                                );
         long cronCount = essentialsScheduler.getTotalPgCronEntries();
-        long execCount = essentialsScheduler.geTotalExecutorJobEntries();
+        long execCount = essentialsScheduler.getTotalExecutorJobEntries();
         assertThat(cronCount).isEqualTo(0);
         assertThat(execCount).isEqualTo(0);
 
@@ -81,12 +81,15 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         });
 
         cronCount = essentialsScheduler.getTotalPgCronEntries();
-        execCount = essentialsScheduler.geTotalExecutorJobEntries();
+        execCount = essentialsScheduler.getTotalExecutorJobEntries();
         assertThat(cronCount).isEqualTo(1);
         assertThat(execCount).isEqualTo(0);
 
-        essentialsScheduler.stop();
         fencedLockManager.stop();
+        essentialsScheduler.stop();
+
+        assertThat(essentialsScheduler.getTotalExecutorJobEntries()).isEqualTo(0);
+        waitAtMost(Duration.ofSeconds(5)).until(() -> !fencedLockManager.isLockAcquired(essentialsScheduler.getLockName()));
     }
 
     @Test
@@ -112,11 +115,11 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
                                                );
 
         long cronCount1 = essentialsScheduler1.getTotalPgCronEntries();
-        long execCount1 = essentialsScheduler1.geTotalExecutorJobEntries();
+        long execCount1 = essentialsScheduler1.getTotalExecutorJobEntries();
         assertThat(cronCount1).isEqualTo(0);
         assertThat(execCount1).isEqualTo(0);
         long cronCount2 = essentialsScheduler2.getTotalPgCronEntries();
-        long execCount2 = essentialsScheduler2.geTotalExecutorJobEntries();
+        long execCount2 = essentialsScheduler2.getTotalExecutorJobEntries();
         assertThat(cronCount2).isEqualTo(0);
         assertThat(execCount2).isEqualTo(0);
 
@@ -134,7 +137,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         });
 
         cronCount1 = essentialsScheduler1.getTotalPgCronEntries();
-        execCount1 = essentialsScheduler1.geTotalExecutorJobEntries();
+        execCount1 = essentialsScheduler1.getTotalExecutorJobEntries();
         assertThat(cronCount1).isEqualTo(1);
         assertThat(execCount1).isEqualTo(0);
 
@@ -179,7 +182,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
                                                 );
 
         long cronCount = essentialsScheduler1.getTotalPgCronEntries();
-        long execCount = essentialsScheduler1.geTotalExecutorJobEntries();
+        long execCount = essentialsScheduler1.getTotalExecutorJobEntries();
         assertThat(cronCount).isEqualTo(1);
         assertThat(execCount).isEqualTo(0);
 
@@ -195,7 +198,7 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
                                                 );
 
         cronCount = essentialsScheduler2.getTotalPgCronEntries();
-        execCount = essentialsScheduler2.geTotalExecutorJobEntries();
+        execCount = essentialsScheduler2.getTotalExecutorJobEntries();
         assertThat(cronCount).isEqualTo(1);
         assertThat(execCount).isEqualTo(0);
 

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2021-2025 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package dk.trustworks.essentials.components.foundation.scheduler;
 
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
@@ -21,8 +37,8 @@ import static org.assertj.core.api.Assertions.*;
 @Testcontainers
 public class PgCronRepositoryIT {
 
-    private static final String IMAGE_PROP = System.getenv().getOrDefault("PGCRON_IMAGE", "essentials-postgres-with-pgcron:latest");
-    protected static DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
+    private static final String          IMAGE_PROP  = System.getenv().getOrDefault("PGCRON_IMAGE", "essentials-postgres-with-pgcron:latest");
+    protected static     DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
 
     @Container
     private static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(pgCronImage)
@@ -33,9 +49,9 @@ public class PgCronRepositoryIT {
             .withInitScript("test-containers-init.sql")
             .withReuse(true);
 
-    private static Jdbi             jdbi;
-    private JdbiUnitOfWorkFactory   unitOfWorkFactory;
-    private  PgCronRepository       repository;
+    private static Jdbi                  jdbi;
+    private        JdbiUnitOfWorkFactory unitOfWorkFactory;
+    private        PgCronRepository      repository;
 
     @BeforeAll
     static void setUp() {
@@ -48,12 +64,14 @@ public class PgCronRepositoryIT {
     void beforeEach() {
         unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
         repository = new PgCronRepository(unitOfWorkFactory);
+        List<PgCronEntry> entries = repository.fetchPgCronEntries(0, 10);
+        entries.forEach(e -> repository.unschedule(e.jobId()));
     }
 
     @Test
     void verify_schedule_and_does_job_exist() {
-        var  job     = new PgCronJob("test", "test_fn", CronExpression.of("0 0 * * *"));
-        var    jobId = repository.schedule(job);
+        var job   = new PgCronJob("test", "test_fn", CronExpression.of("0 0 * * *"));
+        var jobId = repository.schedule(job);
         assertThat(jobId).isNotNull();
 
         var existingId = repository.doesJobExist(job.name());
@@ -65,7 +83,7 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_fetch_and_count_entries() {
-        var job = new PgCronJob("test", "test_fn", CronExpression.of("0 1 * * *"));
+        var job   = new PgCronJob("test", "test_fn", CronExpression.of("0 1 * * *"));
         var jobId = repository.schedule(job);
 
         var total = repository.getTotalPgCronEntries();
@@ -75,9 +93,9 @@ public class PgCronRepositoryIT {
         assertThat(entries.isEmpty()).isFalse();
 
         var entry = entries.stream()
-                                   .filter(e -> e.jobId().equals(jobId))
-                                   .findFirst()
-                                   .orElse(null);
+                           .filter(e -> e.jobId().equals(jobId))
+                           .findFirst()
+                           .orElse(null);
         assertThat(entry).isNotNull();
         assertThat(job.cronExpression().toString()).isEqualTo(entry.schedule());
         assertThat("SELECT test_fn();").isEqualTo(entry.command());
@@ -85,7 +103,7 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_unschedule() {
-        var job = new PgCronJob("test", "test_fn", CronExpression.of("0 2 * * *"));
+        var job   = new PgCronJob("test", "test_fn", CronExpression.of("0 2 * * *"));
         var jobId = repository.schedule(job);
         repository.unschedule(jobId);
 
@@ -94,13 +112,13 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_job_run_details() {
-        var job = new PgCronJob("test", "test_fn", CronExpression.of("0 3 * * *"));
+        var job   = new PgCronJob("test", "test_fn", CronExpression.of("0 3 * * *"));
         var jobId = repository.schedule(job);
 
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             uow.handle().execute("INSERT INTO cron.job_run_details(jobid, runid, job_pid, database, username, command, status, return_message, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           jobId, 1, 1234, postgreSQLContainer.getDatabaseName(), postgreSQLContainer.getUsername(),
-                           "SELECT test_fn();", "success", "ok", OffsetDateTime.now(), OffsetDateTime.now());
+                                 jobId, 1, 1234, postgreSQLContainer.getDatabaseName(), postgreSQLContainer.getUsername(),
+                                 "SELECT test_fn();", "success", "ok", OffsetDateTime.now(), OffsetDateTime.now());
         });
 
         var detailsCount = repository.getTotalPgCronJobDetails(jobId);
@@ -123,7 +141,7 @@ public class PgCronRepositoryIT {
     @Test
     void verify_delete_job_by_name_ending_with_instance_id() {
         var instanceId = Network.hostName();
-        var job = new PgCronJob("test", "test_fn", CronExpression.of("0 2 * * *"));
+        var job        = new PgCronJob("test", "test_fn", CronExpression.of("0 2 * * *"));
         repository.schedule(job);
 
         repository.deleteJobByNameEndingWithInstanceId(instanceId);
