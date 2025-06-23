@@ -166,15 +166,27 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     }
 
     private void scheduleExecutorJobInternal(ExecutorJob job) {
-        if (!executorScheduledJobRepository.existsByName(job.name())) {
-            ScheduledFuture<?> future = executorService.scheduleAtFixedRate(
-                    job.task(), job.fixedDelay().initialDelay(), job.fixedDelay().period(), job.fixedDelay().unit());
-            log.info("✅ Added ExecutorJob '{}'", job);
-            executorJobFutures.put(job, future);
-            executorScheduledJobRepository.insert(job);
-        } else {
+        if (executorScheduledJobRepository.existsByName(job.name())) {
             log.warn("ExecutorJob '{}' already exists", job);
+            return;
         }
+
+        Runnable safeTask = () -> {
+            try {
+                job.task().run();
+            } catch (Throwable t) {
+                log.warn("❌ ExecutorJob '{}' threw an exception, but will retry on next interval", job, t);
+            }
+        };
+
+        var future = executorService.scheduleAtFixedRate(
+                safeTask,
+                job.fixedDelay().initialDelay(),
+                job.fixedDelay().period(),
+                job.fixedDelay().unit());
+        log.info("✅ Added ExecutorJob '{}'", job);
+        executorJobFutures.put(job, future);
+        executorScheduledJobRepository.insert(job);
     }
 
     private void schedulePgCronJobInternal(PgCronJob job) {
