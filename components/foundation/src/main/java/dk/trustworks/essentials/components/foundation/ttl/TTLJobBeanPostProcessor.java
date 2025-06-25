@@ -28,8 +28,8 @@ import org.springframework.core.env.Environment;
 
 import java.util.Optional;
 
+import static dk.trustworks.essentials.shared.MessageFormatter.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
-import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
 /**
  * A Spring {@code BeanPostProcessor} that processes beans annotated with the {@code TTLJob} annotation,
@@ -68,7 +68,7 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
         if (tableName.isEmpty() && !ttlJob.tableNameProperty().isEmpty()) {
             tableName = environment.getProperty(ttlJob.tableNameProperty(), tableName);
         } else if (tableName.isEmpty()) {
-            throw new IllegalArgumentException("@TTLJob on '" + beanName + "' requires tableName or tableNameProperty");
+            throw new IllegalArgumentException(msg("@TTLJob on '{}' requires tableName or tableNameProperty", beanName));
         }
 
         long days = ttlJob.defaultTtlDays();

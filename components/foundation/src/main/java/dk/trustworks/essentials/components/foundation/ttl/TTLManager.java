@@ -16,9 +16,22 @@
 
 package dk.trustworks.essentials.components.foundation.ttl;
 
+/**
+ * Interface for managing Time-To-Live (TTL) jobs. The TTLManager is responsible for
+ * scheduling and managing actions that enforce data lifecycle operations
+ * such as deletion or archival based on expiration policies.
+ */
 public interface TTLManager {
 
-    static final String DEFAULT_TTL_FUNCTION_NAME = "essentials_ttl_function";
+    final String DEFAULT_TTL_FUNCTION_NAME = "essentials_ttl_function";
 
+    /**
+     * Schedules a Time-To-Live (TTL) job for execution based on the provided job definition.
+     * This method registers the job and configures it according to the defined action
+     * and schedule.
+     *
+     * @param jobDefinition the definition of the TTL job to be scheduled, including its action
+     *                      and scheduling configuration. Must not be null.
+     */
     void scheduleTTLJob(TTLJobDefinition jobDefinition);
 }

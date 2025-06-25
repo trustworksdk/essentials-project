@@ -18,15 +18,24 @@ package dk.trustworks.essentials.components.foundation.ttl;
 
 import java.lang.annotation.*;
 
+/**
+ * Annotation to define the configuration and scheduling details of a Time-To-Live (TTL) job.
+ * TTL jobs are used to manage the lifecycle of data by enforcing expiration policies
+ * and executing related actions at scheduled intervals.
+ */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface TTLJob {
 
-    /** Unique name for this TTL job; auto-derived if blank. */
+    /**
+     * Unique name for this TTL job; auto-derived if blank.
+     */
     String name() default "";
 
-    /** Name of the table for which the TTL job should run. */
-    String tableName();
+    /**
+     * Name of the table for which the TTL job should run.
+     */
+    String tableName() default "";
 
     /**
      * Configuration key to override the table name.

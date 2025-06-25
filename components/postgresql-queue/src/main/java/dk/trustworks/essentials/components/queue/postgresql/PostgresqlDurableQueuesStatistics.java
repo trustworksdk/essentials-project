@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import dk.trustworks.essentials.components.queue.postgresql.jdbi.*;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.StatementContext;
@@ -72,6 +73,13 @@ import static dk.trustworks.essentials.shared.MessageFormatter.*;
  * It is highly recommended that the {@code statsQueueTableName} and {@code durableQueueTableName} value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code durableQueueTableName} and {@code statsQueueTableName} value.<br>
  */
+@TTLJob(name = "durable_queues_statistics_ttl",
+        enabledProperty = "essentials.durable-queues.enable-queue-statistics-ttl",
+        tableNameProperty = "essentials.durable-queues.shared-queue-statistics-table-name",
+        timestampColumn = "deletion_ts",
+        cronExpression = "0 0 * * *", // every day at midnight
+        ttlDurationProperty = "essentials.durable-queues.queue-statistics-ttl-duration"
+)
 public class PostgresqlDurableQueuesStatistics implements DurableQueuesStatistics {
     private static final Logger log                               = LoggerFactory.getLogger(PostgresqlDurableQueuesStatistics.class);
     public static final  String DEFAULT_DURABLE_QUEUES_TABLE_NAME = "durable_queues_statistics";

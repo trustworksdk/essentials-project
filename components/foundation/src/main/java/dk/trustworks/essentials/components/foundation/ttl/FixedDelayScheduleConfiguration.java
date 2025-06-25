@@ -20,6 +20,11 @@ import dk.trustworks.essentials.components.foundation.scheduler.executor.FixedDe
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Represents a schedule configuration based on a fixed delay mechanism.
+ * This record wraps a {@link FixedDelay} instance, which defines the
+ * initial delay and the fixed period between subsequent task executions.
+ */
 public record FixedDelayScheduleConfiguration(FixedDelay fixedDelay) implements ScheduleConfiguration {
 
     public FixedDelayScheduleConfiguration {

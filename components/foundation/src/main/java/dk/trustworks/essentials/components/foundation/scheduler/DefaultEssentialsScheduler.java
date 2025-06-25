@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkExce
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.*;
 import dk.trustworks.essentials.shared.network.Network;
+import org.jdbi.v3.core.Handle;
 import org.slf4j.*;
 
 import java.util.*;
@@ -60,6 +61,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     private final LockName                                                      lockName;
 
     private volatile boolean started;
+    private volatile boolean lockAcquired;
 
     private       ScheduledExecutorService             executorService;
     private final PgCronRepository                     pgCronRepository;
@@ -98,10 +100,10 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         requireNonNull(job, "job cannot be null");
         log.debug("Scheduling PgCronJob '{}'", job);
         pgCronJobs.add(job);
-        if (started && pgCronAvailable && fencedLockManager.isLockAcquired(lockName)) {
+        if (started && pgCronAvailable && lockAcquired) {
             schedulePgCronJobInternal(job);
         } else {
-            log.info("Scheduler is started '{}' pgCron is available '{}' and lock acquired '{}' can't schedule job '{}'",started, pgCronAvailable, fencedLockManager.isLockAcquired(lockName), job);
+            log.info("Scheduler is started '{}' pgCron is available '{}' and lock acquired '{}' can't schedule job '{}'",started, pgCronAvailable, lockAcquired, job);
         }
     }
 
@@ -110,10 +112,10 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         requireNonNull(job, "job cannot be null");
         log.debug("Adding ExecutorJob '{}'", job);
         executorJobs.add(job);
-        if (started && fencedLockManager.isLockAcquired(lockName)) {
+        if (started && lockAcquired) {
             scheduleExecutorJobInternal(job);
         } else {
-            log.info("Scheduler is started '{}' and lock acquired '{}' can't schedule job '{}'",started, fencedLockManager.isLockAcquired(lockName), job);
+            log.info("Scheduler is started '{}' and lock acquired '{}' can't schedule job '{}'",started, lockAcquired, job);
         }
     }
 
@@ -221,10 +223,10 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
             executorService = Executors.newScheduledThreadPool(schedulerThreads);
 
-            tryAndCreatePgCronExtension();
             unitOfWorkFactory.usingUnitOfWork(uow -> {
                 var available = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_cron");
                 if (available) {
+                    uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_cron;");
                     boolean loaded = determineIfPgCronIsLoaded();
                     pgCronAvailable = loaded;
                     if (!loaded) {
@@ -234,7 +236,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
                     pgCronAvailable = false;
                 }
             });
-            log.info("⚙️ Starting Essentials Scheduler (with pg_cron available = '{}')", pgCronAvailable);
+            log.info("⚙️ Starting Essentials Scheduler (with pg_cron available = '{}') executor threads ('{}')", pgCronAvailable, schedulerThreads);
 
             deleteJobsWithInstanceId();
 
@@ -265,6 +267,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
     private void onLockAcquired(FencedLock lock) {
         log.info("🎉 FencedLock '{}' was ACQUIRED; purging stale entries, then scheduling all jobs.", lockName);
+        lockAcquired = true;
 
         deleteJobsWithInstanceId();
 
@@ -291,6 +294,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
     private void onLockReleased(FencedLock lock) {
         log.info("🚨 FencedLock '{}' was RELEASED; unscheduling all pg_cron and executor tasks immediately.", lockName);
+        lockAcquired = false;
 
         var instanceId = Network.hostName();
 
@@ -317,23 +321,13 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         }
     }
 
-    private void tryAndCreatePgCronExtension() {
-        try {
-            unitOfWorkFactory.usingUnitOfWork(uow -> {
-                uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_cron;");
-            });
-        } catch (UnitOfWorkException e) {
-            log.warn("Failed to create pg_cron extension -> '{}'", e.getMessage());
-        }
-    }
-
     @Override
     public void stop() {
         if (started) {
             started = false;
             log.info("⏹ Stopping Essentials Scheduler (pg_cron available = '{}')", pgCronAvailable);
 
-            if (fencedLockManager.isLockAcquired(lockName)) {
+            if (lockAcquired) {
                 try {
                     executorScheduledJobRepository.deleteAll();
                 } catch (Exception e) {

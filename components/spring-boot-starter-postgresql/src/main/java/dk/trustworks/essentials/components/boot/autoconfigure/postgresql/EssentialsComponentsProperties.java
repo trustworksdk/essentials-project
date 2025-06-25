@@ -288,8 +288,11 @@ public class EssentialsComponentsProperties {
         private boolean           useCentralizedMessageFetcher             = true;
         private Duration          centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
 
-        private boolean verboseTracing        = false;
-        private boolean enableQueueStatistics = false;
+        private boolean verboseTracing = false;
+
+        private boolean enableQueueStatistics      = false;
+        private boolean enableQueueStatisticsTtl   = true;
+        private int     queueStatisticsTtlDuration = 90;
 
         /**
          * Should the Tracing produces only include all operations or only top level operations (default false)
@@ -325,6 +328,45 @@ public class EssentialsComponentsProperties {
          */
         public void setEnableQueueStatistics(boolean enableQueueStatistics) {
             this.enableQueueStatistics = enableQueueStatistics;
+        }
+
+        /**
+         * Indicates whether queue statistics TTL (Time-To-Live) is enabled.
+         * Default: true
+         *
+         * @return true if queue statistics TTL is enabled, false otherwise.
+         */
+        public boolean isEnableQueueStatisticsTtl() {
+            return enableQueueStatisticsTtl;
+        }
+
+        /**
+         * Enables or disables TTL (Time-To-Live)  for the queue statistics.
+         *
+         * @param enableQueueStatisticsTtl a boolean value where {@code true} enables TTL for the queue statistics,
+         *                                 and {@code false} disables it.
+         */
+        public void setEnableQueueStatisticsTtl(boolean enableQueueStatisticsTtl) {
+            this.enableQueueStatisticsTtl = enableQueueStatisticsTtl;
+        }
+
+        /**
+         * Retrieves the time-to-live (TTL) duration for queue statistics.
+         * Default: 90 days
+         *
+         * @return the TTL duration for queue statistics in days
+         */
+        public int getQueueStatisticsTtlDuration() {
+            return queueStatisticsTtlDuration;
+        }
+
+        /**
+         * Sets the time-to-live (TTL) duration for the queue statistics.
+         *
+         * @param queueStatisticsTtlDuration the duration in days for which the queue statistics will be retained
+         */
+        public void setQueueStatisticsTtlDuration(int queueStatisticsTtlDuration) {
+            this.queueStatisticsTtlDuration = queueStatisticsTtlDuration;
         }
 
         /**

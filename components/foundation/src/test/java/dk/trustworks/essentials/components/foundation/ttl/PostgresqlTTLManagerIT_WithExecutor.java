@@ -19,36 +19,26 @@ package dk.trustworks.essentials.components.foundation.ttl;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
 import dk.trustworks.essentials.components.foundation.scheduler.DefaultEssentialsScheduler;
-import dk.trustworks.essentials.components.foundation.scheduler.pgcron.CronExpression;
+import dk.trustworks.essentials.components.foundation.scheduler.executor.FixedDelay;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
-import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
-import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.waitAtMost;
 
-/**
- * When running it locally set env variable PGCRON_IMAGE=lcramontw/postgres-with-pg-cron:latest
- */
 @Testcontainers
-public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
-
-    private static final String          IMAGE_PROP  = System.getenv().getOrDefault("PGCRON_IMAGE", "essentials-postgres-with-pgcron:latest");
-    protected static     DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
+public class PostgresqlTTLManagerIT_WithExecutor extends AbstractTTLManagerTest {
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(pgCronImage)
-            .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
+    PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
             .withDatabaseName("test-db")
             .withUsername("postgres")
-            .withPassword("postgres")
-            .withInitScript("test-containers-init.sql")
-            .withReuse(true);
+            .withPassword("postgres");
 
     protected JdbiUnitOfWorkFactory      unitOfWorkFactory;
     protected FencedLockManager          fencedLockManager;
@@ -56,7 +46,7 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
     protected PostgresqlTTLManager       ttlManager;
 
     @Test
-    public void schedule_ttl_pgcron_job() {
+    public void schedule_ttl_scheduled_job() {
         unitOfWorkFactory = new JdbiUnitOfWorkFactory(jdbi);
         fencedLockManager = new TestFencedLockManager(jdbi);
         scheduler = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, 1);
@@ -68,18 +58,15 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
         int rowsInTable = getNumberOfRowsInTable(unitOfWorkFactory);
         assertThat(rowsInTable).isEqualTo(5);
 
-        var cronExpression  = CronExpression.TEN_SECOND;
-        var deleteStatement = "DELETE FROM " + TEST_TABLE_NAME + " WHERE expiry_ts < now()";
+        String deleteStatement = "DELETE FROM " + TEST_TABLE_NAME + " WHERE expiry_ts < now()";
         var ttlJobDefinition = new TTLJobDefinitionBuilder()
-                .withAction(new DefaultTTLJobAction(TEST_TABLE_NAME, "WHERE expiry_ts < now()", deleteStatement, "test"))
-                .withSchedule(new CronScheduleConfiguration(cronExpression, Optional.empty()))
+                .withAction(new DefaultTTLJobAction(TEST_TABLE_NAME, "expiry_ts < now()", deleteStatement, "test"))
+                .withSchedule(new FixedDelayScheduleConfiguration(new FixedDelay(0, 1000, TimeUnit.MILLISECONDS)))
                 .build();
         ttlManager.scheduleTTLJob(ttlJobDefinition);
-        rowsInTable = getNumberOfRowsInTable(unitOfWorkFactory);
-        assertThat(rowsInTable).isEqualTo(5);
-        waitAtMost(Duration.ofSeconds(30)).until(() -> {
+        waitAtMost(Duration.ofSeconds(10)).until(() -> {
             int rows = getNumberOfRowsInTable(unitOfWorkFactory);
-            return rows == 2 || rows == 3;
+            return rows == 3 || rows == 2;
         });
 
         scheduler.stop();
@@ -89,5 +76,4 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
     public PostgreSQLContainer<?> getPostgreSQLContainer() {
         return postgreSQLContainer;
     }
-
 }

@@ -16,5 +16,12 @@
 
 package dk.trustworks.essentials.components.foundation.ttl;
 
+/**
+ * Marker interface for schedule configuration types.
+ * <p>
+ * Provides a unified abstraction to represent different scheduling mechanisms,
+ * such as cron-based or fixed delay-based scheduling. Implementations of this
+ * interface encapsulate specific scheduling configurations and logic.
+ */
 public interface ScheduleConfiguration {
 }
