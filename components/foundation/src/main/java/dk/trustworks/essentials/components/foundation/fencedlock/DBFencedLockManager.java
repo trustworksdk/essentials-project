@@ -770,8 +770,8 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     /**
      * Use a {@link UnitOfWork} to perform transactional changes
      *
-     * @param unitOfWorkFunction The functionName that consumes the created {@link UnitOfWork}
-     * @param onError            The functionName that consumes any exception caused by calling {@link UnitOfWorkFactory#withUnitOfWork(CheckedFunction)}
+     * @param unitOfWorkFunction The function that consumes the created {@link UnitOfWork}
+     * @param onError            The function that consumes any exception caused by calling {@link UnitOfWorkFactory#withUnitOfWork(CheckedFunction)}
      * @param <R>                the return value from the <code>unitOfWorkFunction</code>
      * @return the result of the calling the <code>unitOfWorkFunction</code>
      */

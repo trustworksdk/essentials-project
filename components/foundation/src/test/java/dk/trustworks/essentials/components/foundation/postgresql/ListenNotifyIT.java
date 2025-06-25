@@ -211,7 +211,7 @@ class ListenNotifyIT {
         Awaitility.waitAtMost(Duration.ofMillis(2000))
                   .untilAsserted(() -> assertThat(receivedNotifications.size()).isEqualTo(numberOfInserts));
 
-        // Remove notification functionName/trigger
+        // Remove notification function/trigger
         receivedNotifications.clear();
         jdbi.useTransaction(handle -> {
             ListenNotify.removeChangeNotificationTriggerFromTable(handle, TABLE_NAME);

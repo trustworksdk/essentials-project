@@ -106,8 +106,8 @@ public interface AggregateEventStream<AGGREGATE_ID> {
     /**
      * Map the {@link PersistedEvent}'s in the {@link AggregateEventStream} to a different type
      *
-     * @param mappingFunction the mapping functionName
-     * @param <R>             the return type from the mapping functionName
+     * @param mappingFunction the mapping function
+     * @param <R>             the return type from the mapping function
      * @return stream of mapped {@link PersistedEvent}'s
      */
     default <R> Stream<R> map(Function<PersistedEvent, R> mappingFunction) {

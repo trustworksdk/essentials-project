@@ -98,7 +98,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory implements AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> {
     /**
      * The Function that resolves the unique name of the Postgresql table name where ONLY {@link PersistedEvent}'s related to supplied {@link AggregateType} will be stored stored<br>
-     * The {@code eventStreamTableName}'s value resolved by this functionName will be directly used in constructing SQL statements (in components using the {@link SeparateTablePerAggregateEventStreamConfiguration},
+     * The {@code eventStreamTableName}'s value resolved by this function will be directly used in constructing SQL statements (in components using the {@link SeparateTablePerAggregateEventStreamConfiguration},
      * such as {@link SeparateTablePerAggregateTypePersistenceStrategy}) through string concatenation, which exposes the component to SQL injection attacks.<br>
      * <br>
      * <strong>Security Note:</strong><br>
@@ -163,7 +163,7 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
      *                                    <b>Note: The table name provided will automatically be converted to <u>lower case</u></b><br>
      *                                    <br>
      *                                    <strong>Note:</strong><br>
-     *                                    The {@code eventStreamTableName}'s value resolved by this functionName will be directly used in constructing SQL statements (in components using the {@link SeparateTablePerAggregateEventStreamConfiguration},
+     *                                    The {@code eventStreamTableName}'s value resolved by this function will be directly used in constructing SQL statements (in components using the {@link SeparateTablePerAggregateEventStreamConfiguration},
      *                                    such as {@link SeparateTablePerAggregateTypePersistenceStrategy}) through string concatenation, which exposes the component to SQL injection attacks.<br>
      *                                    <br>
      *                                    <strong>Security Note:</strong><br>
@@ -271,7 +271,7 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
      *                                                  <b>Note: The table name provided will automatically be converted to <u>lower case</u></b><br>
      *                                                  <br>
      *                                                  <strong>Note:</strong><br>
-     *                                                  The {@code eventStreamTableName}'s value resolved by this functionName will be directly used in constructing SQL statements (in components using the {@link SeparateTablePerAggregateEventStreamConfiguration},
+     *                                                  The {@code eventStreamTableName}'s value resolved by this function will be directly used in constructing SQL statements (in components using the {@link SeparateTablePerAggregateEventStreamConfiguration},
      *                                                  such as {@link SeparateTablePerAggregateTypePersistenceStrategy}) through string concatenation, which exposes the component to SQL injection attacks.<br>
      *                                                  <br>
      *                                                  <strong>Security Note:</strong><br>
@@ -365,7 +365,7 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
      *                                                  <b>Note: The table name provided will automatically be converted to <u>lower case</u></b><br>
      *                                                  <br>
      *                                                  <strong>Note:</strong><br>
-     *                                                  The {@code eventStreamTableName}'s value resolved by this functionName will be directly used in constructing SQL statements (in components using the {@link SeparateTablePerAggregateEventStreamConfiguration},
+     *                                                  The {@code eventStreamTableName}'s value resolved by this function will be directly used in constructing SQL statements (in components using the {@link SeparateTablePerAggregateEventStreamConfiguration},
      *                                                  such as {@link SeparateTablePerAggregateTypePersistenceStrategy}) through string concatenation, which exposes the component to SQL injection attacks.<br>
      *                                                  <br>
      *                                                  <strong>Security Note:</strong><br>
