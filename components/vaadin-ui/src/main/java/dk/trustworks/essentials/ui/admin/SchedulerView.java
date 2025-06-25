@@ -16,35 +16,53 @@
 
 package dk.trustworks.essentials.ui.admin;
 
+import com.vaadin.flow.component.button.Button;
+import com.vaadin.flow.component.grid.Grid;
+import com.vaadin.flow.component.html.*;
 import com.vaadin.flow.component.orderedlayout.VerticalLayout;
+import com.vaadin.flow.component.textfield.TextField;
+import com.vaadin.flow.data.provider.*;
 import com.vaadin.flow.router.*;
 import com.vaadin.flow.spring.annotation.*;
+import dk.trustworks.essentials.components.foundation.scheduler.api.*;
+import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
+import dk.trustworks.essentials.ui.util.SecurityUtils;
 import dk.trustworks.essentials.ui.view.*;
 import jakarta.annotation.security.PermitAll;
 
+import java.util.stream.Stream;
 
+/**
+ * The SchedulerView class serves as the main UI component for managing and viewing scheduler-related data.
+ * It is a Vaadin view that allows users to interact with PgCron Jobs, Scheduled Executor Jobs, and
+ * their respective run details through data grids and filtering mechanisms.
+ * <p>
+ * Features include:
+ * - Display and manage PgCron Jobs, Scheduled Executor Jobs, and their run details.
+ * - Pagination support for data loading.
+ * - Filter capability for PgCron Job run details.
+ * - Role-based access control using EssentialsAuthenticatedUser and SecurityUtils.
+ * - Refresh button to reload data.
+ */
 @UIScope
 @PermitAll
 @SpringComponent
 @Route(value = "scheduler", layout = AdminMainLayout.class)
 public class SchedulerView extends VerticalLayout implements BeforeEnterObserver {
 
-    // TODO: when scheduler is added
-
-    /*
     private final SchedulerApi                schedulerApi;
     private final EssentialsAuthenticatedUser authenticatedUser;
     private final SecurityUtils               securityUtils;
 
-    private final Grid<ApiPgCronJob> pgCronJobGrid;
+    private final Grid<ApiPgCronJob>           pgCronJobGrid;
     private final Grid<ApiPgCronJobRunDetails> pgCronJobDetailsGrid;
-    private final Grid<ApiScheduledJob> scheduledJobGrid;
+    private final Grid<ApiExecutorJob> scheduledJobGrid;
 
     private final TextField pgCronJobRunField = new TextField("Search PgCron Job Runs");
-    private final Button refreshButton = new Button("Refresh");
+    private final Button    refreshButton     = new Button("Refresh");
 
-    private DataProvider<ApiPgCronJob, Void> pgCronJobProvider;
-    private DataProvider<ApiScheduledJob, Void> scheduledJobProvider;
+    private DataProvider<ApiPgCronJob, Void>    pgCronJobProvider;
+    private DataProvider<ApiExecutorJob, Void>                                   scheduledJobProvider;
     private ConfigurableFilterDataProvider<ApiPgCronJobRunDetails, Void, String> pgCronJobDetailsProvider;
 
     public SchedulerView(SchedulerApi schedulerApi, EssentialsAuthenticatedUser authenticatedUser) {
@@ -79,31 +97,27 @@ public class SchedulerView extends VerticalLayout implements BeforeEnterObserver
     }
 
     private void setPgCronJobProvider() {
-        pgCronJobProvider = DataProvider.<ApiPgCronJob>fromCallbacks(
+        pgCronJobProvider = DataProvider.fromCallbacks(
                 query -> {
                     int offset = query.getOffset();
                     int limit = query.getLimit();
                     var pgCronJobs = schedulerApi.getPgCronJobs(authenticatedUser.getPrincipal(), offset, limit);
                     return pgCronJobs.stream();
                 },
-                query -> {
-                    return (int) schedulerApi.getTotalPgCronJobs(authenticatedUser.getPrincipal());
-                }
-        );
+                query -> (int) schedulerApi.getTotalPgCronJobs(authenticatedUser.getPrincipal())
+                                                      );
         pgCronJobGrid.setDataProvider(pgCronJobProvider);
     }
 
     private void setScheduledJobProvider() {
-        scheduledJobProvider = DataProvider.<ApiScheduledJob>fromCallbacks(
+        scheduledJobProvider = DataProvider.<ApiExecutorJob>fromCallbacks(
                 query -> {
                     int offset = query.getOffset();
                     int limit = query.getLimit();
                     var schedulerJobs = schedulerApi.getExecutorJobs(authenticatedUser.getPrincipal(), offset, limit);
                     return schedulerJobs.stream();
                 },
-                query -> {
-                    return (int) schedulerApi.getTotalExecutorJobs(authenticatedUser.getPrincipal());
-                }
+                query -> (int) schedulerApi.getTotalExecutorJobs(authenticatedUser.getPrincipal())
         );
         scheduledJobGrid.setDataProvider(scheduledJobProvider);
     }
@@ -146,13 +160,13 @@ public class SchedulerView extends VerticalLayout implements BeforeEnterObserver
         return grid;
     }
 
-    private Grid<ApiScheduledJob> createScheduledJobGrid() {
-        Grid<ApiScheduledJob> grid = new Grid<>();
-        grid.addColumn(ApiScheduledJob::name).setHeader("Name").setAutoWidth(true);
-        grid.addColumn(ApiScheduledJob::initialDelay).setHeader("Delay").setAutoWidth(true);
-        grid.addColumn(ApiScheduledJob::period).setHeader("Period").setAutoWidth(true);
-        grid.addColumn(ApiScheduledJob::unit).setHeader("Unit").setAutoWidth(true);
-        grid.addColumn(ApiScheduledJob::scheduledAt).setHeader("Scheduled At").setAutoWidth(true);
+    private Grid<ApiExecutorJob> createScheduledJobGrid() {
+        Grid<ApiExecutorJob> grid = new Grid<>();
+        grid.addColumn(ApiExecutorJob::name).setHeader("Name").setAutoWidth(true);
+        grid.addColumn(ApiExecutorJob::initialDelay).setHeader("Delay").setAutoWidth(true);
+        grid.addColumn(ApiExecutorJob::period).setHeader("Period").setAutoWidth(true);
+        grid.addColumn(ApiExecutorJob::unit).setHeader("Unit").setAutoWidth(true);
+        grid.addColumn(ApiExecutorJob::scheduledAt).setHeader("Scheduled At").setAutoWidth(true);
         grid.setAllRowsVisible(true);
         grid.setWidthFull();
         return grid;
@@ -172,15 +186,11 @@ public class SchedulerView extends VerticalLayout implements BeforeEnterObserver
         return grid;
     }
 
-
-    */
-
     @Override
     public void beforeEnter(BeforeEnterEvent event) {
-//        if (!securityUtils.canAccessScheduler()) {
-//            event.forwardTo(AccessDeniedView.class);
-//        }
+        if (!securityUtils.canAccessScheduler()) {
+            event.forwardTo(AccessDeniedView.class);
+        }
     }
-
 
 }
