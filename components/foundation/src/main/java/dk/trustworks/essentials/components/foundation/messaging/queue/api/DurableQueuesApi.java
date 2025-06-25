@@ -85,7 +85,7 @@ public interface DurableQueuesApi {
     /**
      * Marks a queued message as a dead-letter message. The message is identified by its {@code queueEntryId},
      * and the action is performed under the context of the provided {@code principal}.
-     * If the operation is successful, the function returns an {@code Optional} containing the updated
+     * If the operation is successful, the functionName returns an {@code Optional} containing the updated
      * {@code ApiQueuedMessage}.
      *
      * @param principal the entity (user or system) requesting the operation, used for authorization and context

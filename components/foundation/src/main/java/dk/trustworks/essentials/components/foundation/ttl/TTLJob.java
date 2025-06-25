@@ -22,54 +22,51 @@ import java.lang.annotation.*;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface TTLJob {
 
-    /**
-     * Is TTL enabled
-     */
-    boolean enabled() default true;
+    /** Unique name for this TTL job; auto-derived if blank. */
+    String name() default "";
 
-    /**
-     * Optionally, the key of a configuration property that controls whether TTL is enabled.
-     * <p>
-     * Example: "essentials.durable-queues.enable.queue.statistics.ttl"
-     */
-    String enabledProperty() default "";
-
-    /**
-     * Name of the table for which the TTL job should be scheduled.
-     */
+    /** Name of the table for which the TTL job should run. */
     String tableName();
 
     /**
-     * The key of a configuration property that supplies the table name.
-     * <p>
-     * Example: "essentials.durable-queues.shared.queue.statistics.table.name"
+     * Configuration key to override the table name.
      */
     String tableNameProperty() default "";
 
     /**
-     * Delete statement template using placeholders for table name and number of days.
-     * <pre>
-     * Example: "DELETE FROM {:tableName} WHERE deletion_ts < (NOW() - INTERVAL '{:ttlDuration} day')"
-     * </pre>
+     * Name of the timestamp column used to determine TTL expiration.
      */
-    String deleteStatementTemplate();
+    String timestampColumn();
 
     /**
-     * The cron expression used to schedule the TTL job.
-     * <p>
-     * The default is "0 0 * * *" (every day at midnight).
+     * Comparison operator for the timestamp predicate.
+     */
+    ComparisonOperator operator() default ComparisonOperator.LESS_THAN;
+
+    /**
+     * Cron expression used to schedule the TTL job.
+     * Default: every day at midnight.
      */
     String cronExpression() default "0 0 * * *";
 
     /**
-     * Default TTL duration in days. This is used if no property is set.
-     * <p>
-     * Default is 1 day
+     * Default TTL duration, in days, if no override property is set.
      */
-    long defaultTTLDuration() default 1;
+    long defaultTtlDays() default 1;
 
     /**
-     * The key of a configuration property that supplies the TTL duration in days.
+     * Configuration key to override TTL duration (days).
      */
-    String ttlDuration() default "";
+    String ttlDurationProperty() default "";
+
+    /**
+     * Configuration key to enable or disable this TTL job.
+     */
+    String enabledProperty() default "";
+
+    /**
+     * Whether this TTL job is enabled by default.
+     */
+    boolean enabled() default true;
+
 }

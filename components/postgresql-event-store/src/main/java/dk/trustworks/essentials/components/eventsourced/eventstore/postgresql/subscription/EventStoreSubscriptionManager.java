@@ -217,7 +217,7 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      *
      * @param subscriberId                                            The unique identifier for the subscriber.
      * @param forAggregateType                                        the type of aggregate that we're subscribing for {@link PersistedEvent}'s related to
-     * @param onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder A function that determines the global event order
+     * @param onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder A functionName that determines the global event order
      *                                                                to start subscribing from on the first subscription.
      * @param eventHandler                                            the event handler that will receive the published {@link PersistedEvent}'s<br>
      *                                                                Exceptions thrown from the eventHandler will cause the event to be skipped. If you need a retry capability

@@ -36,12 +36,12 @@ public interface EssentialsScheduler {
 
     /**
      * Schedules a PostgreSQL cron job using the pg_cron extension. The job
-     * encapsulates the target database function to be executed along with
+     * encapsulates the target database functionName to be executed along with
      * the cron expression that specifies its execution schedule.
      * <p>
-     * See {@link PgCronRepository} security note. To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code  PgCronJob#cronExpression} and {@code  PgCronJob#function} values
+     * See {@link PgCronRepository} security note. To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code  PgCronJob#cronExpression} and {@code  PgCronJob#functionName} values
      *
-     * @param job the PgCronJob instance representing the PostgreSQL function
+     * @param job the PgCronJob instance representing the PostgreSQL functionName
      *            and its associated cron schedule to be registered for execution
      */
     void schedulePgCronJob(PgCronJob job);
@@ -74,7 +74,7 @@ public interface EssentialsScheduler {
 
     /**
      * Fetches a paginated list of entries from the PostgreSQL `pg_cron` table.
-     * The `pg_cron` extension must be available and properly configured in the PostgreSQL database for this method to function as expected.
+     * The `pg_cron` extension must be available and properly configured in the PostgreSQL database for this method to functionName as expected.
      *
      * @param startIndex the starting index of the entries to fetch
      * @param pageSize   the number of entries to fetch per page

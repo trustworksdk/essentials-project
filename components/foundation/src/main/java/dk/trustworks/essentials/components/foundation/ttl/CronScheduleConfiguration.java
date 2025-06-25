@@ -16,8 +16,12 @@
 
 package dk.trustworks.essentials.components.foundation.ttl;
 
+import dk.trustworks.essentials.components.foundation.scheduler.executor.FixedDelay;
+import dk.trustworks.essentials.components.foundation.scheduler.pgcron.CronExpression;
+
 import java.time.*;
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -75,5 +79,5 @@ public record CronScheduleConfiguration(CronExpression cronExpression,
                 new FixedDelay(initialDelayMillis, periodMillis, TimeUnit.MILLISECONDS)
         );
     }
-}
+
 }

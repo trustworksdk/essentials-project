@@ -37,8 +37,8 @@ public class QueuedMessageRowMapper implements RowMapper<QueuedMessage> {
     /**
      * Create a new mapper with the provided deserializers
      *
-     * @param payloadDeserializer  function to deserialize message payloads
-     * @param metadataDeserializer function to deserialize message metadata
+     * @param payloadDeserializer  functionName to deserialize message payloads
+     * @param metadataDeserializer functionName to deserialize message metadata
      */
     public QueuedMessageRowMapper(QuadFunction<QueueName, QueueEntryId, String, String, Object> payloadDeserializer,
                                   TriFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer) {
