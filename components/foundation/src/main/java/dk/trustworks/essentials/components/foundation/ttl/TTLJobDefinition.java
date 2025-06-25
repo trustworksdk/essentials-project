@@ -16,12 +16,34 @@
 
 package dk.trustworks.essentials.components.foundation.ttl;
 
+import java.util.Objects;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Represents the definition of a Time-To-Live (TTL) job. A TTL job is used to manage
+ * the lifecycle of data by applying actions based on expiration policies and defined schedules.
+ *
+ * @param action                the action associated with the TTL job. Defines the behavior
+ *                              to be executed during the job.
+ * @param scheduleConfiguration the configuration specifying the scheduling details of the TTL job.
+ */
 public record TTLJobDefinition(TTLJobAction action, ScheduleConfiguration scheduleConfiguration) {
 
     public TTLJobDefinition {
         requireNonNull(action, "Action required");
         requireNonNull(scheduleConfiguration, "Schedule configuration required");
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        TTLJobDefinition that = (TTLJobDefinition) o;
+        return Objects.equals(action, that.action);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(action);
     }
 }

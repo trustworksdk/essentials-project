@@ -305,9 +305,9 @@ public abstract class AggregateRoot<ID, EVENT_TYPE, AGGREGATE_TYPE extends Aggre
 
     /**
      * Apply a new non persisted/uncommitted Event to this aggregate instance. If you don't need to store the
-     * {@link EventOrder} for the event being applied, then you can just call the {@link #apply(Object)} function instead.
+     * {@link EventOrder} for the event being applied, then you can just call the {@link #apply(Object)} functionName instead.
      *
-     * @param eventSupplier function that as argument/input receives the {@link EventOrder} for the next event to be applied (in case you want to
+     * @param eventSupplier functionName that as argument/input receives the {@link EventOrder} for the next event to be applied (in case you want to
      *                      store the {@link EventOrder} with the event being produced by the <code>eventSupplier</code><br>
      *                      The result of the event supplier will be forwarded to the {@link #apply(Object)} method.
      */

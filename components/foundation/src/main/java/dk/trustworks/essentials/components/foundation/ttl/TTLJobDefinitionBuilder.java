@@ -18,6 +18,14 @@ package dk.trustworks.essentials.components.foundation.ttl;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * A builder class for constructing {@link TTLJobDefinition} instances.
+ * This class allows the configuration of the action and schedule details
+ * required for the definition of a Time-To-Live (TTL) job.
+ * <p>
+ * A TTL job is used to manage the lifecycle of data by executing specific
+ * actions based on expiration rules and schedules.
+ */
 public class TTLJobDefinitionBuilder {
 
     private TTLJobAction action;

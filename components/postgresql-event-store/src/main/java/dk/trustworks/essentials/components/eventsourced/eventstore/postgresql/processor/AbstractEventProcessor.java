@@ -200,9 +200,9 @@ public abstract class AbstractEventProcessor implements Lifecycle {
     /**
      * Resets all event store subscriptions to their initial state.
      * This method sets the global event order for each subscription to the first global event order, purges the durable queue
-     * and invokes the provided callback function to reset durable queues.
+     * and invokes the provided callback functionName to reset durable queues.
      *
-     * @param resetDurableQueueCallback a callback function executed if the durable queue is going to be purged - the actual queue reset logic must be implemented in this callback
+     * @param resetDurableQueueCallback a callback functionName executed if the durable queue is going to be purged - the actual queue reset logic must be implemented in this callback
      */
     protected void resetAllSubscriptions(Consumer<QueueName> resetDurableQueueCallback) {
         var resetParameters = eventStoreSubscriptions.stream()
@@ -232,7 +232,7 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @param resetAggregateSubscriptionsFromAndIncluding a map of {@link AggregateType} and the {@link GlobalEventOrder}
      *                                                    from and including which the subscription should be reset
      * @param resetDurableQueue                           a flag indicating whether the durable queue should be purged
-     * @param resetDurableQueueCallback                   a callback function executed if the durable queue is going to be purged - the actual queue reset logic must be implemented in this callback
+     * @param resetDurableQueueCallback                   a callback functionName executed if the durable queue is going to be purged - the actual queue reset logic must be implemented in this callback
      */
     protected void resetSubscriptions(Map<AggregateType, GlobalEventOrder> resetAggregateSubscriptionsFromAndIncluding,
                                       boolean resetDurableQueue,
@@ -262,7 +262,7 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @param eventStoreSubscription      event store subscription
      * @param resubscribeFromAndIncluding reset from and including global order
      * @param resetDurableQueue           should durable queue be purged
-     * @param resetDurableQueueCallback   a callback function executed if the durable queue is going to be purged - the actual queue reset logic must be implemented in this callback
+     * @param resetDurableQueueCallback   a callback functionName executed if the durable queue is going to be purged - the actual queue reset logic must be implemented in this callback
      */
     protected void doResetSubscription(EventStoreSubscription eventStoreSubscription,
                                        GlobalEventOrder resubscribeFromAndIncluding,

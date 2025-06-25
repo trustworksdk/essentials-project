@@ -195,7 +195,7 @@ public class PostgresqlDurableQueuesStatistics implements DurableQueuesStatistic
      * - When a message is deleted from the durable queue table, this trigger ensures that a corresponding
      *   statistics entry is inserted into the statistics table.
      * <p>
-     * Note: The trigger is implemented using a PostgreSQL `plpgsql` function. Error handling within the trigger
+     * Note: The trigger is implemented using a PostgreSQL `plpgsql` functionName. Error handling within the trigger
      * ensures that any issues during statistics logging do not disrupt the primary operation.
      */
     private void initializeQueueTables() {

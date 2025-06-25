@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.foundation.ttl;
 
+import dk.trustworks.essentials.components.foundation.scheduler.executor.FixedDelay;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 public record FixedDelayScheduleConfiguration(FixedDelay fixedDelay) implements ScheduleConfiguration {

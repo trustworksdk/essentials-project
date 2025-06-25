@@ -16,33 +16,70 @@
 
 package dk.trustworks.essentials.components.foundation.postgresql.ttl;
 
+import dk.trustworks.essentials.components.foundation.scheduler.EssentialsScheduler;
+import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorJob;
+import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronJob;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.ttl.*;
-import dk.trustworks.essentials.shared.Lifecycle;
+import dk.trustworks.essentials.shared.*;
 import org.slf4j.*;
 
-import java.util.List;
+import java.nio.charset.StandardCharsets;
+import java.security.*;
+import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
+/**
+ * Manages TTL (Time-To-Live) jobs in a PostgreSQL environment. This class schedules and executes
+ * TTL jobs, which are defined as per the {@link TTLJobDefinition}, ensuring periodic cleanups
+ * or operations on database tables based on user-defined schedules.
+ * <p>
+ * Implements the {@link TTLManager} interface for managing TTL jobs and the {@link Lifecycle}
+ * interface for controlled starting and stopping behavior.
+ * <p>
+ * The {@link PostgresqlTTLManager} component will
+ * validate {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
+ * However, Essentials components does not offer exhaustive protection, nor does it ensure the complete security of the resulting SQL against SQL injection threats.<br>
+ * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
+ * Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.<br>
+ * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
+ * <br>
+ * It is highly recommended that the {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} value is only derived from a controlled and trusted source.<br>
+ * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the  {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} values.<br>
+ */
 public class PostgresqlTTLManager implements TTLManager, Lifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(PostgresqlTTLManager.class);
 
+    private final EssentialsScheduler                                           scheduler;
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final List<TTLJobDefinition>                                        ttlJobDefinitions = new CopyOnWriteArrayList<>();
 
     private volatile     boolean started;
-    private static final String  ROLLBACK_MANUALLY = "ROLLBACK_MANUALLY";
 
-    public PostgresqlTTLManager(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
-        this.unitOfWorkFactory = unitOfWorkFactory;
+    public PostgresqlTTLManager(EssentialsScheduler scheduler,
+                                HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this.scheduler = requireNonNull(scheduler, "scheduler must not be null");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
     }
 
+    /**
+     * Schedules a Time-To-Live (TTL) job for execution. The job defines actions to manage
+     * data lifecycle based on expiration policies and scheduling configurations. If the manager
+     * is already started, the job will be immediately scheduled; otherwise, it will be
+     * added to a queue for scheduling upon startup.
+     * <p>
+     * See class security note. To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} values.
+     *
+     * @param jobDefinition the TTL job definition containing the action and scheduling configuration. Must not be null.
+     */
     @Override
     public void scheduleTTLJob(TTLJobDefinition jobDefinition) {
+        requireNonNull(jobDefinition, "jobDefinition must not be null");
         ttlJobDefinitions.add(jobDefinition);
         if (started) {
             log.info("Scheduling TTL job '{}'", jobDefinition);
@@ -58,12 +95,14 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
         action.validate(unitOfWorkFactory);
 
         if (scheduleConfig instanceof CronScheduleConfiguration cronConfig) {
-            if (postgresqlScheduler.isPgCronAvailable()) {
-                String functionCall = action.buildFunctionCall();
-                postgresqlScheduler.schedulePgCronJob(new PgCronJob(functionCall, cronConfig.cronExpression()));
+            if (scheduler.isPgCronAvailable()) {
+                scheduler.schedulePgCronJob(new PgCronJob(action.jobName(),
+                                                          action.functionName(),
+                                                          action.invocationArgs(),
+                                                          cronConfig.cronExpression()));
                 return;
             }
-            log.warn("PgCron not available; falling back to fixed-delay scheduling.");
+            log.warn("PgCron not available, falling back to fixed-delay scheduling.");
         }
 
         FixedDelayScheduleConfiguration fixedConfig;
@@ -78,10 +117,9 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
         }
 
         Runnable runnable = () -> action.executeDirectly(unitOfWorkFactory);
-        postgresqlScheduler.scheduleExecutorJob(
-                new EssentialsScheduledJob(
+        scheduler.scheduleExecutorJob(
+                new ExecutorJob(action.jobName(),
                         fixedConfig.fixedDelay(),
-                        action.toString(),
                         runnable)
                                                );
     }
@@ -118,12 +156,22 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
     public void stop() {
         if (started) {
             started = false;
-            log.info("⚙️ Stopping Postgresql Time-to-Live manager");
+            log.info("🛑 Stopped Postgresql Time-to-Live manager");
         }
     }
 
     @Override
     public boolean isStarted() {
-        return false;
+        return started;
+    }
+
+    public static String shortHash(String s) {
+        try {
+            MessageDigest md     = MessageDigest.getInstance("MD5");
+            byte[]        digest = md.digest(s.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest, 0, 4);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

@@ -88,7 +88,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
      * If the scheduler is started, pg_cron is available, and the necessary lock is acquired,
      * the job will be scheduled internally. Otherwise, the job will be added for later scheduling.
      * <p>
-     * See {@link PgCronRepository} security note. To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code  PgCronJob#cronExpression} and {@code  PgCronJob#function} values
+     * See {@link PgCronRepository} security note. To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code  PgCronJob#cronExpression} and {@code  PgCronJob#functionName} values
      *
      * @param job the {@link PgCronJob} instance containing details about the job to be scheduled;
      *            must not be null.
@@ -248,7 +248,10 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
 
     private boolean determineIfPgCronIsLoaded() {
         try {
-            Integer testId = pgCronRepository.schedule(new PgCronJob("test", "test", CronExpression.ONE_SECOND));
+            Integer testId = pgCronRepository.schedule(new PgCronJob("test",
+                                                                     "test",
+                                                                     null,
+                                                                     CronExpression.ONE_SECOND));
             pgCronRepository.unschedule(testId);
         } catch (Exception e) {
             var notLoaded = PostgresqlUtil.isPGExtensionNotLoadedException(e);
