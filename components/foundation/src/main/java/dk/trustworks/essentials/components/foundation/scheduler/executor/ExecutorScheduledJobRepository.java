@@ -56,8 +56,8 @@ public class ExecutorScheduledJobRepository {
 
     public ExecutorScheduledJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                          String sharedTableName) {
-        this.unitOfWorkFactory = unitOfWorkFactory;
-        this.sharedTableName = sharedTableName;
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
+        this.sharedTableName = requireNonNull(sharedTableName, "sharedTableName cannot be null");
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedTableName);
         initializeTable();
     }

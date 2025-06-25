@@ -101,8 +101,8 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
         var fencedLockManager2 = new TestFencedLockManager(jdbi);
         fencedLockManager2.start();
 
-        DefaultEssentialsScheduler essentialsScheduler1 = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager1, 2);
-        DefaultEssentialsScheduler essentialsScheduler2 = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager2, 2);
+        var essentialsScheduler1 = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager1, 2);
+        var essentialsScheduler2 = new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager2, 2);
 
         essentialsScheduler1.start();
         essentialsScheduler2.start();

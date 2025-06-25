@@ -105,7 +105,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         }
     }
 
-   @Override
+    @Override
     public void scheduleExecutorJob(ExecutorJob job) {
         requireNonNull(job, "job cannot be null");
         log.debug("Adding ExecutorJob '{}'", job);
@@ -190,10 +190,14 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     }
 
     private void schedulePgCronJobInternal(PgCronJob job) {
-        var jobId = pgCronRepository.schedule(job);
-        if (jobId != null) {
-            log.info("✅ Added PgCronJob '{}' with jobId '{}'", job, jobId);
-            pgCronJobIds.put(job, jobId);
+        if (pgCronRepository.doesJobExist(job.name()) == null) {
+            var jobId = pgCronRepository.schedule(job);
+            if (jobId != null) {
+                log.info("✅ Added PgCronJob '{}' with jobId '{}'", job, jobId);
+                pgCronJobIds.put(job, jobId);
+            }
+        } else {
+            log.warn("PgCronJob '{}' already exists", job);
         }
     }
 
