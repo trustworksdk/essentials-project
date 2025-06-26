@@ -38,12 +38,14 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer
 import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
+import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.scheduler.*;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.transaction.spring.jdbi.SpringTransactionAwareJdbiUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.ttl.TTLJobBeanPostProcessor;
 import dk.trustworks.essentials.components.queue.postgresql.*;
 import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
@@ -59,6 +61,7 @@ import io.micrometer.tracing.propagation.Propagator;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.slf4j.*;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -66,6 +69,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.event.*;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.env.Environment;
 import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -507,6 +511,21 @@ public class EssentialsComponentsConfiguration {
                                                    FencedLockManager fencedLockManager,
                                                    EssentialsComponentsProperties properties) {
         return new DefaultEssentialsScheduler(unitOfWorkFactory, fencedLockManager, properties.getScheduler().getNumberOfThreads());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(EssentialsScheduler.class)
+    public PostgresqlTTLManager postgresqlTTLManager(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                                     EssentialsScheduler scheduler) {
+        return new PostgresqlTTLManager(scheduler, unitOfWorkFactory);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnBean(PostgresqlTTLManager.class)
+    public static TTLJobBeanPostProcessor ttlJobBeanPostProcessor(ConfigurableListableBeanFactory beanFactory, Environment environment) {
+        return new TTLJobBeanPostProcessor(beanFactory, environment);
     }
 
     // Api ###################################################################################################

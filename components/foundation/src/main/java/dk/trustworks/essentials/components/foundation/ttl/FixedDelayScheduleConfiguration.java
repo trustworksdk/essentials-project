@@ -14,26 +14,20 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.components.foundation.scheduler;
+package dk.trustworks.essentials.components.foundation.ttl;
 
-import dk.trustworks.essentials.shared.network.Network;
+import dk.trustworks.essentials.components.foundation.scheduler.executor.FixedDelay;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The JobNameResolver class provides functionality to resolve job names in a hostname-specific manner.
- * It appends the current instance's hostname to the given job name if it's not yet included.
+ * Represents a schedule configuration based on a fixed delay mechanism.
+ * This record wraps a {@link FixedDelay} instance, which defines the
+ * initial delay and the fixed period between subsequent task executions.
  */
-public class JobNameResolver {
+public record FixedDelayScheduleConfiguration(FixedDelay fixedDelay) implements ScheduleConfiguration {
 
-    public static final String UNDER_SCORE  = "_";
-
-    public static String resolve(String name) {
-        requireNonNull(name, "name cannot be null");
-        String instanceId = Network.hostName();
-        String suffix = UNDER_SCORE + instanceId;
-        return name.endsWith(suffix)
-               ? name
-               : name + suffix;
+    public FixedDelayScheduleConfiguration {
+        requireNonNull(fixedDelay, "fixedDelay must not be null");
     }
 }

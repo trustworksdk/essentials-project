@@ -233,7 +233,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                             try {
                                 fencedLock.release();
                             } catch (Exception e) {
-                                log.error(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
+                                if (IOExceptionUtil.isIOException(e)) {
+                                    log.debug(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
+                                } else {
+                                    log.error(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), e);
+                                }
                             }
                         }
                     } catch (Exception e) {
@@ -253,7 +257,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         try {
                             fencedLock.release();
                         } catch (Exception ex) {
-                            log.error(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), ex);
+                            if (IOExceptionUtil.isIOException(ex)) {
+                                log.debug(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), ex);
+                            } else {
+                                log.error(msg("[{}] Failed to release lock '{}'", lockManagerInstanceId, fencedLock.getName()), ex);
+                            }
                         }
                     });
                 }
@@ -282,7 +290,11 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
             log.debug("[{}] Releasing lock '{}': {}", lockManagerInstanceId, lock.getName(), lock);
             var releaseWithSuccess = withUnitOfWork(uow -> lockStorage.releaseLockInDB(this, uow, lock),
                                                     e -> {
-                                                        log.error("[{}] Failed to release lock '{}' in DB", lockManagerInstanceId, lock.getName(), e);
+                                                        if (IOExceptionUtil.isIOException(e)) {
+                                                            log.debug("[{}] Failed to release lock '{}' in DB", lockManagerInstanceId, lock.getName(), e);
+                                                        } else {
+                                                            log.error("[{}] Failed to release lock '{}' in DB", lockManagerInstanceId, lock.getName(), e);
+                                                        }
                                                         return false;
                                                     });
             log.trace("[{}] Removing {} DB released lock '{}' locally, marking and notifying it as released: {}",

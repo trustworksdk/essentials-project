@@ -28,7 +28,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *
  * @param jobId     the unique identifier of the cron job
  * @param schedule  the cron expression indicating the job's execution schedule
- * @param command   the command or function to be executed
+ * @param command   the command or functionName to be executed
  * @param nodeName  the name of the node where the job will run
  * @param nodePort  the port number of the target node
  * @param database  the database context in which the job executes

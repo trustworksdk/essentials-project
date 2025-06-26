@@ -38,7 +38,6 @@ public class EssentialsSchedulerIT_WithExecutor extends AbstractEssentialsSchedu
             .withUsername("postgres")
             .withPassword("postgres");
 
-
     @Override
     protected PostgreSQLContainer<?> getPostgreSQLContainer() {
         return postgreSQLContainer;

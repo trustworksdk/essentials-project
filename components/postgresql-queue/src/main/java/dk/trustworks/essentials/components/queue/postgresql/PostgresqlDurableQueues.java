@@ -1588,7 +1588,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 return allMessages;
             });
         } catch (Exception e) {
-            log.error("Error in fetchNextBatchOfMessages: {}", e.getMessage(), e);
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("Error in fetchNextBatchOfMessages: {}", e.getMessage(), e);
+            } else {
+                log.error("Error in fetchNextBatchOfMessages: {}", e.getMessage(), e);
+            }
             return Collections.emptyList();
         }
     }

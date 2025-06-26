@@ -25,27 +25,30 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 /**
  * Represents a PostgreSQL cron job scheduled using the pg_cron extension.
  * This immutable record encapsulates the details of a job, including the
- * target function to be executed and the cron expression defining when
+ * target functionName to be executed and the cron expression defining when
  * the job is to be run.
- * Only use the function name without () or any sql, the name is validated with {@link PgCronRepository#FN_NAME}.
+ * Only use the functionName name without () or any sql, the name is validated with {@link PgCronRepository#FN_NAME}.
  * Function arguments are not supported yet.
  * <pre>
- *      function: sample_db_metrics
+ *      name: job1
+ *      functionName: sample_db_metrics
+ *      sqlCommand: expiry_ts < now()
  *      cronExpression: *'/'1 * * * *
  * </pre>
  * A PgCronJob implements the {@link EssentialsScheduledJob} interface, allowing
  * it to be used with job schedulers that support this interface.
  *
  * @param name           the name of the job; must not be null.
- * @param function       the name of the function (without () and sql) to be executed as part of the cron job; must not be null.
+ * @param functionName   the name of the functionName (without () and sql) to be executed as part of the cron job; must not be null.
+ * @param sqlCommand     the sql command; can be null
  * @param cronExpression the cron expression indicating the schedule of the job; must not be null.
  */
-public record PgCronJob(String name, String function, CronExpression cronExpression) implements EssentialsScheduledJob {
+public record PgCronJob(String name, String functionName, String sqlCommand, CronExpression cronExpression) implements EssentialsScheduledJob {
 
     public PgCronJob {
         requireNonNull(name, "name cannot be null");
         requireTrue(name.length() <= 50, "name must be <= 50 characters long");
-        requireNonNull(function, "function cannot be null");
+        requireNonNull(functionName, "functionName cannot be null");
         requireNonNull(cronExpression, "cronExpression cannot be null");
     }
 

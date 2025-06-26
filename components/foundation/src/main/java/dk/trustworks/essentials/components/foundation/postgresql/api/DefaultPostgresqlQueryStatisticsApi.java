@@ -50,21 +50,15 @@ public class DefaultPostgresqlQueryStatisticsApi implements PostgresqlQueryStati
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
 
-        tryAndCreatePgStatementsExtension();
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             this.pgStatementsAvailable = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_stat_statements");
-        });
-        log.info("pg_statements extension is '{}' available", pgStatementsAvailable);
-    }
-
-    private void tryAndCreatePgStatementsExtension() {
-        try {
-            unitOfWorkFactory.usingUnitOfWork(uow -> {
+            if (pgStatementsAvailable) {
+                log.info("pg_statements extension is available");
                 uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;");
-            });
-        } catch (UnitOfWorkException e) {
-            log.warn("Failed to initialize pg_statements extension, query statistics will not be available", e);
-        }
+            } else {
+                log.info("pg_statements extension is not available");
+            }
+        });
     }
 
     private void validateRoles(Object principal) {

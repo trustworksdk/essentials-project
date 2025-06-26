@@ -70,7 +70,7 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_schedule_and_does_job_exist() {
-        var job   = new PgCronJob("test", "test_fn", CronExpression.of("0 0 * * *"));
+        var job   = new PgCronJob("test", "test_fn", null, CronExpression.of("0 0 * * *"));
         var jobId = repository.schedule(job);
         assertThat(jobId).isNotNull();
 
@@ -83,7 +83,7 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_fetch_and_count_entries() {
-        var job   = new PgCronJob("test", "test_fn", CronExpression.of("0 1 * * *"));
+        var job   = new PgCronJob("test", "test_fn", null, CronExpression.of("0 1 * * *"));
         var jobId = repository.schedule(job);
 
         var total = repository.getTotalPgCronEntries();
@@ -103,7 +103,7 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_unschedule() {
-        var job   = new PgCronJob("test", "test_fn", CronExpression.of("0 2 * * *"));
+        var job   = new PgCronJob("test", "test_fn", null, CronExpression.of("0 2 * * *"));
         var jobId = repository.schedule(job);
         repository.unschedule(jobId);
 
@@ -112,7 +112,7 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_job_run_details() {
-        var job   = new PgCronJob("test", "test_fn", CronExpression.of("0 3 * * *"));
+        var job   = new PgCronJob("test", "test_fn", null, CronExpression.of("0 3 * * *"));
         var jobId = repository.schedule(job);
 
         unitOfWorkFactory.usingUnitOfWork(uow -> {
@@ -134,14 +134,14 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_invalid_function_name_throws() {
-        var job = new PgCronJob("test", "invalid-fn(DROP TABLE);", CronExpression.of("0 4 * * *"));
+        var job = new PgCronJob("test", "invalid-fn(DROP TABLE);", null, CronExpression.of("0 4 * * *"));
         assertThatThrownBy(() -> repository.schedule(job)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void verify_delete_job_by_name_ending_with_instance_id() {
         var instanceId = Network.hostName();
-        var job        = new PgCronJob("test", "test_fn", CronExpression.of("0 2 * * *"));
+        var job        = new PgCronJob("test", "test_fn", null, CronExpression.of("0 2 * * *"));
         repository.schedule(job);
 
         repository.deleteJobByNameEndingWithInstanceId(instanceId);

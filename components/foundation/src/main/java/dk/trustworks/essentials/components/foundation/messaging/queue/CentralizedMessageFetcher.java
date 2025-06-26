@@ -243,12 +243,20 @@ public class CentralizedMessageFetcher implements Lifecycle {
                             processMessage(queueName, messageOpt.get());
                         }
                     } catch (Exception e) {
-                        log.error("[{}] Error fetching messages: {}", queueName, e.getMessage(), e);
+                        if (IOExceptionUtil.isIOException(e)) {
+                            log.debug("[{}] Error fetching messages: {}", queueName, e.getMessage(), e);
+                        } else {
+                            log.error("[{}] Error fetching messages: {}", queueName, e.getMessage(), e);
+                        }
                     }
                 });
             }
         } catch (Exception e) {
-            log.error("Error during batch message fetching: {}", e.getMessage(), e);
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("Error during batch message fetching: {}", e.getMessage(), e);
+            } else {
+                log.error("Error during batch message fetching: {}", e.getMessage(), e);
+            }
         }
     }
 

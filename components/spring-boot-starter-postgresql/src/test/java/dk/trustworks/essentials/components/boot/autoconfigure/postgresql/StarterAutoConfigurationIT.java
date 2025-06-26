@@ -3,6 +3,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
+import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -12,6 +13,8 @@ import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.test.context.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,7 +45,10 @@ public class StarterAutoConfigurationIT {
                     .withInitializer(ctx -> TestPropertyValues.of(
                             "spring.datasource.url=" + postgreSQLContainer.getJdbcUrl(),
                             "spring.datasource.username=" + postgreSQLContainer.getUsername(),
-                            "spring.datasource.password=" + postgreSQLContainer.getPassword()
+                            "spring.datasource.password=" + postgreSQLContainer.getPassword(),
+                            "essentials.durable-queues.enable-queue-statistics=true",
+                            "essentials.durable-queues.shared-queue-statistics-table-name=durable_queues_statistics",
+                            "essentials.scheduler.enabled=true"
                     ).applyTo(ctx.getEnvironment())); // needed
 
     @Test
@@ -59,6 +65,11 @@ public class StarterAutoConfigurationIT {
             assertThat(ctx).hasSingleBean(PostgresqlQueryStatisticsApi.class);
             PostgresqlQueryStatisticsApi postgresqlQueryStatisticsApi = ctx.getBean(PostgresqlQueryStatisticsApi.class);
             assertThat(postgresqlQueryStatisticsApi.getTopTenSlowestQueries("principal")).isNotNull();
+
+            assertThat(ctx).hasSingleBean(SchedulerApi.class);
+            SchedulerApi schedulerApi = ctx.getBean(SchedulerApi.class);
+            List<ApiExecutorJob> executorJobs = schedulerApi.getExecutorJobs("principal", 0, 10);
+            assertThat(executorJobs).isNotEmpty();
         });
     }
 
