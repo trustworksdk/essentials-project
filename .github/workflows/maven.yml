@@ -36,6 +36,13 @@ jobs:
           **/target/surefire-reports/
           **/target/failsafe-reports/
         retention-days: 2
+    - name: Test Summary
+      if: always()
+      uses: test-summary/action@v2
+      with:
+        paths: |
+          **/target/surefire-reports/TEST-*.xml
+          **/target/failsafe-reports/TEST-*.xml
     #- name: Report JUnit Test Results
     #  if: always()
     #  uses: dorny/test-reporter@v1
