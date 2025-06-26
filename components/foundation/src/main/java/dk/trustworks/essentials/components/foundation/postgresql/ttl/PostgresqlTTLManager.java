@@ -80,12 +80,17 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
     @Override
     public void scheduleTTLJob(TTLJobDefinition jobDefinition) {
         requireNonNull(jobDefinition, "jobDefinition must not be null");
+        if (ttlJobDefinitions.contains(jobDefinition)) {
+            log.info("TTL job '{}' already scheduled", jobDefinition);
+            return;
+        }
+        log.debug("Scheduling TTL job '{}'", jobDefinition);
         ttlJobDefinitions.add(jobDefinition);
         if (started) {
             log.info("Scheduling TTL job '{}'", jobDefinition);
             scheduleJob(jobDefinition);
         } else {
-            log.info("Manager not started, skipping scheduleTTLJob '{}'", jobDefinition);
+            log.info("Manager not started, ttl job '{}' will be scheduled when manager is started", jobDefinition);
         }
     }
 
@@ -132,6 +137,7 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
 
             initializeTimeToLiveFunction();
 
+            log.info("Scheduling '{}' TTL job definitions", ttlJobDefinitions.size());
             for (TTLJobDefinition jobDefinition : ttlJobDefinitions) {
                 scheduleJob(jobDefinition);
             }

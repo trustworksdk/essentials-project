@@ -16,24 +16,23 @@
 
 package dk.trustworks.essentials.components.foundation.scheduler;
 
+import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.*;
 import dk.trustworks.essentials.components.foundation.scheduler.executor.ExecutorScheduledJobRepository.ExecutorJobEntry;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronRepository.*;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkException;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
-import dk.trustworks.essentials.shared.*;
+import dk.trustworks.essentials.shared.Lifecycle;
+import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import dk.trustworks.essentials.shared.network.Network;
-import org.jdbi.v3.core.Handle;
 import org.slf4j.*;
 
 import java.util.*;
 import java.util.concurrent.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
-import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
 /**
  * ** Note: This scheduler is not intended to replace a full-fledged scheduler such as Quartz or Spring, it is a simple
@@ -63,12 +62,12 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     private volatile boolean started;
     private volatile boolean lockAcquired;
 
-    private       ScheduledExecutorService             executorService;
-    private final PgCronRepository                     pgCronRepository;
-    private final ExecutorScheduledJobRepository       executorScheduledJobRepository;
+    private       ScheduledExecutorService       executorService;
+    private final PgCronRepository               pgCronRepository;
+    private final ExecutorScheduledJobRepository executorScheduledJobRepository;
 
-    private final List<PgCronJob>                      pgCronJobs   = new CopyOnWriteArrayList<>();
-    private final Map<PgCronJob, Integer>              pgCronJobIds = new ConcurrentHashMap<>();
+    private final List<PgCronJob>         pgCronJobs   = new CopyOnWriteArrayList<>();
+    private final Map<PgCronJob, Integer> pgCronJobIds = new ConcurrentHashMap<>();
 
     private final List<ExecutorJob>                    executorJobs       = new CopyOnWriteArrayList<>();
     private final Map<ExecutorJob, ScheduledFuture<?>> executorJobFutures = new ConcurrentHashMap<>();
@@ -98,24 +97,32 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     @Override
     public void schedulePgCronJob(PgCronJob job) {
         requireNonNull(job, "job cannot be null");
+        if (pgCronJobs.contains(job)) {
+            log.info("PgCronJob '{}' already exists'", job);
+            return;
+        }
         log.debug("Scheduling PgCronJob '{}'", job);
         pgCronJobs.add(job);
         if (started && pgCronAvailable && lockAcquired) {
             schedulePgCronJobInternal(job);
         } else {
-            log.info("Scheduler is started '{}' pgCron is available '{}' and lock acquired '{}' can't schedule job '{}'",started, pgCronAvailable, lockAcquired, job);
+            log.info("Scheduler is started '{}' pg_cron is available '{}' and lock acquired '{}' can't schedule job '{}'", started, pgCronAvailable, lockAcquired, job);
         }
     }
 
     @Override
     public void scheduleExecutorJob(ExecutorJob job) {
         requireNonNull(job, "job cannot be null");
+        if (executorJobs.contains(job)) {
+            log.info("ExecutorJob '{}' already exists", job);
+            return;
+        }
         log.debug("Adding ExecutorJob '{}'", job);
         executorJobs.add(job);
         if (started && lockAcquired) {
             scheduleExecutorJobInternal(job);
         } else {
-            log.info("Scheduler is started '{}' and lock acquired '{}' can't schedule job '{}'",started, lockAcquired, job);
+            log.info("Scheduler is started '{}' and lock acquired '{}' can't schedule job '{}'", started, lockAcquired, job);
         }
     }
 
@@ -137,8 +144,8 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         try {
             pgCronRepository.unschedule(jobId);
             findJobById(jobId).ifPresent(job -> {
-               pgCronJobIds.remove(job);
-               pgCronJobs.remove(job);
+                pgCronJobIds.remove(job);
+                pgCronJobs.remove(job);
             });
             return true;
         } catch (Exception e) {
@@ -221,7 +228,12 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         if (!started) {
             started = true;
 
-            executorService = Executors.newScheduledThreadPool(schedulerThreads);
+            executorService = Executors.newScheduledThreadPool(schedulerThreads,
+                                                               ThreadFactoryBuilder.builder()
+                                                                                   .nameFormat("essentials-scheduler-%d")
+                                                                                   .daemon(true)
+                                                                                   .build()
+                                                              );
 
             unitOfWorkFactory.usingUnitOfWork(uow -> {
                 var available = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_cron");
@@ -266,12 +278,14 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     }
 
     private void onLockAcquired(FencedLock lock) {
-        log.info("🎉 FencedLock '{}' was ACQUIRED; purging stale entries, then scheduling all jobs.", lockName);
-        lockAcquired = true;
+        log.info("🎉 FencedLock '{}' was ACQUIRED, lockAcquired '{}' purging stale entries, then scheduling all jobs.", lockName, lockAcquired);
+
 
         deleteJobsWithInstanceId();
 
         scheduleJobs();
+
+        lockAcquired = true;
     }
 
     private void deleteJobsWithInstanceId() {
@@ -281,14 +295,23 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
             try {
                 pgCronRepository.deleteJobByNameEndingWithInstanceId(instanceId);
             } catch (Exception e) {
-                log.warn("Failed to purge stale pg_cron jobs", e);
+                if (IOExceptionUtil.isIOException(e)) {
+                    log.debug("Failed to purge stale pg_cron jobs", e);
+                } else {
+                    log.warn("Failed to purge stale pg_cron jobs", e);
+                }
             }
         }
 
         try {
             executorScheduledJobRepository.deleteByNameEndingWithInstanceId(instanceId);
         } catch (Exception e) {
-            log.warn("Failed to purge stale executor scheduled jobs", e);
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("Failed to purge stale executor scheduled jobs", e);
+            } else {
+                log.warn("Failed to purge stale executor scheduled jobs", e);
+            }
+
         }
     }
 
@@ -305,17 +328,23 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         try {
             executorScheduledJobRepository.deleteAll();
         } catch (Exception e) {
-            log.warn("Failed to purge stale executor scheduled jobs on lock release", e);
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("Failed to purge stale executor scheduled jobs on lock release", e);
+            } else {
+                log.warn("Failed to purge stale executor scheduled jobs on lock release", e);
+            }
         }
     }
 
     private void scheduleJobs() {
         if (pgCronAvailable) {
+            log.info("Scheduling '{}' pg_cron jobs", pgCronJobs.size());
             for (PgCronJob job : pgCronJobs) {
                 schedulePgCronJobInternal(job);
             }
         }
 
+        log.info("Scheduling '{}' executor jobs", executorJobs.size());
         for (ExecutorJob job : executorJobs) {
             scheduleExecutorJobInternal(job);
         }
@@ -331,7 +360,11 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
                 try {
                     executorScheduledJobRepository.deleteAll();
                 } catch (Exception e) {
-                    log.warn("Error deleting executor scheduled jobs in stop()", e);
+                    if (IOExceptionUtil.isIOException(e)) {
+                        log.debug("Error deleting executor scheduled jobs in stop()", e);
+                    } else {
+                        log.warn("Error deleting executor scheduled jobs in stop()", e);
+                    }
                 }
             }
 
@@ -359,7 +392,11 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         try {
             executorScheduledJobRepository.deleteByNameEndingWithInstanceId(instanceId);
         } catch (Exception e) {
-            log.warn("Failed to purge executor scheduled jobs for instance '{}'", instanceId, e);
+            if (IOExceptionUtil.isIOException(e)) {
+                log.debug("Failed to purge executor scheduled jobs for instance '{}'", instanceId, e);
+            } else {
+                log.warn("Failed to purge executor scheduled jobs for instance '{}'", instanceId, e);
+            }
         }
         executorJobFutures.clear();
     }
@@ -372,14 +409,22 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
                     try {
                         pgCronRepository.unschedule(id);
                     } catch (Exception e) {
-                        log.warn("Failed to unschedule pg_cron jobId {}", id, e);
+                        if (IOExceptionUtil.isIOException(e)) {
+                            log.debug("Failed to unschedule pg_cron jobId {}", id, e);
+                        } else {
+                            log.warn("Failed to unschedule pg_cron jobId {}", id, e);
+                        }
                     }
                 }
             }
             try {
                 pgCronRepository.deleteJobByNameEndingWithInstanceId(instanceId);
             } catch (Exception e) {
-               log.warn("Failed to purge pg_cron jobs for instance '{}'", instanceId,  e);
+                if (IOExceptionUtil.isIOException(e)) {
+                    log.debug("Failed to purge pg_cron jobs for instance '{}'", instanceId, e);
+                } else {
+                    log.warn("Failed to purge pg_cron jobs for instance '{}'", instanceId, e);
+                }
             }
             pgCronJobIds.clear();
         }
