@@ -181,11 +181,6 @@ class ListenNotifyIT {
     }
 
     @Test
-    public void test_failure() {
-        throw new RuntimeException("Test failure");
-    }
-
-    @Test
     void verify_remove_notifications() throws InterruptedException {
         jdbi.useTransaction(handle -> {
             ListenNotify.addChangeNotificationTriggerToTable(handle, TABLE_NAME, List.of(ListenNotify.SqlOperation.INSERT), "id");
