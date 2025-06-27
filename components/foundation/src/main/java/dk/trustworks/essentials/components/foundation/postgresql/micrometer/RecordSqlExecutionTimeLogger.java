@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.util.Optional;
 
 import static dk.trustworks.essentials.components.foundation.jdbi.EssentialsQueryTagger.QUERY_TAG;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * A logger class that records SQL execution times. This class implements the {@link SqlLogger} interface
@@ -34,7 +35,6 @@ import static dk.trustworks.essentials.components.foundation.jdbi.EssentialsQuer
  * options for enabling/disabling execution time recording and defining module-specific tags.
  */
 public class RecordSqlExecutionTimeLogger implements SqlLogger {
-
 
     private final       MeasurementTaker measurementTaker;
     public static final String           MODULE_TAG_NAME           = "Module";
@@ -48,8 +48,9 @@ public class RecordSqlExecutionTimeLogger implements SqlLogger {
                                         boolean recordExecutionTimeEnabled,
                                         LogThresholds thresholds,
                                         String moduleTag) {
+        requireNonNull(meterRegistryOptional, "meterRegistryOptional cannot be null");
         this.recordExecutionTimeEnabled = recordExecutionTimeEnabled;
-        this.moduleTag = moduleTag;
+        this.moduleTag = requireNonNull(moduleTag, "moduleTag cannot be null");
         this.measurementTaker = MeasurementTaker.builder()
                                                 .addRecorder(
                                                         new LoggingMeasurementRecorder(
@@ -92,7 +93,7 @@ public class RecordSqlExecutionTimeLogger implements SqlLogger {
      * {@code false} otherwise
      */
     private boolean isQuery(StatementContext context) {
-        String sql = context.getRenderedSql();
+        var sql = context.getRenderedSql();
         int    len = sql.length(), i = 0;
 
         while (i < len) {
