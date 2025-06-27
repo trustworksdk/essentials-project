@@ -35,6 +35,11 @@ class ListenNotifyTest {
     }
 
     @Test
+    public void test_failure() {
+        throw new RuntimeException("Test failure");
+    }
+
+    @Test
     void addChangeNotificationTriggerToTable_with_invalid_tableName_and_no_column_names() {
         assertThatThrownBy(() -> {
             ListenNotify.addChangeNotificationTriggerToTable(mock(Handle.class),
