@@ -50,7 +50,7 @@ public class RecordSqlExecutionTimeLogger implements SqlLogger {
                                         String moduleTag) {
         requireNonNull(meterRegistryOptional, "meterRegistryOptional cannot be null");
         this.recordExecutionTimeEnabled = recordExecutionTimeEnabled;
-        this.moduleTag = requireNonNull(moduleTag, "moduleTag cannot be null");
+        this.moduleTag = moduleTag;
         this.measurementTaker = MeasurementTaker.builder()
                                                 .addRecorder(
                                                         new LoggingMeasurementRecorder(
