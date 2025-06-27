@@ -23,6 +23,8 @@ import org.jdbi.v3.core.statement.*;
 import java.util.Optional;
 import java.util.function.Function;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * The EssentialsQueryTagger class is responsible for tagging SQL queries executed through
  * the provided Jdbi instance, ensuring all queries include a predefined comment tag
@@ -43,13 +45,13 @@ public class EssentialsQueryTagger {
     private final Jdbi jdbi;
 
     public EssentialsQueryTagger(Jdbi jdbi) {
-        this.jdbi = jdbi;
+        this.jdbi = requireNonNull(jdbi, "jdbi cannot be null");
         tagQueries();
     }
 
     private void tagQueries() {
-        SqlStatements stmts = jdbi.getConfig(SqlStatements.class);
-        TemplateEngine delegate = stmts.getTemplateEngine();
+        var stmts = jdbi.getConfig(SqlStatements.class);
+        var delegate = stmts.getTemplateEngine();
 
         stmts.setTemplateEngine(new TemplateEngine() {
             @Override
