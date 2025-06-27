@@ -232,6 +232,17 @@ public class MeasurementTaker {
         }
 
         /**
+         * Record the recorded duration using the built measurement context.
+         *
+         * @param recordedDuration the recorded duration to use for the measurement
+         * @return the measurementTaker instance for fluent chaining
+         */
+        public void record(Duration recordedDuration) {
+            requireNonNull(recordedDuration, "No Duration provided");
+            measurementTaker.recordTime(contextBuilder.build(), recordedDuration);
+        }
+
+        /**
          * Adds an optional tag to the measurement. If the value is null then the tag isn't added
          *
          * @param key   the tag key
