@@ -250,7 +250,9 @@ public class MeasurementTaker {
          * @return this FluentMeasurementContext instance for fluent chaining
          */
         public FluentMeasurementContext optionalTag(String key, String value) {
-            contextBuilder.optionalTag(key, value);
+            if (value != null) {
+                contextBuilder.optionalTag(key, value);
+            }
             return this;
         }
     }
