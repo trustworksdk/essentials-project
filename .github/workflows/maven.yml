@@ -25,8 +25,13 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         cache: maven
+    # Pre-pull Postgres so Testcontainers sees it locally
+    - name: Pre-pull Postgres image
+      run: |
+         docker pull postgres:latest
     - name: Build with Maven
       run: mvn -B verify --file pom.xml -DskipDependencyCheck=true
+
     - name: Upload JUnit test results
       if: always()
       uses: actions/upload-artifact@v4
@@ -36,6 +41,23 @@ jobs:
           **/target/surefire-reports/
           **/target/failsafe-reports/
         retention-days: 2
+
+    - name: Test Summary · Unit
+      if: always()
+      uses: test-summary/action@v2
+      with:
+        paths: '**/target/surefire-reports/TEST-*.xml'
+      env:
+        NODE_OPTIONS: --max-old-space-size=4096
+
+    - name: Test Summary · Integration
+      if: always()
+      uses: test-summary/action@v2
+      with:
+        paths: '**/target/failsafe-reports/TEST-*.xml'
+      env:
+        NODE_OPTIONS: --max-old-space-size=8192
+
     #- name: Report JUnit Test Results
     #  if: always()
     #  uses: dorny/test-reporter@v1
