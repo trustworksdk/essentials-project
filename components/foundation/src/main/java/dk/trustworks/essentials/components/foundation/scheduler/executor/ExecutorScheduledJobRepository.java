@@ -173,7 +173,7 @@ public class ExecutorScheduledJobRepository {
         Update u = uow.handle().createUpdate(sql);
         u.bind("instanceid", UNDER_SCORE + instanceId);
         int affectedRows = u.execute();
-        log.debug("Deleted {} scheduled job entries ending with instance id '{}'", affectedRows, instanceId);
+        log.debug("Deleted '{}' scheduled job entries ending with instance id '{}'", affectedRows, instanceId);
         });
     }
 

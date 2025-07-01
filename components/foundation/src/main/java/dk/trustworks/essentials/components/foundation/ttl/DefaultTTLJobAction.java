@@ -16,13 +16,14 @@
 
 package dk.trustworks.essentials.components.foundation.ttl;
 
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.scheduler.pgcron.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 
-import java.util.Objects;
+import java.util.*;
 
 import static dk.trustworks.essentials.components.foundation.ttl.TTLManager.DEFAULT_TTL_FUNCTION_NAME;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Default implementation of the {@link TTLJobAction} interface. This class provides
@@ -37,18 +38,18 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
  * Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br></li>
- * <li><b>NOT VALIDATED:</b> {@link DefaultTTLJobAction#whereClause} and {@link DefaultTTLJobAction#fullDeleteSql} -
+ * <li><b>NOT VALIDATED:</b> {@link DefaultTTLJobAction#functionCall} and {@link DefaultTTLJobAction#fullDeleteSql} -
  *     executed directly without any security checks</li>
  * </ul>
  * <p>
  * <b>Developer Responsibility:</b><br>
- * You MUST ensure that {@code whereClause} and {@code fullDeleteSql} values are safe before creating
+ * You MUST ensure that {@code functionCall} and {@code fullDeleteSql} values are safe before creating
  * this object. These values will be executed directly by the {@link TTLManager} with no additional
  * validation or sanitization.
  * <p>
  * <b>Security Best Practices:</b>
  * <ul>
- * <li>Only derive {@code whereClause} and {@code fullDeleteSql} from controlled, trusted sources</li>
+ * <li>Only derive {@code functionCall} and {@code fullDeleteSql} from controlled, trusted sources</li>
  * <li>Never allow external or untrusted input to directly provide these values</li>
  * <li>Implement your own validation/sanitization before passing these parameters</li>
  * <li>Consider using parameterized queries or prepared statements where possible</li>
@@ -58,10 +59,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * that could compromise database security and integrity.</b>
  */
 public class DefaultTTLJobAction implements TTLJobAction {
-    public final String tableName;
-    public final String whereClause;
-    public final String fullDeleteSql;
-    public final String jobName;
+    public final String       tableName;
+    public final FunctionCall functionCall;
+    public final String       fullDeleteSql;
+    public final String       jobName;
 
     /**
      * Creates a new DefaultTTLJobAction with the specified parameters.
@@ -69,21 +70,26 @@ public class DefaultTTLJobAction implements TTLJobAction {
      * <b>SECURITY NOTE:</b> Only {@code tableName} is validated. You MUST ensure
      * {@code whereClause} and {@code fullDeleteSql} are safe before calling this constructor.
      *
-     * @param tableName the table name (will be validated for SQL identifier format)
-     * @param whereClause the WHERE clause (NOT validated - must be pre-validated by caller)
+     * @param tableName     the table name (will be validated for SQL identifier format)
+     * @param whereClause   the WHERE clause (NOT validated - must be pre-validated by caller)
      * @param fullDeleteSql the full DELETE SQL statement (NOT validated - must be pre-validated by caller)
-     * @param jobName the job name
+     * @param jobName       the job name
      * @throws IllegalArgumentException if tableName is invalid or any parameter is null
      */
     public DefaultTTLJobAction(String tableName,
                                String whereClause,
                                String fullDeleteSql,
                                String jobName) {
-        this.tableName     = requireNonNull(tableName, "tableName must not be null");
-        this.whereClause   = requireNonNull(whereClause, "whereClause must not be null");
+        this.tableName = requireNonNull(tableName, "tableName must not be null");
+        requireNonNull(whereClause, "whereClause must not be null");
+        this.functionCall = new FunctionCall(
+                DEFAULT_TTL_FUNCTION_NAME,
+                List.of(
+                        Arg.tableNameLiteral(tableName),
+                        Arg.literal(stripWhereClause(whereClause))
+                       ));
         this.fullDeleteSql = requireNonNull(fullDeleteSql, "fullDeleteSql must not be null");
-        this.jobName       = requireNonNull(jobName, "jobName must not be null");
-        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        this.jobName = requireNonNull(jobName, "jobName must not be null");
     }
 
     @Override
@@ -96,7 +102,7 @@ public class DefaultTTLJobAction implements TTLJobAction {
             });
         } catch (Exception e) {
             throw new IllegalArgumentException(
-                    String.format("Failed to validate delete statement '%s'", fullDeleteSql), e
+                    msg("Failed to validate delete statement '{}}'", fullDeleteSql), e
             );
         }
     }
@@ -107,20 +113,15 @@ public class DefaultTTLJobAction implements TTLJobAction {
     }
 
     @Override
-    public String buildFunctionCall() {
-        String whereClause = this.whereClause;
+    public FunctionCall functionCall() {
+        return functionCall;
+    }
+
+    private static String stripWhereClause(String whereClause) {
         if (whereClause.trim().toLowerCase().startsWith("where ")) {
             whereClause = whereClause.trim().substring(6);
         }
-        return String.format("%s(%s, %s);",
-                             DEFAULT_TTL_FUNCTION_NAME,
-                             quoteLiteral(tableName),
-                             quoteLiteral(whereClause)
-                            );
-    }
-
-    private String quoteLiteral(String input) {
-        return "'" + input.replace("'", "''") + "'";
+        return whereClause;
     }
 
     @Override

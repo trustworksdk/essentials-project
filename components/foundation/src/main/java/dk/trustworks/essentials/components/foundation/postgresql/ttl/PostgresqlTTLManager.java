@@ -120,8 +120,8 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
         if (scheduleConfig instanceof CronScheduleConfiguration cronConfig) {
             if (scheduler.isPgCronAvailable()) {
                 scheduler.schedulePgCronJob(new PgCronJob(action.jobName(),
-                                                          action.functionName(),
-                                                          action.invocationArgs(),
+                                                          action.functionCall().functionName(),
+                                                          action.functionCall().args(),
                                                           cronConfig.cronExpression()));
                 return;
             }

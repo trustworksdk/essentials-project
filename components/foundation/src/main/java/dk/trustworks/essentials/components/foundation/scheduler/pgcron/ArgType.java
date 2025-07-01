@@ -16,11 +16,8 @@
  *
  */
 
-package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.manager;
+package dk.trustworks.essentials.components.foundation.scheduler.pgcron;
 
-import java.time.Duration;
-
-public record EventStoreSubscriptionSettings(int eventStorePollingBatchSize,
-                                             Duration eventStorePollingInterval,
-                                             Duration snapshotResumePointsEvery) {
+public enum ArgType {
+    IDENTIFIER, LITERAL, EXPRESSION
 }
