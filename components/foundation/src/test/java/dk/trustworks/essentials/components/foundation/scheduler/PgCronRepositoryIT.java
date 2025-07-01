@@ -134,8 +134,7 @@ public class PgCronRepositoryIT {
 
     @Test
     void verify_invalid_function_name_throws() {
-        var job = new PgCronJob("test", "invalid-fn(DROP TABLE);", null, CronExpression.of("0 4 * * *"));
-        assertThatThrownBy(() -> repository.schedule(job)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PgCronJob("test", "invalid-fn(DROP TABLE);", null, CronExpression.of("0 4 * * *"))).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
