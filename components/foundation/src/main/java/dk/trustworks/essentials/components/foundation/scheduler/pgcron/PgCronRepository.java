@@ -92,7 +92,7 @@ public class PgCronRepository {
 
         if (!SqlIdentifierValidator.isValidFunctionName(functionName)) {
             throw new IllegalArgumentException(
-                    String.format("Invalid function name '%s'. Must be a valid SQL identifier.", functionName)
+                    msg("Invalid function name '{}'. Must be a valid SQL identifier.", functionName)
             );
         }
 
@@ -100,7 +100,7 @@ public class PgCronRepository {
 
         Integer existingId = doesJobExist(jobName);
         if (existingId != null) {
-            log.debug("Cron job '%s' already exists with id %d", jobName, existingId);
+            log.debug("Cron job '{}' already exists with id '{}'", jobName, existingId);
             return existingId;
         }
 
@@ -133,19 +133,19 @@ public class PgCronRepository {
             String[] parts = commandArgs.trim().split("\\s*,\\s*");
             if (parts.length > MAX_ARGS_COUNT) {
                 throw new IllegalArgumentException(
-                        String.format("Too many arguments (%d), max is %d", parts.length, MAX_ARGS_COUNT)
+                        msg("Too many arguments ('{}'), max is '{}'", parts.length, MAX_ARGS_COUNT)
                 );
             }
 
             for (String arg : parts) {
                 if (arg.length() > MAX_ARG_LENGTH) {
                     throw new IllegalArgumentException(
-                            String.format("Argument too long (%d chars), max is %d", arg.length(), MAX_ARG_LENGTH)
+                            msg("Argument too long ('{}' chars), max is '{}'", arg.length(), MAX_ARG_LENGTH)
                     );
                 }
                 if (!ARG_PATTERN.matcher(arg).matches()) {
                     throw new IllegalArgumentException(
-                            String.format("Invalid argument syntax: '%s'", arg)
+                            msg("Invalid argument syntax: '{}'", arg)
                     );
                 }
             }
