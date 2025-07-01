@@ -291,7 +291,7 @@ public class EssentialsComponentsProperties {
         private boolean verboseTracing = false;
 
         private boolean enableQueueStatistics      = false;
-        private boolean enableQueueStatisticsTtl   = true;
+        private boolean enableQueueStatisticsTtl   = false;
         private int     queueStatisticsTtlDuration = 90;
 
         /**

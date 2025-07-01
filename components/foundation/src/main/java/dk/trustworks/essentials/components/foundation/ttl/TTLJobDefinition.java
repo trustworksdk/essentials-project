@@ -39,11 +39,11 @@ public record TTLJobDefinition(TTLJobAction action, ScheduleConfiguration schedu
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) return false;
         TTLJobDefinition that = (TTLJobDefinition) o;
-        return Objects.equals(action, that.action);
+        return Objects.equals(action.jobName(), that.action.jobName());
     }
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(action);
+        return Objects.hashCode(action.jobName());
     }
 }

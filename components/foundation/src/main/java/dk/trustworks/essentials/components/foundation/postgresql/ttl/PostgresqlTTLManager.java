@@ -30,8 +30,8 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
-import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
 /**
  * Manages TTL (Time-To-Live) jobs in a PostgreSQL environment. This class schedules and executes
@@ -41,15 +41,33 @@ import static dk.trustworks.essentials.shared.MessageFormatter.bind;
  * Implements the {@link TTLManager} interface for managing TTL jobs and the {@link Lifecycle}
  * interface for controlled starting and stopping behavior.
  * <p>
- * The {@link PostgresqlTTLManager} component will
- * validate {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
+ * <b>SECURITY WARNING - Limited Validation:</b><br>
+ * This implementation provides <b>only partial protection</b> against SQL injection:
+ * <ul>
+ * <li><b>VALIDATED:</b> {@link DefaultTTLJobAction#tableName} - checked for valid SQL identifier format as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input<br>
  * However, Essentials components does not offer exhaustive protection, nor does it ensure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
  * Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.<br>
- * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
- * <br>
- * It is highly recommended that the {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} value is only derived from a controlled and trusted source.<br>
- * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the  {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} values.<br>
+ * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br></li>
+ * <li><b>NOT VALIDATED:</b> {@link DefaultTTLJobAction#whereClause} and {@link DefaultTTLJobAction#fullDeleteSql} -
+ *     executed directly without any security checks</li>
+ * </ul>
+ * <p>
+ * <b>Developer Responsibility:</b><br>
+ * You MUST ensure that {@code whereClause} and {@code fullDeleteSql} values are safe before creating
+ * this object. These values will be executed directly by the {@link TTLManager} with no additional
+ * validation or sanitization.
+ * <p>
+ * <b>Security Best Practices:</b>
+ * <ul>
+ * <li>Only derive {@code whereClause} and {@code fullDeleteSql} from controlled, trusted sources</li>
+ * <li>Never allow external or untrusted input to directly provide these values</li>
+ * <li>Implement your own validation/sanitization before passing these parameters</li>
+ * <li>Consider using parameterized queries or prepared statements where possible</li>
+ * </ul>
+ * <p>
+ * <b>Failure to properly validate unprotected parameters may result in SQL injection vulnerabilities
+ * that could compromise database security and integrity.</b>
  */
 public class PostgresqlTTLManager implements TTLManager, Lifecycle {
 
@@ -118,7 +136,7 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
                              .map(FixedDelayScheduleConfiguration::new)
                              .orElseGet(csc::toFixedDelay);
         } else {
-            throw new IllegalArgumentException("Unsupported schedule configuration type.");
+            throw new IllegalArgumentException(msg("Unsupported schedule configuration type '{}'", scheduleConfig.getClass().getSimpleName()));
         }
 
         Runnable runnable = () -> action.executeDirectly(unitOfWorkFactory);

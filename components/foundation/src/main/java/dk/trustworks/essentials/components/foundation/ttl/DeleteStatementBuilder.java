@@ -16,7 +16,11 @@
 
 package dk.trustworks.essentials.components.foundation.ttl;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+
 import java.util.Locale;
+
+import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * Utility class for constructing SQL DELETE statements with specific conditions.
@@ -35,6 +39,12 @@ public class DeleteStatementBuilder {
                                String timestampColumn,
                                ComparisonOperator operator,
                                long days) {
+        requireNonNull(tableName, "tableName must not be null");
+        requireNonNull(timestampColumn, "timestampColumn must not be null");
+        requireNonNull(operator, "operator must not be null");
+        requireTrue(days >= 0, "days must be non-negative");
+        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        PostgresqlUtil.checkIsValidTableOrColumnName(timestampColumn);
         String where = buildWhereClause(timestampColumn, operator, days);
         return String.format(
                 "DELETE FROM %s WHERE %s",
@@ -46,6 +56,10 @@ public class DeleteStatementBuilder {
     public static String buildWhereClause(String timestampColumn,
                                           ComparisonOperator operator,
                                           long days) {
+        requireNonNull(timestampColumn, "timestampColumn must not be null");
+        requireNonNull(operator, "operator must not be null");
+        requireTrue(days >= 0, "days must be non-negative");
+        PostgresqlUtil.checkIsValidTableOrColumnName(timestampColumn);
         String col = quoteIdent(timestampColumn);
         String opSql;
         if (operator == ComparisonOperator.LESS_THAN

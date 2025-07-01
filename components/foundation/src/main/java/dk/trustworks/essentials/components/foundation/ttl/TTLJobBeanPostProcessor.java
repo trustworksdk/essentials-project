@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.ttl;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.CronExpression;
 import org.slf4j.*;
@@ -70,6 +71,7 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
         } else if (tableName.isEmpty()) {
             throw new IllegalArgumentException(msg("@TTLJob on '{}' requires tableName or tableNameProperty", beanName));
         }
+        PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
 
         long days = ttlJob.defaultTtlDays();
         if (!ttlJob.ttlDurationProperty().isEmpty()) {

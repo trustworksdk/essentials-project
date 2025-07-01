@@ -22,6 +22,15 @@ import java.lang.annotation.*;
  * Annotation to define the configuration and scheduling details of a Time-To-Live (TTL) job.
  * TTL jobs are used to manage the lifecycle of data by enforcing expiration policies
  * and executing related actions at scheduled intervals.
+ * <pre>
+ *     @TTLJob(name = "durable_queues_statistics_ttl",
+ *         enabledProperty = "essentials.durable-queues.enable-queue-statistics-ttl",
+ *         tableNameProperty = "essentials.durable-queues.shared-queue-statistics-table-name",
+ *         timestampColumn = "deletion_ts",
+ *         cronExpression = "0 0 * * *", // every day at midnight
+ *         ttlDurationProperty = "essentials.durable-queues.queue-statistics-ttl-duration"
+ * )
+ * </pre>
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -38,7 +47,7 @@ public @interface TTLJob {
     String tableName() default "";
 
     /**
-     * Configuration key to override the table name.
+     * Environment or configuration file key to override the table name.
      */
     String tableNameProperty() default "";
 
@@ -64,12 +73,12 @@ public @interface TTLJob {
     long defaultTtlDays() default 1;
 
     /**
-     * Configuration key to override TTL duration (days).
+     * Environment or configuration file key to override TTL duration (days).
      */
     String ttlDurationProperty() default "";
 
     /**
-     * Configuration key to enable or disable this TTL job.
+     *  Environment or configuration file keyxx to enable or disable this TTL job.
      */
     String enabledProperty() default "";
 

@@ -38,14 +38,14 @@ class PostgresqlUtilTest {
     void testWithInvalidCharacters() {
         assertThatThrownBy(() -> PostgresqlUtil.checkIsValidTableOrColumnName("Invalid-Name"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("Invalid table or column name");
+                .hasMessageContaining("has invalid format");
     }
 
     @Test
     void testStartsWithDigit() {
         assertThatThrownBy(() -> PostgresqlUtil.checkIsValidTableOrColumnName("123InvalidName"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("Invalid table or column name");
+                .hasMessageContaining("has invalid format");
     }
 
     @Test
@@ -66,9 +66,9 @@ class PostgresqlUtilTest {
     void testSimpleSqlInjection() {
         assertThatThrownBy(() -> PostgresqlUtil.checkIsValidTableOrColumnName("users; DROP TABLE users;--"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("Invalid table or column name");
+                .hasMessageContaining("contains suspicious pattern");
         assertThatThrownBy(() -> PostgresqlUtil.checkIsValidTableOrColumnName("1 OR 1=1"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("Invalid table or column name");
+                .hasMessageContaining("has invalid format");
     }
 }

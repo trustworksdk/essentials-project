@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bu
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSON;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.manager.EventStoreSubscriptionSettings;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
@@ -66,6 +67,13 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
      * @return the {@link EventStore} associated with the {@link EventStoreSubscriptionManager
      */
     EventStore getEventStore();
+
+    /**
+     * Retrieves the settings for the event store subscription.
+     *
+     * @return an instance of EventStoreSubscriptionSettings containing the subscription configuration.
+     */
+    EventStoreSubscriptionSettings getEventStoreSubscriptionSettings();
 
     /**
      * Create a builder for the {@link EventStoreSubscriptionManager}
@@ -724,6 +732,10 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
             return eventStore;
         }
 
+        @Override
+        public EventStoreSubscriptionSettings getEventStoreSubscriptionSettings() {
+            throw new UnsupportedOperationException("Not supported yet.");
+        }
 
         @Override
         public Set<Pair<SubscriberId, AggregateType>> getActiveSubscriptions() {

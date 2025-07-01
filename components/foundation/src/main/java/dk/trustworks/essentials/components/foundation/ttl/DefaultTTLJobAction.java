@@ -29,22 +29,52 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * functionality for managing a Time-To-Live (TTL) job action, including execution, validation,
  * and function call generation specific to a table and a job.
  * <p>
- * The {@link DefaultTTLJobAction} component will
- * validate {@link DefaultTTLJobAction#tableName}, {@link DefaultTTLJobAction#whereClause} and {@link DefaultTTLJobAction#fullDeleteSql} as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
+ * <b>SECURITY WARNING - Limited Validation:</b><br>
+ * This implementation provides <b>only partial protection</b> against SQL injection:
+ * <ul>
+ * <li><b>VALIDATED:</b> {@link DefaultTTLJobAction#tableName} - checked for valid SQL identifier format as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input<br>
  * However, Essentials components does not offer exhaustive protection, nor does it ensure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
  * Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.<br>
- * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
- * <br>
- * It is highly recommended that the {@link DefaultTTLJobAction#tableName}, {@link DefaultTTLJobAction#whereClause} and {@link DefaultTTLJobAction#fullDeleteSql} value is only derived from a controlled and trusted source.<br>
- * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link DefaultTTLJobAction#tableName}, {@link DefaultTTLJobAction#whereClause} and {@link DefaultTTLJobAction#fullDeleteSql} values.<br>
+ * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br></li>
+ * <li><b>NOT VALIDATED:</b> {@link DefaultTTLJobAction#whereClause} and {@link DefaultTTLJobAction#fullDeleteSql} -
+ *     executed directly without any security checks</li>
+ * </ul>
+ * <p>
+ * <b>Developer Responsibility:</b><br>
+ * You MUST ensure that {@code whereClause} and {@code fullDeleteSql} values are safe before creating
+ * this object. These values will be executed directly by the {@link TTLManager} with no additional
+ * validation or sanitization.
+ * <p>
+ * <b>Security Best Practices:</b>
+ * <ul>
+ * <li>Only derive {@code whereClause} and {@code fullDeleteSql} from controlled, trusted sources</li>
+ * <li>Never allow external or untrusted input to directly provide these values</li>
+ * <li>Implement your own validation/sanitization before passing these parameters</li>
+ * <li>Consider using parameterized queries or prepared statements where possible</li>
+ * </ul>
+ * <p>
+ * <b>Failure to properly validate unprotected parameters may result in SQL injection vulnerabilities
+ * that could compromise database security and integrity.</b>
  */
 public class DefaultTTLJobAction implements TTLJobAction {
-    private final String tableName;
-    private final String whereClause;
-    private final String fullDeleteSql;
-    private final String jobName;
+    public final String tableName;
+    public final String whereClause;
+    public final String fullDeleteSql;
+    public final String jobName;
 
+    /**
+     * Creates a new DefaultTTLJobAction with the specified parameters.
+     * <p>
+     * <b>SECURITY NOTE:</b> Only {@code tableName} is validated. You MUST ensure
+     * {@code whereClause} and {@code fullDeleteSql} are safe before calling this constructor.
+     *
+     * @param tableName the table name (will be validated for SQL identifier format)
+     * @param whereClause the WHERE clause (NOT validated - must be pre-validated by caller)
+     * @param fullDeleteSql the full DELETE SQL statement (NOT validated - must be pre-validated by caller)
+     * @param jobName the job name
+     * @throws IllegalArgumentException if tableName is invalid or any parameter is null
+     */
     public DefaultTTLJobAction(String tableName,
                                String whereClause,
                                String fullDeleteSql,
