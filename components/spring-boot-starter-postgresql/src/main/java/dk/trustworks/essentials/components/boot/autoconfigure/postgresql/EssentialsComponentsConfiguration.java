@@ -199,7 +199,7 @@ public class EssentialsComponentsConfiguration {
         var jdbi = Jdbi.create(new TransactionAwareDataSourceProxy(dataSource));
         jdbi.installPlugin(new PostgresPlugin());
         if (properties.getMetrics().getSql().isEnabled()) {
-            new EssentialsQueryTagger(jdbi);
+            EssentialsQueryTagger.tagQueries(jdbi);
             jdbi.setSqlLogger(new RecordSqlExecutionTimeLogger(meterRegistry,
                                                                properties.getMetrics().getSql().isEnabled(),
                                                                properties.getMetrics().getSql().toLogThresholds(),

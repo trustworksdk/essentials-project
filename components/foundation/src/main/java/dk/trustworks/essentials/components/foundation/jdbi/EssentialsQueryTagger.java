@@ -37,19 +37,15 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * tagging are required for debugging, monitoring, or auditing purposes.
  * Use {@code EssentialsComponentsProperties#metrics#sql#enabled} to enable
  */
-public class EssentialsQueryTagger {
+public final class EssentialsQueryTagger {
 
     public static final String QUERY_TAG = "/* TAG: essentials */";
     public static final String QUERY_TAG_NL = "/* TAG: essentials */\n";
 
-    private final Jdbi jdbi;
+    private EssentialsQueryTagger() {}
 
-    public EssentialsQueryTagger(Jdbi jdbi) {
-        this.jdbi = requireNonNull(jdbi, "jdbi cannot be null");
-        tagQueries();
-    }
-
-    private void tagQueries() {
+    public static void tagQueries(Jdbi jdbi) {
+        requireNonNull(jdbi, "jdbi cannot be null");
         var stmts = jdbi.getConfig(SqlStatements.class);
         var delegate = stmts.getTemplateEngine();
 
