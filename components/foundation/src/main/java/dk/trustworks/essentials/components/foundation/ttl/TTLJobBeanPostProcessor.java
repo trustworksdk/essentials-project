@@ -89,7 +89,6 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
                 ttlJob.operator(),
                 days
                                                            );
-
         String jobName = !ttlJob.name().isEmpty()
                          ? ttlJob.name()
                          : "ttl_" + tableName + "_" + PostgresqlTTLManager.shortHash(fullDeleteSql);

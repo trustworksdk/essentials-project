@@ -31,10 +31,6 @@ public class DeleteStatementBuilder {
 
     private DeleteStatementBuilder() {  }
 
-    public static String quoteIdent(String ident) {
-        return "\"" + ident.replace("\"", "\"\"") + "\"";
-    }
-
     public static String build(String tableName,
                                String timestampColumn,
                                ComparisonOperator operator,
@@ -48,7 +44,7 @@ public class DeleteStatementBuilder {
         String where = buildWhereClause(timestampColumn, operator, days);
         return String.format(
                 "DELETE FROM %s WHERE %s",
-                quoteIdent(tableName),
+                tableName,
                 where
                             );
     }
@@ -60,7 +56,6 @@ public class DeleteStatementBuilder {
         requireNonNull(operator, "operator must not be null");
         requireTrue(days >= 0, "days must be non-negative");
         PostgresqlUtil.checkIsValidTableOrColumnName(timestampColumn);
-        String col = quoteIdent(timestampColumn);
         String opSql;
         if (operator == ComparisonOperator.LESS_THAN
                 || operator == ComparisonOperator.LESS_THAN_EQUALS) {
@@ -70,7 +65,7 @@ public class DeleteStatementBuilder {
         }
         return String.format(
                 "%s %s (NOW() - INTERVAL '%d day')",
-                col,
+                timestampColumn,
                 opSql,
                 days
                             );
