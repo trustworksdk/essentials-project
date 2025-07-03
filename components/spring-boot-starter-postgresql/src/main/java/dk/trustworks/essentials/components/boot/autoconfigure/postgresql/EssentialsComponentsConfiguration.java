@@ -28,6 +28,7 @@ import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.interceptor.micrometer.*;
+import dk.trustworks.essentials.components.foundation.jdbi.EssentialsQueryTagger;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
@@ -39,6 +40,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
+import dk.trustworks.essentials.components.foundation.postgresql.micrometer.RecordSqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.scheduler.*;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
@@ -195,10 +197,22 @@ public class EssentialsComponentsConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    public Jdbi jdbi(DataSource dataSource) {
+    public Jdbi jdbi(DataSource dataSource,
+                     EssentialsComponentsProperties properties,
+                     Optional<MeterRegistry> meterRegistry) {
         var jdbi = Jdbi.create(new TransactionAwareDataSourceProxy(dataSource));
         jdbi.installPlugin(new PostgresPlugin());
-        jdbi.setSqlLogger(new SqlExecutionTimeLogger());
+        if (properties.getMetrics().getSql().isEnabled()) {
+            EssentialsQueryTagger.tagQueries(jdbi);
+            jdbi.setSqlLogger(new RecordSqlExecutionTimeLogger(meterRegistry,
+                                                               properties.getMetrics().getSql().isEnabled(),
+                                                               properties.getMetrics().getSql().toLogThresholds(),
+                                                               properties.getTracingProperties().getModuleTag())
+                             );
+        } else {
+            jdbi.setSqlLogger(new SqlExecutionTimeLogger());
+        }
+
         return jdbi;
     }
 
@@ -430,7 +444,8 @@ public class EssentialsComponentsConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public LifecycleManager lifecycleController(EssentialsComponentsProperties properties) {
-        return new DefaultLifecycleManager(this::onContextRefreshedEvent, properties.getLifeCycles().isStartLifeCycles());
+        return new DefaultLifecycleManager(this::onContextRefreshedEvent,
+                                           properties.getLifeCycles().isStartLifeCycles());
     }
 
     private void onContextRefreshedEvent(ApplicationContext applicationContext) {
