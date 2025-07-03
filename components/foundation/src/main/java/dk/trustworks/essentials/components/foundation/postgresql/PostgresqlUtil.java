@@ -20,7 +20,7 @@ import dk.trustworks.essentials.shared.Exceptions;
 import org.jdbi.v3.core.Handle;
 import org.postgresql.util.PSQLException;
 
-import java.util.Set;
+import java.util.*;
 import java.util.regex.Pattern;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -236,5 +236,86 @@ public final class PostgresqlUtil {
      */
     public static void checkIsValidTableOrColumnName(String tableOrColumnName) {
         checkIsValidTableOrColumnName(tableOrColumnName, null);
+    }
+ 
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    
+    /**
+     * A compiled regex pattern used to validate the format of SQL function names.
+     * The pattern enforces the following rules:
+     * 1. The name must start with a letter (a-z or A-Z) or an underscore (_).
+     * 2. Subsequent characters can include letters, digits (0-9), or underscores (_).
+     * 3. The length of the name must not exceed 63 characters.
+     *
+     * This pattern is designed to ensure compliance with SQL naming conventions
+     * and avoid potential conflicts with system or reserved identifiers.
+     */
+    public static final Pattern FN_NAME = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,62}$");
+
+    /**
+     * A compiled regex pattern used to validate the format of fully qualified SQL function names.
+     * The pattern enforces the following rules:
+     * 1. The name must consist of two parts separated by a dot ('.').
+     * 2. Each part must start with a letter (a-z or A-Z) or an underscore (_).
+     * 3. Each part can contain letters, digits (0-9), or underscores (_) after the initial character.
+     * 4. Each part must not exceed 63 characters in length.
+     *
+     * This pattern ensures that the function name adheres to SQL naming conventions,
+     * including support for fully qualified names in the format of `schema_name.function_name`.
+     */
+    public static final Pattern QUALIFIED_FN_NAME =
+            Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,62}\\.[a-zA-Z_][a-zA-Z0-9_]{0,62}$");
+
+
+    /**
+     * Validates whether the given string is a valid SQL function name.
+     *
+     * <p>The method enforces PostgreSQL SQL naming conventions for function names. A valid function name:
+     * <ul>
+     *     <li>Must not be null, empty, or consist only of whitespace.</li>
+     *     <li>Must match the pattern {@link PostgresqlUtil#FN_NAME} for non-qualified function names
+     *         or {@link PostgresqlUtil#QUALIFIED_FN_NAME} for fully qualified function names
+     *         (e.g., <code>schema_name.function_name</code>).</li>
+     *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
+     * </ul>
+     *
+     * @param functionName The name of the SQL function to validate, either fully qualified or unqualified.
+     * @return {@code true} if the provided {@code functionName} is valid according to PostgreSQL naming conventions
+     *         and does not contain reserved keywords; {@code false} otherwise.
+     *
+     * <p>Usage example:
+     * <pre>
+     * {@code
+     * boolean isValid = PostgresqlUtil.isValidFunctionName("my_schema.my_function");
+     * // Returns true if "my_schema.my_function" conforms to SQL conventions and contains no reserved keywords.
+     * }
+     * </pre>
+     */
+    public static boolean isValidFunctionName(String functionName) {
+        if (functionName == null || functionName.trim().isEmpty()) {
+            return false;
+        }
+
+        // Qualified function name?
+        if (functionName.contains(".")) {
+            if (!QUALIFIED_FN_NAME.matcher(functionName).matches()) {
+                return false;
+            }
+
+            var parts = functionName.split("\\.");
+            for (var part : parts) {
+                if (RESERVED_NAMES.contains(part.toUpperCase(Locale.ROOT).trim())) {
+                    return false;
+                }
+            }
+
+            return true;
+        } else {
+            if (!FN_NAME.matcher(functionName).matches()) {
+                return false;
+            }
+
+            return !RESERVED_NAMES.contains(functionName.toUpperCase(Locale.ROOT).trim());
+        }
     }
 }

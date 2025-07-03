@@ -29,8 +29,8 @@ import org.springframework.core.env.Environment;
 
 import java.util.Optional;
 
-import static dk.trustworks.essentials.shared.MessageFormatter.*;
-import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * A Spring {@code BeanPostProcessor} that processes beans annotated with the {@code TTLJob} annotation,
@@ -45,18 +45,18 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
     private final Environment                     environment;
 
     public TTLJobBeanPostProcessor(ConfigurableListableBeanFactory beanFactory, Environment environment) {
-        this.beanFactory = beanFactory;
-        this.environment = environment;
+        this.beanFactory = requireNonNull(beanFactory, "beanFactory is required");
+        this.environment = requireNonNull(environment, "environment is required");
     }
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
-        TTLJob ttlJob = AnnotationUtils.findAnnotation(bean.getClass(), TTLJob.class);
+        var ttlJob = AnnotationUtils.findAnnotation(bean.getClass(), TTLJob.class);
         if (ttlJob == null || shouldSkipPostProcessing(bean, beanName)) {
             return bean;
         }
 
-        boolean enabled = ttlJob.enabled();
+        var enabled = ttlJob.enabled();
         if (!ttlJob.enabledProperty().isEmpty()) {
             enabled = environment.getProperty(ttlJob.enabledProperty(), Boolean.class, enabled);
         }
@@ -65,43 +65,44 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
             return bean;
         }
 
-        String tableName = ttlJob.tableName();
+        var tableName = ttlJob.tableName();
         if (tableName.isEmpty() && !ttlJob.tableNameProperty().isEmpty()) {
             tableName = environment.getProperty(ttlJob.tableNameProperty(), tableName);
         } else if (tableName.isEmpty()) {
             throw new IllegalArgumentException(msg("@TTLJob on '{}' requires tableName or tableNameProperty", beanName));
         }
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        PostgresqlUtil.checkIsValidTableOrColumnName(ttlJob.timestampColumn());
 
-        long days = ttlJob.defaultTtlDays();
+        var days = ttlJob.defaultTtlDays();
         if (!ttlJob.ttlDurationProperty().isEmpty()) {
             days = environment.getProperty(ttlJob.ttlDurationProperty(), Long.class, days);
         }
 
-        String whereClause = DeleteStatementBuilder.buildWhereClause(
+        var whereClause = DeleteStatementBuilder.buildWhereClause(
                 ttlJob.timestampColumn(),
                 ttlJob.operator(),
                 days
-                                                                    );
-        String fullDeleteSql = DeleteStatementBuilder.build(
+                                                                 );
+        var fullDeleteSql = DeleteStatementBuilder.build(
                 tableName,
                 ttlJob.timestampColumn(),
                 ttlJob.operator(),
                 days
-                                                           );
-        String jobName = !ttlJob.name().isEmpty()
-                         ? ttlJob.name()
-                         : "ttl_" + tableName + "_" + PostgresqlTTLManager.shortHash(fullDeleteSql);
+                                                        );
+        var jobName = !ttlJob.name().isEmpty()
+                      ? ttlJob.name()
+                      : "ttl_" + tableName + "_" + PostgresqlTTLManager.shortHash(fullDeleteSql);
 
         log.info("Registering TTL job '{}' on table '{}' with TTL {} days (cron='{}')",
                  jobName, tableName, days, ttlJob.cronExpression()
                 );
 
-        var deleteAction = new DefaultTTLJobAction(tableName, whereClause, fullDeleteSql, jobName);
-        var cronConfig   = new CronScheduleConfiguration(
+        var deleteAction = new DefaultTTLJobAction(jobName, tableName, whereClause, fullDeleteSql);
+        var cronConfig = new CronScheduleConfiguration(
                 CronExpression.of(ttlJob.cronExpression()), Optional.empty()
         );
-        var jobDef       = new TTLJobDefinition(deleteAction, cronConfig);
+        var jobDef = new TTLJobDefinition(deleteAction, cronConfig);
 
         var manager = beanFactory.getBean(PostgresqlTTLManager.class);
         manager.scheduleTTLJob(jobDef);
@@ -111,7 +112,7 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
     private boolean shouldSkipPostProcessing(Object bean, String beanName) {
         if (this.beanFactory != null) {
             try {
-                BeanDefinition beanDefinition = this.beanFactory.getBeanDefinition(beanName);
+                var beanDefinition = this.beanFactory.getBeanDefinition(beanName);
                 if (beanDefinition.getRole() == BeanDefinition.ROLE_INFRASTRUCTURE || bean.getClass().isAnnotationPresent(AutoConfiguration.class)) {
                     return true;
                 }

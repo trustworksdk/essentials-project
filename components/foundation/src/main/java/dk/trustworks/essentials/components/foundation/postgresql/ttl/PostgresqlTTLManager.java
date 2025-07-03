@@ -41,7 +41,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBind
  * Implements the {@link TTLManager} interface for managing TTL jobs and the {@link Lifecycle}
  * interface for controlled starting and stopping behavior.
  * <p>
- * <b>SECURITY WARNING - Limited Validation:</b><br>
+ * <b>SECURITY WARNING - Limited Validation of provided {@link TTLJobDefinition#action()} (such as {@link DefaultTTLJobAction}) value validations:</b><br>
  * This implementation provides <b>only partial protection</b> against SQL injection:
  * <ul>
  * <li><b>VALIDATED:</b> {@link DefaultTTLJobAction#tableName} - checked for valid SQL identifier format as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input<br>
@@ -49,18 +49,17 @@ import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBind
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
  * Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br></li>
- * <li><b>NOT VALIDATED:</b> {@link DefaultTTLJobAction#whereClause} and {@link DefaultTTLJobAction#fullDeleteSql} -
- *     executed directly without any security checks</li>
+ * <li><b>NOT VALIDATED:</b> {@code DefaultTTLJobAction#whereClause} and {@link DefaultTTLJobAction#fullDeleteSql} provided to {@link DefaultTTLJobAction} - these are executed directly without any security checks</li>
  * </ul>
  * <p>
  * <b>Developer Responsibility:</b><br>
- * You MUST ensure that {@code whereClause} and {@code fullDeleteSql} values are safe before creating
+ * You MUST ensure that the provided {@link TTLJobAction}, such as {@link DefaultTTLJobAction}'s {@code tableName}, {@code whereClause} and {@code fullDeleteSql} values, are safe before creating
  * this object. These values will be executed directly by the {@link TTLManager} with no additional
  * validation or sanitization.
  * <p>
  * <b>Security Best Practices:</b>
  * <ul>
- * <li>Only derive {@code whereClause} and {@code fullDeleteSql} from controlled, trusted sources</li>
+ * <li>Only derive {@link TTLJobAction} values, such as {@link DefaultTTLJobAction}'s {@code tableName}, {@code whereClause} and {@code fullDeleteSql} from controlled, trusted sources</li>
  * <li>Never allow external or untrusted input to directly provide these values</li>
  * <li>Implement your own validation/sanitization before passing these parameters</li>
  * <li>Consider using parameterized queries or prepared statements where possible</li>
@@ -91,7 +90,9 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
      * is already started, the job will be immediately scheduled; otherwise, it will be
      * added to a queue for scheduling upon startup.
      * <p>
-     * See class security note. To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} values.
+     * See class security note related to {@link TTLJobDefinition#action()} (see {@link DefaultTTLJobAction}) values provided.
+     * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide {@link TTLJobAction} values, such as the
+     * {@code DefaultTTLJobAction#tableName}, {@code DefaultTTLJobAction#whereClause} and {@code DefaultTTLJobAction#fullDeleteSql} values.
      *
      * @param jobDefinition the TTL job definition containing the action and scheduling configuration. Must not be null.
      */
@@ -134,7 +135,7 @@ public class PostgresqlTTLManager implements TTLManager, Lifecycle {
         } else if (scheduleConfig instanceof CronScheduleConfiguration csc) {
             fixedConfig = csc.fixedDelay()
                              .map(FixedDelayScheduleConfiguration::new)
-                             .orElseGet(csc::toFixedDelay);
+                             .orElseGet(csc::toFixedDelayConfiguration);
         } else {
             throw new IllegalArgumentException(msg("Unsupported schedule configuration type '{}'", scheduleConfig.getClass().getSimpleName()));
         }

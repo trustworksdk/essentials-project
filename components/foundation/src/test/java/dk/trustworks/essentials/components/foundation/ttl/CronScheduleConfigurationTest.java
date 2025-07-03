@@ -34,7 +34,7 @@ public class CronScheduleConfigurationTest {
                  CronExpression.of("10 seconds"),
                 Optional.empty()
         );
-        FixedDelayScheduleConfiguration fdc = config.toFixedDelay();
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
         FixedDelay fd = fdc.fixedDelay();
 
         long expected = 10 * 1000L;
@@ -49,7 +49,7 @@ public class CronScheduleConfigurationTest {
                  CronExpression.of("5 minutes"),
                 Optional.empty()
         );
-        FixedDelayScheduleConfiguration fdc = config.toFixedDelay();
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
         FixedDelay fd = fdc.fixedDelay();
 
         long expected = 5 * 60 * 1000L;
@@ -64,7 +64,7 @@ public class CronScheduleConfigurationTest {
                 CronExpression.of("2 hours"),
                 Optional.empty()
         );
-        FixedDelayScheduleConfiguration fdc = config.toFixedDelay();
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
         FixedDelay fd = fdc.fixedDelay();
 
         long expected = 2 * 3600 * 1000L;
@@ -79,7 +79,7 @@ public class CronScheduleConfigurationTest {
                 new CronExpression("3 days"),
                 Optional.empty()
         );
-        FixedDelayScheduleConfiguration fdc = config.toFixedDelay();
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
         FixedDelay fd = fdc.fixedDelay();
 
         long expected = 3 * 24 * 3600 * 1000L;
@@ -94,7 +94,7 @@ public class CronScheduleConfigurationTest {
                 CronExpression.of("*/15 * * * *"),
                 Optional.empty()
         );
-        FixedDelayScheduleConfiguration fdc = config.toFixedDelay();
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
         FixedDelay fd = fdc.fixedDelay();
 
         long expected = 15 * 60 * 1000L;
@@ -109,7 +109,7 @@ public class CronScheduleConfigurationTest {
                 CronExpression.of("0 * * * *"),
                 Optional.empty()
         );
-        FixedDelayScheduleConfiguration fdc = config.toFixedDelay();
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
         FixedDelay                      fd  = fdc.fixedDelay();
 
         long expectedPeriod = Duration.ofHours(1).toMillis();
@@ -127,7 +127,7 @@ public class CronScheduleConfigurationTest {
                 CronExpression.of("0 0 * * *"),
                 Optional.empty()
         );
-        FixedDelayScheduleConfiguration fdc = config.toFixedDelay();
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
         FixedDelay fd = fdc.fixedDelay();
 
         long expectedPeriod = Duration.ofDays(1).toMillis();
@@ -145,7 +145,7 @@ public class CronScheduleConfigurationTest {
                 CronExpression.of("invalid"),
                 Optional.empty()
         );
-        assertThatThrownBy(config::toFixedDelay)
+        assertThatThrownBy(config::toFixedDelayConfiguration)
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

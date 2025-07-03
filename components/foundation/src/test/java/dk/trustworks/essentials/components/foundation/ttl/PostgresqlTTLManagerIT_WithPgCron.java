@@ -71,7 +71,7 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
         var cronExpression  = CronExpression.TEN_SECOND;
         var deleteStatement = "DELETE FROM " + TEST_TABLE_NAME + " WHERE expiry_ts < now()";
         var ttlJobDefinition = new TTLJobDefinitionBuilder()
-                .withAction(new DefaultTTLJobAction(TEST_TABLE_NAME, "WHERE expiry_ts < now()", deleteStatement, "test"))
+                .withAction(new DefaultTTLJobAction("test", TEST_TABLE_NAME, "WHERE expiry_ts < now()", deleteStatement))
                 .withSchedule(new CronScheduleConfiguration(cronExpression, Optional.empty()))
                 .build();
         ttlManager.scheduleTTLJob(ttlJobDefinition);
@@ -79,7 +79,7 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
         assertThat(rowsInTable).isEqualTo(5);
         waitAtMost(Duration.ofSeconds(30)).until(() -> {
             int rows = getNumberOfRowsInTable(unitOfWorkFactory);
-            return rows == 2 || rows == 3;
+            return rows == 2 || rows == 3; // Timing in regards to the expire of the test data database rows
         });
 
         scheduler.stop();

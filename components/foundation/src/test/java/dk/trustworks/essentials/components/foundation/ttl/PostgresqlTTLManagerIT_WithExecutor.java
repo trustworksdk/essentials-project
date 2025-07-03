@@ -60,13 +60,13 @@ public class PostgresqlTTLManagerIT_WithExecutor extends AbstractTTLManagerTest 
 
         String deleteStatement = "DELETE FROM " + TEST_TABLE_NAME + " WHERE expiry_ts < now()";
         var ttlJobDefinition = new TTLJobDefinitionBuilder()
-                .withAction(new DefaultTTLJobAction(TEST_TABLE_NAME, "expiry_ts < now()", deleteStatement, "test"))
+                .withAction(new DefaultTTLJobAction("test", TEST_TABLE_NAME, "expiry_ts < now()", deleteStatement))
                 .withSchedule(new FixedDelayScheduleConfiguration(new FixedDelay(0, 1000, TimeUnit.MILLISECONDS)))
                 .build();
         ttlManager.scheduleTTLJob(ttlJobDefinition);
         waitAtMost(Duration.ofSeconds(10)).until(() -> {
             int rows = getNumberOfRowsInTable(unitOfWorkFactory);
-            return rows == 3 || rows == 2;
+            return rows == 3 || rows == 2; // Timing in regards to the expire of the test data database rows
         });
 
         scheduler.stop();

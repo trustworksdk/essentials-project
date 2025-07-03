@@ -25,10 +25,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * the lifecycle of data by applying actions based on expiration policies and defined schedules.
  *
  * @param action                the action associated with the TTL job. Defines the behavior
- *                              to be executed during the job.
+ *                              to be executed during the job - see {@link TTLJobAction#create(String, String, String, String)}/{@link DefaultTTLJobAction} and their <b>associated security warnings!</b>
  * @param scheduleConfiguration the configuration specifying the scheduling details of the TTL job.
  */
 public record TTLJobDefinition(TTLJobAction action, ScheduleConfiguration scheduleConfiguration) {
+
 
     public TTLJobDefinition {
         requireNonNull(action, "Action required");

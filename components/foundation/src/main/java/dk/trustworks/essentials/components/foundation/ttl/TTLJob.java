@@ -31,6 +31,7 @@ import java.lang.annotation.*;
  *         ttlDurationProperty = "essentials.durable-queues.queue-statistics-ttl-duration"
  * )
  * </pre>
+ * @see TTLJobBeanPostProcessor
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -47,7 +48,10 @@ public @interface TTLJob {
     String tableName() default "";
 
     /**
-     * Environment or configuration file key to override the table name.
+     * Environment or configuration file key to override the table name.<br>
+     * When specified and used with {@link TTLJobBeanPostProcessor}, the value from this property will be used instead of {@link #tableName()}
+     * if {@link #tableName()} is empty. If both {@link #tableName()} and this property are empty,
+     * an {@link IllegalArgumentException} will be thrown during bean post-processing.
      */
     String tableNameProperty() default "";
 
@@ -73,12 +77,17 @@ public @interface TTLJob {
     long defaultTtlDays() default 1;
 
     /**
-     * Environment or configuration file key to override TTL duration (days).
+     * Environment or configuration file key to override TTL duration (days).<br>
+     * When specified and used with {@link TTLJobBeanPostProcessor}, the value from this property will be used instead of {@link #defaultTtlDays()}.
+     * The property value should be a valid {@code Long} representing the number of days.
      */
     String ttlDurationProperty() default "";
 
     /**
-     *  Environment or configuration file keyxx to enable or disable this TTL job.
+     * Environment or configuration file key to enable or disable this TTL job.<br>
+     * When specified and used with {@link TTLJobBeanPostProcessor}, the value from this property will be used instead of {@link #enabled()}.
+     * The property value should be a valid {@code Boolean}. If the property is not found,
+     * the default value from {@link #enabled()} will be used.
      */
     String enabledProperty() default "";
 

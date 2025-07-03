@@ -28,6 +28,21 @@ public class JobNameResolver {
 
     public static final String UNDER_SCORE  = "_";
 
+    /**
+     * Resolves a job name by appending the current instance's hostname suffix if the suffix
+     * is not already present. The hostname suffix is formed by concatenating an underscore (`_`)
+     * and the hostname, as retrieved by {@link Network#hostName()}.
+     *
+     * @param name the original job name to resolve; must not be null
+     * @return the resolved job name which includes the hostname suffix if it was not originally present
+     * @throws IllegalArgumentException if {@code name} is {@code null}
+     *
+     * <p><b>Usage Example:</b></p>
+     * <pre>
+     * String resolvedName = JobNameResolver.resolve("jobA");
+     * System.out.println(resolvedName);  // Output: jobA_hostname (where "hostname" is the current instance hostname)
+     * </pre>
+     */
     public static String resolve(String name) {
         requireNonNull(name, "name cannot be null");
         String instanceId = Network.hostName();

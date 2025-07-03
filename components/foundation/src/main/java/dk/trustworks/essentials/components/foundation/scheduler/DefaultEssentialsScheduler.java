@@ -35,19 +35,21 @@ import java.util.concurrent.*;
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * ** Note: This scheduler is not intended to replace a full-fledged scheduler such as Quartz or Spring, it is a simple
- * scheduler that utilizes the postgresql pg_cron extension if available or a simple ScheduledExecutorService to schedule jobs.
- * It is meant to be used internally by essentials components to schedule jobs.
- * **
+ * <b>Note: This scheduler is not intended to replace a full-fledged scheduler such as Quartz or Spring, it is a simple
+ * scheduler that utilizes the postgresql pg_cron extension if available or a simple {@link ScheduledExecutorService} to schedule jobs.
+ * It is meant to be used internally by essentials components to schedule jobs!
+ * </b>
  * <p>
- * DefaultEssentialsScheduler is a task scheduler implementation that manages scheduling for both
- * PostgreSQL-based cron jobs (pg_cron) and standard Java Executor-based jobs. The class ensures
+ * {@link DefaultEssentialsScheduler} is a task scheduler implementation that manages scheduling for both
+ * PostgreSQL-based cron jobs (<code>pg_cron</code>) and standard Java Executor-based jobs. The class ensures
  * proper execution of tasks based on available locking mechanisms and PostgreSQL support.
  * <p>
  * Responsibilities:
- * - Schedules and manages both Executor-based and pg_cron-based jobs.
- * - Coordinates job scheduling with the availability of PostgreSQL's pg_cron extension.
- * - Manages task lifecycle using a distributed lock to ensure coordinated task execution across multiple nodes.
+ * <ul>
+ *   <li>Schedules and manages both Executor-based and pg_cron-based jobs.</li>
+ *   <li>Coordinates job scheduling with the availability of PostgreSQL's pg_cron extension.</li>
+ *   <li>Manages task lifecycle using a distributed lock to ensure coordinated task execution across multiple nodes.</li>
+ * </ul>
  */
 public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycle {
 
@@ -89,7 +91,15 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
      * If the scheduler is started, pg_cron is available, and the necessary lock is acquired,
      * the job will be scheduled internally. Otherwise, the job will be added for later scheduling.
      * <p>
-     * See {@link PgCronRepository} security note. To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link PgCronJob#cronExpression()}, {@link PgCronJob#args()} and {@link PgCronJob#functionName()} values
+     * {@link PgCronJob#functionName()} is validated by {@link PgCronRepository} using {@link PostgresqlUtil#isValidFunctionName(String)} as an initial layer
+     * of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
+     * However, Essentials components does not offer exhaustive protection, nor does it ensure the complete security of the resulting SQL against SQL injection threats.<br>
+     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
+     * Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.<br>
+     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
+     * <br>
+     * It is highly recommended that the {@link PgCronJob#cronExpression()}, {@link PgCronJob#functionName()} and  {@link PgCronJob#args()} value is only derived from a controlled and trusted source.<br>
+     * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link PgCronJob#cronExpression()}, {@link  PgCronJob#functionName()} and  {@link PgCronJob#args()} values.<br>
      *
      * @param job the {@link PgCronJob} instance containing details about the job to be scheduled;
      *            must not be null.
@@ -106,7 +116,11 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         if (started && pgCronAvailable && lockAcquired) {
             schedulePgCronJobInternal(job);
         } else {
-            log.info("Scheduler is started '{}' pg_cron is available '{}' and lock acquired '{}' can't schedule job '{}'", started, pgCronAvailable, lockAcquired, job);
+            if (started && !pgCronAvailable) {
+                log.warn("Can't schedule job - Scheduler is started but pg_cron is not available: '{}'", job);
+            } else {
+                log.info("Can't schedule job right now - Scheduler is started '{}' pg_cron is available '{}' and lock acquired '{}': '{}'", started, pgCronAvailable, lockAcquired, job);
+            }
         }
     }
 
@@ -122,7 +136,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         if (started && lockAcquired) {
             scheduleExecutorJobInternal(job);
         } else {
-            log.info("Scheduler is started '{}' and lock acquired '{}' can't schedule job '{}'", started, lockAcquired, job);
+            log.info("Can't schedule job right now - Scheduler is started '{}' and lock acquired '{}': '{}'", started, lockAcquired, job);
         }
     }
 
@@ -248,7 +262,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
                     pgCronAvailable = false;
                 }
             });
-            log.info("⚙️ Starting Essentials Scheduler (with pg_cron available = '{}') executor threads ('{}')", pgCronAvailable, schedulerThreads);
+            log.info("⚙️ Starting Essentials Scheduler - pg_cron available = '{}' & '{}' local executor threads", pgCronAvailable, schedulerThreads);
 
             deleteJobsWithInstanceId();
 
@@ -345,7 +359,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
         }
 
         log.info("Scheduling '{}' executor jobs", executorJobs.size());
-        for (ExecutorJob job : executorJobs) {
+        for (var job : executorJobs) {
             scheduleExecutorJobInternal(job);
         }
     }
@@ -386,7 +400,7 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     }
 
     private void unscheduleExecutorJobs(String instanceId) {
-        for (ScheduledFuture<?> future : executorJobFutures.values()) {
+        for (var future : executorJobFutures.values()) {
             future.cancel(true);
         }
         try {
@@ -404,15 +418,15 @@ public class DefaultEssentialsScheduler implements EssentialsScheduler, Lifecycl
     private void unschedulePgCronJobs(String instanceId) {
         if (pgCronAvailable) {
             for (Map.Entry<PgCronJob, Integer> pair : pgCronJobIds.entrySet()) {
-                Integer id = pair.getValue();
-                if (id != null) {
+                var jobId = pair.getValue();
+                if (jobId != null) {
                     try {
-                        pgCronRepository.unschedule(id);
+                        pgCronRepository.unschedule(jobId);
                     } catch (Exception e) {
                         if (IOExceptionUtil.isIOException(e)) {
-                            log.debug("Failed to unschedule pg_cron jobId {}", id, e);
+                            log.debug("Failed to unschedule pg_cron jobId '{}'", jobId, e);
                         } else {
-                            log.warn("Failed to unschedule pg_cron jobId {}", id, e);
+                            log.warn("Failed to unschedule pg_cron jobId '{}'", jobId, e);
                         }
                     }
                 }
