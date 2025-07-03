@@ -277,4 +277,11 @@
         <packageUrl regex="true">^pkg:maven/com\.jayway\.jsonpath/json\-path@.*$</packageUrl>
         <vulnerabilityName>CVE-2023-51074</vulnerabilityName>
     </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: xmlunit-core-2.10.3.jar is matched as ada
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.xmlunit/xmlunit-core@.*$</packageUrl>
+        <cpe>cpe:/a:ada:ada</cpe>
+    </suppress>
 </suppressions>
