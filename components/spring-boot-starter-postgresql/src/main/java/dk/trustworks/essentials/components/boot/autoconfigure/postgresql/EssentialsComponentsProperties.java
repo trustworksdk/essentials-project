@@ -332,7 +332,7 @@ public class EssentialsComponentsProperties {
 
         /**
          * Indicates whether queue statistics TTL (Time-To-Live) is enabled.
-         * Default: true
+         * Default: false
          *
          * @return true if queue statistics TTL is enabled, false otherwise.
          */
@@ -341,7 +341,7 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Enables or disables TTL (Time-To-Live)  for the queue statistics.
+         * Enables or disables TTL (Time-To-Live) for the queue statistics.
          *
          * @param enableQueueStatisticsTtl a boolean value where {@code true} enables TTL for the queue statistics,
          *                                 and {@code false} disables it.
