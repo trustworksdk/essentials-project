@@ -724,7 +724,6 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
             return eventStore;
         }
 
-
         @Override
         public Set<Pair<SubscriberId, AggregateType>> getActiveSubscriptions() {
             return this.subscribers.entrySet().stream()

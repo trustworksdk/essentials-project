@@ -16,8 +16,7 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
-import dk.trustworks.essentials.shared.functional.QuadFunction;
-import org.apache.commons.lang3.function.TriFunction;
+import dk.trustworks.essentials.shared.functional.*;
 import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.StatementContext;
 
@@ -31,8 +30,8 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * Extracted to be reusable between single message and batch operations.
  */
 public class QueuedMessageRowMapper implements RowMapper<QueuedMessage> {
-    private final TriFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer;
-    private final QuadFunction<QueueName, QueueEntryId, String, String, Object> payloadDeserializer;
+    private final TripleFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer;
+    private final QuadFunction<QueueName, QueueEntryId, String, String, Object>    payloadDeserializer;
 
     /**
      * Create a new mapper with the provided deserializers
@@ -41,7 +40,7 @@ public class QueuedMessageRowMapper implements RowMapper<QueuedMessage> {
      * @param metadataDeserializer function to deserialize message metadata
      */
     public QueuedMessageRowMapper(QuadFunction<QueueName, QueueEntryId, String, String, Object> payloadDeserializer,
-                                  TriFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer) {
+                                  TripleFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer) {
         this.payloadDeserializer = payloadDeserializer;
         this.metadataDeserializer = metadataDeserializer;
     }
