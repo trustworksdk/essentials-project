@@ -46,9 +46,7 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")
-            .withPassword("postgres")
-            .withInitScript("test-containers-init.sql")
-            .withReuse(true);
+            .withPassword("postgres");
 
     protected JdbiUnitOfWorkFactory      unitOfWorkFactory;
     protected FencedLockManager          fencedLockManager;

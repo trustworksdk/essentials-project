@@ -3,7 +3,7 @@
 # syntax=docker/dockerfile:1
 
 # ─── STAGE 1: build pg_cron ──────────────────────────────────────────────
-FROM postgres:latest AS builder
+FROM postgres:17.5 AS builder
 
 # install build deps, compile pg_cron, then purge everything in one layer
 RUN apt-get update \
@@ -24,7 +24,7 @@ RUN apt-get update \
  && rm -rf /tmp/pg_cron /var/lib/apt/lists/*
 
 # ─── STAGE 2: minimal runtime ─────────────────────────────────────────────
-FROM postgres:latest
+FROM postgres:17.5
 
 # copy only the runtime bits of pg_cron
 COPY --from=builder /usr/lib/postgresql /usr/lib/postgresql

@@ -90,8 +90,8 @@ public final class EventStoreSubscriptionManagerBuilder {
         return this;
     }
 
-    public EventStoreSubscriptionManager.DefaultEventStoreSubscriptionManager build() {
-        return new EventStoreSubscriptionManager.DefaultEventStoreSubscriptionManager(eventStore,
+    public DefaultEventStoreSubscriptionManager build() {
+        return new DefaultEventStoreSubscriptionManager(eventStore,
                                                                                       eventStorePollingBatchSize,
                                                                                       eventStorePollingInterval,
                                                                                       fencedLockManager,

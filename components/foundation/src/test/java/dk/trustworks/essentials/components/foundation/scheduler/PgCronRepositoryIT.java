@@ -22,7 +22,9 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitO
 import dk.trustworks.essentials.shared.network.Network;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.utility.DockerImageName;
 
@@ -46,8 +48,8 @@ public class PgCronRepositoryIT {
             .withDatabaseName("test-db")
             .withUsername("postgres")
             .withPassword("postgres")
-            .withInitScript("test-containers-init.sql")
-            .withReuse(true);
+            .withLogConsumer(new Slf4jLogConsumer(LoggerFactory.getLogger("pgcontainer")))
+            .withStartupAttempts(1);
 
     private static Jdbi                  jdbi;
     private        JdbiUnitOfWorkFactory unitOfWorkFactory;
