@@ -69,7 +69,7 @@ public class StatefulAggregateRepositoryCombinedWithInTransactionEventProcessorI
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private StatefulAggregateRepository<OrderId, OrderEvent, Order>                 ordersRepository;
-    private EventStoreSubscriptionManager.DefaultEventStoreSubscriptionManager      eventStoreSubscriptionManager;
+    private DefaultEventStoreSubscriptionManager                                    eventStoreSubscriptionManager;
     private PostgresqlDurableQueues                                                 durableQueues;
     private Inboxes                                                                 inboxes;
     private DurableLocalCommandBus                                                  commandBus;
