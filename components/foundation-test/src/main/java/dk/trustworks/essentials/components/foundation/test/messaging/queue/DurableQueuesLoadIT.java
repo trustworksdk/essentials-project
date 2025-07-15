@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public abstract class DurableQueuesLoadIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>> {
     protected UOW_FACTORY          unitOfWorkFactory;
     protected DURABLE_QUEUES       durableQueues;
-    private   DurableQueueConsumer consumer;
+    protected DurableQueueConsumer consumer;
 
     @BeforeEach
     void setup() {

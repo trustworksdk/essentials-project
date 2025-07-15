@@ -287,6 +287,7 @@ public class EssentialsComponentsProperties {
         private Duration          messageHandlingTimeout                   = Duration.ofSeconds(30);
         private boolean           useCentralizedMessageFetcher             = true;
         private Duration          centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
+        private Double            centralizedPollingDelayBackOffFactor     = 1.5d;
 
         private boolean verboseTracing = false;
 
@@ -619,6 +620,27 @@ public class EssentialsComponentsProperties {
          */
         public void setCentralizedMessageFetcherPollingInterval(Duration centralizedMessageFetcherPollingInterval) {
             this.centralizedMessageFetcherPollingInterval = centralizedMessageFetcherPollingInterval;
+        }
+
+        /**
+         * Retrieves the centralized polling delay back-off factor.
+         *
+         * @return the value of the centralized polling delay back-off factor as a Double
+         */
+        public Double getCentralizedPollingDelayBackOffFactor() {
+            return centralizedPollingDelayBackOffFactor;
+        }
+
+        /**
+         * Sets the factor by which the centralized polling delay is backed off.
+         * This factor determines how the delay between polling attempts is adjusted
+         * in a centralized polling mechanism.
+         *
+         * @param centralizedPollingDelayBackOffFactor the back-off factor to be applied to the centralized polling delay.
+         *                                             It should typically be a positive value greater than 0.
+         */
+        public void setCentralizedPollingDelayBackOffFactor(Double centralizedPollingDelayBackOffFactor) {
+            this.centralizedPollingDelayBackOffFactor = centralizedPollingDelayBackOffFactor;
         }
     }
 

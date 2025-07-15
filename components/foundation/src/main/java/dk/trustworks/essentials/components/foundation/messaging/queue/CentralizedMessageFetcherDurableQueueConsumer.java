@@ -32,7 +32,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * independently, this consumer registers with the centralized fetcher and receives
  * messages when they become available.
  */
-public class CentralizedMessageFetcherDurableQueueConsumer implements DurableQueueConsumer {
+public class CentralizedMessageFetcherDurableQueueConsumer implements DurableQueueConsumer, DurableQueueConsumerNotifications {
     private static final Logger log = LoggerFactory.getLogger(CentralizedMessageFetcherDurableQueueConsumer.class);
 
     private final QueueName                      queueName;
@@ -44,6 +44,7 @@ public class CentralizedMessageFetcherDurableQueueConsumer implements DurableQue
     private final ExecutorService                workerPool;
     private final int                            parallelConsumers;
     private final CentralizedMessageFetcher      centralizedMessageFetcher;
+    private final QueuePollingOptimizer          queuePollingOptimizer;
 
     /**
      * Create a new CentralizedPostgresqlDurableQueueConsumer
@@ -56,7 +57,9 @@ public class CentralizedMessageFetcherDurableQueueConsumer implements DurableQue
     public CentralizedMessageFetcherDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
                                                          BatchMessageFetchingCapableDurableQueues durableQueues,
                                                          Consumer<DurableQueueConsumer> removeDurableQueueConsumer,
-                                                         CentralizedMessageFetcher centralizedMessageFetcher) {
+                                                         CentralizedMessageFetcher centralizedMessageFetcher,
+                                                         QueuePollingOptimizer queuePollingOptimizer) {
+
         requireNonNull(consumeFromQueue, "No consumeFromQueue provided");
         requireNonNull(durableQueues, "No durableQueues provided");
 
@@ -68,6 +71,7 @@ public class CentralizedMessageFetcherDurableQueueConsumer implements DurableQue
         this.started = new AtomicBoolean(false);
         this.parallelConsumers = consumeFromQueue.getParallelConsumers();
         this.centralizedMessageFetcher = requireNonNull(centralizedMessageFetcher, "No centralizedMessageFetcher provided");
+        this.queuePollingOptimizer = requireNonNull(queuePollingOptimizer, "No queuePollingOptimizer provided");
 
         // Create worker pool
         this.workerPool = consumeFromQueue.getConsumerExecutorService()
@@ -127,6 +131,22 @@ public class CentralizedMessageFetcherDurableQueueConsumer implements DurableQue
         }
     }
 
+    /**
+     * Retrieves the instance of {@link QueuePollingOptimizer} associated with this consumer.
+     * The {@link QueuePollingOptimizer} is responsible for optimizing the frequency of polling
+     * the underlying message queue/database for new messages, ensuring efficient resource utilization.
+     *
+     * @return the {@link QueuePollingOptimizer} instance used by this consumer for managing polling behavior
+     */
+    public QueuePollingOptimizer getQueuePollingOptimizer() {
+        return queuePollingOptimizer;
+    }
+
+    @Override
+    public void messageAdded(QueuedMessage queuedMessage) {
+        queuePollingOptimizer.messageAdded(queuedMessage);
+    }
+
     @Override
     public boolean isStarted() {
         return started.get();
@@ -160,4 +180,5 @@ public class CentralizedMessageFetcherDurableQueueConsumer implements DurableQue
                 ", started=" + started +
                 '}';
     }
+
 }

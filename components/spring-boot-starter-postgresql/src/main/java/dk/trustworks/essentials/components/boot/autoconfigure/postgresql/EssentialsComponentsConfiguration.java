@@ -291,7 +291,14 @@ public class EssentialsComponentsConfiguration {
                                                                                                                                                               properties.getDurableQueues()
                                                                                                                                                                         .getMaxPollingInterval()
                                                                                                                                                                         .toMillis()
-                                                   )).build();
+                                                   ))
+                                                    .setCentralizedQueuePollingOptimizerFactory(queueName -> new CentralizedQueuePollingOptimizer(queueName,
+                                                            properties.getDurableQueues().getCentralizedMessageFetcherPollingInterval().toMillis(),
+                                                            properties.getDurableQueues().getMaxPollingInterval().toMillis(),
+                                                            properties.getDurableQueues().getCentralizedPollingDelayBackOffFactor(),
+                                                            0.1
+                                                    ))
+                                                    .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;
     }

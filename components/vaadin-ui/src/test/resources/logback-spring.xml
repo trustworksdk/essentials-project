@@ -21,6 +21,8 @@
     <springProperty scope="context" name="appName" source="spring.application.name"/>
 
     <logger name="dk.trustworks.essentials" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues" level="DEBUG"/>
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedQueuePollingOptimizer" level="TRACE"/>
     <root level="INFO" />
 
 </configuration>
