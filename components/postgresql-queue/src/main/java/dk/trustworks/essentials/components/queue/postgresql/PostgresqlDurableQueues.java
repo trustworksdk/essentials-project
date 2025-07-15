@@ -1351,6 +1351,16 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 .proceed();
     }
 
+    /**
+     * Builds and returns an SQL statement that selects and updates rows
+     * from a specific queue table that are ready for processing. The selected
+     * rows are updated atomically to mark them as being delivered and update
+     * the delivery timestamp. The SQL query also applies specific conditions
+     * regarding the queue and message properties to determine eligible rows.
+     *
+     * @return A string representing the SQL statement to process queue messages
+     *         in an unordered manner based on the specified conditions.
+     */
     public String buildUnorderedSqlStatement() {
         return bind("""
                       WITH cte_unordered AS (
@@ -1379,6 +1389,18 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     """, arg("tableName", sharedQueueTableName));
     }
 
+    /**
+     * Constructs an SQL statement for ordering and updating a message queue.
+     * The statement uses common table expressions (CTE) to first select eligible
+     * messages based on specific conditions, and then updates and returns those messages.
+     *
+     * @param hasExclusiveKeys a boolean flag indicating whether exclusive keys
+     *                         should be excluded from the query. If true, the SQL
+     *                         will include an additional condition to exclude keys
+     *                         from the provided exclusion list.
+     * @return the constructed SQL statement as a String. The statement includes
+     *         logic for selecting, ordering, and updating messages in a queue table.
+     */
     public String buildOrderedSqlStatement(boolean hasExclusiveKeys) {
         var orderedSql = new StringBuilder();
         orderedSql.append("""
