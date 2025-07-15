@@ -166,6 +166,15 @@ public class CentralizedMessageFetcher implements Lifecycle {
     }
 
     /**
+     * Retrieves the polling interval in milliseconds used for fetching messages.
+     *
+     * @return the polling interval in milliseconds
+     */
+    public long getPollingIntervalMs() {
+        return pollingIntervalMs;
+    }
+
+    /**
      * Main method that fetches and distributes messages to workers
      */
     private void fetchAndDistributeMessages() {

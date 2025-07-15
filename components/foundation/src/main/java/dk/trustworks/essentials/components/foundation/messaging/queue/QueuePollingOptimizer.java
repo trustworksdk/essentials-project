@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.foundation.messaging.queue;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import org.slf4j.*;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -65,6 +66,8 @@ public interface QueuePollingOptimizer extends DurableQueueConsumerNotifications
     void queuePollingReturnedNoMessages();
 
     void queuePollingReturnedMessage(QueuedMessage queuedMessage);
+
+    default void queuePollingReturnedMessages(List<QueuedMessage> queuedMessages) {}
 
     boolean shouldSkipPolling();
 

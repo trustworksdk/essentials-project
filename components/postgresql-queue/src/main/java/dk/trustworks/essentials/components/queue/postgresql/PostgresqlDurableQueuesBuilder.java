@@ -60,8 +60,11 @@ public final class PostgresqlDurableQueuesBuilder {
      * Controls whether the PostgresqlDurableQueues should use the CentralizedMessageFetcher
      * for optimized message fetching. Default is true.
      */
-    private boolean  useCentralizedMessageFetcher             = true;
-    private Duration centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
+    private boolean                                    useCentralizedMessageFetcher             = true;
+    private Duration                                   centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
+    private Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory  = null;
+
+    private boolean useOrderedUnorderedQuery;
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
@@ -179,6 +182,24 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
+    /**
+     * Sets the factory responsible for creating {@link QueuePollingOptimizer} instances for each {@link QueueName}.
+     *
+     * @param centralizedQueuePollingOptimizerFactory a factory function that takes a {@link QueueName}
+     *                                                and produces a corresponding {@link QueuePollingOptimizer}.
+     *                                                This function allows customization of queue polling optimization
+     *                                                strategies for individual queues.
+     */
+    public PostgresqlDurableQueuesBuilder setCentralizedQueuePollingOptimizerFactory(Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory) {
+        this.centralizedQueuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory;
+        return this;
+    }
+
+    public PostgresqlDurableQueuesBuilder setUseOrderedUnorderedQuery(boolean useOrderedUnorderedQuery) {
+        this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
+        return this;
+    }
+
     public PostgresqlDurableQueues build() {
         return new PostgresqlDurableQueues(unitOfWorkFactory,
                                            jsonSerializer != null ? jsonSerializer : new JacksonJSONSerializer(createDefaultObjectMapper()),
@@ -188,6 +209,8 @@ public final class PostgresqlDurableQueuesBuilder {
                                            transactionalMode,
                                            messageHandlingTimeout,
                                            useCentralizedMessageFetcher,
-                                           centralizedMessageFetcherPollingInterval);
+                                           centralizedMessageFetcherPollingInterval,
+                                           centralizedQueuePollingOptimizerFactory,
+                                           useOrderedUnorderedQuery);
     }
 }

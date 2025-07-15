@@ -36,4 +36,8 @@ public interface BatchMessageFetchingCapableDurableQueues extends DurableQueues 
     List<QueuedMessage> fetchNextBatchOfMessages(Collection<QueueName> queueNames,
                                                  Map<QueueName, Set<String>> excludeKeysPerQueue,
                                                  Map<QueueName, Integer> availableWorkerSlotsPerQueue);
+
+    List<QueuedMessage> fetchNextBatchOfMessagesBatched(Collection<QueueName> queueNames,
+                                                 Map<QueueName, Set<String>> excludeKeysPerQueue,
+                                                 Map<QueueName, Integer> availableWorkerSlotsPerQueue);
 }
