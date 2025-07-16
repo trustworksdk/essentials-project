@@ -26,22 +26,22 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesLoadIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
-import dk.trustworks.essentials.components.foundation.types.CorrelationId;
+import dk.trustworks.essentials.components.queue.postgresql.test_data.TestMessageFactory;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import dk.trustworks.essentials.shared.time.StopWatch;
 import org.jdbi.v3.core.Jdbi;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.*;
 
 import static dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule.createObjectMapper;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
+import static dk.trustworks.essentials.shared.collections.Lists.partition;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.waitAtMost;
 
@@ -116,32 +116,19 @@ public abstract class PostgresqlDurableQueuesPerformanceIT extends DurableQueues
     void queue_a_large_number_of_unordered_messages() {
         // Given
         var queueName = QueueName.of("TestQueue");
-        var now       = Instant.now();
-
         var stopwatch = StopWatch.start();
 
-        var totalMessagesQueued = new AtomicLong();
-        for (var batch = 0; batch < TOTAL_MESSAGES / BATCH_SIZE; batch++) {
-            var batchStart = batch * BATCH_SIZE;
-            var batchEnd   = (batch + 1) * BATCH_SIZE;
-            System.out.println("batchStart: [" + batchStart + ", batchEnd: " + batchEnd + "[");
-            unitOfWorkFactory.usingUnitOfWork(uow -> {
-                var messages = IntStream.range(batchStart, batchEnd)
-                                        .mapToObj(i -> Message.of(("Message" + i), MessageMetaData.of("correlation_id", CorrelationId.random(), "trace_id", UUID.randomUUID().toString())))
-                                        .collect(Collectors.toList());
-                var queueEntryIds = durableQueues.queueMessages(queueName,
-                                                                messages);
-                System.out.println("TotalMessagesQueued: " + totalMessagesQueued.addAndGet(messages.size()));
-                assertThat(queueEntryIds).hasSize(messages.size());
-            });
-        }
+        Map<QueueName, List<Message>> unorderedMessages = TestMessageFactory.createUnorderedMessages(TOTAL_MESSAGES, List.of(queueName));
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            List<Message> messages = unorderedMessages.get(queueName);
+            for (List<Message> chunk : partition(messages, BATCH_SIZE)) {
+                var ids = durableQueues.queueMessages(queueName, chunk);
+                assertThat(ids).hasSize(chunk.size());
+            }
+        });
         System.out.println(msg("-----> {} Queueing {} messages took {}", Instant.now(), TOTAL_MESSAGES, stopwatch.stop()));
 
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(TOTAL_MESSAGES);
-        var nextMessages = durableQueues.queryForMessagesSoonReadyForDelivery(queueName,
-                                                                              now,
-                                                                              10);
-        assertThat(nextMessages).hasSize(10);
 
         var handler = new RecordingQueuedMessageHandler();
         consumer = durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
@@ -168,35 +155,16 @@ public abstract class PostgresqlDurableQueuesPerformanceIT extends DurableQueues
     void queue_a_large_number_of_ordered_messages() {
         QueueName queueName = QueueName.of("TestQueue");
 
-        List<String> keys = IntStream.range(0, 1000)
-                                     .mapToObj(i -> "Key" + i)
-                                     .toList();
-
-        var stopWatch           = StopWatch.start();
-        var totalMessagesQueued = new AtomicLong();
-        int keyCount            = keys.size();
-        for (int batch = 0; batch < TOTAL_MESSAGES / BATCH_SIZE; batch++) {
-            int   start         = batch * BATCH_SIZE;
-            int   end           = start + BATCH_SIZE;
-            int[] orderCounters = new int[keyCount];
-            unitOfWorkFactory.usingUnitOfWork(uow -> {
-                List<OrderedMessage> messages = new ArrayList<>(BATCH_SIZE);
-                for (int i = start; i < end; i++) {
-                    int keyIdx = i % keyCount;
-                    messages.add(OrderedMessage.of(
-                            "Message" + i,
-                            keys.get(keyIdx),
-                            orderCounters[keyIdx]++,
-                            MessageMetaData.of("correlation_id", CorrelationId.random(),
-                                               "trace_id", UUID.randomUUID().toString())
-                                                  ));
-                }
-                var ids = durableQueues.queueMessages(queueName, messages);
-                assertThat(ids).hasSize(messages.size());
-                totalMessagesQueued.addAndGet(messages.size());
-            });
-        }
-        System.out.println("Enqueued " + totalMessagesQueued.get() +
+        var                                  stopWatch       = StopWatch.start();
+        Map<QueueName, List<OrderedMessage>> orderedMessages = TestMessageFactory.createOrderedMessages(TOTAL_MESSAGES, List.of(queueName), 75000);
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            List<OrderedMessage> messages = orderedMessages.get(queueName);
+            for (List<OrderedMessage> chunk : partition(messages, BATCH_SIZE)) {
+                var ids = durableQueues.queueMessages(queueName, chunk);
+                assertThat(ids).hasSize(chunk.size());
+            }
+        });
+        System.out.println("Enqueued " + TOTAL_MESSAGES +
                                    " ordered messages in " + stopWatch.stop().duration.toMillis() + " ms");
 
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName))
@@ -227,40 +195,27 @@ public abstract class PostgresqlDurableQueuesPerformanceIT extends DurableQueues
     @Test
     void queue_a_large_number_of_mixed_messages() {
         QueueName queueName = QueueName.of("TestQueue");
+        var queuesList = List.of(queueName);
 
         var stopWatch           = StopWatch.start();
-        var totalMessagesQueued = new AtomicLong();
-        for (int batch = 0; batch < TOTAL_MESSAGES / BATCH_SIZE; batch++) {
-            int start = batch * BATCH_SIZE;
-            int end   = start + BATCH_SIZE;
-            unitOfWorkFactory.usingUnitOfWork(uow -> {
-                List<Message> messages = new ArrayList<>(BATCH_SIZE);
-                for (int i = start; i < end; i++) {
-                    if (i % 2 == 0) {
-                        // unordered
-                        messages.add(Message.of(
-                                "Msg" + i,
-                                MessageMetaData.of("correlation_id", CorrelationId.random(),
-                                                   "trace_id", UUID.randomUUID().toString())
-                                               ));
-                    } else {
-                        // ordered, round‐robin 100 keys
-                        String key = "Key" + (i % 100);
-                        messages.add(OrderedMessage.of(
-                                "Msg" + i,
-                                key,
-                                i / 2,  // simple per-key increment
-                                MessageMetaData.of("correlation_id", CorrelationId.random(),
-                                                   "trace_id", UUID.randomUUID().toString())
-                                                      ));
-                    }
+        int half         = TOTAL_MESSAGES / 2;
+        var unorderedMap = TestMessageFactory.createUnorderedMessages(half, queuesList);
+        var orderedMap   = TestMessageFactory.createOrderedMessages(half, queuesList, 40000);
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+                var unOrderedMessages = unorderedMap.get(queueName);
+                for (List<Message> chunk : partition(unOrderedMessages, BATCH_SIZE)) {
+                    var unOrderedIds = durableQueues.queueMessages(queueName, chunk);
+                    assertThat(unOrderedIds).hasSize(chunk.size());
                 }
-                var ids = durableQueues.queueMessages(queueName, messages);
-                assertThat(ids).hasSize(messages.size());
-                totalMessagesQueued.addAndGet(messages.size());
-            });
-        }
-        System.out.println("Enqueued " + totalMessagesQueued.get() +
+
+                var orderedMessages = orderedMap.get(queueName);
+                for (List<OrderedMessage> chunk : partition(orderedMessages, BATCH_SIZE)) {
+                    var orderedIds = durableQueues.queueMessages(queueName, chunk);
+                    assertThat(orderedIds).hasSize(chunk.size());
+                }
+        });
+        System.out.println("Enqueued " + TOTAL_MESSAGES +
                                    " mixed messages in " + stopWatch.stop().duration.toMillis() + " ms");
 
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName))

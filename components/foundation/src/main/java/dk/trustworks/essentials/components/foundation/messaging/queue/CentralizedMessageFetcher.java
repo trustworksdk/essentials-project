@@ -43,6 +43,7 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  */
 public class CentralizedMessageFetcher implements Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(CentralizedMessageFetcher.class);
+    public static final int NUMBER_OF_ACTIVE_QUEUES_THRESHOLD = 10;
 
     private final DurableQueues                                              durableQueues;
     private final ScheduledExecutorService                                   scheduler;
@@ -204,10 +205,19 @@ public class CentralizedMessageFetcher implements Lifecycle {
             // Ask the DurableQueues implementation if it supports batch fetching
             if (durableQueues instanceof BatchMessageFetchingCapableDurableQueues batchCapableDurableQueues) {
                 // Use batch fetching for better efficiency
-                var messages = batchCapableDurableQueues.fetchNextBatchOfMessages(
-                        availableWorkerSlotsPerQueue.keySet(),
-                        excludeKeysPerQueue,
-                        availableWorkerSlotsPerQueue);
+                List<QueuedMessage> messages;
+                var queueNames = availableWorkerSlotsPerQueue.keySet();
+                if (queueNames.size() > NUMBER_OF_ACTIVE_QUEUES_THRESHOLD) {
+                    messages = batchCapableDurableQueues.fetchNextBatchOfMessagesBatched(
+                            queueNames,
+                            excludeKeysPerQueue,
+                            availableWorkerSlotsPerQueue);
+                } else {
+                    messages = batchCapableDurableQueues.fetchNextBatchOfMessages(
+                            queueNames,
+                            excludeKeysPerQueue,
+                            availableWorkerSlotsPerQueue);
+                }
 
                 // Debug logging when using batch fetching
                 if (log.isDebugEnabled()) {
