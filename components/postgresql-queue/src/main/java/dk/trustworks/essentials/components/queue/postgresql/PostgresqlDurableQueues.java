@@ -1215,8 +1215,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                () -> {
                                                    log.trace("[{}] Handling GetNextMessageReadyForDelivery: {}", operation.queueName, operation);
                                                    resetMessagesStuckBeingDelivered(operation.queueName);
-                                                   var now                 = Instant.now();
-                                                   Collection<String> excludedKeys        = operation.getExcludeOrderedMessagesWithKey() != null ? operation.getExcludeOrderedMessagesWithKey() : List.of();
+                                                   var                now          = Instant.now();
+                                                   Collection<String> excludedKeys = operation.getExcludeOrderedMessagesWithKey() != null ? operation.getExcludeOrderedMessagesWithKey() : List.of();
 
                                                    var sql = buildGetNextMessageReadyForDeliverySqlStatement(excludedKeys);
                                                    log.trace("[{}] Querying Postgresql: {}", operation.queueName, operation);
@@ -1251,47 +1251,47 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
 
         return bind("""
-                                                                  WITH queued_message_ready_for_delivery AS (
-                                                                      SELECT id FROM {:tableName} q1
-                                                                      WHERE
-                                                                          queue_name = :queueName AND
-                                                                          is_dead_letter_message = FALSE AND
-                                                                          is_being_delivered = FALSE AND
-                                                                          next_delivery_ts <= :now AND
-                                                                          NOT EXISTS (SELECT 1 FROM {:tableName} q2 WHERE q2.key = q1.key AND q2.queue_name = q1.queue_name AND q2.key_order < q1.key_order)
-                                                                              {:excludeKeys}
-                                                                      ORDER BY key_order ASC, next_delivery_ts ASC
-                                                                      LIMIT :limit
-                                                                      FOR UPDATE SKIP LOCKED
-                                                                  )
-                                                                          UPDATE {:tableName} queued_message SET
-                                                                              total_attempts = queued_message.total_attempts + 1,
-                                                                              next_delivery_ts = NULL,
-                                                                              is_being_delivered = TRUE,
-                                                                              delivery_ts = :now
-                                                                          FROM queued_message_ready_for_delivery
-                                                                          WHERE queued_message.id = queued_message_ready_for_delivery.id
-                                                                          AND queued_message.queue_name = :queueName
-                                                                          RETURNING
-                                                                              queued_message.id,
-                                                                              queued_message.queue_name,
-                                                                              queued_message.message_payload,
-                                                                              queued_message.message_payload_type,
-                                                                              queued_message.added_ts,
-                                                                              queued_message.next_delivery_ts,
-                                                                              queued_message.delivery_ts,
-                                                                              queued_message.last_delivery_error,
-                                                                              queued_message.total_attempts,
-                                                                              queued_message.redelivery_attempts,
-                                                                              queued_message.is_dead_letter_message,
-                                                                              queued_message.is_being_delivered,
-                                                                              queued_message.meta_data,
-                                                                              queued_message.delivery_mode,
-                                                                              queued_message.key,
-                                                                              queued_message.key_order
-                                                                  """,
-                       arg("tableName", sharedQueueTableName),
-                       arg("excludeKeys", excludeKeysLimitSql));
+                    WITH queued_message_ready_for_delivery AS (
+                        SELECT id FROM {:tableName} q1
+                        WHERE
+                            queue_name = :queueName AND
+                            is_dead_letter_message = FALSE AND
+                            is_being_delivered = FALSE AND
+                            next_delivery_ts <= :now AND
+                            NOT EXISTS (SELECT 1 FROM {:tableName} q2 WHERE q2.key = q1.key AND q2.queue_name = q1.queue_name AND q2.key_order < q1.key_order)
+                                {:excludeKeys}
+                        ORDER BY key_order ASC, next_delivery_ts ASC
+                        LIMIT :limit
+                        FOR UPDATE SKIP LOCKED
+                    )
+                            UPDATE {:tableName} queued_message SET
+                                total_attempts = queued_message.total_attempts + 1,
+                                next_delivery_ts = NULL,
+                                is_being_delivered = TRUE,
+                                delivery_ts = :now
+                            FROM queued_message_ready_for_delivery
+                            WHERE queued_message.id = queued_message_ready_for_delivery.id
+                            AND queued_message.queue_name = :queueName
+                            RETURNING
+                                queued_message.id,
+                                queued_message.queue_name,
+                                queued_message.message_payload,
+                                queued_message.message_payload_type,
+                                queued_message.added_ts,
+                                queued_message.next_delivery_ts,
+                                queued_message.delivery_ts,
+                                queued_message.last_delivery_error,
+                                queued_message.total_attempts,
+                                queued_message.redelivery_attempts,
+                                queued_message.is_dead_letter_message,
+                                queued_message.is_being_delivered,
+                                queued_message.meta_data,
+                                queued_message.delivery_mode,
+                                queued_message.key,
+                                queued_message.key_order
+                    """,
+                    arg("tableName", sharedQueueTableName),
+                    arg("excludeKeys", excludeKeysLimitSql));
 
     }
 
@@ -1359,7 +1359,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * regarding the queue and message properties to determine eligible rows.
      *
      * @return A string representing the SQL statement to process queue messages
-     *         in an unordered manner based on the specified conditions.
+     * in an unordered manner based on the specified conditions.
      */
     public String buildUnorderedSqlStatement() {
         return bind("""
@@ -1399,7 +1399,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *                         will include an additional condition to exclude keys
      *                         from the provided exclusion list.
      * @return the constructed SQL statement as a String. The statement includes
-     *         logic for selecting, ordering, and updating messages in a queue table.
+     * logic for selecting, ordering, and updating messages in a queue table.
      */
     public String buildOrderedSqlStatement(boolean hasExclusiveKeys) {
         var orderedSql = new StringBuilder();
@@ -1732,8 +1732,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @return list of queued messages ready for delivery
      */
     public List<QueuedMessage> fetchNextBatchOfMessages_(Collection<QueueName> queueNames,
-                                                        Map<QueueName, Set<String>> excludeKeysPerQueue,
-                                                        Map<QueueName, Integer> availableWorkerSlotsPerQueue) {
+                                                         Map<QueueName, Set<String>> excludeKeysPerQueue,
+                                                         Map<QueueName, Integer> availableWorkerSlotsPerQueue) {
         log.trace("Fetching batch of messages for queues: {}", queueNames);
         if (queueNames.isEmpty()) {
             return Collections.emptyList();
@@ -1820,8 +1820,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     public List<QueuedMessage> fetchNextBatchOfMessagesOrderedUnordered(Collection<QueueName> queueNames,
-                                                        Map<QueueName, Set<String>> excludeKeysPerQueue,
-                                                        Map<QueueName, Integer> availableWorkerSlotsPerQueue) {
+                                                                        Map<QueueName, Set<String>> excludeKeysPerQueue,
+                                                                        Map<QueueName, Integer> availableWorkerSlotsPerQueue) {
         log.trace("Fetching batch of messages for queues: {}", queueNames);
         if (queueNames.isEmpty()) {
             return Collections.emptyList();
@@ -1942,104 +1942,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
                 Instant now = Instant.now();
 
-                StringBuilder vals = new StringBuilder();
-                for (int i = 0; i < activeQueues.size(); i++) {
-                    QueueName   q        = activeQueues.get(i);
-                    int         slots    = availableWorkerSlotsPerQueue.get(q);
-                    Set<String> excludes = excludeKeysPerQueue.getOrDefault(q, Collections.emptySet());
-
-                    // build SQL array literal of excluded keys
-                    String arrayLiteral = excludes.isEmpty()
-                                          ? "ARRAY[]::text[]"
-                                          : "ARRAY[" +
-                                                  excludes.stream()
-                                                          .map(k -> "'" + k.replace("'", "''") + "'")
-                                                          .collect(Collectors.joining(","))
-                                                  + "]::text[]";
-
-                    if (i > 0) vals.append(",\n    ");
-                    vals.append("('")
-                        .append(q.toString()).append("', ")
-                        .append(slots).append(", ")
-                        .append(arrayLiteral)
-                        .append(")");
-                }
-
-                String sql = """
-                                     WITH queue_config(queue_name, slots, exclude_keys) AS (
-                                                                 VALUES
-                                                                   %s
-                                                               ),
-                                                               ranked AS (
-                                                                 SELECT
-                                                                   q.id,
-                                                                   q.queue_name,
-                                                                   ROW_NUMBER() OVER (
-                                                                     PARTITION BY q.queue_name
-                                                                     ORDER BY q.key_order, q.next_delivery_ts
-                                                                   ) AS rn
-                                                                 FROM %s q
-                                                                 JOIN queue_config cfg
-                                                                   ON q.queue_name = cfg.queue_name
-                                                                 WHERE
-                                                                   q.is_dead_letter_message = FALSE
-                                                                   AND q.is_being_delivered   = FALSE
-                                                                   AND q.next_delivery_ts    <= :now
-                                                                   AND NOT (q.key = ANY(cfg.exclude_keys))
-                                                                   AND NOT EXISTS (
-                                                                     SELECT 1
-                                                                     FROM %s q2
-                                                                     WHERE q2.queue_name = q.queue_name
-                                                                       AND q2.key        = q.key
-                                                                       AND q2.key_order < q.key_order
-                                                                   )
-                                                               ),
-                                                               to_update AS (
-                                                                 -- pick the top‐N per queue, but no locking yet
-                                                                 SELECT
-                                                                   r.id
-                                                                 FROM ranked r
-                                                                 JOIN queue_config cfg
-                                                                   ON r.queue_name = cfg.queue_name
-                                                                 WHERE r.rn <= cfg.slots
-                                                               ),
-                                                               locked AS (
-                                                                 -- now lock exactly those rows, skipping any already locked
-                                                                 SELECT id
-                                                                 FROM to_update
-                                                                 FOR UPDATE SKIP LOCKED
-                                                               )
-                                                               UPDATE %s queued_message
-                                                               SET
-                                                                 total_attempts     = queued_message.total_attempts + 1,
-                                                                 next_delivery_ts   = NULL,
-                                                                 is_being_delivered = TRUE,
-                                                                 delivery_ts        = :now
-                                                               FROM locked u
-                                                               WHERE queued_message.id = u.id
-                                                               RETURNING
-                                                                 queued_message.id,
-                                                                 queued_message.queue_name,
-                                                                 queued_message.message_payload,
-                                                                 queued_message.message_payload_type,
-                                                                 queued_message.added_ts,
-                                                                 queued_message.next_delivery_ts,
-                                                                 queued_message.delivery_ts,
-                                                                 queued_message.last_delivery_error,
-                                                                 queued_message.total_attempts,
-                                                                 queued_message.redelivery_attempts,
-                                                                 queued_message.is_dead_letter_message,
-                                                                 queued_message.is_being_delivered,
-                                                                 queued_message.meta_data,
-                                                                 queued_message.delivery_mode,
-                                                                 queued_message.key,
-                                                                 queued_message.key_order;
-                             """.formatted(
-                        vals.toString(),
-                        sharedQueueTableName,
-                        sharedQueueTableName,
-                        sharedQueueTableName
-                                          );
+                String sql = buildBatchedSqlStatement(excludeKeysPerQueue, availableWorkerSlotsPerQueue, activeQueues);
 
                 List<QueuedMessage> messages = uow.handle()
                                                   .createQuery(sql)
@@ -2057,11 +1960,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                         continue;
                     }
                     var                 queuePollingOptimizer = durableQueueConsumer.getQueuePollingOptimizer();
-                    List<QueuedMessage> msgsForQ              = byQueue.getOrDefault(queueName, Collections.emptyList());
-                    if (msgsForQ.isEmpty()) {
+                    List<QueuedMessage> messagesForQueue      = byQueue.getOrDefault(queueName, Collections.emptyList());
+                    if (messagesForQueue.isEmpty()) {
                         queuePollingOptimizer.queuePollingReturnedNoMessages();
                     } else {
-                        queuePollingOptimizer.queuePollingReturnedMessages(msgsForQ);
+                        queuePollingOptimizer.queuePollingReturnedMessages(messagesForQueue);
                     }
                 }
 
@@ -2081,6 +1984,125 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             }
             return Collections.emptyList();
         }
+    }
+
+    public String buildBatchedSqlStatement(Map<QueueName, Set<String>> excludeKeysPerQueue, Map<QueueName, Integer> availableWorkerSlotsPerQueue, List<QueueName> activeQueues) {
+        StringBuilder vals = new StringBuilder();
+        for (int i = 0; i < activeQueues.size(); i++) {
+            QueueName   q        = activeQueues.get(i);
+            int         slots    = availableWorkerSlotsPerQueue.get(q);
+            Set<String> excludes = excludeKeysPerQueue.getOrDefault(q, Collections.emptySet());
+
+            // build SQL array literal of excluded keys
+            String arrayLiteral = excludes.isEmpty()
+                                  ? "ARRAY[]::text[]"
+                                  : "ARRAY[" +
+                                          excludes.stream()
+                                                  .map(k -> "'" + k.replace("'", "''") + "'")
+                                                  .collect(Collectors.joining(","))
+                                          + "]::text[]";
+
+            if (i > 0) vals.append(",\n    ");
+            vals.append("('")
+                .append(q.toString()).append("', ")
+                .append(slots).append(", ")
+                .append(arrayLiteral)
+                .append(")");
+        }
+
+        return bind("""
+                             WITH queue_config(queue_name, slots, exclude_keys) AS (
+                               VALUES {:values}
+                           ),
+                           -- 2) Numbered ordered candidates
+                               ordered_rn AS (
+                                 SELECT
+                                   q.id,
+                                   q.queue_name,
+                                   ROW_NUMBER() OVER (
+                                     PARTITION BY q.queue_name
+                                     ORDER BY q.key_order, q.next_delivery_ts
+                                   ) AS rn
+                                 FROM durable_queues q
+                                 JOIN queue_config cfg USING(queue_name)
+                                 WHERE
+                                      q.is_dead_letter_message = FALSE
+                                  AND q.is_being_delivered     = FALSE
+                                  AND q.next_delivery_ts      <= :now
+                                  AND q.key IS NOT NULL
+                                  AND NOT (q.key = ANY(cfg.exclude_keys))
+                                  AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM durable_queues q2
+                                    WHERE q2.queue_name = q.queue_name
+                                      AND q2.key        = q.key
+                                      AND q2.key_order  < q.key_order
+                                  )
+                               ),
+        
+                               -- 3) Numbered unordered candidates
+                               unordered_rn AS (
+                                 SELECT
+                                   q.id,
+                                   q.queue_name,
+                                   ROW_NUMBER() OVER (
+                                     PARTITION BY q.queue_name
+                                     ORDER BY q.next_delivery_ts
+                                   ) AS rn
+                                 FROM durable_queues q
+                                 JOIN queue_config cfg USING(queue_name)
+                                 WHERE
+                                      q.is_dead_letter_message = FALSE
+                                  AND q.is_being_delivered     = FALSE
+                                  AND q.next_delivery_ts      <= :now
+                                  AND q.key IS NULL
+                                  AND NOT (q.key = ANY(cfg.exclude_keys))
+                               ),
+        
+                               -- 4) Pick up to cfg.slots from each
+                               ordered_pick AS (
+                                 SELECT orr.id
+                                 FROM ordered_rn orr
+                                 JOIN queue_config cfg
+                                   ON orr.queue_name = cfg.queue_name
+                                 WHERE orr.rn <= cfg.slots
+                               ),
+                               unordered_pick AS (
+                                 SELECT unr.id
+                                 FROM unordered_rn unr
+                                 JOIN queue_config cfg
+                                   ON unr.queue_name = cfg.queue_name
+                                 WHERE unr.rn <= cfg.slots
+                               ),
+        
+                               -- 5) Union them *without locking*
+                               candidates AS (
+                                 SELECT id FROM ordered_pick
+                                 UNION ALL
+                                 SELECT id FROM unordered_pick
+                               ),
+        
+                               -- 6) Now lock exactly those durable_queues rows
+                               locked AS (
+                                 SELECT q.id
+                                 FROM durable_queues q
+                                 JOIN candidates c
+                                   ON q.id = c.id
+                                 FOR UPDATE SKIP LOCKED
+                               )
+        
+                             -- 7) Finally, update & return the locked rows
+                             UPDATE durable_queues dq
+                             SET
+                               total_attempts     = dq.total_attempts + 1,
+                               next_delivery_ts   = NULL,
+                               is_being_delivered = TRUE,
+                               delivery_ts        = :now
+                             FROM locked l
+                             WHERE dq.id = l.id
+                            RETURNING dq.*;
+                          """, arg("values", vals.toString()), arg("tableName", sharedQueueTableName)
+                   );
     }
 
     /**

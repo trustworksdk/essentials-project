@@ -86,4 +86,21 @@ public final class Lists {
     public static <T> List<T> nullSafeList(List<T> list) {
         return Optional.ofNullable(list).orElse(List.of());
     }
+
+    /**
+     * Splits a given list into smaller sublists, each of a specified maximum size.
+     * The last sublist may contain fewer elements if the size of the list is not evenly divisible by the batch size.
+     *
+     * @param <T>       the type of elements in the list
+     * @param list      the list to be partitioned
+     * @param batchSize the maximum size of each partition
+     * @return a list of sublists, where each sublist contains at most {@code batchSize} elements
+     */
+    public static <T> List<List<T>> partition(List<T> list, int batchSize) {
+        List<List<T>> parts = new ArrayList<>();
+        for (int i = 0; i < list.size(); i += batchSize) {
+            parts.add(list.subList(i, Math.min(list.size(), i + batchSize)));
+        }
+        return parts;
+    }
 }
