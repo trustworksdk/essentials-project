@@ -36,7 +36,7 @@ import org.testcontainers.junit.jupiter.*;
 import java.time.Duration;
 import java.util.*;
 
-import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.createDefaultObjectMapper;
+import static dk.trustworks.essentials.components.queue.postgresql.DurableQueuesSerialization.createDefaultObjectMapper;
 import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
 
 /**
