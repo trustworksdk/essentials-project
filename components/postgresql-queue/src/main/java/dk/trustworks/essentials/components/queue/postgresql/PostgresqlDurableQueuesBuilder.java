@@ -77,7 +77,7 @@ public final class PostgresqlDurableQueuesBuilder {
 
     /**
      * @param jsonSerializer Set the {@link JSONSerializer} that is used to serialize/deserialize message payloads.<br>
-     *                       If not set, then {@link JacksonJSONSerializer} with the {@link PostgresqlDurableQueues#createDefaultObjectMapper()} will be used
+     *                       If not set, then {@link JacksonJSONSerializer} with the {@link DurableQueuesSerialization#createDefaultObjectMapper()} will be used
      * @return this builder instance
      */
     public PostgresqlDurableQueuesBuilder setJsonSerializer(JSONSerializer jsonSerializer) {
@@ -202,7 +202,7 @@ public final class PostgresqlDurableQueuesBuilder {
 
     public PostgresqlDurableQueues build() {
         return new PostgresqlDurableQueues(unitOfWorkFactory,
-                                           jsonSerializer != null ? jsonSerializer : new JacksonJSONSerializer(createDefaultObjectMapper()),
+                                           jsonSerializer != null ? jsonSerializer : new JacksonJSONSerializer(DurableQueuesSerialization.createDefaultObjectMapper()),
                                            sharedQueueTableName,
                                            multiTableChangeListener,
                                            queuePollingOptimizerFactory,

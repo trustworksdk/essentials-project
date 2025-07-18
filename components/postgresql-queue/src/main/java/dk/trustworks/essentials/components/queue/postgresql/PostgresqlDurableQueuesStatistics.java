@@ -32,7 +32,7 @@ import java.sql.*;
 import java.time.OffsetDateTime;
 import java.util.*;
 
-import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.createDefaultObjectMapper;
+import static dk.trustworks.essentials.components.queue.postgresql.DurableQueuesSerialization.createDefaultObjectMapper;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.*;
