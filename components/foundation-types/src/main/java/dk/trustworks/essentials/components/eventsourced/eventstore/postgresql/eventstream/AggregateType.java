@@ -40,8 +40,8 @@ import dk.trustworks.essentials.types.*;
  * <br>
  * It is highly recommended that the {@link AggregateType}'s value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link AggregateType}'s value.<br>
- * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
- *
+ * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
+ * <p>
  * <u>Aggregate examples:</u>
  * Classical examples of Aggregate Types and their associated events are:
  * <ul>
@@ -75,16 +75,16 @@ import dk.trustworks.essentials.types.*;
  * <br>
  * We could put all Events from all Aggregate Types into one Event Stream, but this is often <b>not very useful</b>:
  * <ul>
- *     <li>From a usage and use case perspective it makes more sense to subscribe and handle events related to the same type of Aggregates separate from
+ *     <li>From a usage and use case perspective, it makes more sense to subscribe and handle events related to the same type of Aggregates separate from
  *     the handling of other Events related to other types of Aggregates.<br>
- *     E.g. it makes more sense to handle Order related Events separate from Account related Events
+ *     E.g., it makes more sense to handle Order related Events separate from Account related Events
  *     </li>
  *     <li>Using {@code SeparateTablePerAggregateTypePersistenceStrategy} we can store all Events related to a specific Aggregate Type in a separate table
  *     from other Aggregate types, which is more efficient and allows us to store many more Events related to this given {@link AggregateType}.<br>
  *     This allows use to use the globalEventOrdering to track the order in which Events, related to the same type of Aggregate, were persisted.<br>
  *     This also allows us to use the GlobalEventOrdering as a natual Resume-Point for EventStore subscriptions (see {@code EventStoreSubscriptionManager})
  *     </li>
- * </ul
+ * </ul>
  * <p>
  * This aligns with the concept of an AggregateEventStream, which contains Events related to a specific {@link AggregateType} with a distinct <b>AggregateId</b><br>
  * When loading/fetching and persisting/appending Events we always work at the Aggregate instance level, i.e., with AggregateEventStreams.<br>
@@ -128,7 +128,7 @@ public final class AggregateType extends CharSequenceType<AggregateType> impleme
      *              <br>
      *              It is highly recommended that the {@link AggregateType}'s value is only derived from a controlled and trusted source.<br>
      *              To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link AggregateType}'s value.<br>
-     *              <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     *              <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      */
     public AggregateType(CharSequence value) {
         super(value);
@@ -155,7 +155,7 @@ public final class AggregateType extends CharSequenceType<AggregateType> impleme
      *              <br>
      *              It is highly recommended that the {@link AggregateType}'s value is only derived from a controlled and trusted source.<br>
      *              To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link AggregateType}'s value.<br>
-     *              <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     *              <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      */
     public AggregateType(String value) {
         super(value);
@@ -183,7 +183,7 @@ public final class AggregateType extends CharSequenceType<AggregateType> impleme
      *              <br>
      *              It is highly recommended that the {@link AggregateType}'s value is only derived from a controlled and trusted source.<br>
      *              To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link AggregateType}'s value.<br>
-     *              <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     *              <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      * @return the new {@link AggregateType} with the value applied
      */
     public static AggregateType of(CharSequence value) {
