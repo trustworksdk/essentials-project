@@ -62,6 +62,7 @@ class DeciderCommandHandlerAdapter<CMD, EVENT>(
         return commandType == deciderHandlesCommandOfType
     }
 
+    @Suppress("UNCHECKED_CAST")
     override fun handle(command: Any): Any? {
         log.trace("Received command '{}'", deciderHandlesCommandOfType)
 
@@ -90,7 +91,7 @@ class DeciderCommandHandlerAdapter<CMD, EVENT>(
                 "[{}:{}] Resolved aggregate id from event '{}' resulting from handling command '{}'",
                 aggregateTypeConfiguration.aggregateType,
                 aggregateId,
-                possibleEventResult!!::class.simpleName,
+                possibleEventResult::class.simpleName,
                 deciderHandlesCommandOfType
             )
         }
