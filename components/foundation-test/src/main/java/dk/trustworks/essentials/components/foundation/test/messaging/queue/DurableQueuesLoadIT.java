@@ -104,7 +104,6 @@ public abstract class DurableQueuesLoadIT<DURABLE_QUEUES extends DurableQueues, 
                   .untilAsserted(() -> assertThat(msgHandler.messagesReceived.get()).isGreaterThan(10));
         consumer.cancel();
         consumer = null;
-
     }
 
     static class RecordingQueuedMessageHandler implements QueuedMessageHandler {
