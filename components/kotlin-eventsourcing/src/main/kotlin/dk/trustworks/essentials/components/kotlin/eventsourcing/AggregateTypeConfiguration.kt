@@ -90,6 +90,10 @@ fun interface DeciderSupportsAggregateTypeChecker {
      */
     class HandlesCommandsThatInheritsFromCommandType(private val baseCommandType: KClass<*>) :
         DeciderSupportsAggregateTypeChecker {
+        companion object {
+            @JvmStatic
+            private val log = LoggerFactory.getLogger(HandlesCommandsThatInheritsFromCommandType::class.java)
+        }
         override fun doesDeciderWorkWithThisAggregateType(decider: Decider<*, *>): Boolean {
             var commandTypeTheDeciderHandles = GenericType.resolveGenericTypeForInterface(
                 decider.javaClass,
@@ -108,11 +112,6 @@ fun interface DeciderSupportsAggregateTypeChecker {
 
             return baseCommandType.java.isAssignableFrom(commandTypeTheDeciderHandles)
         }
-
-        companion object {
-            @JvmStatic
-            private val log = LoggerFactory.getLogger(javaClass.enclosingClass)
-        }
     }
 }
 
@@ -125,6 +124,3 @@ typealias CommandAggregateIdResolver = (cmd: Any) -> Any?
  * An [EventAggregateIdResolver] can resolve the required Aggregate-Id value from an instance of an Event
  */
 typealias EventAggregateIdResolver = (event: Any) -> Any
-
-
-
