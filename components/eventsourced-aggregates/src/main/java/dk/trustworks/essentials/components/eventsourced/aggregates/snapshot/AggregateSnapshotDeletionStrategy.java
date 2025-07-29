@@ -98,7 +98,6 @@ public interface AggregateSnapshotDeletionStrategy {
          * Strategy that keeps a specific number historic aggregate snapshots
          *
          * @param numberOfHistoricSnapshotsToKeep the number of historic aggregate snapshots to keep (must be >= 0)
-         * @return Strategy that keeps all historic snapshot events
          */
         public KeepHistoricSnapshots(long numberOfHistoricSnapshotsToKeep) {
             requireTrue(numberOfHistoricSnapshotsToKeep >= 0, "numberOfHistoricSnapshotsToKeep must be >= 0");

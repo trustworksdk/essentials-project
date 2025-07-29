@@ -228,19 +228,19 @@ public class EventsToPersist<ID, EVENT_TYPE> {
     }
 
     /**
-     * Number of events. Shorthand for {@link #events#size()}
+     * Number of events. Shorthand for calling {@link List#size()} on {@link #events}
      *
-     * @return Shorthand for {@link #events#size()}
+     * @return Shorthand for calling {@link List#size()} on {@link #events}
      */
     public int size() {
         return events.size();
     }
 
     /**
-     * Get event at index. Shorthand for {@link #events#get(int)}
+     * Get event at index. Shorthand for calling {@link List#get(int)} on {@link #events}
      *
      * @param index the index on the {@link #events} list
-     * @return Shorthand for {@link #events#get(int)}
+     * @return Shorthand for calling {@link List#get(int)} on {@link #events}
      */
     public Object get(int index) {
         return events.get(index);

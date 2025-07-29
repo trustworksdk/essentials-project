@@ -32,9 +32,9 @@ public interface Decider<COMMAND, EVENT, ERROR, STATE> extends Handler<COMMAND, 
      * Factory method for creating a {@link Decider} instance from instances of the various {@link Decider} related interfaces
      *
      * @param handler                   A {@link Decider} related interface that is responsible for handling <code>COMMAND</code>(s)
-     * @param initialStateProvider      A {@link Decider} related interface, which provides the <b>Initial</b> <code>STATE</code> for a given  <i>aggregate</i>.
-     * @param stateEvolver              A {@link Decider} related interface, which can apply <code>EVENT</code><(s) to an <i>aggregate/i>'s <code>STATE</code> instance
-     * @param stateIsStateFinalResolver A {@link Decider} related interface that resolves if the aggregate's state is final and no more changes can occur, i.e. no more events can be persisted
+     * @param initialStateProvider      A {@link Decider} related interface, which provides the <b>Initial</b> <code>STATE</code> for a given <i>aggregate</i>.
+     * @param stateEvolver              A {@link Decider} related interface, which can apply <code>EVENT</code>(s) to an <i>aggregate</i>'s <code>STATE</code> instance
+     * @param stateIsStateFinalResolver A {@link Decider} related interface that resolves if the aggregate's state is final and no more changes can occur, i.e., no more events can be persisted
      * @param <COMMAND>                 The type of Commands that the {@link #handle(Object, Object)} can process
      * @param <EVENT>                   The type of Events that can be returned by {@link #handle(Object, Object)} and applied in the {@link #applyEvent(Object, Object)}
      * @param <ERROR>                   The type of Error that can be returned by the {@link #handle(Object, Object)} method

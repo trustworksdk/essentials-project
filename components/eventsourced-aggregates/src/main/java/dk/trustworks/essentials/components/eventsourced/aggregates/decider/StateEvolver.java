@@ -21,7 +21,7 @@ import java.util.stream.Stream;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * A {@link Decider} or {@link View} related interface, which can apply <code>EVENT</code><(s) to a <i>aggregate/projection/view</i> <code>STATE</code> instance
+ * A {@link Decider} or {@link View} related interface, which can apply <code>EVENT</code>(s) to a <i>aggregate/projection/view</i> <code>STATE</code> instance
  *
  * @param <EVENT> The type of Events that can be applied in the {@link #applyEvent(Object, Object)}
  * @param <STATE> The type of <i>aggregate/projection/view</i> <code>STATE</code> that {@link #applyEvent(Object, Object)} supports
