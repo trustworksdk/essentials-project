@@ -106,16 +106,21 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         }
 
         this.scheduler = consumeFromQueue.getConsumerExecutorService()
-                                         .orElseGet(() -> Executors.newScheduledThreadPool(consumeFromQueue.getParallelConsumers(),
-                                                                                           new ThreadFactoryBuilder()
-                                                                                                   .nameFormat("Queue-" + queueName + "-Polling-%d")
-                                                                                                   .daemon(true)
-                                                                                                   .uncaughtExceptionHandler((thread, throwable) -> {
-                                                                                                       LOG.error(msg("[{}] {} - Unexpected error",
-                                                                                                                     queueName,
-                                                                                                                     consumeFromQueue.consumerName), throwable);
-                                                                                                   })
-                                                                                                   .build()));
+                                         .orElseGet(() -> {
+                                             LOG.debug("[{}] {} - Creating new ScheduledThreadPool as no ConsumerExecutorService was provided",
+                                                       queueName,
+                                                       consumeFromQueue.consumerName);
+                                             return Executors.newScheduledThreadPool(consumeFromQueue.getParallelConsumers(),
+                                                                                     new ThreadFactoryBuilder()
+                                                                                             .nameFormat("Queue-" + queueName + "-Polling-%d")
+                                                                                             .daemon(true)
+                                                                                             .uncaughtExceptionHandler((thread, throwable) -> {
+                                                                                                 LOG.error(msg("[{}] {} - Unexpected error",
+                                                                                                               queueName,
+                                                                                                               consumeFromQueue.consumerName), throwable);
+                                                                                             })
+                                                                                             .build());
+                                         });
 
         LOG.info("[{}] '{}' - Created '{}' with '{}', {} thread(s) and polling interval {} ms",
                  queueName,
@@ -341,7 +346,14 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                                   consumeFromQueue.consumerName,
                                   queuedMessage.getId());
                         // Assign the Runnable returned by handleMessage
-                        resultRunnable[0] = handleMessage(queuedMessage);
+                        if (!started) {
+                            LOG.trace("[{}] {} - Consumer was stopped right before Handle Next Message ReadyForDelivery with id '{}'",
+                                      queueName,
+                                      consumeFromQueue.consumerName,
+                                      queuedMessage.getId());
+                        } else {
+                            resultRunnable[0] = handleMessage(queuedMessage);
+                        }
                     } else {
                         LOG.debug("[{}] {} - {}.getNextMessageReadyForDelivery did NOT return a Message",
                                   queueName,

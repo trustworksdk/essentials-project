@@ -115,7 +115,7 @@ public class CentralizedMessageFetcherDurableQueueConsumer implements DurableQue
 
             // Allow for worker pool shutdown if not provided externally
             if (!workerPool.isShutdown()) {
-                workerPool.shutdown();
+                workerPool.shutdownNow();
             }
 
             removeDurableQueueConsumer.accept(this);
