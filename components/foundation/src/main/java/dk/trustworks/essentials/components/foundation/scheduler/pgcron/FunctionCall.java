@@ -37,11 +37,24 @@ import static java.util.stream.Collectors.joining;
  *                     and must match specific validation rules for a SQL function name using {@link PostgresqlUtil#isValidFunctionName(String)}
  * @param args         a list of {@link Arg} objects acting as the arguments to the function.
  *                     Must not be null.
- * @throws IllegalArgumentException if {@code functionName} or {@code args} is null or if {@code functionName} does not pass validation.
  * @see {@link Arg}
  */
 public record FunctionCall(String functionName, List<Arg<?>> args) {
 
+    /**
+     * Represents a call to a SQL function with a name and a list of arguments. This class
+     * checks the function name is valid and provides functionality to construct a SQL-compatible
+     * representation of the function call.
+     * <p>
+     * Instances of this class are immutable and thread-safe.
+     * </p>
+     *
+     * @param functionName the name of the SQL function. Must not be null
+     *                     and must match specific validation rules for a SQL function name using {@link PostgresqlUtil#isValidFunctionName(String)}
+     * @param args         a list of {@link Arg} objects acting as the arguments to the function.
+     *                     Must not be null.
+     * @throws IllegalArgumentException if {@code functionName} or {@code args} is null or if {@code functionName} does not pass validation.
+     */
     public FunctionCall {
         requireNonNull(functionName, "functionName cannot be null");
         requireNonNull(args, "args cannot be null");
@@ -63,9 +76,9 @@ public record FunctionCall(String functionName, List<Arg<?>> args) {
      * </code>
      *
      * @return the SQL string representation of the function call in the format:
-     *         {@code functionName(arg1, arg2, ...)}.
-     *         If there are no arguments, the result will be:
-     *         {@code functionName()}.
+     * {@code functionName(arg1, arg2, ...)}.
+     * If there are no arguments, the result will be:
+     * {@code functionName()}.
      */
     public String toSql() {
         String joined = args.stream()
