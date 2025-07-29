@@ -283,7 +283,7 @@ public abstract class SpringTransactionAwareUnitOfWorkFactory<TRX_MGR extends Pl
 
     /**
      * Called during {@link TransactionSynchronization#afterCompletion(int)} BEFORE any registered {@link SpringTransactionAwareUnitOfWork#unitOfWorkLifecycleCallbackResources} have
-     * had their {@link UnitOfWorkLifecycleCallback#afterRollback(UnitOfWork, List, Exception)} method called
+     * had their {@link UnitOfWorkLifecycleCallback#afterRollback(UnitOfWork, List, Throwable)} method called
      *
      * @param unitOfWork the unit of work
      */
@@ -292,7 +292,7 @@ public abstract class SpringTransactionAwareUnitOfWorkFactory<TRX_MGR extends Pl
 
     /**
      * Called during {@link TransactionSynchronization#afterCompletion(int)} AFTER all registered {@link SpringTransactionAwareUnitOfWork#unitOfWorkLifecycleCallbackResources} have
-     * had their {@link UnitOfWorkLifecycleCallback#afterRollback(UnitOfWork, List, Exception)} method called
+     * had their {@link UnitOfWorkLifecycleCallback#afterRollback(UnitOfWork, List, Throwable)} method called
      *
      * @param unitOfWork the unit of work
      */
