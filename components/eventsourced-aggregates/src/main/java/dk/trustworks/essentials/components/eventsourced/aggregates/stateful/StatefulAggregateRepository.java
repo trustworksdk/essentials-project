@@ -403,7 +403,6 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * is committed.
      *
      * @param aggregate the aggregate instance to persist to the underlying {@link EventStore}
-     * @return the persisted aggregate
      * @deprecated Use {@link #save(StatefulAggregate)} instead
      */
     @Deprecated
