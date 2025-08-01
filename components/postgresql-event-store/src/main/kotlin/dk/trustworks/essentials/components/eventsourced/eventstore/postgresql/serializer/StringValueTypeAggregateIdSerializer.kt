@@ -23,6 +23,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * [AggregateIdSerializer] for semantic [StringValueType]'s
  */
+@Suppress("UNCHECKED_CAST")
 data class StringValueTypeAggregateIdSerializer<T : StringValueType<T>>(private val concreteType: KClass<T>) : AggregateIdSerializer {
     override fun aggregateIdType(): Class<*> {
         return concreteType.java

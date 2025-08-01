@@ -49,7 +49,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <br>
  * It is highly recommended that the {@link #aggregateType}'s value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link #aggregateType}'s value.<br>
- * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+ * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
  */
 public class AggregateEventStreamConfiguration {
     /**
@@ -71,7 +71,7 @@ public class AggregateEventStreamConfiguration {
      * <br>
      * It is highly recommended that the {@code aggregateType}'s value is only derived from a controlled and trusted source.<br>
      * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code aggregateType}'s value.<br>
-     * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      */
     public final AggregateType         aggregateType;
     /**
@@ -134,7 +134,7 @@ public class AggregateEventStreamConfiguration {
      *                                    <br>
      *                                    It is highly recommended that the {@code aggregateType}'s value is only derived from a controlled and trusted source.<br>
      *                                    To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code aggregateType}'s value.<br>
-     *                                    <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     *                                    <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      * @param queryFetchSize              The SQL fetch size for Queries
      * @param jsonSerializer              The {@link JSONEventSerializer} used to serialize and deserialize {@link PersistedEvent#event()} and {@link PersistedEvent#metaData()}
      * @param aggregateIdSerializer       The serializer for the Aggregate Id

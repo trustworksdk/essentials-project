@@ -91,7 +91,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <br>
  * It is highly recommended that the {@code aggregateType}'s value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code aggregateType}'s value.<br>
- * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+ * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
  */
 public final class SeparateTablePerAggregateEventStreamConfiguration extends AggregateEventStreamConfiguration {
     /**
@@ -123,7 +123,7 @@ public final class SeparateTablePerAggregateEventStreamConfiguration extends Agg
      *                                    <br>
      *                                    It is highly recommended that the {@code aggregateType}'s value is only derived from a controlled and trusted source.<br>
      *                                    To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code aggregateType}'s value.<br>
-     *                                    <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     *                                    <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      * @param eventStreamTableName        The unique name of the Postgresql table name where ONLY {@link PersistedEvent}'s related to {@link #aggregateType} are stored<br>
      *                                    <b>Note: The table name provided will automatically be converted to <u>lower case</u></b><br>
      *                                    <br>
@@ -239,7 +239,7 @@ public final class SeparateTablePerAggregateEventStreamConfiguration extends Agg
      *                                                  <br>
      *                                                  It is highly recommended that the {@code aggregateType}'s value is only derived from a controlled and trusted source.<br>
      *                                                  To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code aggregateType}'s value.<br>
-     *                                                  <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     *                                                  <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      * @param jsonSerializer                            The {@link JSONEventSerializer}
      * @param aggregateIdSerializer                     The serializer for the Aggregate Id
      * @param identifierColumnTypeUsedForAllIdentifiers The SQL Column type used for all identifier columns (aggregate id, event id, correlation id, etc.)

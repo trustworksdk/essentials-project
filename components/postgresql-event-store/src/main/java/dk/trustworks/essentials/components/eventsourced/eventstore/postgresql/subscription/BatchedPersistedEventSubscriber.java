@@ -37,7 +37,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
- * Batching alternative to the {@link EventStoreSubscriptionManager.DefaultEventStoreSubscriptionManager.PersistedEventSubscriber} that processes events in batches
+ * Batching alternative to the {@link PersistedEventSubscriber} that processes events in batches
  * to improve throughput and reduce database load. This is a specialized subscriber
  * that should be used when high throughput is needed and the event handlers can
  * efficiently process batches of events.
@@ -77,7 +77,7 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
      * @param eventHandler               The event handler that batches of {@link PersistedEvent}'s are forwarded to
      * @param eventStoreSubscription     the {@link EventStoreSubscription} (as created by {@link EventStoreSubscriptionManager})
      * @param onErrorHandler             The error handler called for any non-retryable Exceptions (as specified by the {@link RetryBackoffSpec})
-     *                                   Similar to the {@link EventStoreSubscriptionManager.DefaultEventStoreSubscriptionManager.PersistedEventSubscriber} error handler
+     *                                   Similar to the {@link PersistedEventSubscriber} error handler
      * @param eventStorePollingBatchSize The batch size used when polling events from the {@link EventStore}
      * @param eventStore                 The {@link EventStore} to use
      * @param maxBatchSize               The maximum number of events to include in a batch before processing

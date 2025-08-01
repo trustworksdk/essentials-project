@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /**
  * {@link PersistedEvent} Event handler interface for use with the {@link EventStoreSubscriptionManager}'s:
@@ -35,10 +36,10 @@ import java.util.Optional;
  */
 public interface PersistedEventHandler {
     /**
-     * This method will be called if {@link EventStoreSubscription#resetFrom(GlobalEventOrder)} is called
+     * This method will be called if {@link EventStoreSubscription#resetFrom(GlobalEventOrder, Consumer)} is called
      *
-     * @param eventStoreSubscription           the {@link EventStoreSubscription} where {@link EventStoreSubscription#resetFrom(GlobalEventOrder)} was called (useful if a {@link PersistedEventHandler} listens to multiple streams)
-     * @param resetFromAndIncludingGlobalOrder the value provided to {@link EventStoreSubscription#resetFrom(GlobalEventOrder)}. This {@link GlobalEventOrder} will become the new starting point in the
+     * @param eventStoreSubscription           the {@link EventStoreSubscription} where {@link EventStoreSubscription#resetFrom(GlobalEventOrder, Consumer)} was called (useful if a {@link PersistedEventHandler} listens to multiple streams)
+     * @param resetFromAndIncludingGlobalOrder the value provided to {@link EventStoreSubscription#resetFrom(GlobalEventOrder, Consumer)}. This {@link GlobalEventOrder} will become the new starting point in the
      *                                         EventStream associated with the {@link EventStoreSubscription#aggregateType()}
      */
     default void onResetFrom(EventStoreSubscription eventStoreSubscription, GlobalEventOrder resetFromAndIncludingGlobalOrder) {

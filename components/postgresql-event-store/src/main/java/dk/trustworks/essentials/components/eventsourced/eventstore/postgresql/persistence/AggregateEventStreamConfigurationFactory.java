@@ -48,7 +48,7 @@ public interface AggregateEventStreamConfigurationFactory<CONFIG extends Aggrega
      *                              <br>
      *                              It is highly recommended that the {@code aggregateType}'s value is only derived from a controlled and trusted source.<br>
      *                              To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code aggregateType}'s value.<br>
-     *                              <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     *                              <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      * @param aggregateIdSerializer the {@link AggregateIdSerializer} to use for the given {@link AggregateType}
      * @return the concrete {@link AggregateEventStreamConfiguration} for a given {@link AggregateType}
      */
@@ -77,7 +77,7 @@ public interface AggregateEventStreamConfigurationFactory<CONFIG extends Aggrega
      *                        <br>
      *                        It is highly recommended that the {@code aggregateType}'s value is only derived from a controlled and trusted source.<br>
      *                        To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code aggregateType}'s value.<br>
-     *                        <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     *                        <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      * @param aggregateIdType the Aggregate Id type used by the provided {@link AggregateType} - calls {@link AggregateIdSerializer#serializerFor(Class)}
      * @return the concrete {@link AggregateEventStreamConfiguration} for a given {@link AggregateType}
      */

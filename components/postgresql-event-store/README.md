@@ -29,7 +29,7 @@ Users must ensure thorough sanitization and validation of API input parameters, 
 Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.    
 It is highly recommended that the `AggregateType`'s value is only derived from a controlled and trusted source.   
 To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `AggregateType`'s value.   
-**Failure to adequately sanitize and validate this value could expose the application to SQL injection**
+**Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.**
 
 ## `SeparateTablePerAggregateEventStreamConfiguration -> eventStreamTableName`
 The `SeparateTablePerAggregateEventStreamConfiguration.eventStreamTableName` property defines the Postgresql table name where PersistedEvent's related to

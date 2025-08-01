@@ -18,8 +18,8 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.p
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
 
 import java.util.*;
@@ -34,10 +34,11 @@ public interface PersistableEventMapper {
     /**
      * Convert a Java object Event into a PersistableEvent.
      *
-     * @param aggregateId                the aggregate id (as provided to {@link EventStore#appendToStream(AggregateType, Object, Optional, List)}/{@link AggregateEventStreamPersistenceStrategy#persist(UnitOfWork, AggregateEventStreamConfiguration, Object, Optional, List)}
+     * @param aggregateId                       the aggregate id (as provided to {@link EventStore#appendToStream(AggregateType, Object, Optional, List)}/
+     *                                          {@link AggregateEventStreamPersistenceStrategy#persist(EventStoreUnitOfWork, AggregateType, Object, Optional, List)})
      * @param aggregateEventStreamConfiguration the configuration for the {@link AggregateEventStream} the events related to this aggregate instance will be appended to
-     * @param event                      the raw Java event
-     * @param eventOrder                 the order of the event
+     * @param event                             the raw Java event
+     * @param eventOrder                        the order of the event
      * @return the {@link PersistableEvent} which is the precursor to the {@link PersistedEvent}.<br>
      * A {@link PersistableEvent} contains additional metadata, such as {@link CorrelationId}, {@link PersistableEvent#causedByEventId()}, {@link Tenant},
      * and {@link EventMetaData}

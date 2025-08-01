@@ -59,7 +59,7 @@ import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChai
  *     <li>dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore.PollingEventStream</li>
  * </ul>
  *
- * @param <CONFIG> The concrete {@link AggregateEventStreamConfiguration
+ * @param <CONFIG> The concrete {@link AggregateEventStreamConfiguration}
  */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG> {
@@ -155,7 +155,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      *
      * @param unitOfWorkFactory                       the unit of work factory
      * @param aggregateEventStreamPersistenceStrategy the persistence strategy - please see {@link AggregateEventStreamPersistenceStrategy} documentation regarding <b>Security</b> considerations
-     * @param <CONFIG>                                The concrete {@link AggregateEventStreamConfiguration
+     * @param <CONFIG>                                The concrete {@link AggregateEventStreamConfiguration}
      * @param <STRATEGY>                              the persistence strategy type
      * @return new {@link PostgresqlEventStore} instance
      */
@@ -175,7 +175,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      *
      * @param unitOfWorkFactory                       the unit of work factory
      * @param aggregateEventStreamPersistenceStrategy the persistence strategy - please see {@link AggregateEventStreamPersistenceStrategy} documentation regarding <b>Security</b> considerations
-     * @param <CONFIG>                                The concrete {@link AggregateEventStreamConfiguration
+     * @param <CONFIG>                                The concrete {@link AggregateEventStreamConfiguration}
      * @param <STRATEGY>                              the persistence strategy type
      * @return new {@link PostgresqlEventStore} instance
      */
