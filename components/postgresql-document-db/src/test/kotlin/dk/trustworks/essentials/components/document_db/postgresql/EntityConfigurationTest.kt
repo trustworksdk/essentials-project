@@ -35,6 +35,7 @@ import java.time.ZonedDateTime
 import kotlin.reflect.KProperty1
 import kotlin.reflect.full.memberProperties
 
+@Suppress("UNCHECKED_CAST")
 class EntityConfigurationTest {
     @Test
     fun `Test with Kotlin built-in types`() {
