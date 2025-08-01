@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.queue.postgresql;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.QueuePollingOptimizer.SimpleQueuePollingOptimizer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
@@ -28,9 +29,11 @@ import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.collections.Lists;
 import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.mapper.RowMapper;
+import org.jdbi.v3.core.statement.StatementContext;
 import org.slf4j.*;
 
-import java.sql.Types;
+import java.sql.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -63,10 +66,10 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
  * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
- * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+ * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes</b>.<br>
- * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+ * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
  * <br>
  * It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
@@ -94,9 +97,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     private final boolean                                                                 useCentralizedMessageFetcher;
     private final boolean                                                                 useOrderedUnorderedQuery;
-    
-    private final DurableQueuesSql                                                        durableQueuesSql;
-    private final DurableQueuesSerialization                                              durableQueuesSerialization;
+
+    private final DurableQueuesSql           durableQueuesSql;
+    private final DurableQueuesSerialization durableQueuesSerialization;
 
     private   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory;
     /**
@@ -137,7 +140,13 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *
      * @param unitOfWorkFactory            the {@link UnitOfWorkFactory} needed to access the database
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
-     *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     *                                     if set to null a default {@link SimpleQueuePollingOptimizer} is used instead using, which sets
+     *                                     <ul>
+     *                                       <li>The minimum polling interval is set to 50% of the consumer's configured polling interval</li>
+     *                                       <li>The maximum polling interval is set to 20x the consumer's configured polling interval</li>
+     *                                     </ul>
+     *                                     This provides an adaptive polling mechanism that reduces database load when queues are empty while
+     *                                     maintaining responsiveness when messages arrive.
      */
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory) {
@@ -171,7 +180,13 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @param unitOfWorkFactory            the {@link UnitOfWorkFactory} needed to access the database
      * @param jsonSerializer               the {@link JSONSerializer} that is used to serialize/deserialize message payloads
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
-     *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     *                                     if set to null a default {@link SimpleQueuePollingOptimizer} is used instead using, which sets
+     *                                     <ul>
+     *                                       <li>The minimum polling interval is set to 50% of the consumer's configured polling interval</li>
+     *                                       <li>The maximum polling interval is set to 20x the consumer's configured polling interval</li>
+     *                                     </ul>
+     *                                     This provides an adaptive polling mechanism that reduces database load when queues are empty while
+     *                                     maintaining responsiveness when messages arrive.
      */
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    JSONSerializer jsonSerializer,
@@ -202,14 +217,20 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *                                     The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
      *                                     However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
      *                                     <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes</b>.<br>
-     *                                     Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+     *                                     Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      *                                     Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      *                                     <br>
      *                                     It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
      *                                     To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code sharedQueueTableName} value.<br>
      * @param multiTableChangeListener     optional {@link MultiTableChangeListener} that allows {@link PostgresqlDurableQueues} to use {@link QueuePollingOptimizer}
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
-     *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     *                                     if set to null a default {@link SimpleQueuePollingOptimizer} is used instead using, which sets
+     *                                     <ul>
+     *                                       <li>The minimum polling interval is set to 50% of the consumer's configured polling interval</li>
+     *                                       <li>The maximum polling interval is set to 20x the consumer's configured polling interval</li>
+     *                                     </ul>
+     *                                     This provides an adaptive polling mechanism that reduces database load when queues are empty while
+     *                                     maintaining responsiveness when messages arrive.
      */
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    JSONSerializer jsonSerializer,
@@ -245,14 +266,20 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *                                     The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
      *                                     However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
      *                                     <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes</b>.<br>
-     *                                     Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+     *                                     Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      *                                     Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      *                                     <br>
      *                                     It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
      *                                     To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code sharedQueueTableName} value.<br>
      * @param multiTableChangeListener     optional {@link MultiTableChangeListener} that allows {@link PostgresqlDurableQueues} to use {@link QueuePollingOptimizer}
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
-     *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     *                                     if set to null a default {@link SimpleQueuePollingOptimizer} is used instead using, which sets
+     *                                     <ul>
+     *                                       <li>The minimum polling interval is set to 50% of the consumer's configured polling interval</li>
+     *                                       <li>The maximum polling interval is set to 20x the consumer's configured polling interval</li>
+     *                                     </ul>
+     *                                     This provides an adaptive polling mechanism that reduces database load when queues are empty while
+     *                                     maintaining responsiveness when messages arrive.
      * @param transactionalMode            The {@link TransactionalMode} for this {@link DurableQueues} instance. If set to {@link TransactionalMode#SingleOperationTransaction}
      *                                     then the consumer MUST call the {@link DurableQueues#acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled)} explicitly in a new {@link UnitOfWork}
      * @param messageHandlingTimeout       Only required if <code>transactionalMode</code> is {@link TransactionalMode#SingleOperationTransaction}.<br>
@@ -298,14 +325,20 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *                                                 The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
      *                                                 However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
      *                                                 <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes</b>.<br>
-     *                                                 Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+     *                                                 Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      *                                                 Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      *                                                 <br>
      *                                                 It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
      *                                                 To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code sharedQueueTableName} value.<br>
      * @param multiTableChangeListener                 optional {@link MultiTableChangeListener} that allows {@link PostgresqlDurableQueues} to use {@link QueuePollingOptimizer}
      * @param queuePollingOptimizerFactory             optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
-     *                                                 if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead - not required when using the Centralized message fetcher
+     *                                                 if set to null a default {@link SimpleQueuePollingOptimizer} is used instead using, which sets
+     *                                                 <ul>
+     *                                                   <li>The minimum polling interval is set to 50% of the consumer's configured polling interval</li>
+     *                                                   <li>The maximum polling interval is set to 20x the consumer's configured polling interval</li>
+     *                                                 </ul>
+     *                                                 This provides an adaptive polling mechanism that reduces database load when queues are empty while
+     *                                                 maintaining responsiveness when messages arrive.
      * @param transactionalMode                        The {@link TransactionalMode} for this {@link DurableQueues} instance. If set to {@link TransactionalMode#SingleOperationTransaction}
      *                                                 then the consumer MUST call the {@link DurableQueues#acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled)} explicitly in a new {@link UnitOfWork}
      * @param messageHandlingTimeout                   Only required if <code>transactionalMode</code> is {@link TransactionalMode#SingleOperationTransaction}.<br>
@@ -315,6 +348,16 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *                                                 The centralized fetcher optimizes message fetching across multiple queues.
      * @param centralizedMessageFetcherPollingInterval Set the polling interval for the {@link CentralizedMessageFetcher}.
      *                                                 This value determines how frequently the fetcher checks for new messages when none are immediately available.
+     * @param centralizedQueuePollingOptimizerFactory  Optional factory function that creates a {@link QueuePollingOptimizer} for each queue when using centralized message fetching.
+     *                                                 If not provided, a default {@link CentralizedQueuePollingOptimizer} will be used with:
+     *                                                 <ul>
+     *                                                   <li>Minimum polling interval: 50% of the centralized fetcher's polling interval</li>
+     *                                                   <li>Maximum polling interval: 20x the centralized fetcher's polling interval</li>
+     *                                                   <li>Polling interval increase factor: 1.5 (50% increase per empty poll)</li>
+     *                                                   <li>Polling interval decrease factor: 0.1 (90% decrease when messages found)</li>
+     *                                                 </ul>
+     * @param useOrderedUnorderedQuery                 a boolean flag that determines whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
+     *                                                 performance for mixed, ordered and unordered message processing scenarios
      */
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    JSONSerializer jsonSerializer,
@@ -333,15 +376,15 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
         this.useCentralizedMessageFetcher = useCentralizedMessageFetcher;
         this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
-        
+
         // Initialize helper classes
         this.durableQueuesSql = new DurableQueuesSql(sharedQueueTableName);
         this.durableQueuesSerialization = new DurableQueuesSerialization(jsonSerializer);
 
         // Create the message row mapper for mapping SQL results to QueuedMessage objects
         this.queuedMessageMapper = new QueuedMessageRowMapper(
-            durableQueuesSerialization::deserializeMessagePayload, 
-            durableQueuesSerialization::deserializeMessageMetadata
+                durableQueuesSerialization::deserializeMessagePayload,
+                durableQueuesSerialization::deserializeMessageMetadata
         );
 
         this.multiTableChangeListener = Optional.ofNullable(multiTableChangeListener);
@@ -430,6 +473,20 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         return sharedQueueTableName;
     }
 
+    /**
+     * Access to the {@link DurableQueuesSql} required for some Integration Tests
+     *
+     * @return Access to the {@link DurableQueuesSql}
+     */
+    DurableQueuesSql getDurableQueuesSql() {
+        return durableQueuesSql;
+    }
+
+    /**
+     * Access to the configured {@link DurableQueuesInterceptor}'s
+     *
+     * @return Read-Only list of the configured {@link DurableQueuesInterceptor}'s
+     */
     public List<DurableQueuesInterceptor> getInterceptors() {
         return Collections.unmodifiableList(interceptors);
     }
@@ -468,14 +525,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                             var queueName = QueueName.of(e.queueName);
 
                             if (useCentralizedMessageFetcher) {
-                                // For centralized consumers, simply log the notification
                                 durableQueueConsumers.values()
                                                      .stream()
                                                      .filter(durableQueueConsumer -> durableQueueConsumer.queueName().equals(queueName))
                                                      .forEach(durableQueueConsumer -> {
-                                                         // Just notify that a message was added, no need to process it directly
-                                                         // The centralized fetcher will pick it up
-                                                         log.debug("[{}] New message notification received with QueueEntryId '{}'", queueName, e.id);
                                                          // Create a stub QueuedMessage just for notification purposes
                                                          var queuedMessage = createDefaultQueuedMessage(e, queueName);
                                                          // Use the notification interface to optimize polling
@@ -594,7 +647,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         return Optional.ofNullable(unitOfWorkFactory);
     }
 
-    public QueuedMessageRowMapper getQueuedMessageMapper() {
+    /**
+     * Access to the {@link QueuedMessageRowMapper} required for certain integration tests
+     *
+     * @return the configured {@link QueuedMessageRowMapper}
+     */
+    QueuedMessageRowMapper getQueuedMessageMapper() {
         return queuedMessageMapper;
     }
 
@@ -688,27 +746,44 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * Override this method to provide another {@link QueuePollingOptimizer} than the default {@link QueuePollingOptimizer.SimpleQueuePollingOptimizer}<br>
-     * Only called if the {@link PostgresqlDurableQueues} is configured with a {@link MultiTableChangeListener}
+     * Returns a default {@link SimpleQueuePollingOptimizer} for a given queue when no <code>Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory</code> is provided through the constructor.<br>
+     * The optimizer provides an adaptive polling mechanism that reduces database load when queues are empty while
+     * maintaining responsiveness when messages arrive.
      *
-     * @param operation the operation for which the {@link QueuePollingOptimizer} will be responsible
-     * @return the {@link QueuePollingOptimizer}
+     * @param operation the {@link ConsumeFromQueue} operation containing the queue consumer's configuration
+     * @return a {@link SimpleQueuePollingOptimizer} instance configured with:
+     * <ul>
+     *   <li>The minimum polling interval is set to 50% of the consumer's configured polling interval</li>
+     *   <li>The maximum polling interval is set to 20x the consumer's configured polling interval</li>
+     * </ul>
+     * @see SimpleQueuePollingOptimizer
+     * @see PostgresqlDurableQueues#PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory, JSONSerializer, String, MultiTableChangeListener, Function, TransactionalMode, Duration)
      */
-    protected QueuePollingOptimizer createQueuePollingOptimizerFor(ConsumeFromQueue operation) {
+    private QueuePollingOptimizer createQueuePollingOptimizerFor(ConsumeFromQueue operation) {
         var pollingIntervalMs = operation.getPollingInterval().toMillis();
-        return new QueuePollingOptimizer.SimpleQueuePollingOptimizer(operation,
-                                                                     (long) (pollingIntervalMs * 0.5d),
-                                                                     pollingIntervalMs * 20);
+        return new SimpleQueuePollingOptimizer(operation,
+                                               (long) (pollingIntervalMs * 0.5d),
+                                               pollingIntervalMs * 20);
     }
 
     /**
-     * Override this method to provide another {@link QueuePollingOptimizer} than the default {@link CentralizedQueuePollingOptimizer}<br>
-     * Only called if the {@link PostgresqlDurableQueues} is configured with a {@link MultiTableChangeListener}
+     * Creates a default {@link CentralizedQueuePollingOptimizer} for a given queue when using the centralized message fetcher and when no
+     * <code>Function<ConsumeFromQueue, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory</code> is provided through the constructor.
+     * The optimizer provides an adaptive polling mechanism that reduces database load when queues are empty while
+     * maintaining responsiveness when messages arrive.
      *
-     * @param queueName the operation for which the {@link QueuePollingOptimizer} will be responsible
-     * @return the {@link QueuePollingOptimizer}
+     * @param queueName the queue name for which to create the polling optimizer
+     * @return a new {@link CentralizedQueuePollingOptimizer} configured with:
+     * <ul>
+     *   <li>Minimum polling interval: 50% of the centralized fetcher's polling interval</li>
+     *   <li>Maximum polling interval: 20x the centralized fetcher's polling interval</li>
+     *   <li>Polling interval increase factor: 1.5 (50% increase per empty poll)</li>
+     *   <li>Polling interval decrease factor: 0.1 (90% decrease when messages found)</li>
+     * </ul>
+     * @throws IllegalStateException if called and the centralized message fetcher is not enabled
+     * @see PostgresqlDurableQueues#PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory, JSONSerializer, String, MultiTableChangeListener, Function, TransactionalMode, Duration, boolean, Duration, Function, boolean)
      */
-    protected QueuePollingOptimizer createCentralizedQueuePollingOptimizerFor(QueueName queueName) {
+    private QueuePollingOptimizer createCentralizedQueuePollingOptimizerFor(QueueName queueName) {
         if (!useCentralizedMessageFetcher) {
             throw new IllegalStateException("The CentralizedMessageFetcher is not enabled, so a custom QueuePollingOptimizer must be provided");
         }
@@ -1069,10 +1144,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                }).proceed();
     }
 
-    public String buildGetNextMessageReadyForDeliverySqlStatement(Collection<String> excludeOrderedMessagesWithKey) {
-        return durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excludeOrderedMessagesWithKey);
-    }
-
     @Override
     public Optional<QueuedMessage> getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery operation) {
         requireNonNull(operation, "You must provide a GetNextMessageReadyForDelivery instance");
@@ -1085,65 +1156,65 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         log.trace("[{}] Entered GetNextMessageReadyForDelivery", operation.queueName);
 
         return newInterceptorChainForOperation(operation,
-                                interceptors,
-                                (interceptors, interceptorChain) -> interceptors.intercept(operation, interceptorChain),
-                                () -> {
-                                    resetMessagesStuckBeingDelivered(operation.queueName);
-                                    Instant now = Instant.now();
-                                    Collection<String> excludes =
-                                            operation.getExcludeOrderedMessagesWithKey() != null
-                                            ? operation.getExcludeOrderedMessagesWithKey()
-                                            : List.of();
+                                               interceptors,
+                                               (interceptors, interceptorChain) -> interceptors.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   resetMessagesStuckBeingDelivered(operation.queueName);
+                                                   Instant now = Instant.now();
+                                                   Collection<String> excludes =
+                                                           operation.getExcludeOrderedMessagesWithKey() != null
+                                                           ? operation.getExcludeOrderedMessagesWithKey()
+                                                           : List.of();
 
-                                    try {
-                                        if (useOrderedUnorderedQuery) {
-                                            return fetchNextMessageReadyForDeliveryOrderedUnordered(operation.queueName, excludes, now);
-                                        } else {
-                                            return fetchNextMessageReadyForDelivery(operation.queueName, excludes, now);
-                                        }
-                                    } catch (DurableQueueDeserializationException e) {
-                                        log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
-                                                          + "while deserializing message with id '{}'",
-                                                  operation.queueName, e.queueEntryId.get(), e);
-                                        markAsDeadLetterMessage(e.queueEntryId.get(), e);
-                                        return Optional.<QueuedMessage>empty();
-                                    }
-                                }).proceed();
+                                                   try {
+                                                       if (useOrderedUnorderedQuery) {
+                                                           return fetchNextMessageReadyForDeliveryOrderedUnordered(operation.queueName, excludes, now);
+                                                       } else {
+                                                           return fetchNextMessageReadyForDelivery(operation.queueName, excludes, now);
+                                                       }
+                                                   } catch (DurableQueueDeserializationException e) {
+                                                       log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
+                                                                         + "while deserializing message with id '{}'",
+                                                                 operation.queueName, e.queueEntryId.get(), e);
+                                                       markAsDeadLetterMessage(e.queueEntryId.get(), e);
+                                                       return Optional.<QueuedMessage>empty();
+                                                   }
+                                               }).proceed();
     }
 
     private Optional<QueuedMessage> fetchNextMessageReadyForDeliveryOrderedUnordered(QueueName queueName, Collection<String> excludes, Instant now) {
         boolean hasExcludes = !excludes.isEmpty();
-        var orderedSql = buildOrderedSqlStatement(hasExcludes);
+        var     orderedSql  = durableQueuesSql.buildOrderedSqlStatement(hasExcludes);
         log.trace("[{}] Executing fetchNextMessageReadyForDeliveryOrderedUnordered sql", queueName);
-        return unitOfWorkFactory.getRequiredUnitOfWork()
-                                .handle()
-                                .inTransaction(handle -> {
-                                    var orderedQuery = handle.createQuery(orderedSql)
-                                                         .bind("queueName", queueName)
-                                                         .bind("now", now)
-                                                         .bind("limit", 1);
-                                    if (hasExcludes) orderedQuery.bindList("excludeKeys", excludes);
 
-                                    Optional<QueuedMessage> queuedMessage = orderedQuery
-                                            .map(queuedMessageMapper)
-                                            .findOne();
-                                    if (queuedMessage.isPresent()) {
-                                        return queuedMessage;
-                                    }
-                                    var unorderedSql = buildUnorderedSqlStatement();
+        var handle = unitOfWorkFactory.getRequiredUnitOfWork().handle();
 
-                                    return handle.createQuery(unorderedSql)
-                                                 .bind("queueName", queueName)
-                                                 .bind("now", now)
-                                                 .bind("limit", 1)
-                                                 .map(queuedMessageMapper)
-                                                 .findOne();
-                                });
+        var orderedQuery = handle.createQuery(orderedSql)
+                                 .bind("queueName", queueName)
+                                 .bind("now", now)
+                                 .bind("limit", 1);
+        if (hasExcludes) orderedQuery.bindList("excludeKeys", excludes);
+
+        Optional<QueuedMessage> queuedMessage = orderedQuery
+                .map(queuedMessageMapper)
+                .findOne();
+        if (queuedMessage.isPresent()) {
+            return queuedMessage;
+        }
+
+        var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
+
+        return handle.createQuery(unorderedSql)
+                     .bind("queueName", queueName)
+                     .bind("now", now)
+                     .bind("limit", 1)
+                     .map(queuedMessageMapper)
+                     .findOne();
     }
 
 
     private Optional<QueuedMessage> fetchNextMessageReadyForDelivery(QueueName queueName, Collection<String> excludes, Instant now) {
-        String sql = buildGetNextMessageReadyForDeliverySqlStatement(excludes);
+        var sql = durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excludes);
         var query = unitOfWorkFactory
                 .getRequiredUnitOfWork()
                 .handle()
@@ -1160,36 +1231,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * Builds and returns an SQL statement that selects and updates rows
-     * from a specific queue table that are ready for processing. The selected
-     * rows are updated atomically to mark them as being delivered and update
-     * the delivery timestamp. The SQL query also applies specific conditions
-     * regarding the queue and message properties to determine eligible rows.
-     *
-     * @return A string representing the SQL statement to process queue messages
-     * in an unordered manner based on the specified conditions.
-     */
-    public String buildUnorderedSqlStatement() {
-        return durableQueuesSql.buildUnorderedSqlStatement();
-    }
-
-    /**
-     * Constructs an SQL statement for ordering and updating a message queue.
-     * The statement uses common table expressions (CTE) to first select eligible
-     * messages based on specific conditions, and then updates and returns those messages.
-     *
-     * @param hasExclusiveKeys a boolean flag indicating whether exclusive keys
-     *                         should be excluded from the query. If true, the SQL
-     *                         will include an additional condition to exclude keys
-     *                         from the provided exclusion list.
-     * @return the constructed SQL statement as a String. The statement includes
-     * logic for selecting, ordering, and updating messages in a queue table.
-     */
-    public String buildOrderedSqlStatement(boolean hasExclusiveKeys) {
-       return durableQueuesSql.buildOrderedSqlStatement(hasExclusiveKeys);
-    }
-
-    /**
      * This operation will scan for messages that has been marked as {@link QueuedMessage#isBeingDelivered()} for longer
      * than {@link #messageHandlingTimeoutMs}<br>
      * All messages found will have {@link QueuedMessage#isBeingDelivered()} and {@link QueuedMessage#getDeliveryTimestamp()}
@@ -1198,7 +1239,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *
      * @param queueName the queue for which we're looking for messages stuck being marked as {@link QueuedMessage#isBeingDelivered()}
      */
-    protected void resetMessagesStuckBeingDelivered(QueueName queueName) {
+    void resetMessagesStuckBeingDelivered(QueueName queueName) {
         // Reset stuck messages
         if (transactionalMode == TransactionalMode.SingleOperationTransaction) {
             var now                            = Instant.now();
@@ -1335,7 +1376,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         ALL, DEAD_LETTER_MESSAGES, QUEUED_MESSAGES
     }
 
-    protected List<QueuedMessage> queryQueuedMessages(QueueName queueName, QueueingSortOrder queueingSortOrder, IncludeMessages includeMessages, long startIndex, long pageSize) {
+    List<QueuedMessage> queryQueuedMessages(QueueName queueName, QueueingSortOrder queueingSortOrder, IncludeMessages includeMessages, long startIndex, long pageSize) {
         requireNonNull(queueName, "No queueName provided");
         requireNonNull(queueingSortOrder, "No queueingOrder provided");
         requireNonNull(includeMessages, "No includeMessages provided");
@@ -1440,71 +1481,71 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(queueNames);
 
-                Instant now = Instant.now();
-                List<QueuedMessage> allMessages = new ArrayList<>();
+                var now         = Instant.now();
+                var allMessages = new ArrayList<QueuedMessage>();
 
-                for (QueueName q : queueNames) {
-                    Integer slots = availableWorkerSlotsPerQueue.get(q);
-                    if (slots == null || slots <= 0) {
-                        log.trace("[{}] Skipping queue as it has no available worker slots", q);
+                for (var queueName : queueNames) {
+                    var availableWorkerSlotsForThisQueue = availableWorkerSlotsPerQueue.get(queueName);
+                    if (availableWorkerSlotsForThisQueue == null || availableWorkerSlotsForThisQueue <= 0) {
+                        log.trace("[{}] Skipping queue as it has no available worker slots", queueName);
                         continue;
                     }
-                    var consumer = durableQueueConsumers.get(q);
+                    var consumer = durableQueueConsumers.get(queueName);
                     if (consumer == null) {
-                        log.trace("[{}] Skipping queue as it has no consumer", q);
+                        log.trace("[{}] Skipping queue as it has no consumer", queueName);
                         continue;
                     }
                     var optimizer = consumer.getQueuePollingOptimizer();
                     if (optimizer.shouldSkipPolling()) {
-                        log.trace("[{}] skipping centralized polling", q);
+                        log.trace("[{}] skipping centralized polling", queueName);
                         continue;
                     }
 
-                    Set<String> excluded = excludeKeysPerQueue.getOrDefault(q, Collections.emptySet());
+                    var                 excluded = excludeKeysPerQueue.getOrDefault(queueName, Collections.emptySet());
                     List<QueuedMessage> messagesForQueue;
 
                     try {
                         if (useOrderedUnorderedQuery) {
-                            var orderedSql = buildOrderedSqlStatement(!excluded.isEmpty());
-                            var orderedQ   = uow.handle().createQuery(orderedSql)
-                                                .bind("queueName", q)
-                                                .bind("now", now)
-                                                .bind("limit", slots);
+                            var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
+                            var orderedQ = uow.handle().createQuery(orderedSql)
+                                              .bind("queueName", queueName)
+                                              .bind("now", now)
+                                              .bind("limit", availableWorkerSlotsForThisQueue);
                             if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
 
                             messagesForQueue = orderedQ.map(queuedMessageMapper).list();
                             if (messagesForQueue.isEmpty()) {
-                                var unorderedSql = buildUnorderedSqlStatement();
-                                var unorderedQ   = uow.handle().createQuery(unorderedSql)
-                                                      .bind("queueName", q)
-                                                      .bind("now", now)
-                                                      .bind("limit", slots);
+                                var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
+                                var unorderedQ = uow.handle().createQuery(unorderedSql)
+                                                    .bind("queueName", queueName)
+                                                    .bind("now", now)
+                                                    .bind("limit", availableWorkerSlotsForThisQueue);
                                 messagesForQueue = unorderedQ.map(queuedMessageMapper).list();
                             }
                         } else {
-                            var sql   = buildGetNextMessageReadyForDeliverySqlStatement(excluded);
+                            var sql = durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excluded);
                             var query = uow.handle().createQuery(sql)
-                                           .bind("queueName", q)
+                                           .bind("queueName", queueName)
                                            .bind("now", now)
-                                           .bind("limit", slots);
+                                           .bind("limit", availableWorkerSlotsForThisQueue);
                             if (!excluded.isEmpty()) query.bindList("excludedKeys", new ArrayList<>(excluded));
                             messagesForQueue = query.map(queuedMessageMapper).list();
                         }
 
                         log.debug("[{}] Batch fetched {} messages with {} slots available",
-                                  q, messagesForQueue.size(), slots);
+                                  queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
                         if (messagesForQueue.isEmpty()) {
                             optimizer.queuePollingReturnedNoMessages();
-                            log.trace("[{}] No messages fetched for this queue", q);
+                            log.trace("[{}] No messages fetched for this queue", queueName);
                         } else {
                             optimizer.queuePollingReturnedMessages(messagesForQueue);
-                            log.trace("[{}] Fetched {} messages for this queue", q, messagesForQueue.size());
+                            log.trace("[{}] Fetched {} messages for this queue", queueName, messagesForQueue.size());
                         }
                         allMessages.addAll(messagesForQueue);
 
                     } catch (DurableQueueDeserializationException e) {
                         log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
-                                          + "while deserializing message with id '{}'", q, e.queueEntryId.get(), e);
+                                          + "while deserializing message with id '{}'", queueName, e.queueEntryId.get(), e);
                         markAsDeadLetterMessage(e.queueEntryId.get(), e);
                     }
                 }
@@ -1524,9 +1565,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * Fetches the next batch of messages across multiple queues in one round-trip,
-     * applying per-queue backoff/skip logic and updating each queue’s optimizer.
+     * Work in progress - doesn't handle competing consumers yet
      */
+    @Override
     public List<QueuedMessage> fetchNextBatchOfMessagesBatched(Collection<QueueName> queueNames,
                                                                Map<QueueName, Set<String>> excludeKeysPerQueue,
                                                                Map<QueueName, Integer> availableWorkerSlotsPerQueue) {
@@ -1557,15 +1598,41 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(activeQueues);
 
-                Instant now = Instant.now();
-
-                String sql = buildBatchedSqlStatement(excludeKeysPerQueue, availableWorkerSlotsPerQueue, activeQueues);
-
-                List<QueuedMessage> messages = uow.handle()
-                                                  .createQuery(sql)
-                                                  .bind("now", now)
-                                                  .map(queuedMessageMapper)
-                                                  .list();
+                var now = Instant.now();
+                var batchedSqlResult = durableQueuesSql.buildBatchedSqlStatement(excludeKeysPerQueue, availableWorkerSlotsPerQueue, activeQueues);
+                var query = uow.handle()
+                               .createQuery(batchedSqlResult.getSql())
+                               .bind("now", now);
+                
+                // Bind single-value parameters (queue names)
+                for (var entry : batchedSqlResult.getSingleValueBindings().entrySet()) {
+                    query.bind(entry.getKey(), entry.getValue());
+                }
+                
+                // Bind list parameters (exclude keys)
+                for (var entry : batchedSqlResult.getListBindings().entrySet()) {
+                    query.bindList(entry.getKey(), entry.getValue());
+                }
+                
+                var mappingResult = mapQueryResultsWithExceptionHandling(query);
+                var messages = mappingResult.successfulMessages();
+                
+                // Log failed mappings for monitoring purposes
+                if (!mappingResult.failedMappings().isEmpty()) {
+                    log.warn("Failed to deserialize {} messages during batch fetch. Failed QueueEntryIds: {}",
+                             mappingResult.failedMappings().size(),
+                             mappingResult.failedMappings().stream()
+                                          .map(failed -> failed.queueEntryId().toString())
+                                          .collect(Collectors.joining(", ")));
+                    
+                    // Log individual failures for debugging
+                    for (var failedMapping : mappingResult.failedMappings()) {
+                        log.error("[{}] Marking Message as DeadLetterMessage due to issues "
+                                          + "while deserializing message with id '{}'",
+                                  failedMapping.queueName(), failedMapping.queueEntryId(), failedMapping.mappingException());
+                        markAsDeadLetterMessage(failedMapping.queueEntryId(), failedMapping.mappingException());
+                    }
+                }
 
                 Map<QueueName, List<QueuedMessage>> byQueue = messages.stream()
                                                                       .collect(Collectors.groupingBy(QueuedMessage::getQueueName));
@@ -1603,8 +1670,38 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
     }
 
-    public String buildBatchedSqlStatement(Map<QueueName, Set<String>> excludeKeysPerQueue, Map<QueueName, Integer> availableWorkerSlotsPerQueue, List<QueueName> activeQueues) {
-        return durableQueuesSql.buildBatchedSqlStatement(excludeKeysPerQueue, availableWorkerSlotsPerQueue, activeQueues);
+    /**
+     * Maps query results to QueuedMessage objects while handling JSONDeserializationException.
+     * Messages that fail to deserialize are captured with their QueueEntryId and exception.
+     *
+     * @param query the JDBI query to execute and map
+     * @return MessageMappingResult containing successful messages and failed mappings
+     */
+    private MessageMappingResult mapQueryResultsWithExceptionHandling(org.jdbi.v3.core.statement.Query query) {
+        List<QueuedMessage> successfulMessages = new ArrayList<>();
+        List<MessageMappingResult.FailedMessageMapping> failedMappings = new ArrayList<>();
+
+        // Use a custom row mapper that handles exceptions
+        var customMapper = new RowMapper<QueuedMessage>() {
+            @Override
+            public QueuedMessage map(ResultSet rs, StatementContext ctx) throws java.sql.SQLException {
+                try {
+                    // Use the existing mapper to process the row
+                    return queuedMessageMapper.map(rs, ctx);
+                } catch (Exception e) {
+                    QueueName queueName = QueueName.of(rs.getString("queue_name"));
+                    QueueEntryId queueEntryId = QueueEntryId.of(rs.getString("id"));
+                    failedMappings.add(new MessageMappingResult.FailedMessageMapping(queueName, queueEntryId, e));
+                    return null;
+                }
+            }
+        };
+
+        // Execute the query and filter out null results
+        List<QueuedMessage> allResults = query.map(customMapper).list();
+        successfulMessages.addAll(allResults.stream().filter(Objects::nonNull).toList());
+
+        return new MessageMappingResult(successfulMessages, failedMappings);
     }
 
     /**

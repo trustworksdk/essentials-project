@@ -26,7 +26,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import java.time.Duration;
 import java.util.function.Function;
 
-import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.*;
+import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
 
 /**
  * <u>Security</u><br>
@@ -36,7 +36,7 @@ import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDur
  * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
  * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
- * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+ * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
  * <br>
  * It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
@@ -99,7 +99,7 @@ public final class PostgresqlDurableQueuesBuilder {
      *                             The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
      *                             However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
      *                             <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-     *                             Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+     *                             Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      *                             Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      *                             <br>
      *                             It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
@@ -195,6 +195,13 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
+    /**
+     * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
+     * performance for mixed, ordered and unordered message processing scenarios
+     *
+     * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
+     * @return this builder instance
+     */
     public PostgresqlDurableQueuesBuilder setUseOrderedUnorderedQuery(boolean useOrderedUnorderedQuery) {
         this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
         return this;

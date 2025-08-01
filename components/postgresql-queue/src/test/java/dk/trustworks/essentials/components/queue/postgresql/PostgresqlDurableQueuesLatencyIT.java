@@ -1,19 +1,17 @@
-/*
+ /*
+ * Copyright 2021-2025 the original author or authors.
  *
- *  * Copyright 2021-2025 the original author or authors.
- *  *
- *  * Licensed under the Apache License, Version 2.0 (the "License");
- *  * you may not use this file except in compliance with the License.
- *  * You may obtain a copy of the License at
- *  *
- *  *      https://www.apache.org/licenses/LICENSE-2.0
- *  *
- *  * Unless required by applicable law or agreed to in writing, software
- *  * distributed under the License is distributed on an "AS IS" BASIS,
- *  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  * See the License for the specific language governing permissions and
- *  * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package dk.trustworks.essentials.components.queue.postgresql;
@@ -129,15 +127,17 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
         Instant    wallStart = Instant.now();
         List<Long> latencies = new ArrayList<>(TOTAL_PER_TEST);
 
-        outer:
         while (totalFetched.get() < targetQueriesToMeasure()) {
             for (var queueName : queuesList) {
+                if (totalFetched.get() >= targetQueriesToMeasure()) {
+                    break;
+                }
                 if (fetchedPerQueue.get(queueName).get() >= targetQueriesToMeasurePerQueue()) {
                     continue;
                 }
                 unitOfWorkFactory.usingUnitOfWork(uow -> {
                     long t0 = System.nanoTime();
-                    var opt = uow.handle().createQuery(durableQueues.buildUnorderedSqlStatement())
+                    var opt = uow.handle().createQuery(durableQueues.getDurableQueuesSql().buildUnorderedSqlStatement())
                                  .bind("queueName", queueName)
                                  .bind("now", Instant.now())
                                  .bind("limit", 1)
@@ -153,15 +153,13 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
                            .execute();
                     }
                 });
-                if (totalFetched.get() >= targetQueriesToMeasure()) {
-                    break outer;
-                }
             }
         }
 
         return new QueryPerformanceResult(Duration.between(wallStart, Instant.now()).toMillis(),
                                           latencies.stream().mapToLong(x -> x).average().orElse(0) / 1_000.0,
-                                          percentile(latencies, 0.95));
+                                          percentile(latencies, 0.95),
+                                          percentile(latencies, 0.99));
     }
 
     @Test
@@ -172,15 +170,15 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
 
         Map<QueueName, List<Message>> unorderedMessages = TestMessageFactory.createUnorderedMessages(TOTAL_PER_TEST, queuesList);
 
-        for (var queueName : queuesList) {
-            unitOfWorkFactory.usingUnitOfWork(uow -> {
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            for (var queueName : queuesList) {
                 List<Message> messages = unorderedMessages.get(queueName);
                 for (List<Message> chunk : partition(messages, BATCH_SIZE)) {
                     var ids = durableQueues.queueMessages(queueName, chunk);
                     assertThat(ids).hasSize(chunk.size());
                 }
-            });
-        }
+            }
+        });
 
         QueryPerformanceResult result = oldQuery(queuesList);
         System.out.println("Unordered workload performance old query: " + result);
@@ -216,11 +214,13 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
         var        wallStart = Instant.now();
         List<Long> latencies = new ArrayList<>();
 
-        var orderedSql = durableQueues.buildOrderedSqlStatement(false);
+        var orderedSql = durableQueues.getDurableQueuesSql().buildOrderedSqlStatement(false);
 
-        outer:
         while (totalFetched.get() < targetQueriesToMeasure()) {
             for (var queueName : queuesList) {
+                if (totalFetched.get() >= targetQueriesToMeasure()) {
+                    break;
+                }
                 if (fetchedPerQueue.get(queueName).get() >= targetQueriesToMeasurePerQueue()) {
                     continue;
                 }
@@ -242,15 +242,13 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
                            .execute();
                     }
                 });
-                if (totalFetched.get() >= targetQueriesToMeasure()) {
-                    break outer;
-                }
             }
         }
 
         return new QueryPerformanceResult(Duration.between(wallStart, Instant.now()).toMillis(),
                                           latencies.stream().mapToLong(x -> x).average().orElse(0) / 1_000.0,
-                                          percentile(latencies, 0.95));
+                                          percentile(latencies, 0.95),
+                                          percentile(latencies, 0.99));
     }
 
     @Test
@@ -314,12 +312,14 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
         var        wallStart = Instant.now();
         List<Long> latencies = new ArrayList<>();
 
-        var orderedSql   = durableQueues.buildOrderedSqlStatement(false);
-        var unorderedSql = durableQueues.buildUnorderedSqlStatement();
+        var orderedSql   = durableQueues.getDurableQueuesSql().buildOrderedSqlStatement(false);
+        var unorderedSql = durableQueues.getDurableQueuesSql().buildUnorderedSqlStatement();
 
-        outer:
         while (totalFetched.get() < targetQueriesToMeasure()) {
             for (var queueName : queuesList) {
+                if (totalFetched.get() >= targetQueriesToMeasure()) {
+                    break;
+                }
                 if (fetchedPerQueue.get(queueName).get() >= targetQueriesToMeasurePerQueue()) {
                     continue;
                 }
@@ -365,16 +365,13 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
 
                     return false;
                 });
-
-                if (didDeliver && totalFetched.get() >= targetQueriesToMeasure()) {
-                    break outer;
-                }
             }
         }
 
         return new QueryPerformanceResult(Duration.between(wallStart, Instant.now()).toMillis(),
                                           latencies.stream().mapToLong(x -> x).average().orElse(0) / 1_000.0,
-                                          percentile(latencies, 0.95));
+                                          percentile(latencies, 0.95),
+                                          percentile(latencies, 0.99));
     }
 
     @Test
@@ -415,11 +412,13 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
         var        wallStart = Instant.now();
         List<Long> latencies = new ArrayList<>();
 
-        var oldSql = durableQueues.buildGetNextMessageReadyForDeliverySqlStatement(Collections.emptySet());
+        var oldSql = durableQueues.getDurableQueuesSql().buildGetNextMessageReadyForDeliverySqlStatement(Collections.emptySet());
 
-        outer:
         while (totalFetched.get() < targetQueriesToMeasure()) {
             for (var queueName : queuesList) {
+                if (totalFetched.get() >= targetQueriesToMeasure()) {
+                    break;
+                }
                 if (fetchedPerQueue.get(queueName).get() >= targetQueriesToMeasurePerQueue()) {
                     continue;
                 }
@@ -441,18 +440,16 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
                            .execute();
                     }
                 });
-                if (totalFetched.get() >= targetQueriesToMeasure()) {
-                    break outer;
-                }
             }
         }
 
         return new QueryPerformanceResult(Duration.between(wallStart, Instant.now()).toMillis(),
                                           latencies.stream().mapToLong(x -> x).average().orElse(0) / 1_000.0,
-                                          percentile(latencies, 0.95));
+                                          percentile(latencies, 0.95),
+                                          percentile(latencies, 0.99));
     }
 
-    //@Test takes over a minute
+    // @Test// takes over a minute
     void measure_latency_multi_queue_mixed_batched() {
         var queuesList = IntStream.range(0, 20)
                                   .mapToObj(i -> QueueName.of("PerfQ" + i))
@@ -483,23 +480,34 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
     }
 
     private QueryPerformanceResult batchedQuery(List<QueueName> queuesList) {
-        var totalFetched = new AtomicInteger();
-        var        wallStart = Instant.now();
-        List<Long> latencies = new ArrayList<>();
+        var        totalFetched = new AtomicInteger();
+        var        wallStart    = Instant.now();
+        List<Long> latencies    = new ArrayList<>();
 
         Map<QueueName, Integer> availableSlotPrQueue = queuesList.stream().collect(Collectors.toMap(qn -> qn, qn -> 3));
-        var batchedSql = durableQueues.buildBatchedSqlStatement(Map.of(), availableSlotPrQueue, queuesList);
+        var                     batchedSqlResult     = durableQueues.getDurableQueuesSql().buildBatchedSqlStatement(Map.of(), availableSlotPrQueue, queuesList);
 
         while (totalFetched.get() < TOTAL_PER_TEST) {
             for (var queueName : queuesList) {
                 unitOfWorkFactory.usingUnitOfWork(uow -> {
                     long t0 = System.nanoTime();
-                    var queuedMessages = uow.handle().createQuery(batchedSql)
-                                           .bind("queueName", queueName)
-                                           .bind("now", Instant.now())
-                                           .bind("limit", 1)
-                                           .map(durableQueues.getQueuedMessageMapper())
-                                            .list();
+                    var query = uow.handle().createQuery(batchedSqlResult.getSql())
+                                   .bind("queueName", queueName)
+                                   .bind("now", Instant.now())
+                                   .bind("limit", 1);
+                    
+                    // Bind single-value parameters (queue names)
+                    for (var entry : batchedSqlResult.getSingleValueBindings().entrySet()) {
+                        query.bind(entry.getKey(), entry.getValue());
+                    }
+                    
+                    // Bind list parameters (exclude keys)
+                    for (var entry : batchedSqlResult.getListBindings().entrySet()) {
+                        query.bindList(entry.getKey(), entry.getValue());
+                    }
+                    
+                    var queuedMessages = query.map(durableQueues.getQueuedMessageMapper())
+                                             .list();
                     long t1 = System.nanoTime();
                     if (!queuedMessages.isEmpty()) {
                         latencies.add(t1 - t0);
@@ -516,7 +524,8 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
 
         return new QueryPerformanceResult(Duration.between(wallStart, Instant.now()).toMillis(),
                                           latencies.stream().mapToLong(x -> x).average().orElse(0) / 1_000.0,
-                                          percentile(latencies, 0.95));
+                                          percentile(latencies, 0.95),
+                                          percentile(latencies, 0.99));
     }
 
 

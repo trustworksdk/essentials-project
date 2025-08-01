@@ -34,6 +34,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
+import static dk.trustworks.essentials.shared.time.StopWatch.time;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -130,16 +131,16 @@ public class CentralizedFetcherDurableQueueIT_WithOrderedUnordered {
         System.out.println("Queuing messages to all queues");
         var queueTimings = new ArrayList<Timing>();
 
-        queueTimings.add(timeIt("Queuing " + queue1Messages.size() + " messages to queue1",
-                                () -> unitOfWorkFactory.usingUnitOfWork(uow ->
+        queueTimings.add(time("Queuing " + queue1Messages.size() + " messages to queue1",
+                              () -> unitOfWorkFactory.usingUnitOfWork(uow ->
                                                                                 durableQueues.queueMessages(queue1, queue1Messages))));
 
-        queueTimings.add(timeIt("Queuing " + queue2Messages.size() + " messages to queue2",
-                                () -> unitOfWorkFactory.usingUnitOfWork(uow ->
+        queueTimings.add(time("Queuing " + queue2Messages.size() + " messages to queue2",
+                              () -> unitOfWorkFactory.usingUnitOfWork(uow ->
                                                                                 durableQueues.queueMessages(queue2, queue2Messages))));
 
-        queueTimings.add(timeIt("Queuing " + queue3Messages.size() + " messages to queue3",
-                                () -> unitOfWorkFactory.usingUnitOfWork(uow ->
+        queueTimings.add(time("Queuing " + queue3Messages.size() + " messages to queue3",
+                              () -> unitOfWorkFactory.usingUnitOfWork(uow ->
                                                                                 durableQueues.queueMessages(queue3, queue3Messages))));
 
         // Verify all messages were queued
@@ -330,14 +331,6 @@ public class CentralizedFetcherDurableQueueIT_WithOrderedUnordered {
 
         // Cleanup
         consumer.cancel();
-    }
-
-    private Timing timeIt(String description, Runnable action) {
-        var stopWatch = StopWatch.start(description);
-        action.run();
-        var timing = stopWatch.stop();
-        System.out.println(timing);
-        return timing;
     }
 
     private static class RecordingQueuedMessageHandler implements QueuedMessageHandler {

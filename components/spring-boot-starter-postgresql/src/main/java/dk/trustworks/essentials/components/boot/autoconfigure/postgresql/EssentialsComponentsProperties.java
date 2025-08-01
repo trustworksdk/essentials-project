@@ -50,7 +50,7 @@ import java.time.*;
  * call the {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} method to validate the table name as a first line of defense.<br>
  * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
- * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+ * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
  * <br>
  * It is highly recommended that the {@code fencedLocksTableName} value is only derived from a controlled and trusted source.<br>
@@ -67,7 +67,7 @@ import java.time.*;
  * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
  * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
- * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+ * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
  * <br>
  * It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
@@ -294,6 +294,7 @@ public class EssentialsComponentsProperties {
         private boolean enableQueueStatistics      = false;
         private boolean enableQueueStatisticsTtl   = false;
         private int     queueStatisticsTtlDuration = 90;
+        private boolean useOrderedUnorderedQuery   = true;
 
         /**
          * Should the Tracing produces only include all operations or only top level operations (default false)
@@ -429,7 +430,7 @@ public class EssentialsComponentsProperties {
          * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
          * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
          * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+         * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
          * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
          * <br>
          * It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
@@ -458,7 +459,7 @@ public class EssentialsComponentsProperties {
          * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
          * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
          * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+         * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
          * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
          * <br>
          * It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
@@ -487,7 +488,7 @@ public class EssentialsComponentsProperties {
          * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
          * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
          * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+         * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
          * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
          * <br>
          * It is highly recommended that the {@code sharedQueueStatisticsTableName} value is only derived from a controlled and trusted source.<br>
@@ -516,7 +517,7 @@ public class EssentialsComponentsProperties {
          * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
          * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
          * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+         * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
          * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
          * <br>
          * It is highly recommended that the {@code sharedQueueStatisticsTableName} value is only derived from a controlled and trusted source.<br>
@@ -623,7 +624,10 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Retrieves the centralized polling delay back-off factor.
+         * Retrieves the factor by which the centralized polling delay is backed off.<br>
+         * This factor determines how the delay between polling attempts is adjusted
+         * when using the centralized polling mechanism and repeated polls to the same
+         * queue haven't returned any messages ready for delivery.
          *
          * @return the value of the centralized polling delay back-off factor as a Double
          */
@@ -632,15 +636,35 @@ public class EssentialsComponentsProperties {
         }
 
         /**
-         * Sets the factor by which the centralized polling delay is backed off.
+         * Sets the factor by which the centralized polling delay is backed off.<br>
          * This factor determines how the delay between polling attempts is adjusted
-         * in a centralized polling mechanism.
+         * when using the centralized polling mechanism and repeated polls to the same
+         * queue haven't returned any messages ready for delivery.
+
          *
          * @param centralizedPollingDelayBackOffFactor the back-off factor to be applied to the centralized polling delay.
          *                                             It should typically be a positive value greater than 0.
          */
         public void setCentralizedPollingDelayBackOffFactor(Double centralizedPollingDelayBackOffFactor) {
             this.centralizedPollingDelayBackOffFactor = centralizedPollingDelayBackOffFactor;
+        }
+
+        /**
+         * Is the ordered-unordered query mode is enabled?<br>
+         * When {@code true}, enables a specialized query strategy that can improve performance for mixed, ordered and unordered message processing scenarios
+         */
+        public boolean isUseOrderedUnorderedQuery() {
+            return useOrderedUnorderedQuery;
+        }
+
+        /**
+         * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
+         * performance for mixed, ordered and unordered message processing scenarios
+         *
+         * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
+         */
+        public void setUseOrderedUnorderedQuery(boolean useOrderedUnorderedQuery) {
+            this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
         }
     }
 
@@ -720,7 +744,7 @@ public class EssentialsComponentsProperties {
          * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
          * However, {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
          * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+         * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
          * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
          * <br>
          * It is highly recommended that the {@code fencedLocksTableName} value is only derived from a controlled and trusted source.<br>
@@ -751,7 +775,7 @@ public class EssentialsComponentsProperties {
          * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
          * However, {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
          * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+         * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
          * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
          * <br>
          * It is highly recommended that the {@code fencedLocksTableName} value is only derived from a controlled and trusted source.<br>
@@ -774,7 +798,7 @@ public class EssentialsComponentsProperties {
          *                             The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
          *                             However, {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
          *                             <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
-         *                             Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+         *                             Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
          *                             Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
          *                             <br>
          *                             It is highly recommended that the {@code fencedLocksTableName} value is only derived from a controlled and trusted source.<br>
@@ -1141,7 +1165,9 @@ public class EssentialsComponentsProperties {
          *
          * @return the SQL metrics properties.
          */
-        public MetricsProperties getSql() { return sql; }
+        public MetricsProperties getSql() {
+            return sql;
+        }
     }
 
 

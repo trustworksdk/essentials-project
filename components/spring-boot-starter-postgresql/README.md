@@ -57,22 +57,24 @@ To use `spring-boot-starter-postgresql` to add the following dependency:
         - The `PostgresqlUtil#checkIsValidTableOrColumnName(String)` provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.    
           - **However, Essentials components as well as `PostgresqlUtil#checkIsValidTableOrColumnName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.**
         - The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-        - Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names
+        - Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names
         - **Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
       - It is highly recommended that the `essentials.fenced-lock-manager.fenced-locks-table-name` value is only derived from a controlled and trusted source.
          - To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `essentials.fenced-lock-manager.fenced-locks-table-name` value.
-         - **Failure to adequately sanitize and validate this value could expose the application to SQL injection  vulnerabilities, compromising the security and integrity of the database.**
+         - **Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.**
 - `PostgresqlDurableQueues` using the `JSONSerializer` as JSON serializer
   - Supports additional properties:
   - ```
     essentials.durable-queues.shared-queue-table-name=durable_queues
     essentials.durable-queues.use-centralized-message-fetcher=true (default)
     essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms (default)
+    essentials.durable-queues.centralized-message-polling-delay-back-off-factor=1.5 (default)
+    essentials.durable-queues.use-ordered-unordered-query=true (default)
     essentials.durable-queues.transactional-mode=fullytransactional or singleoperationtransaction (default)
     essentials.durable-queues.polling-delay-interval-increment-factor=0.5
     essentials.durable-queues.max-polling-interval=2s
     essentials.durable-queues.verbose-tracing=false
-    # Only relevant if transactional-mode=singleoperationtransaction
+    # Relevant if transactional-mode=singleoperationtransaction (the default)
     essentials.durable-queues.message-handling-timeout=5s
     ```
   - **Security Notice regarding `essentials.durable-queues.shared-queue-table-name`:**
@@ -84,7 +86,7 @@ To use `spring-boot-starter-postgresql` to add the following dependency:
       - The `PostgresqlUtil#checkIsValidTableOrColumnName(String)` provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.
           - **However, Essentials components as well as `PostgresqlUtil#checkIsValidTableOrColumnName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.**
       - The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-      - Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names
+      - Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names
       - **Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
     - It is highly recommended that the `essentials.durable-queues.shared-queue-table-name` value is only derived from a controlled and trusted source.
       - To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `essentials.durable-queues.shared-queue-table-name` value. 
