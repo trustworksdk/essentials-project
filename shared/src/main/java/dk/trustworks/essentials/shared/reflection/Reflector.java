@@ -299,7 +299,7 @@ public final class Reflector {
      *
      * @param method         the method that will be invoked
      * @param invokeOnObject the object instance that the matching method will be invoked on
-     * @param withArguments  the arguments that will be passed to the instance method.<
+     * @param withArguments  the arguments that will be passed to the instance method.
      * @param <R>            the return type
      * @return the result of invoking the method
      * @throws NoMatchingMethodFoundException  if a matching method cannot be found

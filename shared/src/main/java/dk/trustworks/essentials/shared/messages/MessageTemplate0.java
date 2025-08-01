@@ -178,7 +178,7 @@ public final class MessageTemplate0 extends AbstractMessageTemplate {
      * @param <PARAM_1>      the type for the parameter with index 0
      * @param <PARAM_2>      the type for the parameter with index 1
      * @param <PARAM_3>      the type for the parameter with index 2
-     * @param <PARAM_3>      the type for the parameter with index 3
+     * @param <PARAM_4>      the type for the parameter with index 3
      * @return a new {@link MessageTemplate} with {@link #getKey()}: this.getKey() + "." + messageKey
      * and the provided defaultMessage
      */

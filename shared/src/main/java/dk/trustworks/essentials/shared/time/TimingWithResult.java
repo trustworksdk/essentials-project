@@ -37,7 +37,6 @@ public final class TimingWithResult<R> extends Timing {
      * @param result      The result of the operation performed
      * @param description Description of the timing - typically a description of what was timed/measured
      * @param duration    How long did the operation performed take
-     * @return the {@link TimingWithResult}
      */
     public TimingWithResult(R result, String description, Duration duration) {
         super(description, duration);
@@ -49,7 +48,6 @@ public final class TimingWithResult<R> extends Timing {
      *
      * @param result      The result of the operation performed
      * @param duration    How long did the operation performed take
-     * @return the {@link TimingWithResult}
      */
     public TimingWithResult(R result, Duration duration) {
         super(duration);

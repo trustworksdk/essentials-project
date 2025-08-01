@@ -237,9 +237,10 @@ public class MeasurementTaker {
          * @param recordedDuration the recorded duration to use for the measurement
          * @return the measurementTaker instance for fluent chaining
          */
-        public void record(Duration recordedDuration) {
+        public FluentMeasurementContext record(Duration recordedDuration) {
             requireNonNull(recordedDuration, "No Duration provided");
             measurementTaker.recordTime(contextBuilder.build(), recordedDuration);
+            return this;
         }
 
         /**

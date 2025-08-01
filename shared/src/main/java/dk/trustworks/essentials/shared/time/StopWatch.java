@@ -23,6 +23,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Stop watch feature that allows you to time operations
+ * @see #time(String, Runnable)
  */
 public final class StopWatch {
     private final String description;
@@ -49,19 +50,17 @@ public final class StopWatch {
     }
 
     /**
-     * Create a new {@link StopWatch}
+     * Create a new {@link StopWatch}. Call {@link StopWatch#stop()} to end the timing
      *
-     * @return the new {@link StopWatch}. Call {@link StopWatch#stop()} to end the timing
      */
     public StopWatch() {
         this(null);
     }
 
     /**
-     * Create a new {@link StopWatch}
+     * Create a new {@link StopWatch}. Call {@link StopWatch#stop()} to end the timing
      *
      * @param description Description of the timing - typically a description of what is being timed/measured
-     * @return the new {@link StopWatch}. Call {@link StopWatch#stop()} to end the timing
      */
     public StopWatch(String description) {
         this.description = description;
@@ -112,5 +111,28 @@ public final class StopWatch {
      */
     public Duration elapsed() {
         return Duration.ofNanos(System.nanoTime() - start);
+    }
+
+    /**
+     * Measures the execution time of a given {@link Runnable} action and outputs the result.
+     * <p>
+     * Usage example:
+     * <pre>{@code
+     * Timing timing = time("Sample Task", () -> {
+     *     // Simulate task execution
+     *     Thread.sleep(500);
+     * });
+     * System.out.println("Task completed in " + timing.getDuration());
+     * }</pre>
+     *
+     * @param description A textual description of the task being timed, used for logging or debugging purposes.
+     * @param action      The {@link Runnable} containing the task whose execution time is to be measured.
+     *                    The action's execution should not depend on the internal state of the timing process.
+     * @return A {@link Timing} object containing the description and duration of the measured task.
+     */
+    public static Timing time(String description, Runnable action) {
+        var stopWatch = StopWatch.start(description);
+        action.run();
+        return stopWatch.stop();
     }
 }

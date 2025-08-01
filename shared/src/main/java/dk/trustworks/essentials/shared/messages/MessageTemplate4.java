@@ -74,7 +74,7 @@ public final class MessageTemplate4<PARAM_1, PARAM_2, PARAM_3, PARAM_4> extends 
      * @param param1 the parameter with index 0 in the generated {@link Message#getMessage()}
      * @param param2 the parameter with index 1 in the generated {@link Message#getMessage()}
      * @param param3 the parameter with index 2 in the generated {@link Message#getMessage()}
-     * @param param3 the parameter with index 3 in the generated {@link Message#getMessage()}
+     * @param param4 the parameter with index 3 in the generated {@link Message#getMessage()}
      * @return the new {@link Message} with the parameter applied
      */
     public Message create(PARAM_1 param1, PARAM_2 param2, PARAM_3 param3, PARAM_4 param4) {
