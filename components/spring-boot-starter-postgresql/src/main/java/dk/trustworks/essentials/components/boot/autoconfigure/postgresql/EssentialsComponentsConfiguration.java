@@ -39,8 +39,8 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer
 import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
-import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
 import dk.trustworks.essentials.components.foundation.postgresql.micrometer.RecordSqlExecutionTimeLogger;
+import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.scheduler.*;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
@@ -96,7 +96,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * call the {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} method to validate the table name as a first line of defense.<br>
  * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
- * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+ * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
  * <br>
  * It is highly recommended that the {@code fencedLocksTableName} value is only derived from a controlled and trusted source.<br>
@@ -113,7 +113,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
  * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.</b><br>
- * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+ * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
  * <br>
  * It is highly recommended that the {@code sharedQueueTableName} value is only derived from a controlled and trusted source.<br>
@@ -298,7 +298,7 @@ public class EssentialsComponentsConfiguration {
                                                             properties.getDurableQueues().getCentralizedPollingDelayBackOffFactor(),
                                                             0.1
                                                     ))
-                                                    .setUseOrderedUnorderedQuery(true)
+                                                    .setUseOrderedUnorderedQuery(properties.getDurableQueues().isUseOrderedUnorderedQuery())
                                                     .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;

@@ -1,19 +1,17 @@
 /*
+ * Copyright 2021-2025 the original author or authors.
  *
- *  * Copyright 2021-2025 the original author or authors.
- *  *
- *  * Licensed under the Apache License, Version 2.0 (the "License");
- *  * you may not use this file except in compliance with the License.
- *  * You may obtain a copy of the License at
- *  *
- *  *      https://www.apache.org/licenses/LICENSE-2.0
- *  *
- *  * Unless required by applicable law or agreed to in writing, software
- *  * distributed under the License is distributed on an "AS IS" BASIS,
- *  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  * See the License for the specific language governing permissions and
- *  * limitations under the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package dk.trustworks.essentials.components.queue.postgresql;
@@ -22,7 +20,6 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
@@ -52,30 +49,30 @@ public class DurableQueuesSql {
      */
     public String buildUnorderedSqlStatement() {
         return bind("""
-                  WITH cte_unordered AS (
-                    SELECT id
-                    FROM {:tableName} q
-                    WHERE
-                         queue_name = :queueName
-                      AND is_dead_letter_message = FALSE
-                      AND is_being_delivered     = FALSE
-                      AND next_delivery_ts <= :now
-                      AND key IS NULL
-                    ORDER BY next_delivery_ts
-                    LIMIT :limit
-                    FOR UPDATE SKIP LOCKED
-                  )
-                  UPDATE {:tableName} q
-                  SET
-                    total_attempts       = q.total_attempts + 1,
-                    next_delivery_ts     = NULL,
-                    is_being_delivered   = TRUE,
-                    delivery_ts          = :now
-                  FROM cte_unordered u
-                  WHERE q.id = u.id
-                    AND q.queue_name = :queueName
-                  RETURNING q.*;
-                """, arg("tableName", sharedQueueTableName));
+                      WITH cte_unordered AS (
+                        SELECT id
+                        FROM {:tableName} q
+                        WHERE
+                             queue_name = :queueName
+                          AND is_dead_letter_message = FALSE
+                          AND is_being_delivered     = FALSE
+                          AND next_delivery_ts <= :now
+                          AND key IS NULL
+                        ORDER BY next_delivery_ts
+                        LIMIT :limit
+                        FOR UPDATE SKIP LOCKED
+                      )
+                      UPDATE {:tableName} q
+                      SET
+                        total_attempts       = q.total_attempts + 1,
+                        next_delivery_ts     = NULL,
+                        is_being_delivered   = TRUE,
+                        delivery_ts          = :now
+                      FROM cte_unordered u
+                      WHERE q.id = u.id
+                        AND q.queue_name = :queueName
+                      RETURNING q.*;
+                    """, arg("tableName", sharedQueueTableName));
     }
 
     /**
@@ -91,48 +88,44 @@ public class DurableQueuesSql {
      * logic for selecting, ordering, and updating messages in a queue table.
      */
     public String buildOrderedSqlStatement(boolean hasExclusiveKeys) {
-        var orderedSql = new StringBuilder();
-        orderedSql.append("""
-                      WITH cte_ordered AS (
-                                 SELECT id
-                                 FROM %s q
-                                 WHERE
-                                      queue_name             = :queueName
-                                  AND is_dead_letter_message = FALSE
-                                  AND is_being_delivered     = FALSE
-                                  AND next_delivery_ts      <= :now
-                      
-                                  AND key IS NOT NULL
-                      
-                                  -- full per-key barrier:
-                                  AND NOT EXISTS (
-                                    SELECT 1
-                                    FROM %1$s q2
-                                    WHERE q2.key        = q.key
-                                      AND q2.queue_name = q.queue_name
-                                      AND q2.key_order  < q.key_order
-                                  )
-                      """.formatted(sharedQueueTableName));
-        if (hasExclusiveKeys) {
-            orderedSql.append("\n    AND key NOT IN (<excludeKeys>)");
-        }
-        orderedSql.append("""
-                       ORDER BY key_order, next_delivery_ts
-                                          LIMIT :limit
-                                          FOR UPDATE SKIP LOCKED
-                                        )
-                                        UPDATE %1$s q
-                                        SET
-                                          total_attempts       = q.total_attempts + 1,
-                                          next_delivery_ts     = NULL,
-                                          is_being_delivered   = TRUE,
-                                          delivery_ts          = :now
-                                        FROM cte_ordered o
-                                        WHERE q.id = o.id
-                                          AND q.queue_name = :queueName
-                                        RETURNING q.*;
-                      """.formatted(sharedQueueTableName));
-        return orderedSql.toString();
+        return bind("""
+                    WITH cte_ordered AS (
+                               SELECT id
+                               FROM {:tableName} q
+                               WHERE
+                                    queue_name             = :queueName
+                                AND is_dead_letter_message = FALSE
+                                AND is_being_delivered     = FALSE
+                                AND next_delivery_ts      <= :now
+                    
+                                AND key IS NOT NULL
+                    
+                                -- full per-key barrier:
+                                AND NOT EXISTS (
+                                  SELECT 1
+                                  FROM {:tableName} q2
+                                  WHERE q2.key        = q.key
+                                    AND q2.queue_name = q.queue_name
+                                    AND q2.key_order  < q.key_order
+                                )
+                                {:excludeKeys} 
+                     ORDER BY key_order, next_delivery_ts
+                                        LIMIT :limit
+                                        FOR UPDATE SKIP LOCKED
+                                      )
+                                      UPDATE {:tableName} q
+                                      SET
+                                        total_attempts       = q.total_attempts + 1,
+                                        next_delivery_ts     = NULL,
+                                        is_being_delivered   = TRUE,
+                                        delivery_ts          = :now
+                                      FROM cte_ordered o
+                                      WHERE q.id = o.id
+                                        AND q.queue_name = :queueName
+                                      RETURNING q.*;
+                    """,
+                    arg("tableName", sharedQueueTableName),
+                    arg("excludeKeys", hasExclusiveKeys ? "AND key NOT IN (<excludeKeys>)" : ""));
     }
 
     /**
@@ -194,41 +187,73 @@ public class DurableQueuesSql {
     }
 
     /**
-     * Builds a batched SQL statement for retrieving messages from multiple queues.
-     *
-     * @param excludeKeysPerQueue Map of queue names to sets of keys to exclude
-     * @param availableWorkerSlotsPerQueue Map of queue names to available worker slots
-     * @param activeQueues List of active queue names
-     * @return SQL statement for retrieving messages from multiple queues
+     * Result class for batched SQL statement containing both the SQL and parameter bindings
      */
-    public String buildBatchedSqlStatement(Map<QueueName, Set<String>> excludeKeysPerQueue, 
-                                          Map<QueueName, Integer> availableWorkerSlotsPerQueue, 
-                                          List<QueueName> activeQueues) {
-        StringBuilder vals = new StringBuilder();
-        for (int i = 0; i < activeQueues.size(); i++) {
-            QueueName   q        = activeQueues.get(i);
-            int         slots    = availableWorkerSlotsPerQueue.get(q);
-            Set<String> excludes = excludeKeysPerQueue.getOrDefault(q, Collections.emptySet());
+    public static class BatchedSqlResult {
+        private final String                          sql;
+        private final Map<String, String>             singleValueBindings;
+        private final Map<String, Collection<String>> listBindings;
 
-            // build SQL array literal of excluded keys
-            String arrayLiteral = excludes.isEmpty()
-                                ? "ARRAY[]::text[]"
-                                : "ARRAY[" +
-                                        excludes.stream()
-                                                .map(k -> "'" + k.replace("'", "''") + "'")
-                                                .collect(Collectors.joining(","))
-                                        + "]::text[]";
-
-            if (i > 0) vals.append(",\n    ");
-            vals.append("('")
-                .append(q.toString()).append("', ")
-                .append(slots).append(", ")
-                .append(arrayLiteral)
-                .append(")");
+        public BatchedSqlResult(String sql, Map<String, String> singleValueBindings, Map<String, Collection<String>> listBindings) {
+            this.sql = sql;
+            this.singleValueBindings = singleValueBindings;
+            this.listBindings = listBindings;
         }
 
-        return bind("""
-                         WITH queue_config(queue_name, slots, exclude_keys) AS (
+        public String getSql() {
+            return sql;
+        }
+
+        public Map<String, String> getSingleValueBindings() {
+            return singleValueBindings;
+        }
+
+        public Map<String, Collection<String>> getListBindings() {
+            return listBindings;
+        }
+    }
+
+    /**
+     * Builds a batched SQL statement for retrieving messages from multiple queues - work in progress (doesn't handle competing consumers yet due to )
+     * <p>
+     * This method now uses parameterized queries to avoid SQL injection vulnerabilities
+     * that could arise from string concatenation of user-provided keys.
+     *
+     * @param excludeKeysPerQueue          Map of queue names to sets of keys to exclude
+     * @param availableWorkerSlotsPerQueue Map of queue names to available worker slots
+     * @param activeQueues                 List of active queue names
+     * @return BatchedSqlResult containing SQL statement and parameter bindings for retrieving messages from multiple queues
+     */
+    public BatchedSqlResult buildBatchedSqlStatement(Map<QueueName, Set<String>> excludeKeysPerQueue,
+                                                     Map<QueueName, Integer> availableWorkerSlotsPerQueue,
+                                                     List<QueueName> activeQueues) {
+        var values              = new StringBuilder();
+        var singleValueBindings = new HashMap<String, String>();
+        var listBindings        = new HashMap<String, Collection<String>>();
+
+        for (int i = 0; i < activeQueues.size(); i++) {
+            var queueName                        = activeQueues.get(i);
+            var availableWorkerSlotsForThisQueue = availableWorkerSlotsPerQueue.get(queueName);
+            var excludedKeysForThisQueue         = excludeKeysPerQueue.getOrDefault(queueName, Collections.emptySet());
+
+            // Add queue name parameter binding as single value
+            singleValueBindings.put("queueName" + i, queueName.toString());
+
+            // Only add parameter binding if there are keys to exclude
+            // For empty collections, we'll use a different SQL approach
+            if (!excludedKeysForThisQueue.isEmpty()) {
+                listBindings.put("excludeKeys" + i, excludedKeysForThisQueue);
+            }
+
+            if (i > 0) values.append(",\n    ");
+            values.append("(:queueName").append(i).append(", ")
+                  .append(availableWorkerSlotsForThisQueue).append(", ")
+                  .append(excludedKeysForThisQueue.isEmpty() ? "ARRAY[]::text[]" : ":excludeKeys" + i)
+                  .append(")");
+        }
+
+        var sql = bind("""
+                       WITH queue_config(queue_name, slots, exclude_keys) AS (
                            VALUES {:values}
                        ),
                        -- 2) Numbered ordered candidates
@@ -240,7 +265,7 @@ public class DurableQueuesSql {
                                  PARTITION BY q.queue_name
                                  ORDER BY q.key_order, q.next_delivery_ts
                                ) AS rn
-                             FROM durable_queues q
+                             FROM {:tableName} q
                              JOIN queue_config cfg USING(queue_name)
                              WHERE
                                   q.is_dead_letter_message = FALSE
@@ -250,13 +275,13 @@ public class DurableQueuesSql {
                               AND NOT (q.key = ANY(cfg.exclude_keys))
                               AND NOT EXISTS (
                                 SELECT 1
-                                FROM durable_queues q2
+                                FROM {:tableName} q2
                                 WHERE q2.queue_name = q.queue_name
                                   AND q2.key        = q.key
                                   AND q2.key_order  < q.key_order
                               )
                            ),
-    
+                       
                            -- 3) Numbered unordered candidates
                            unordered_rn AS (
                              SELECT
@@ -266,7 +291,7 @@ public class DurableQueuesSql {
                                  PARTITION BY q.queue_name
                                  ORDER BY q.next_delivery_ts
                                ) AS rn
-                             FROM durable_queues q
+                             FROM {:tableName} q
                              JOIN queue_config cfg USING(queue_name)
                              WHERE
                                   q.is_dead_letter_message = FALSE
@@ -275,7 +300,7 @@ public class DurableQueuesSql {
                               AND q.key IS NULL
                               AND NOT (q.key = ANY(cfg.exclude_keys))
                            ),
-    
+                       
                            -- 4) Pick up to cfg.slots from each
                            ordered_pick AS (
                              SELECT orr.id
@@ -291,25 +316,25 @@ public class DurableQueuesSql {
                                ON unr.queue_name = cfg.queue_name
                              WHERE unr.rn <= cfg.slots
                            ),
-    
+                       
                            -- 5) Union them *without locking*
                            candidates AS (
                              SELECT id FROM ordered_pick
                              UNION ALL
                              SELECT id FROM unordered_pick
                            ),
-    
+                       
                            -- 6) Now lock exactly those durable_queues rows
                            locked AS (
                              SELECT q.id
-                             FROM durable_queues q
+                             FROM {:tableName} q
                              JOIN candidates c
                                ON q.id = c.id
                              FOR UPDATE SKIP LOCKED
                            )
-    
+                       
                          -- 7) Finally, update & return the locked rows
-                         UPDATE durable_queues dq
+                         UPDATE {:tableName} dq
                          SET
                            total_attempts     = dq.total_attempts + 1,
                            next_delivery_ts   = NULL,
@@ -317,9 +342,12 @@ public class DurableQueuesSql {
                            delivery_ts        = :now
                          FROM locked l
                          WHERE dq.id = l.id
-                           AND dq.queue_name = :queueName
                          RETURNING dq.*;
-                       """, arg("values", vals.toString()));
+                       """,
+                       arg("tableName", sharedQueueTableName),
+                       arg("values", values.toString()));
+
+        return new BatchedSqlResult(sql, singleValueBindings, listBindings);
     }
 
     /**
@@ -329,15 +357,15 @@ public class DurableQueuesSql {
      */
     public String getResetMessagesStuckBeingDeliveredSql() {
         return bind("""
-                            UPDATE {:tableName} SET
-                            is_being_delivered = FALSE,
-                            delivery_ts = NULL,
-                            redelivery_attempts = redelivery_attempts + 1,
-                            next_delivery_ts = :now,
-                            last_delivery_error = :error
-                            WHERE is_being_delivered = TRUE
-                            AND delivery_ts <= :threshold
-                            """,
+                    UPDATE {:tableName} SET
+                    is_being_delivered = FALSE,
+                    delivery_ts = NULL,
+                    redelivery_attempts = redelivery_attempts + 1,
+                    next_delivery_ts = :now,
+                    last_delivery_error = :error
+                    WHERE is_being_delivered = TRUE
+                    AND delivery_ts <= :threshold
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -348,13 +376,13 @@ public class DurableQueuesSql {
      */
     public String getHasOrderedMessageQueuedForKeySql() {
         return bind("""
-                             SELECT count(*) FROM {:tableName}
-                             WHERE
-                             queue_name = :queueName AND
-                             key = :key AND
-                             delivery_mode = 'IN_ORDER'
-                             """,
-                     arg("tableName", sharedQueueTableName));
+                    SELECT count(*) FROM {:tableName}
+                    WHERE
+                    queue_name = :queueName AND
+                    key = :key AND
+                    delivery_mode = 'IN_ORDER'
+                    """,
+                    arg("tableName", sharedQueueTableName));
     }
 
     /**
@@ -364,11 +392,11 @@ public class DurableQueuesSql {
      */
     public String getGetTotalMessagesQueuedForSql() {
         return bind("""
-                            SELECT count(*) FROM {:tableName}
-                            WHERE
-                            queue_name = :queueName AND
-                            is_dead_letter_message = FALSE
-                            """,
+                    SELECT count(*) FROM {:tableName}
+                    WHERE
+                    queue_name = :queueName AND
+                    is_dead_letter_message = FALSE
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -379,13 +407,13 @@ public class DurableQueuesSql {
      */
     public String getQueuedMessageCountsForSql() {
         return bind("""
-                            SELECT
-                            COUNT(*) FILTER (WHERE is_dead_letter_message = FALSE) AS regular_count,
-                            COUNT(*) FILTER (WHERE is_dead_letter_message = TRUE) AS dead_letter_count
-                            FROM {:tableName}
-                            WHERE
-                            queue_name = :queueName
-                            """,
+                    SELECT
+                    COUNT(*) FILTER (WHERE is_dead_letter_message = FALSE) AS regular_count,
+                    COUNT(*) FILTER (WHERE is_dead_letter_message = TRUE) AS dead_letter_count
+                    FROM {:tableName}
+                    WHERE
+                    queue_name = :queueName
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -396,11 +424,11 @@ public class DurableQueuesSql {
      */
     public String getGetTotalDeadLetterMessagesQueuedForSql() {
         return bind("""
-                            SELECT count(*) FROM {:tableName}
-                            WHERE
-                            queue_name = :queueName AND
-                            is_dead_letter_message = TRUE
-                            """,
+                    SELECT count(*) FROM {:tableName}
+                    WHERE
+                    queue_name = :queueName AND
+                    is_dead_letter_message = TRUE
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -421,14 +449,14 @@ public class DurableQueuesSql {
      */
     public String getQueryForMessagesSoonReadyForDeliverySql() {
         return bind("""
-                            SELECT id, added_ts, next_delivery_ts FROM {:tableName}
-                            WHERE queue_name = :queueName
-                            AND is_dead_letter_message = FALSE
-                            AND is_being_delivered = FALSE
-                            AND next_delivery_ts > :now
-                            ORDER BY next_delivery_ts ASC
-                            LIMIT :pageSize
-                            """,
+                    SELECT id, added_ts, next_delivery_ts FROM {:tableName}
+                    WHERE queue_name = :queueName
+                    AND is_dead_letter_message = FALSE
+                    AND is_being_delivered = FALSE
+                    AND next_delivery_ts > :now
+                    ORDER BY next_delivery_ts ASC
+                    LIMIT :pageSize
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -439,17 +467,17 @@ public class DurableQueuesSql {
      */
     public String getResetMessagesStuckBeingDeliveredAcrossMultipleQueuesSql() {
         return bind("""
-                        UPDATE {:tableName} SET
-                        is_being_delivered = FALSE,
-                        delivery_ts = NULL,
-                        redelivery_attempts = redelivery_attempts + 1,
-                        next_delivery_ts = :now,
-                        last_delivery_error = :error
-                        WHERE is_being_delivered = TRUE
-                        AND delivery_ts <= :threshold
-                        AND queue_name IN (<queueNames>)
-                        """,
-                arg("tableName", sharedQueueTableName));
+                    UPDATE {:tableName} SET
+                    is_being_delivered = FALSE,
+                    delivery_ts = NULL,
+                    redelivery_attempts = redelivery_attempts + 1,
+                    next_delivery_ts = :now,
+                    last_delivery_error = :error
+                    WHERE is_being_delivered = TRUE
+                    AND delivery_ts <= :threshold
+                    AND queue_name IN (<queueNames>)
+                    """,
+                    arg("tableName", sharedQueueTableName));
     }
 
     /**
@@ -459,25 +487,25 @@ public class DurableQueuesSql {
      */
     public String getCreateQueueTableSql() {
         return bind("""
-                            CREATE TABLE IF NOT EXISTS {:tableName} (
-                            id                     TEXT PRIMARY KEY,
-                            queue_name             TEXT NOT NULL,
-                            message_payload        JSONB NOT NULL,
-                            message_payload_type   TEXT NOT NULL,
-                            added_ts               TIMESTAMPTZ NOT NULL,
-                            next_delivery_ts       TIMESTAMPTZ,
-                            delivery_ts            TIMESTAMPTZ DEFAULT NULL,
-                            total_attempts         INTEGER DEFAULT 0,
-                            redelivery_attempts    INTEGER DEFAULT 0,
-                            last_delivery_error    TEXT DEFAULT NULL,
-                            is_being_delivered     BOOLEAN DEFAULT FALSE,
-                            is_dead_letter_message BOOLEAN NOT NULL DEFAULT FALSE,
-                            meta_data              JSONB DEFAULT NULL,
-                            delivery_mode          TEXT NOT NULL,
-                            key                    TEXT DEFAULT NULL,
-                            key_order              BIGINT DEFAULT -1
-                            )
-                            """,
+                    CREATE TABLE IF NOT EXISTS {:tableName} (
+                    id                     TEXT PRIMARY KEY,
+                    queue_name             TEXT NOT NULL,
+                    message_payload        JSONB NOT NULL,
+                    message_payload_type   TEXT NOT NULL,
+                    added_ts               TIMESTAMPTZ NOT NULL,
+                    next_delivery_ts       TIMESTAMPTZ,
+                    delivery_ts            TIMESTAMPTZ DEFAULT NULL,
+                    total_attempts         INTEGER DEFAULT 0,
+                    redelivery_attempts    INTEGER DEFAULT 0,
+                    last_delivery_error    TEXT DEFAULT NULL,
+                    is_being_delivered     BOOLEAN DEFAULT FALSE,
+                    is_dead_letter_message BOOLEAN NOT NULL DEFAULT FALSE,
+                    meta_data              JSONB DEFAULT NULL,
+                    delivery_mode          TEXT NOT NULL,
+                    key                    TEXT DEFAULT NULL,
+                    key_order              BIGINT DEFAULT -1
+                    )
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -508,16 +536,16 @@ public class DurableQueuesSql {
      */
     public String getCreateNextReadyMessageIndexSql() {
         return bind("""
-                        CREATE INDEX IF NOT EXISTS idx_{:tableName}_ready ON {:tableName} (
-                            queue_name,
-                            next_delivery_ts,
-                            key,
-                            key_order
-                        )
-                        WHERE
-                            is_dead_letter_message = FALSE
-                            AND is_being_delivered = FALSE
-                        """,
+                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_ready ON {:tableName} (
+                        queue_name,
+                        next_delivery_ts,
+                        key,
+                        key_order
+                    )
+                    WHERE
+                        is_dead_letter_message = FALSE
+                        AND is_being_delivered = FALSE
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -528,13 +556,13 @@ public class DurableQueuesSql {
      */
     public String getCreateOrderedMessageReadyIndexSql() {
         return bind("""
-                        CREATE INDEX IF NOT EXISTS idx_{:tableName}_ordered_ready
-                          ON {:tableName} (key, queue_name, key_order, next_delivery_ts)
-                          INCLUDE (id)
-                          WHERE key IS NOT NULL
-                            AND NOT is_dead_letter_message
-                            AND NOT is_being_delivered
-                        """,
+                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_ordered_ready
+                      ON {:tableName} (key, queue_name, key_order, next_delivery_ts)
+                      INCLUDE (id)
+                      WHERE key IS NOT NULL
+                        AND NOT is_dead_letter_message
+                        AND NOT is_being_delivered
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -545,13 +573,13 @@ public class DurableQueuesSql {
      */
     public String getCreateUnorderedMessageReadyIndexSql() {
         return bind("""
-                        CREATE INDEX IF NOT EXISTS idx_{:tableName}_unordered_ready
-                          ON {:tableName} (queue_name, next_delivery_ts)
-                          INCLUDE (id)
-                          WHERE key IS NULL
-                            AND NOT is_dead_letter_message
-                            AND NOT is_being_delivered
-                        """,
+                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_unordered_ready
+                      ON {:tableName} (queue_name, next_delivery_ts)
+                      INCLUDE (id)
+                      WHERE key IS NULL
+                        AND NOT is_dead_letter_message
+                        AND NOT is_being_delivered
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -562,13 +590,13 @@ public class DurableQueuesSql {
      */
     public String getCreateOrderedMessageHeadIndexSql() {
         return bind("""
-                        CREATE INDEX IF NOT EXISTS idx_{:tableName}_ordered_head
-                          ON {:tableName} (queue_name, key_order, next_delivery_ts)
-                          INCLUDE (id)
-                          WHERE key IS NOT NULL
-                            AND is_dead_letter_message = FALSE
-                            AND is_being_delivered     = FALSE;
-                        """,
+                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_ordered_head
+                      ON {:tableName} (queue_name, key_order, next_delivery_ts)
+                      INCLUDE (id)
+                      WHERE key IS NOT NULL
+                        AND is_dead_letter_message = FALSE
+                        AND is_being_delivered     = FALSE;
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -589,79 +617,79 @@ public class DurableQueuesSql {
      */
     public String getQueueMessageSql() {
         return bind("""
-                            INSERT INTO {:tableName} (
-                            id,
-                            queue_name,
-                            message_payload,
-                            message_payload_type,
-                            added_ts,
-                            next_delivery_ts,
-                            last_delivery_error,
-                            is_dead_letter_message,
-                            meta_data,
-                            delivery_mode,
-                            key,
-                            key_order
-                            ) VALUES (
-                            :id,
-                            :queueName,
-                            :message_payload::jsonb,
-                            :message_payload_type,
-                            :addedTimestamp,
-                            :nextDeliveryTimestamp,
-                            :lastDeliveryError,
-                            :isDeadLetterMessage,
-                            :metaData::jsonb,
-                            :deliveryMode,
-                            :key,
-                            :order
-                            )
-                            """,
+                    INSERT INTO {:tableName} (
+                    id,
+                    queue_name,
+                    message_payload,
+                    message_payload_type,
+                    added_ts,
+                    next_delivery_ts,
+                    last_delivery_error,
+                    is_dead_letter_message,
+                    meta_data,
+                    delivery_mode,
+                    key,
+                    key_order
+                    ) VALUES (
+                    :id,
+                    :queueName,
+                    :message_payload::jsonb,
+                    :message_payload_type,
+                    :addedTimestamp,
+                    :nextDeliveryTimestamp,
+                    :lastDeliveryError,
+                    :isDeadLetterMessage,
+                    :metaData::jsonb,
+                    :deliveryMode,
+                    :key,
+                    :order
+                    )
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
     /**
      * SQL statement for getting queue message sql. If another message related to the same key and a lower order is already marked as a dead letter message,
-     *  in which case this message can be queued directly as a dead letter message.
+     * in which case this message can be queued directly as a dead letter message.
      *
      * @return SQL statement for getting queue message sql
      */
     public String getQueueMessageSqlOptimized() {
         return bind("""
-                        INSERT INTO durable_queues (
-                          id, queue_name, message_payload, message_payload_type,
-                          added_ts, next_delivery_ts, last_delivery_error,
-                          is_dead_letter_message, is_being_delivered,
-                          meta_data, delivery_mode, key, key_order
-                        )
-                        SELECT
-                          :id,
-                          :queueName,
-                          :message_payload::jsonb,
-                          :message_payload_type,
-                          :addedTimestamp,
-                          :nextDeliveryTimestamp,
-                          :lastDeliveryError,
-                          -- inline dead-letter-barrier check:
-                          CASE
-                            WHEN :key IS NOT NULL
-                              AND EXISTS (
-                                SELECT 1
-                                FROM durable_queues dq
-                                WHERE dq.queue_name             = :queueName
-                                  AND dq.key                    = :key
-                                  AND dq.key_order     < :order
-                                  AND dq.is_dead_letter_message = TRUE
-                              )
-                            THEN TRUE
-                            ELSE :isDeadLetterMessage
-                          END,
-                          FALSE,
-                          :metaData::jsonb,
-                          :deliveryMode,
-                          :key,
-                          :order
-                      """,
+                      INSERT INTO {:tableName} (
+                        id, queue_name, message_payload, message_payload_type,
+                        added_ts, next_delivery_ts, last_delivery_error,
+                        is_dead_letter_message, is_being_delivered,
+                        meta_data, delivery_mode, key, key_order
+                      )
+                      SELECT
+                        :id,
+                        :queueName,
+                        :message_payload::jsonb,
+                        :message_payload_type,
+                        :addedTimestamp,
+                        :nextDeliveryTimestamp,
+                        :lastDeliveryError,
+                        -- inline dead-letter-barrier check:
+                        CASE
+                          WHEN :key IS NOT NULL
+                            AND EXISTS (
+                              SELECT 1
+                              FROM {:tableName} dq
+                              WHERE dq.queue_name             = :queueName
+                                AND dq.key                    = :key
+                                AND dq.key_order     < :order
+                                AND dq.is_dead_letter_message = TRUE
+                            )
+                          THEN TRUE
+                          ELSE :isDeadLetterMessage
+                        END,
+                        FALSE,
+                        :metaData::jsonb,
+                        :deliveryMode,
+                        :key,
+                        :order
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -672,15 +700,15 @@ public class DurableQueuesSql {
      */
     public String getRetryMessageSql() {
         return bind("""
-                            UPDATE {:tableName} SET
-                            next_delivery_ts = :nextDeliveryTimestamp,
-                            last_delivery_error = :lastDeliveryError,
-                            redelivery_attempts = redelivery_attempts + 1,
-                            is_being_delivered = FALSE,
-                            delivery_ts = NULL
-                            WHERE id = :id
-                            RETURNING *
-                            """,
+                    UPDATE {:tableName} SET
+                    next_delivery_ts = :nextDeliveryTimestamp,
+                    last_delivery_error = :lastDeliveryError,
+                    redelivery_attempts = redelivery_attempts + 1,
+                    is_being_delivered = FALSE,
+                    delivery_ts = NULL
+                    WHERE id = :id
+                    RETURNING *
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -691,15 +719,15 @@ public class DurableQueuesSql {
      */
     public String getMarkAsDeadLetterMessageSql() {
         return bind("""
-                            UPDATE {:tableName} SET
-                            next_delivery_ts = NULL,
-                            last_delivery_error = :lastDeliveryError,
-                            is_dead_letter_message = TRUE,
-                            is_being_delivered = FALSE,
-                            delivery_ts = NULL
-                            WHERE id = :id AND is_dead_letter_message = FALSE
-                            RETURNING *
-                            """,
+                    UPDATE {:tableName} SET
+                    next_delivery_ts = NULL,
+                    last_delivery_error = :lastDeliveryError,
+                    is_dead_letter_message = TRUE,
+                    is_being_delivered = FALSE,
+                    delivery_ts = NULL
+                    WHERE id = :id AND is_dead_letter_message = FALSE
+                    RETURNING *
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -710,13 +738,13 @@ public class DurableQueuesSql {
      */
     public String getResurrectDeadLetterMessageSql() {
         return bind("""
-                            UPDATE {:tableName} SET
-                            next_delivery_ts = :nextDeliveryTimestamp,
-                            is_dead_letter_message = FALSE
-                            WHERE id = :id AND
-                            is_dead_letter_message = TRUE
-                            RETURNING *
-                            """,
+                    UPDATE {:tableName} SET
+                    next_delivery_ts = :nextDeliveryTimestamp,
+                    is_dead_letter_message = FALSE
+                    WHERE id = :id AND
+                    is_dead_letter_message = TRUE
+                    RETURNING *
+                    """,
                     arg("tableName", sharedQueueTableName));
     }
 
@@ -747,7 +775,7 @@ public class DurableQueuesSql {
      */
     public String getQueueNameForQueueEntryIdSql() {
         return bind("SELECT queue_name FROM {:tableName} WHERE id = :queueEntryId",
-                   arg("tableName", sharedQueueTableName));
+                    arg("tableName", sharedQueueTableName));
     }
 
     /**
@@ -757,10 +785,10 @@ public class DurableQueuesSql {
      */
     public String getQueuedMessageByIdSql() {
         return bind("""
-                   SELECT * FROM {:tableName} WHERE
-                   id = :id AND
-                   is_dead_letter_message = :isDeadLetterMessage
-                   """,
-                   arg("tableName", sharedQueueTableName));
+                    SELECT * FROM {:tableName} WHERE
+                    id = :id AND
+                    is_dead_letter_message = :isDeadLetterMessage
+                    """,
+                    arg("tableName", sharedQueueTableName));
     }
 }
