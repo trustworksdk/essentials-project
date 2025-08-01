@@ -207,17 +207,18 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 // Use batch fetching for better efficiency
                 List<QueuedMessage> messages;
                 var queueNames = availableWorkerSlotsPerQueue.keySet();
-                if (queueNames.size() > NUMBER_OF_ACTIVE_QUEUES_THRESHOLD) {
-                    messages = batchCapableDurableQueues.fetchNextBatchOfMessagesBatched(
-                            queueNames,
-                            excludeKeysPerQueue,
-                            availableWorkerSlotsPerQueue);
-                } else {
+// Don't use fetchNextBatchOfMessagesBatched until it properly handles competing consumers
+//                if (queueNames.size() > NUMBER_OF_ACTIVE_QUEUES_THRESHOLD) {
+//                    messages = batchCapableDurableQueues.fetchNextBatchOfMessagesBatched(
+//                            queueNames,
+//                            excludeKeysPerQueue,
+//                            availableWorkerSlotsPerQueue);
+//                } else {
                     messages = batchCapableDurableQueues.fetchNextBatchOfMessages(
                             queueNames,
                             excludeKeysPerQueue,
                             availableWorkerSlotsPerQueue);
-                }
+//                }
 
                 // Debug logging when using batch fetching
                 if (log.isDebugEnabled()) {

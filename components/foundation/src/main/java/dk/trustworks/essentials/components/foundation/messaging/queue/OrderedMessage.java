@@ -20,14 +20,14 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * Represents a message that will be delivered in order.<br>
- * This of course requires that message are queued in order and that the consumer is single threaded.<br>
+ * This, of course, requires that messages are queued in order and that the consumer is single-threaded or provides additional coordination.<br>
  * All messages sharing the same {@link #key}, will be delivered according to their {@link #order}<br>
- * An example of a message key is the id of the entity the message relates to
+ * An example of a message key is the id of the entity/aggregate the message relates to
  */
 public class OrderedMessage extends Message {
     /**
-     * All messages sharing the same key, will be delivered according to their {@link #order}<br>
-     * An example of a message key is the id of the entity the message relates to
+     * All messages sharing the same key will be delivered according to their {@link #order}<br>
+     * An example of a message key is the id of the entity/aggregate the message relates to
      */
     public final String key;
     /**
@@ -38,7 +38,7 @@ public class OrderedMessage extends Message {
 
     /**
      * @param payload the message payload
-     * @param key     the message key. All messages sharing the same key, will be delivered according to their {@link #getOrder()}
+     * @param key     the message key. All messages sharing the same key will be delivered according to their {@link #getOrder()}.
      * @param order   the order of the message relative to the {@link #getKey()}.
      */
     public OrderedMessage(Object payload, String key, long order) {
@@ -50,7 +50,7 @@ public class OrderedMessage extends Message {
 
     /**
      * @param payload  the message payload
-     * @param key      the message key. All messages sharing the same key, will be delivered according to their {@link #getOrder()}
+     * @param key      the message key. All messages sharing the same key will be delivered according to their {@link #getOrder()}.
      * @param order    the order of the message relative to the {@link #getKey()}.
      * @param metaData the {@link MessageMetaData} associated with the message
      */
@@ -65,7 +65,7 @@ public class OrderedMessage extends Message {
      * Create a new {@link Message} and an empty {@link MessageMetaData}
      *
      * @param payload the message payload
-     * @param key     the message key. All messages sharing the same key, will be delivered according to their {@link #getOrder()}
+     * @param key     the message key. All messages sharing the same key will be delivered according to their {@link #getOrder()}.
      * @param order   the order of the message relative to the {@link #getKey()}.
      * @return the new {@link Message}
      */
@@ -77,7 +77,7 @@ public class OrderedMessage extends Message {
      * Create a new {@link Message}
      *
      * @param payload  the message payload
-     * @param key      the message key. All messages sharing the same key, will be delivered according to their {@link #getOrder()}
+     * @param key      the message key. All messages sharing the same key will be delivered according to their {@link #getOrder()}.
      * @param order    the order of the message relative to the {@link #getKey()}.
      * @param metaData the {@link MessageMetaData} associated with the message
      * @return the new {@link Message}
@@ -87,7 +87,7 @@ public class OrderedMessage extends Message {
     }
 
     /**
-     * All messages sharing the same key, will be delivered according to their {@link #getOrder()}<br>
+     * All messages sharing the same key will be delivered according to their {@link #getOrder()}<br>
      * An example of a message key is the id of the entity the message relates to
      *
      * @return The message key
@@ -98,7 +98,7 @@ public class OrderedMessage extends Message {
 
     /**
      * Represent the order of a message relative to the {@link #getKey()}.<br>
-     * All messages sharing the same key, will be delivered according to their {@link #getOrder()}
+     * All messages sharing the same key will be delivered according to their {@link #getOrder()}
      *
      * @return the order of a message relative to the {@link #getKey()}
      */
