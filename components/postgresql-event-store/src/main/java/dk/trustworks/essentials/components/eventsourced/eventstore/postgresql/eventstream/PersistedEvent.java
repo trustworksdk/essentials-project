@@ -44,6 +44,22 @@ public interface PersistedEvent {
      * @param aggregateType    Contains the Type of Aggregate the Event-Stream the events belongs to
      * @param aggregateId      Contains the aggregate identifier that an event is related to.<br>
      *                         This is also known as the Stream-Id
+     *                         <p>
+     *                         In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+     *                         <ul>
+     *                           <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+     *                           <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+     *                           <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+     *                         </ul>
+     *
+     *                         <p>
+     *                             <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+     *                         </p>
+     *                         <ul>
+     *                           <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+     *                           <li>Never contain user-supplied input without proper validation</li>
+     *                           <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+     *                         </ul>
      * @param event            The serialized Event that was persisted (aka the payload)
      * @param eventOrder       Contains the order of an event relative to the aggregate instance (the {@link #aggregateId})<br>
      *                         Each event has its own unique position within the stream, also known as the event-order,
@@ -141,6 +157,22 @@ public interface PersistedEvent {
     /**
      * Contains the aggregate identifier that an event is related to.<br>
      * This is also known as the Stream-Id
+     * <p>
+     * In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+     * <ul>
+     *   <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+     *   <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+     *   <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+     * </ul>
+     *
+     * <p>
+     *     <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+     * </p>
+     * <ul>
+     *   <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+     *   <li>Never contain user-supplied input without proper validation</li>
+     *   <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+     * </ul>
      */
     Object aggregateId();
 
@@ -212,18 +244,18 @@ public interface PersistedEvent {
     boolean valueEquals(PersistedEvent that);
 
     class DefaultPersistedEvent implements PersistedEvent {
-        private final EventId                 eventId;
-        private final Object                  aggregateId;
-        private final AggregateType           streamName;
-        private final EventJSON               event;
-        private final EventOrder              eventOrder;
-        private final GlobalEventOrder        globalEventOrder;
-        private final EventRevision           eventRevision;
-        private final EventMetaDataJSON       metaData;
-        private final OffsetDateTime          timestamp;
-        private final Optional<EventId>       causedByEventId;
-        private final Optional<CorrelationId> correlationId;
-        private final Optional<? extends Tenant>        tenant;
+        private final EventId                    eventId;
+        private final Object                     aggregateId;
+        private final AggregateType              streamName;
+        private final EventJSON                  event;
+        private final EventOrder                 eventOrder;
+        private final GlobalEventOrder           globalEventOrder;
+        private final EventRevision              eventRevision;
+        private final EventMetaDataJSON          metaData;
+        private final OffsetDateTime             timestamp;
+        private final Optional<EventId>          causedByEventId;
+        private final Optional<CorrelationId>    correlationId;
+        private final Optional<? extends Tenant> tenant;
 
         public DefaultPersistedEvent(EventId eventId,
                                      AggregateType streamName,

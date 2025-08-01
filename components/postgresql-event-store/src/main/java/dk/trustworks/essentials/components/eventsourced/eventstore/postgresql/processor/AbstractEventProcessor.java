@@ -47,10 +47,17 @@ import static java.util.stream.Collectors.toMap;
 /**
  * The AbstractEventProcessor provides base functionality for event processors that react to events
  * associated with one or more aggregate event streams stored in the {@link EventStore}.
- * It manages event subscriptions and message handling mechanisms.
+ * It manages event subscriptions and message handling mechanisms such a retries (see {@link #getDurableQueueRedeliveryPolicy()}) and pattern matching (through {@link PatternMatchingQueuedMessageHandler}).
  * <br>
- * It includes integration with durable queues and supports handling of message handler interceptors,
- * command bus handling, and resettable subscriptions.
+ * It includes integration with {@link DurableQueues} and supports handling of {@link MessageHandlerInterceptor},
+ * {@link DurableLocalCommandBus} handling, and resettable event store subscriptions.
+ * <p>
+ * <h3>Event Queuing</h3>
+ * When events from the {@link EventStore} need to be queued for processing, they are converted to {@link OrderedMessage}s where:
+ * <ul>
+ *  <li>The event's {@link PersistedEvent#aggregateId()} becomes the {@link OrderedMessage#getKey()}</li>
+ *  <li>The event's {@link PersistedEvent#eventOrder()} becomes the {@link OrderedMessage#getOrder()}</li>
+ * </ul>
  * <br>
  * Subclasses can customize behavior by overriding specific methods or providing their own
  * configurations such as message handler interceptors, subscription policies, and processing logic.

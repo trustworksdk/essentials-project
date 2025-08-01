@@ -41,6 +41,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Event Modeling style Event Sourced Event Processor and Command Handler, which is capable of both containing {@link CmdHandler} as well as {@link MessageHandler}
  * annotated event handling methods.<br>
+ * <p>
+ * <h3>Event Queuing</h3>
+ * When events from the {@link EventStore} need to be queued for processing, they are converted to {@link OrderedMessage}s where:
+ * <ul>
+ *  <li>The event's {@link PersistedEvent#aggregateId()} becomes the {@link OrderedMessage#getKey()}</li>
+ *  <li>The event's {@link PersistedEvent#eventOrder()} becomes the {@link OrderedMessage#getOrder()}</li>
+ * </ul>
+ * <p>
  * The {@link EventProcessor} simplifies building event projections or process automations.<br>
  * <br>
  * <i><b>Note:</b> If the associated {@link DurableLocalCommandBus} uses the {@link UnitOfWorkControllingCommandBusInterceptor} then all
