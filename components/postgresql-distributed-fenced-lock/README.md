@@ -21,7 +21,7 @@ call the `PostgresqlUtil#checkIsValidTableOrColumnName(String)` method to valida
 The `PostgresqlUtil#checkIsValidTableOrColumnName(String)` provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.    
 **However, Essentials components as well as `PostgresqlUtil#checkIsValidTableOrColumnName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.**
 > The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-> Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names
+> Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names
 
 **Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
 

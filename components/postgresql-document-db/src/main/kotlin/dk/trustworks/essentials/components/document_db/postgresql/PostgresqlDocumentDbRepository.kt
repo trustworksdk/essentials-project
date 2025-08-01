@@ -76,7 +76,7 @@ import kotlin.reflect.full.primaryConstructor
  * **However, Essentials components as well as  [dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName] does not offer exhaustive protection,
  * nor does it assure the complete security of the resulting SQL against SQL injection threats.**
  * > The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
- * > Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.
+ * > Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.
  *
  * **Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
  *
