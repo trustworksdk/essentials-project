@@ -95,7 +95,7 @@ import java.util.stream.Stream;
  * <br>
  * It is highly recommended that the {@link AggregateEventStreamConfiguration#aggregateType}'s value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link AggregateEventStreamConfiguration#aggregateType}'s value.<br>
- * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+ * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
  * @param <CONFIG> the {@link AggregateType} configuration type
  */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
@@ -181,7 +181,7 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
      * <br>
      * It is highly recommended that the {@link AggregateEventStreamConfiguration#aggregateType}'s value is only derived from a controlled and trusted source.<br>
      * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link AggregateEventStreamConfiguration#aggregateType}'s value.<br>
-     * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
+     * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
      *
      * @param eventStreamConfiguration the event stream configuration
      * @return this strategy instance

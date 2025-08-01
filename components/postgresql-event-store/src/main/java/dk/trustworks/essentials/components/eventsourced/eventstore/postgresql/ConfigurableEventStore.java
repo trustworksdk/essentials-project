@@ -99,7 +99,7 @@ public interface ConfigurableEventStore<CONFIG extends AggregateEventStreamConfi
     ConfigurableEventStore<CONFIG> addGenericInMemoryProjector(InMemoryProjector inMemoryProjector);
 
     /**
-     * Remove a generic {@link InMemoryProjector
+     * Remove a generic {@link InMemoryProjector}
      *
      * @param inMemoryProjector the in memory projector
      * @return this event store instance

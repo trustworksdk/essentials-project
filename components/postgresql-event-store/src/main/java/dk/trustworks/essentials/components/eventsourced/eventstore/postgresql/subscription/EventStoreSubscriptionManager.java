@@ -17,25 +17,20 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSON;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.Lifecycle;
-import dk.trustworks.essentials.components.foundation.fencedlock.FencedLock;
-import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
+import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inbox;
 import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
-import dk.trustworks.essentials.components.foundation.types.Tenant;
+import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
 
 import java.time.Duration;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -54,7 +49,7 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
     /**
      * The {@link EventStore} associated with the {@link EventStoreSubscriptionManager}
      *
-     * @return the {@link EventStore} associated with the {@link EventStoreSubscriptionManager
+     * @return the {@link EventStore} associated with the {@link EventStoreSubscriptionManager}
      */
     EventStore getEventStore();
 

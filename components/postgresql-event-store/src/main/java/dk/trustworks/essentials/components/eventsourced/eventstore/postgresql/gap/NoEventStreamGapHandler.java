@@ -27,7 +27,7 @@ import java.util.stream.Stream;
 
 /**
  * {@link EventStreamGapHandler} that doesn't track or manage gaps
- * @param <CONFIG> The concrete {@link AggregateEventStreamConfiguration
+ * @param <CONFIG> The concrete {@link AggregateEventStreamConfiguration}
  */
 public final class NoEventStreamGapHandler<CONFIG extends AggregateEventStreamConfiguration> implements EventStreamGapHandler<CONFIG> {
     @Override

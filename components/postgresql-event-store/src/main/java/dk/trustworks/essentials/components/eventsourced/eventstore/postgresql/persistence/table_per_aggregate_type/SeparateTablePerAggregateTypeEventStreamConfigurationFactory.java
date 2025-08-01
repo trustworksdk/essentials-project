@@ -51,7 +51,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <br>
  * It is highly recommended that the {@link AggregateType}'s value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link AggregateType}'s value.<br>
- * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection<br>
+ * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b><br>
  * <br>
  * <u>SeparateTablePerAggregateEventStreamConfiguration#eventStreamTableName</u><br>
  * The {@link SeparateTablePerAggregateEventStreamConfiguration#eventStreamTableName} defines the Postgresql table name where {@link PersistedEvent}'s related to {@link SeparateTablePerAggregateEventStreamConfiguration#aggregateType} are stored<br>
@@ -179,7 +179,7 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
      *                                    It is highly recommended that the {@code eventStreamTableName}'s value is only derived from a controlled and trusted source.<br>
      *                                    To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code eventStreamTableName}'s value.<br>
      *                                    <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
-     *                                    vulnerabilities, compromising the security and integrity of the database.</b><br>
+     *                                    vulnerabilities, compromising the security and integrity of the database.</b>
      * @param eventStreamTableColumnNames Defines the names of the eventStreamTableColumnNames - The actual implementation must be compatible with the chosen {@link AggregateEventStreamPersistenceStrategy}<br>
      *                                    <br>
      *                                    <u><b>Security</b></u><br>
@@ -287,7 +287,7 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
      *                                                  It is highly recommended that the {@code eventStreamTableName}'s value is only derived from a controlled and trusted source.<br>
      *                                                  To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code eventStreamTableName}'s value.<br>
      *                                                  <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
-     *                                                  vulnerabilities, compromising the security and integrity of the database.</b><br>
+     *                                                  vulnerabilities, compromising the security and integrity of the database.</b>
      * @param eventStreamTableColumnNames               Defines the names of the eventStreamTableColumnNames - The actual implementation must be compatible with the chosen {@link AggregateEventStreamPersistenceStrategy}<br>
      *                                                  <br>
      *                                                  <u><b>Security</b></u><br>
@@ -381,7 +381,7 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
      *                                                  It is highly recommended that the {@code eventStreamTableName}'s value is only derived from a controlled and trusted source.<br>
      *                                                  To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code eventStreamTableName}'s value.<br>
      *                                                  <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection
-     *                                                  vulnerabilities, compromising the security and integrity of the database.</b><br>
+     *                                                  vulnerabilities, compromising the security and integrity of the database.</b>
      * @param eventStreamTableColumnNames               Defines the names of the eventStreamTableColumnNames - The actual implementation must be compatible with the chosen {@link AggregateEventStreamPersistenceStrategy}<br>
      *                                                  <br>
      *                                                  <u><b>Security</b></u><br>
