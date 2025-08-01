@@ -67,7 +67,7 @@
 
         <spring-boot.version>3.3.13</spring-boot.version>
         <spring-framework-bom.version>6.1.21</spring-framework-bom.version>
-        <reactor-bom.version>2023.0.19</reactor-bom.version>
+        <reactor-bom.version>2024.0.8</reactor-bom.version>
         <spring-data-mongodb.version>4.3.13</spring-data-mongodb.version>
         <spring-data-jpa.version>3.3.13</spring-data-jpa.version>
         <objenesis.version>3.4</objenesis.version>
@@ -76,27 +76,27 @@
         <awaitility.version>4.3.0</awaitility.version>
         <assertj.version>3.27.3</assertj.version>
         <mongodb-driver-sync.version>5.0.1</mongodb-driver-sync.version>
-        <log4j-to-slf4j.version>2.25.0</log4j-to-slf4j.version>
+        <log4j-to-slf4j.version>2.25.1</log4j-to-slf4j.version>
         <json-smart.version>2.5.2</json-smart.version>
         <json-path.version>2.9.0</json-path.version>
         <snakeyaml.version>2.4</snakeyaml.version>
         <micrometer.version>1.13.15</micrometer.version>
         <micrometer-tracing.version>1.3.13</micrometer-tracing.version>
-        <netty-bom.version>4.2.2.Final</netty-bom.version>
-        <junit-bom.version>5.13.2</junit-bom.version>
+        <junit-bom.version>5.13.4</junit-bom.version>
         <testcontainers-bom.version>1.21.3</testcontainers-bom.version>
         <jdbi3-bom.version>3.49.5</jdbi3-bom.version>
-        <jackson-bom.version>2.19.1</jackson-bom.version>
+        <jackson-bom.version>2.19.2</jackson-bom.version>
         <mockito-bom.version>5.18.0</mockito-bom.version>
         <logback.version>1.5.18</logback.version>
         <avro.version>1.12.0</avro.version>
         <commons-compress.version>1.27.1</commons-compress.version>
+        <commons-lang3.version>3.18.0</commons-lang3.version>
         <xmlunit-core.version>2.10.3</xmlunit-core.version>
-        <vaadin.version>24.7.9</vaadin.version>
+        <vaadin.version>24.7.12</vaadin.version>
         <spring.security.version>6.3.10</spring.security.version>
         <kaributesting.version>2.3.0</kaributesting.version>
         <kaributesting.servlet.version>1.3.24</kaributesting.servlet.version>
-        <tomcat-embed.version>10.1.42</tomcat-embed.version>
+        <tomcat-embed.version>10.1.43</tomcat-embed.version>
 
         <dokka.version>2.0.0</dokka.version>
         <maven-dependency-plugin.version>3.8.1</maven-dependency-plugin.version>
@@ -113,10 +113,10 @@
         <maven-surefire-plugin.version>3.5.3</maven-surefire-plugin.version>
         <maven-compiler-plugin.version>3.14.0</maven-compiler-plugin.version>
         <versions-maven-plugin.version>2.18.0</versions-maven-plugin.version>
-        <maven-enforcer-plugin.version>3.6.0</maven-enforcer-plugin.version>
+        <maven-enforcer-plugin.version>3.6.1</maven-enforcer-plugin.version>
         <minimum-maven-version>3.8.8</minimum-maven-version>
         <dependency-check-maven.version>12.1.3</dependency-check-maven.version>
-        <flatten-maven-plugin.version>1.7.1</flatten-maven-plugin.version>
+        <flatten-maven-plugin.version>1.7.2</flatten-maven-plugin.version>
         <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
         <maven.docker.plugin.version>0.46.0</maven.docker.plugin.version>
         <central-publishing-maven-plugin.version>0.8.0</central-publishing-maven-plugin.version>
@@ -156,13 +156,6 @@
 
     <dependencyManagement>
         <dependencies>
-            <dependency>
-                <groupId>io.netty</groupId>
-                <artifactId>netty-bom</artifactId>
-                <version>${netty-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
             <dependency>
                 <groupId>org.junit</groupId>
                 <artifactId>junit-bom</artifactId>
@@ -217,6 +210,13 @@
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-compress</artifactId>
                 <version>${commons-compress.version}</version>
+                <scope>provided</scope>
+            </dependency>
+            <!-- Due to CVE-2025-48924 in version 3.16.0 and 3.17.0 -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>${commons-lang3.version}</version>
                 <scope>provided</scope>
             </dependency>
             <dependency>
