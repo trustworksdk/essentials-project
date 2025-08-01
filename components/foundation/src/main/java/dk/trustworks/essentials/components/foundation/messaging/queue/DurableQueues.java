@@ -56,8 +56,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <b>Ordered Messages</b><br>
  * If you're queuing with {@link OrderedMessage} then, IF and only IF, only a single cluster node is consuming from the Queue,
  * such as with an {@link Inbox} or {@link Outbox} configured with {@link MessageConsumptionMode#SingleGlobalConsumer} (which uses a {@link FencedLock} to
- * coordinate message consumption across cluster nodes)
- * in order to be able to guarantee that {@link OrderedMessage}'s are delivered in {@link OrderedMessage#getOrder()} per
+ * coordinate message consumption across cluster nodes) in order to be able to guarantee that {@link OrderedMessage}'s are delivered in {@link OrderedMessage#getOrder()} per
  * {@link OrderedMessage#getKey()} across as many parallel message consumers as you wish to use.
  */
 public interface DurableQueues extends Lifecycle {
@@ -649,7 +648,7 @@ public interface DurableQueues extends Lifecycle {
      * Check if there are any ordered messages queued (ignoring the dead letter message flag) with the specified key in the given queue
      *
      * @param queueName the name of the queue to check
-     * @param key the key to check for
+     * @param key       the key to check for
      * @return true if there are ordered messages queued with the specified key in the given queue, otherwise false
      */
     boolean hasOrderedMessageQueuedForKey(QueueName queueName, String key);

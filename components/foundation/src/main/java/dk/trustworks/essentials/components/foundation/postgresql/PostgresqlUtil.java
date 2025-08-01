@@ -44,7 +44,7 @@ public final class PostgresqlUtil {
     /**
      * Checks if a specified PostgreSQL extension is available in the current database instance.
      *
-     * @param handle   the Jdbi {@code Handle} used to execute the query; must not be null
+     * @param handle    the Jdbi {@code Handle} used to execute the query; must not be null
      * @param extension the name of the PostgreSQL extension to check; must not be null
      * @return {@code true} if the specified extension is available, {@code false} otherwise
      */
@@ -52,15 +52,14 @@ public final class PostgresqlUtil {
         requireNonNull(handle, "No handle provided");
         requireNonNull(extension, "No extension provided");
         return handle.createQuery("""
-                                    SELECT exists(
-                                        SELECT 1
-                                        FROM pg_extension
-                                        WHERE extname = :extension
-                                    );
-                """)
-                .bind("extension", extension)
-                .mapTo(Boolean.class)
-                .first();
+                                  SELECT exists(
+                                      SELECT 1
+                                      FROM pg_extension
+                                      WHERE extname = :extension
+                                  );""")
+                     .bind("extension", extension)
+                     .mapTo(Boolean.class)
+                     .first();
     }
 
     /**
@@ -69,7 +68,7 @@ public final class PostgresqlUtil {
      *
      * @param e the exception to analyze; must not be null
      * @return true if the root cause of the exception indicates that a PostgreSQL extension
-     *         must be loaded via `shared_preload_libraries`, false otherwise
+     * must be loaded via `shared_preload_libraries`, false otherwise
      * @throws IllegalArgumentException if the provided exception is null
      */
     public static boolean isPGExtensionNotLoadedException(Exception e) {
@@ -126,7 +125,7 @@ public final class PostgresqlUtil {
             "DROP", "EXISTS", "EXPLAIN",
             "CLOB", "BLOB", "NBLOB", "NCHAR",
             "SAVEPOINT", "TIMESTAMPZ",
-            "VACUUM",  "VIEW",
+            "VACUUM", "VIEW",
 
             // Reserved Keywords  "Table C.1. SQL Key Words" on https://www.postgresql.org/docs/current/sql-keywords-appendix.html where
             // the "SQL:2023", "SQL:2016" or "SQL-92" columns  specifies "reserved
@@ -152,7 +151,7 @@ public final class PostgresqlUtil {
             "REGR_SXX", "REGR_SXY", "REGR_SYY", "RELATIVE", "RELEASE", "REPEAT", "RESIGNAL",
             "RESTRICT", "RESULT", "RETURN", "RETURNS", "REVOKE", "ROLE", "ROLLUP", "ROW",
             "ROW_NUMBER", "ROWS", "SCOPE", "SCROLL", "SEARCH", "SECOND", "SECTION", "SENSITIVE",
-            "SET", "SIGNAL","SPECIFIC", "SPECIFICTYPE", "SQL", "SQLEXCEPTION",
+            "SET", "SIGNAL", "SPECIFIC", "SPECIFICTYPE", "SQL", "SQLEXCEPTION",
             "SQLSTATE", "SQLWARNING", "SQRT", "STACKED", "START", "STATIC", "STDDEV_POP",
             "STDDEV_SAMP", "SUBSTRING", "SUM", "SYSTEM", "SYSTEM_USER", "TABLESAMPLE",
             "TIMEZONE_HOUR", "TIMEZONE_MINUTE", "TRANSLATE",
@@ -164,31 +163,31 @@ public final class PostgresqlUtil {
             "XMLPARSE", "XMLPI", "XMLQUERY", "XMLROOT", "XMLSCHEMA", "XMLSERIALIZE", "XMLTABLE",
             "YEAR", "ZONE");
 
-            /**
-             * Validates whether the provided table or column name is valid according to PostgreSQL naming conventions
-             * and does not conflict with reserved keywords.<br>
-             * <br>
-             * The method provided is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
-             * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String, String)} does not offer exhaustive protection, nor does it assure
-             * the complete security of the resulting SQL against SQL injection threats.<br>
-             * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
-             * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
-             * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
-             * <p>
-             * The method checks if the {@code tableOrColumnName}:
-             * <ul>
-             *     <li>Is not null, empty, and does not consist solely of whitespace.</li>
-             *     <li>Does not match any PostgreSQL reserved keyword (case-insensitive check).</li>
-             *     <li>Contains only characters valid for PostgreSQL identifiers: letters, digits, and underscores,
-             *         and does not start with a digit.</li>
-             * </ul>
-             * <p>
-             *
-             * @param tableOrColumnName the table or column name to validate.
-             * @param context           optional context that will be included in any error message. null value means no context is provided
-             * @throws InvalidTableOrColumnNameException if the provided name is null, empty, matches a reserved keyword,
-             *                                           or contains invalid characters.
-             */
+    /**
+     * Validates whether the provided table or column name is valid according to PostgreSQL naming conventions
+     * and does not conflict with reserved keywords.<br>
+     * <br>
+     * The method provided is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
+     * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String, String)} does not offer exhaustive protection, nor does it assure
+     * the complete security of the resulting SQL against SQL injection threats.<br>
+     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
+     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
+     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
+     * <p>
+     * The method checks if the {@code tableOrColumnName}:
+     * <ul>
+     *     <li>Is not null, empty, and does not consist solely of whitespace.</li>
+     *     <li>Does not match any PostgreSQL reserved keyword (case-insensitive check).</li>
+     *     <li>Contains only characters valid for PostgreSQL identifiers: letters, digits, and underscores,
+     *         and does not start with a digit.</li>
+     * </ul>
+     * <p>
+     *
+     * @param tableOrColumnName the table or column name to validate.
+     * @param context           optional context that will be included in any error message. null value means no context is provided
+     * @throws InvalidTableOrColumnNameException if the provided name is null, empty, matches a reserved keyword,
+     *                                           or contains invalid characters.
+     */
 
     public static void checkIsValidTableOrColumnName(String tableOrColumnName, String context) {
         if (tableOrColumnName == null || tableOrColumnName.trim().isEmpty()) {
@@ -218,7 +217,7 @@ public final class PostgresqlUtil {
      * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
      * SQL against SQL injection threats.<br>
      * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
-     * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      * <p>
      * The method checks if the {@code tableOrColumnName}:
@@ -237,16 +236,16 @@ public final class PostgresqlUtil {
     public static void checkIsValidTableOrColumnName(String tableOrColumnName) {
         checkIsValidTableOrColumnName(tableOrColumnName, null);
     }
- 
+
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    
+
     /**
      * A compiled regex pattern used to validate the format of SQL function names.
      * The pattern enforces the following rules:
      * 1. The name must start with a letter (a-z or A-Z) or an underscore (_).
      * 2. Subsequent characters can include letters, digits (0-9), or underscores (_).
      * 3. The length of the name must not exceed 63 characters.
-     *
+     * <p>
      * This pattern is designed to ensure compliance with SQL naming conventions
      * and avoid potential conflicts with system or reserved identifiers.
      */
@@ -259,16 +258,22 @@ public final class PostgresqlUtil {
      * 2. Each part must start with a letter (a-z or A-Z) or an underscore (_).
      * 3. Each part can contain letters, digits (0-9), or underscores (_) after the initial character.
      * 4. Each part must not exceed 63 characters in length.
-     *
+     * <p>
      * This pattern ensures that the function name adheres to SQL naming conventions,
      * including support for fully qualified names in the format of `schema_name.function_name`.
      */
     public static final Pattern QUALIFIED_FN_NAME =
             Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,62}\\.[a-zA-Z_][a-zA-Z0-9_]{0,62}$");
 
-
     /**
      * Validates whether the given string is a valid SQL function name.
+     * <p>
+     * This method is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
+     * However, Essentials components as well as {@link PostgresqlUtil#isValidFunctionName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
+     * SQL against SQL injection threats.<br>
+     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
+     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
+     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
      *
      * <p>The method enforces PostgreSQL SQL naming conventions for function names. A valid function name:
      * <ul>
@@ -281,7 +286,7 @@ public final class PostgresqlUtil {
      *
      * @param functionName The name of the SQL function to validate, either fully qualified or unqualified.
      * @return {@code true} if the provided {@code functionName} is valid according to PostgreSQL naming conventions
-     *         and does not contain reserved keywords; {@code false} otherwise.
+     * and does not contain reserved keywords; {@code false} otherwise.
      *
      * <p>Usage example:
      * <pre>

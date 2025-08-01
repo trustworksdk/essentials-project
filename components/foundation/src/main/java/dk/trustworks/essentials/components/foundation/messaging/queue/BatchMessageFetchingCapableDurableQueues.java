@@ -20,6 +20,7 @@ import java.util.*;
 /**
  * Extension interface for {@link DurableQueues} implementations that support batch fetching of messages
  * across multiple queues in a single operation.
+ *
  * @see CentralizedMessageFetcher
  */
 public interface BatchMessageFetchingCapableDurableQueues extends DurableQueues {
@@ -37,7 +38,18 @@ public interface BatchMessageFetchingCapableDurableQueues extends DurableQueues 
                                                  Map<QueueName, Set<String>> excludeKeysPerQueue,
                                                  Map<QueueName, Integer> availableWorkerSlotsPerQueue);
 
+    /**
+     * Fetches the next batch of messages across multiple queues in one round-trip, applying per-queue backoff/skip logic and updating each queue’s optimizer.<br>
+     * It filters out messages based on excluded keys and the number of available worker slots in each queue.
+     *
+     * @param queueNames                   a collection of {@link QueueName} objects representing the queues to fetch messages from
+     * @param excludeKeysPerQueue          a map associating each {@link QueueName} with a set of keys to exclude from the batch (required for in-order delivery scenarios)
+     * @param availableWorkerSlotsPerQueue a map associating each {@link QueueName} with the count of available worker slots
+     *                                      indicating how many messages can be fetched for that queue
+     * @return a list of {@link QueuedMessage} objects representing the messages ready for delivery, respecting the
+     *         constraints defined by the input parameters
+     */
     List<QueuedMessage> fetchNextBatchOfMessagesBatched(Collection<QueueName> queueNames,
-                                                 Map<QueueName, Set<String>> excludeKeysPerQueue,
-                                                 Map<QueueName, Integer> availableWorkerSlotsPerQueue);
+                                                        Map<QueueName, Set<String>> excludeKeysPerQueue,
+                                                        Map<QueueName, Integer> availableWorkerSlotsPerQueue);
 }

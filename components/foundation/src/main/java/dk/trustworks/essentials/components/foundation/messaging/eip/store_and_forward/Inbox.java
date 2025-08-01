@@ -112,7 +112,7 @@ public interface Inbox {
     void deleteAllMessages();
 
     /**
-     * Register or add a message (with meta-data) that has been received<br>
+     * Register or add a message (with meta-data) that has been received. The payload will be converted to a {@link Message}<br>
      * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The message will be delivered asynchronously to the message consumer
@@ -126,14 +126,14 @@ public interface Inbox {
     }
 
     /**
-     * Register or add a message (with meta-data) that has been received and where the message should be delivered later<br>
-     * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork} 
+     * Register or add a message (with meta-data) that has been received and where the message should be delivered later. The payload will be converted to a {@link Message}<br>
+     * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The message will be delivered asynchronously to the message consumer
      *
-     * @param payload  the message payload
-     * @param metaData the message meta-data
-     * @param deliveryDelay    duration before the message should be delivered
+     * @param payload       the message payload
+     * @param metaData      the message meta-data
+     * @param deliveryDelay duration before the message should be delivered
      * @return this inbox instance
      */
     default Inbox addMessageReceived(Object payload, MessageMetaData metaData, Duration deliveryDelay) {
@@ -141,8 +141,8 @@ public interface Inbox {
     }
 
     /**
-     * Register or add a message (without meta-data) that has been received<br>
-     * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork} 
+     * Register or add a message (without meta-data) that has been received. The payload will be converted to a {@link Message}<br>
+     * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The message will be delivered asynchronously to the message consumer
      *
@@ -153,13 +153,13 @@ public interface Inbox {
     }
 
     /**
-     * Register or add a message (without meta-data) that has been received and where the message should be delivered later<br>
+     * Register or add a message (without meta-data) that has been received and where the message should be delivered later. The payload will be converted to a {@link Message}<br>
      * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The message will be delivered asynchronously to the message consumer
      *
-     * @param payload the message payload
-     * @param deliveryDelay   duration before the message should be delivered
+     * @param payload       the message payload
+     * @param deliveryDelay duration before the message should be delivered
      */
     default Inbox addMessageReceived(Object payload, Duration deliveryDelay) {
         return addMessageReceived(new Message(payload), deliveryDelay);
@@ -196,7 +196,7 @@ public interface Inbox {
 
     /**
      * Register or add a message that has been received<br>
-     * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork} 
+     * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The message will be delivered asynchronously to the message consumer
      *
@@ -208,12 +208,12 @@ public interface Inbox {
 
     /**
      * Register or add a message that has been received and where the message should be delivered later<br>
-     * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork} 
+     * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The message will be delivered asynchronously to the message consumer
      *
-     * @param message the message
-     * @param deliveryDelay   duration before the message should be delivered
+     * @param message       the message
+     * @param deliveryDelay duration before the message should be delivered
      * @return this inbox instance
      * @see OrderedMessage
      */

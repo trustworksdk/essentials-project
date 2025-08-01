@@ -113,7 +113,7 @@ public interface Outbox {
     void deleteAllMessages();
 
     /**
-     * Send a message (without meta-data) asynchronously.<br>
+     * Send a message (without meta-data) asynchronously. The payload will be converted to a {@link Message}<br>
      * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The message will be delivered asynchronously to the message consumer
@@ -140,7 +140,7 @@ public interface Outbox {
     }
 
     /**
-     * Send a message (with meta-data) asynchronously.<br>
+     * Send a message (with meta-data) asynchronously. The payload will be converted to a {@link Message}<br>
      * This message will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The message will be delivered asynchronously to the message consumer
@@ -183,8 +183,7 @@ public interface Outbox {
     }
 
     /**
-     * Send a list of message payloads with delayed delivery.
-     * The payloads will be converted to {@link Message}'s<br>
+     * Send a list of message payloads with delayed delivery. The payloads will be converted to {@link Message}'s<br>
      * These messages will be stored durably (without any duplication check) in connection with the currently active {@link UnitOfWork}
      * (or a new {@link UnitOfWork} will be created in case there isn't an active {@link UnitOfWork}).<br>
      * The messages will be delivered asynchronously to the message consumer
