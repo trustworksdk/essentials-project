@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.Ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.foundation.types.RandomIdGenerator;
 import dk.trustworks.essentials.types.NumberType;
 
 import java.util.*;
@@ -39,7 +40,23 @@ public final class AppendToStream<ID> {
      */
     public final AggregateType  aggregateType;
     /**
-     * the identifier of the aggregate we want to persist events related to
+     * The identifier of the aggregate we want to persist events related to
+     * <p>
+     * In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+     * <ul>
+     *   <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+     *   <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+     *   <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+     * </ul>
+     *
+     * <p>
+     *     <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+     * </p>
+     * <ul>
+     *   <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+     *   <li>Never contain user-supplied input without proper validation</li>
+     *   <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+     * </ul>
      */
     public final ID             aggregateId;
     private      Optional<Long> appendEventsAfterEventOrder;
@@ -63,7 +80,23 @@ public final class AppendToStream<ID> {
      * IF you know the last persisted aggregate event order then please use {@link #AppendToStream(AggregateType, Object, Optional, List)} constructor
      *
      * @param aggregateType  the aggregate type that the underlying {@link AggregateEventStream} is associated with
-     * @param aggregateId    the identifier of the aggregate we want to persist events related to
+     * @param aggregateId    the identifier of the aggregate we want to persist eventsToAppend related to<br>
+     *                       <p>
+     *                       In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+     *                       <ul>
+     *                         <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+     *                         <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+     *                         <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+     *                       </ul>
+     *
+     *                       <p>
+     *                           <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+     *                       </p>
+     *                       <ul>
+     *                         <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+     *                         <li>Never contain user-supplied input without proper validation</li>
+     *                         <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+     *                       </ul>
      * @param eventsToAppend the events to persist/append
      */
     public AppendToStream(AggregateType aggregateType, ID aggregateId, List<?> eventsToAppend) {
@@ -82,7 +115,23 @@ public final class AppendToStream<ID> {
      * IF you know the last persisted aggregate event order then please use {@link #AppendToStream(AggregateType, Object, Optional, List)} constructor
      *
      * @param aggregateType  the aggregate type that the underlying {@link AggregateEventStream} is associated with
-     * @param aggregateId    the identifier of the aggregate we want to persist events related to
+     * @param aggregateId    the identifier of the aggregate we want to persist eventsToAppend related to<br>
+     *                       <p>
+     *                       In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+     *                       <ul>
+     *                         <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+     *                         <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+     *                         <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+     *                       </ul>
+     *
+     *                       <p>
+     *                           <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+     *                       </p>
+     *                       <ul>
+     *                         <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+     *                         <li>Never contain user-supplied input without proper validation</li>
+     *                         <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+     *                       </ul>
      * @param eventsToAppend the events to persist/append
      */
     public AppendToStream(AggregateType aggregateType, ID aggregateId, Object... eventsToAppend) {
@@ -97,7 +146,23 @@ public final class AppendToStream<ID> {
      * is associated with the <code>aggregateType</code>
      *
      * @param aggregateType               the aggregate type that the underlying {@link AggregateEventStream} is associated with
-     * @param aggregateId                 the identifier of the aggregate we want to persist events related to
+     * @param aggregateId                 the identifier of the aggregate we want to persist eventsToAppend related to<br>
+     *                                    <p>
+     *                                    In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+     *                                    <ul>
+     *                                      <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+     *                                      <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+     *                                      <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+     *                                    </ul>
+     *
+     *                                    <p>
+     *                                        <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+     *                                    </p>
+     *                                    <ul>
+     *                                      <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+     *                                      <li>Never contain user-supplied input without proper validation</li>
+     *                                      <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+     *                                    </ul>
      * @param appendEventsAfterEventOrder append the <code>events</code> after this event order, i.e. the first event in the <code>events</code> list
      *                                    will receive an {@link PersistedEvent#eventOrder()} which is <code>appendEventsAfterEventOrder +  1</code><br>
      *                                    If it's the very first event to be appended, then you can provide {@link EventOrder#NO_EVENTS_PREVIOUSLY_PERSISTED}<br>
@@ -188,6 +253,24 @@ public final class AppendToStream<ID> {
     }
 
     /**
+     * The identifier of the aggregate we want to persist events related to
+     * <p>
+     * In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+     * <ul>
+     *   <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+     *   <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+     *   <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+     * </ul>
+     *
+     * <p>
+     *     <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+     * </p>
+     * <ul>
+     *   <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+     *   <li>Never contain user-supplied input without proper validation</li>
+     *   <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+     * </ul>
+     *
      * @return the identifier of the aggregate we want to persist events related to
      */
     public ID getAggregateId() {

@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -37,6 +37,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * It integrates with a distributed locking mechanism to ensure exclusive access during processing.<br>
  * {@link PersistedEvent}'s are processed directly and only in case of an error handling the event will this event (and later events associated with the same aggregate id)
  * by queued onto the underlying durable queue associated with this processor.
+ * <p>
+ * <h3>Event Queuing</h3>
+ * When events from the {@link EventStore} need to be queued for processing, they are converted to {@link OrderedMessage}s where:
+ * <ul>
+ *  <li>The event's {@link PersistedEvent#aggregateId()} becomes the {@link OrderedMessage#getKey()}</li>
+ *  <li>The event's {@link PersistedEvent#eventOrder()} becomes the {@link OrderedMessage#getOrder()}</li>
+ * </ul>
+ * <p>
  */
 public abstract class ViewEventProcessor extends AbstractEventProcessor {
     private final Logger                        logger = LoggerFactory.getLogger(this.getClass());
