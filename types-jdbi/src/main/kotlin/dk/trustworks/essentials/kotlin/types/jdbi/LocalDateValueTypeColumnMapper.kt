@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.kotlin.types.jdbi
 
-import dk.trustworks.essentials.kotlin.types.*
+import dk.trustworks.essentials.kotlin.types.LocalDateValueType
 import dk.trustworks.essentials.shared.types.GenericType
 import org.jdbi.v3.core.mapper.ColumnMapper
 import org.jdbi.v3.core.statement.StatementContext
@@ -30,6 +30,7 @@ import kotlin.reflect.full.primaryConstructor
  *
  * @param <T> the concrete [LocalDateValueType] this instance is mapping
  */
+@Suppress("UNCHECKED_CAST")
 abstract class LocalDateValueTypeColumnMapper<T : LocalDateValueType<T>> : ColumnMapper<T?> {
     private val concreteType: KClass<T>
 

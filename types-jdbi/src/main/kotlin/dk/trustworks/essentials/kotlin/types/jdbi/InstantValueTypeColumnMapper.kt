@@ -30,6 +30,7 @@ import kotlin.reflect.full.primaryConstructor
  *
  * @param <T> the concrete [InstantValueType] this instance is mapping
  */
+@Suppress("UNCHECKED_CAST")
 abstract class InstantValueTypeColumnMapper<T : InstantValueType<T>> : ColumnMapper<T?> {
     private val concreteType: KClass<T>
 

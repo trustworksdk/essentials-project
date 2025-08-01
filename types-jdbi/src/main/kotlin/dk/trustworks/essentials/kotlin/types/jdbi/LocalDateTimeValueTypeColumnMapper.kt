@@ -30,6 +30,7 @@ import kotlin.reflect.full.primaryConstructor
  *
  * @param <T> the concrete [LocalDateTimeValueType] this instance is mapping
  */
+@Suppress("UNCHECKED_CAST")
 abstract class LocalDateTimeValueTypeColumnMapper<T : LocalDateTimeValueType<T>> : ColumnMapper<T?> {
     private val concreteType: KClass<T>
 

@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.kotlin.types.jdbi
 
-import dk.trustworks.essentials.kotlin.types.*
+import dk.trustworks.essentials.kotlin.types.LongValueType
 import dk.trustworks.essentials.shared.types.GenericType
 import org.jdbi.v3.core.mapper.ColumnMapper
 import org.jdbi.v3.core.statement.StatementContext
@@ -30,6 +30,7 @@ import kotlin.reflect.full.primaryConstructor
  *
  * @param <T> the concrete [LongValueType] this instance is mapping
  */
+@Suppress("UNCHECKED_CAST")
 abstract class LongValueTypeColumnMapper<T : LongValueType<T>> : ColumnMapper<T?> {
     private val concreteType: KClass<T>
 

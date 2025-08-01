@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.kotlin.types.jdbi
 
-import dk.trustworks.essentials.kotlin.types.*
+import dk.trustworks.essentials.kotlin.types.ZonedDateTimeValueType
 import dk.trustworks.essentials.shared.types.GenericType
 import org.jdbi.v3.core.mapper.ColumnMapper
 import org.jdbi.v3.core.statement.StatementContext
@@ -32,6 +32,7 @@ import kotlin.reflect.full.primaryConstructor
  *
  * @param <T> the concrete [ZonedDateTimeValueType] this instance is mapping
  */
+@Suppress("UNCHECKED_CAST")
 abstract class ZonedDateTimeValueTypeColumnMapper<T : ZonedDateTimeValueType<T>> : ColumnMapper<T?> {
     private val concreteType: KClass<T>
 
