@@ -17,6 +17,9 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import dk.trustworks.essentials.components.foundation.types.RandomIdGenerator;
+
+import java.util.UUID;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -56,7 +59,23 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * }
  * }</pre>
  *
- * @param <ID>             the type of id
+ * @param <ID>             The id type for the aggregate id
+ *                         <p>
+ *                         In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+ *                         <ul>
+ *                           <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+ *                           <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+ *                           <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+ *                         </ul>
+ *
+ *                         <p>
+ *                             <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+ *                         </p>
+ *                         <ul>
+ *                           <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+ *                           <li>Never contain user-supplied input without proper validation</li>
+ *                           <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+ *                         </ul>
  * @param <EVENT_TYPE>     the type of event
  * @param <AGGREGATE_TYPE> the aggregate root type
  */
