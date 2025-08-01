@@ -31,6 +31,7 @@ import kotlin.reflect.full.primaryConstructor
  *
  * @param <T> the concrete [BigIntegerValueType] this instance is mapping
  */
+@Suppress("UNCHECKED_CAST")
 abstract class BigIntegerValueTypeColumnMapper<T : BigIntegerValueType<T>> : ColumnMapper<T?> {
     private val concreteType: KClass<T>
 

@@ -30,6 +30,7 @@ import kotlin.reflect.full.primaryConstructor
  *
  * @param <T> the concrete [ByteValueType] this instance is mapping
  */
+@Suppress("UNCHECKED_CAST")
 abstract class ByteValueTypeColumnMapper<T : ByteValueType<T>> : ColumnMapper<T?> {
     private val concreteType: KClass<T>
 
