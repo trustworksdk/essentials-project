@@ -90,6 +90,7 @@ import kotlin.reflect.full.primaryConstructor
  * @see DocumentDbRepository
  * @see DocumentDbRepositoryFactory
  */
+@Suppress("UNCHECKED_CAST")
 class PostgresqlDocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID>(
     private val unitOfWorkFactory: HandleAwareUnitOfWorkFactory<out HandleAwareUnitOfWork>,
     entityClass: KClass<ENTITY>,
