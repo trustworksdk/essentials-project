@@ -87,8 +87,6 @@ public interface AggregateSnapshotDeletionStrategy {
 
         /**
          * Strategy that keeps all historic aggregate snapshots
-         *
-         * @return Strategy that keeps all historic aggregate snapshots
          */
         public KeepHistoricSnapshots() {
             numberOfHistoricSnapshotsToKeep = Long.MAX_VALUE;
