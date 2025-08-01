@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.clas
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import dk.trustworks.essentials.components.foundation.types.RandomIdGenerator;
 import dk.trustworks.essentials.shared.reflection.invocation.*;
 import dk.trustworks.essentials.shared.types.GenericType;
 
@@ -45,7 +46,23 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * <p>
  * You don't have to use the {@link AggregateRoot} IF it doesn't fit your purpose. It's always possible to build your own {@link Aggregate} concept.<br>
  *
- * @param <ID>             the aggregate id type
+ * @param <ID>             The id type for the aggregate id
+ *                         <p>
+ *                         In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
+ *                         <ul>
+ *                           <li><b>Event Organization</b>: All events related to a specific aggregate instance share the same Aggregate-Id, allowing for easy tracking and retrieval of an aggregate's complete history.</li>
+ *                           <li><b>Stream Identification</b>: The Aggregate-Id helps identify which event stream an event belongs to, making it possible to rebuild the aggregate's state by replaying all events with the same ID.</li>
+ *                           <li><b>Concurrency Control</b>: Used to ensure that events for the same aggregate instance are processed in the correct order and to detect potential conflicts.</li>
+ *                         </ul>
+ *
+ *                         <p>
+ *                             <b>IMPORTANT</b>: For security reasons, Aggregate-Id's should:
+ *                         </p>
+ *                         <ul>
+ *                           <li>Be generated using secure methods (e.g., {@link RandomIdGenerator#generate()} or {@link UUID#randomUUID()})</li>
+ *                           <li>Never contain user-supplied input without proper validation</li>
+ *                           <li>Use safe characters to prevent SQL injection attacks when used in database operations that perform SQL string concatenation</li>
+ *                         </ul>
  * @param <EVENT_TYPE>     the type of event
  * @param <AGGREGATE_TYPE> the aggregate self type (i.e. your concrete aggregate type)
  * @see AggregateRootWithState
@@ -57,7 +74,7 @@ public abstract class AggregateRoot<ID, EVENT_TYPE extends Event<ID>, AGGREGATE_
     /**
      * Zero based event order
      */
-    private           EventOrder                              eventOrderOfLastAppliedEvent = EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED;
+    private           EventOrder                              eventOrderOfLastAppliedEvent    = EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED;
     private           boolean                                 hasBeenRehydrated;
     private           boolean                                 isRehydrating;
     private           EventOrder                              eventOrderOfLastRehydratedEvent = EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED;

@@ -55,7 +55,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
  * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
  * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes</b>.<br>
- * Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+ * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
  * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
  * It is highly recommended that the {@code snapshotTableName} value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code snapshotTableName} value.<br>
@@ -117,7 +117,7 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      *                          The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
      *                          However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
      *                          <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes</b>.<br>
-     *                          Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+     *                          Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      *                          Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      *                          It is highly recommended that the {@code snapshotTableName} value is only derived from a controlled and trusted source.<br>
      *                          To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code snapshotTableName} value.<br>
@@ -155,7 +155,7 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      *                                 The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
      *                                 However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
      *                                 <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes</b>.<br>
-     *                                 Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+     *                                 Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      *                                 Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      *                                 It is highly recommended that the {@code snapshotTableName} value is only derived from a controlled and trusted source.<br>
      *                                 To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code snapshotTableName} value.<br>
@@ -219,7 +219,7 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      *                                 The {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
      *                                 However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.<br>
      *                                 <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes</b>.<br>
-     *                                 Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names.<br>
+     *                                 Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      *                                 Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      *                                 It is highly recommended that the {@code snapshotTableName} value is only derived from a controlled and trusted source.<br>
      *                                 To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code snapshotTableName} value.<br>
