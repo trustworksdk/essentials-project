@@ -68,13 +68,13 @@ To use `spring-boot-starter-postgresql` to add the following dependency:
     essentials.durable-queues.shared-queue-table-name=durable_queues
     essentials.durable-queues.use-centralized-message-fetcher=true (default)
     essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms (default)
-    essentials.durable-queues.centralized-message-polling-delay-back-off-factor=1.5 (default)
+    essentials.durable-queues.centralized-polling-delay-back-off-factor=1.5 (default)
     essentials.durable-queues.use-ordered-unordered-query=true (default)
-    essentials.durable-queues.transactional-mode=fullytransactional or singleoperationtransaction (default)
+    essentials.durable-queues.transactional-mode=single-operation-transaction (default) or fully-transactional
     essentials.durable-queues.polling-delay-interval-increment-factor=0.5
     essentials.durable-queues.max-polling-interval=2s
     essentials.durable-queues.verbose-tracing=false
-    # Relevant if transactional-mode=singleoperationtransaction (the default)
+    # Relevant if transactional-mode=single-operation-transaction (the default)
     essentials.durable-queues.message-handling-timeout=5s
     ```
   - **Security Notice regarding `essentials.durable-queues.shared-queue-table-name`:**
