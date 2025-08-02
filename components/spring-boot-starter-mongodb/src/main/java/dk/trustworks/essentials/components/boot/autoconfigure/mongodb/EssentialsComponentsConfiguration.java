@@ -312,11 +312,11 @@ public class EssentialsComponentsConfiguration {
                                        EssentialsComponentsProperties properties,
                                        List<DurableQueuesInterceptor> durableQueuesInterceptors) {
         Function<ConsumeFromQueue, QueuePollingOptimizer> pollingOptimizerFactory =
-                consumeFromQueue -> new QueuePollingOptimizer.SimpleQueuePollingOptimizer(consumeFromQueue,
-                                                                                          (long) (consumeFromQueue.getPollingInterval().toMillis() *
+                consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue,
+                                                                    (long) (consumeFromQueue.getPollingInterval().toMillis() *
                                                                                                   properties.getDurableQueues()
                                                                                                             .getPollingDelayIntervalIncrementFactor()),
-                                                                                          properties.getDurableQueues()
+                                                                    properties.getDurableQueues()
                                                                                                     .getMaxPollingInterval()
                                                                                                     .toMillis()
                 );
