@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.postgresql;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueuePollingOptimizer;
+import dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesLoadIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork;
@@ -55,7 +55,7 @@ abstract class PostgresqlDurableQueuesLoadIT extends DurableQueuesLoadIT<Postgre
     protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory) {
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
-                                      .setQueuePollingOptimizerFactory(consumeFromQueue -> new QueuePollingOptimizer.SimpleQueuePollingOptimizer(consumeFromQueue, 100, 1000))
+                                      .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue, 100, 1000))
                                       .setMultiTableChangeListener(new MultiTableChangeListener<>(unitOfWorkFactory.getJdbi(),
                                                                                                   Duration.ofMillis(100),
                                                                                                   new JacksonJSONSerializer(

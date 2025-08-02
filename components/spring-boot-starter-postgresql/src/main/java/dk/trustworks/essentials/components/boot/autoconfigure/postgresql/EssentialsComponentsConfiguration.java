@@ -284,11 +284,11 @@ public class EssentialsComponentsConfiguration {
                                                    .setMultiTableChangeListener(optionalMultiTableChangeListener.orElse(null))
                                                    .setUseCentralizedMessageFetcher(properties.getDurableQueues().isUseCentralizedMessageFetcher())
                                                    .setCentralizedMessageFetcherPollingInterval(properties.getDurableQueues().getCentralizedMessageFetcherPollingInterval())
-                                                   .setQueuePollingOptimizerFactory(consumeFromQueue -> new QueuePollingOptimizer.SimpleQueuePollingOptimizer(consumeFromQueue,
-                                                                                                                                                              (long) (consumeFromQueue.getPollingInterval().toMillis() *
+                                                   .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue,
+                                                                                                                                        (long) (consumeFromQueue.getPollingInterval().toMillis() *
                                                                                                                                                                       properties.getDurableQueues()
                                                                                                                                                                                 .getPollingDelayIntervalIncrementFactor()),
-                                                                                                                                                              properties.getDurableQueues()
+                                                                                                                                        properties.getDurableQueues()
                                                                                                                                                                         .getMaxPollingInterval()
                                                                                                                                                                         .toMillis()
                                                    ))
