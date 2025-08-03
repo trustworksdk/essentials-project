@@ -137,7 +137,7 @@ public abstract class AbstractCommandBus implements CommandBus {
     public CommandHandler findCommandHandlerCapableOfHandling(Object command) {
         requireNonNull(command, "No command provided");
         return commandTypeToCommandHandlerCache.computeIfAbsent(command.getClass(), commandType -> {
-            var commandHandlersThatCanHandleCommand = commandHandlers.stream().filter(commandHandler -> commandHandler.canHandle(commandType)).collect(Collectors.toList());
+            var commandHandlersThatCanHandleCommand = commandHandlers.stream().filter(commandHandler -> commandHandler.canHandle(commandType)).toList();
             if (commandHandlersThatCanHandleCommand.isEmpty()) {
                 throw new NoCommandHandlerFoundException(commandType, msg("Couldn't find a {} that can handle a command of type '{}'", CommandHandler.class.getSimpleName(), commandType.getName()));
             } else if (commandHandlersThatCanHandleCommand.size() > 1) {
