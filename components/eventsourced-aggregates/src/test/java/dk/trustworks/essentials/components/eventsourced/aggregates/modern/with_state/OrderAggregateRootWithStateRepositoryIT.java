@@ -25,19 +25,16 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.OrderEvent;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
-import dk.trustworks.essentials.reactive.EventHandler;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -58,9 +55,9 @@ class OrderAggregateRootWithStateRepositoryIT {
     public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
     public static final AggregateType ORDERS    = AggregateType.of("Orders");
 
-    private Jdbi                                                             jdbi;
-    private AggregateType                                                    aggregateType;
-    private EventStoreUnitOfWorkFactory<EventStoreUnitOfWork>                unitOfWorkFactory;
+    private Jdbi                                                                    jdbi;
+    private AggregateType                                                           aggregateType;
+    private EventStoreUnitOfWorkFactory<EventStoreUnitOfWork>                       unitOfWorkFactory;
     private TestPersistableEventMapper                                              eventMapper;
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
@@ -304,26 +301,6 @@ class OrderAggregateRootWithStateRepositoryIT {
         return objectMapper;
     }
 
-    private static class TestPersistableEventMapper implements PersistableEventMapper {
-        private final CorrelationId correlationId   = CorrelationId.random();
-        private final EventId       causedByEventId = EventId.random();
-
-        @Override
-        public PersistableEvent map(Object aggregateId, AggregateEventStreamConfiguration aggregateEventStreamConfiguration, Object event, EventOrder eventOrder) {
-            return PersistableEvent.from(EventId.random(),
-                                         aggregateEventStreamConfiguration.aggregateType,
-                                         aggregateId,
-                                         EventTypeOrName.with(event.getClass()),
-                                         event,
-                                         eventOrder,
-                                         EventRevision.of(1),
-                                         META_DATA,
-                                         OffsetDateTime.now(),
-                                         causedByEventId,
-                                         correlationId,
-                                         null);
-        }
-    }
 
     /**
      * Simple test in memory projector that just returns the underlying list of {@link PersistedEvent}'s
@@ -345,27 +322,4 @@ class OrderAggregateRootWithStateRepositoryIT {
         }
     }
 
-    private static class RecordingLocalEventBusConsumer implements EventHandler {
-        private final List<PersistedEvent> beforeCommitPersistedEvents  = new ArrayList<>();
-        private final List<PersistedEvent> afterCommitPersistedEvents   = new ArrayList<>();
-        private final List<PersistedEvent> afterRollbackPersistedEvents = new ArrayList<>();
-
-        @Override
-        public void handle(Object event) {
-            var persistedEvents = (PersistedEvents)event;
-            if (persistedEvents.commitStage == CommitStage.BeforeCommit) {
-                beforeCommitPersistedEvents.addAll(persistedEvents.events);
-            } else if (persistedEvents.commitStage == CommitStage.AfterCommit) {
-                afterCommitPersistedEvents.addAll(persistedEvents.events);
-            } else {
-                afterRollbackPersistedEvents.addAll(persistedEvents.events);
-            }
-        }
-
-        private void clear() {
-            beforeCommitPersistedEvents.clear();
-            afterCommitPersistedEvents.clear();
-            afterRollbackPersistedEvents.clear();
-        }
-    }
 }

@@ -18,8 +18,8 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.stateful;
 
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
-import dk.trustworks.essentials.components.eventsourced.aggregates.modern.Order;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.*;
+import dk.trustworks.essentials.components.eventsourced.aggregates.modern.Order;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
@@ -94,7 +94,7 @@ public class StatefulAggregateRepositoryCombinedWithInTransactionEventProcessorI
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
-                                                                                                     new StatefulAggregateRepositoryIT.TestPersistableEventMapper(),
+                                                                                                     new TestPersistableEventMapper(),
                                                                                                      aggregateEventStreamConfigurationFactory));
 
         lockManager = PostgresqlFencedLockManager.builder()
