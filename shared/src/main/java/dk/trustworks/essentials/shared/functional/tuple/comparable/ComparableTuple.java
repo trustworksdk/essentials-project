@@ -31,6 +31,7 @@ import java.util.*;
  *     <tr><td>1</td><td>{@link ComparableSingle}</td><td>{@link ComparableTuple#of(Comparable)}</td></tr>
  *     <tr><td>2</td><td>{@link ComparablePair}</td><td>{@link ComparableTuple#of(Comparable, Comparable)}</td></tr>
  *     <tr><td>3</td><td>{@link ComparableTriple}</td><td>{@link ComparableTuple#of(Comparable, Comparable, Comparable)}</td></tr>
+ *     <tr><td>4</td><td>{@link ComparableQuad}</td><td>{@link ComparableTuple#of(Comparable, Comparable, Comparable, Comparable)}</td></tr>
  * </table>
  * <br>
  * <b>Note</b>: {@link ComparableTuple} (and its subclasses) supports {@link Object#equals(Object)} comparison using subclasses for the different subclasses
@@ -124,5 +125,25 @@ public interface ComparableTuple<CONCRETE_TUPLE extends ComparableTuple<CONCRETE
             T2 extends Comparable<? super T2>,
             T3 extends Comparable<? super T3>> ComparableTriple<T1, T2, T3> of(T1 t1, T2 t2, T3 t3) {
         return new ComparableTriple<>(t1, t2, t3);
+    }
+
+    /**
+     * Create a new {@link ComparableTuple} with 4 elements
+     *
+     * @param t1   the first element
+     * @param t2   the second element
+     * @param t3   the third element
+     * @param t4   the fourth element
+     * @param <T1> the first element type
+     * @param <T2> the second element type
+     * @param <T3> the third element type
+     * @param <T4> the fourth element type
+     * @return the newly created {@link ComparableQuad} tuple
+     */
+    static <T1 extends Comparable<? super T1>,
+            T2 extends Comparable<? super T2>,
+            T3 extends Comparable<? super T3>,
+            T4 extends Comparable<? super T4>> ComparableQuad<T1, T2, T3, T4> of(T1 t1, T2 t2, T3 t3, T4 t4) {
+        return new ComparableQuad<>(t1, t2, t3, t4);
     }
 }

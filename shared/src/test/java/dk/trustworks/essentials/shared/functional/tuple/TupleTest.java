@@ -158,6 +158,53 @@ class TupleTest {
         assertThat(Tuple.of("Hi", "there", "World").toList()).isEqualTo(List.of("Hi", "there", "World"));
     }
 
+    @Test
+    void test_Quad() {
+        // Element accessors
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")._1).isEqualTo("Hi");
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")._2).isEqualTo("there");
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")._3).isEqualTo("beautiful");
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")._4).isEqualTo("World");
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")._1()).isEqualTo("Hi");
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")._2()).isEqualTo("there");
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")._3()).isEqualTo("beautiful");
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")._4()).isEqualTo("World");
+
+        // Equals
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isEqualTo(new Quad<>("Hi", "there", "beautiful", "World"));
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isEqualTo(new LeftMiddleRightAndBottom("Hi", "there", "beautiful", "World"));
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(Tuple.of("hi", "there", "beautiful", "World"));
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(Tuple.of("Hi", "There", "beautiful", "World"));
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(Tuple.of("Hi", "there", "Beautiful", "World"));
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(Tuple.of("Hi", "there", "beautiful", "world"));
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(Tuple.of("Hi"));
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(Tuple.of("Hi", "There"));
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(Tuple.of("Hi", "there", "beautiful"));
+
+        // HashCode
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World").hashCode()).isEqualTo(Tuple.of("Hi", "there", "beautiful", "World").hashCode());
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World").hashCode()).isNotEqualTo(Tuple.of("Hi", "There", "beautiful", "World").hashCode());
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World").hashCode()).isNotEqualTo(Tuple.of("Hi", "there", "Beautiful", "World").hashCode());
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World").hashCode()).isNotEqualTo(Tuple.of("Hi", "there", "beautiful", "world").hashCode());
+
+        // ToString
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World").toString()).isEqualTo("(Hi, there, beautiful, World)");
+
+        // Map
+        assertThat(Tuple.of(1, 2, 3, 4).map((t1, t2, t3, t4) -> Tuple.of(t1.toString(), t2.toString(), t3.toString(), t4.toString()))).isEqualTo(Tuple.of("1", "2", "3", "4"));
+        assertThat(Tuple.of("1", "2", "3", "4").map(Integer::parseInt, Integer::parseInt, Integer::parseInt, Integer::parseInt)).isEqualTo(Tuple.of(1, 2, 3, 4));
+        assertThat(Tuple.of("1", "2", "3", "4").map1(Integer::parseInt)).isEqualTo(Tuple.of(1, "2", "3", "4"));
+        assertThat(Tuple.of("1", "2", "3", "4").map2(Integer::parseInt)).isEqualTo(Tuple.of("1", 2, "3", "4"));
+        assertThat(Tuple.of("1", "2", "3", "4").map3(Integer::parseInt)).isEqualTo(Tuple.of("1", "2", 3, "4"));
+        assertThat(Tuple.of("1", "2", "3", "4").map4(Integer::parseInt)).isEqualTo(Tuple.of("1", "2", "3", 4));
+
+        // Arity
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World").arity()).isEqualTo(4);
+
+        // ToList
+        assertThat(Tuple.of("Hi", "there", "beautiful", "World").toList()).isEqualTo(List.of("Hi", "there", "beautiful", "World"));
+    }
+
     private static class Option extends Single<String> {
         /**
          * Construct a new specialized {@link Tuple} with 1 element
@@ -191,6 +238,20 @@ class TupleTest {
          */
         public LeftMiddleAndRightSide(String leftSide, String middle, String rightSide) {
             super(leftSide, middle, rightSide);
+        }
+    }
+
+    private static class LeftMiddleRightAndBottom extends Quad<String, String, String, String> {
+        /**
+         * Construct a new specialized {@link Tuple} with 4 elements
+         *
+         * @param leftSide  the first element
+         * @param middle    the second element
+         * @param rightSide the third element
+         * @param bottom    the fourth element
+         */
+        public LeftMiddleRightAndBottom(String leftSide, String middle, String rightSide, String bottom) {
+            super(leftSide, middle, rightSide, bottom);
         }
     }
 }
