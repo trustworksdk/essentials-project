@@ -30,11 +30,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <pre>{@code
  * public class OrderEventsHandler extends AnnotatedEventHandler {
  *
- *     @EventHandler
+ *     @Handler
  *     void handle(OrderCreated event) {
  *     }
  *
- *     @EventHandler
+ *     @Handler
  *     void handle(OrderCancelled event) {
  *     }
  * }}</pre>
