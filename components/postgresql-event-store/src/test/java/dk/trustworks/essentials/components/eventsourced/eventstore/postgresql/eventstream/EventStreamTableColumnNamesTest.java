@@ -69,7 +69,7 @@ class EventStreamTableColumnNamesTest {
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName,
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 "invalid-name", // globalOrderColumn
@@ -96,7 +96,7 @@ class EventStreamTableColumnNamesTest {
                 validNameForColumnsNotTested, validNameForColumnsNotTested, validNameForColumnsNotTested, validNameForColumnsNotTested,
                 validNameForColumnsNotTested, validNameForColumnsNotTested, validNameForColumnsNotTested, validNameForColumnsNotTested, validNameForColumnsNotTested, validNameForColumnsNotTested))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validNameForColumnsNotTested,
@@ -122,7 +122,7 @@ class EventStreamTableColumnNamesTest {
                 "Select", // eventIdColumn
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName,
@@ -146,7 +146,7 @@ class EventStreamTableColumnNamesTest {
                 "Select",// causedByEventIdColumn
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName,
@@ -170,7 +170,7 @@ class EventStreamTableColumnNamesTest {
                 "Select", // correlationIdColumn
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName, validColumnName,
@@ -195,7 +195,7 @@ class EventStreamTableColumnNamesTest {
                 "Select", // aggregateIdColumn
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName, validColumnName,
@@ -221,7 +221,7 @@ class EventStreamTableColumnNamesTest {
                 "Select", // eventOrderColumn
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName,
@@ -245,7 +245,7 @@ class EventStreamTableColumnNamesTest {
                 "Select", // eventTypeColumn
                 validColumnName, validColumnName, validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName,
@@ -269,7 +269,7 @@ class EventStreamTableColumnNamesTest {
                 "Select", // eventRevisionColumn
                 validColumnName, validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName,
@@ -293,7 +293,7 @@ class EventStreamTableColumnNamesTest {
                 "Select", // eventPayloadColumn
                 validColumnName, validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName,
@@ -317,7 +317,7 @@ class EventStreamTableColumnNamesTest {
                 "Select", // eventMetaDataColumn
                 validColumnName))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName,
@@ -340,7 +340,7 @@ class EventStreamTableColumnNamesTest {
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName,
                 "Select")) // tenantColumn
                            .isInstanceOf(InvalidTableOrColumnNameException.class)
-                           .hasMessageContaining("is a reserved keyword");
+                           .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> new EventStreamTableColumnNames(
                 validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName, validColumnName,
