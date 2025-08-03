@@ -122,6 +122,7 @@ This library contains the smallest set of supporting building blocks needed for 
     - E.g. `Reflector.reflectOn(someType).invokeStatic("of");`
 - `PatternMatchingMethodInvoker` which supports creating your own reflective pattern matching method invokers.
 - `MessageTemplates`, `MessageTemplate` and `Message` for structured Messages that support typed parameters.
+- **Interceptor Pattern Support** that allows configuring method interception using `Interceptor` and `InterceptorChain` for implementing before, after or around operation interceptor logic
 
 ![Essentials modules](images/essentials-modules.png)
 
@@ -646,7 +647,7 @@ public class OrderIdConversion extends BaseCharSequenceConversion<OrderId> {
 
     @Override
     protected LogicalType getLogicalType() {
-        return OrderIdLogicalTypeFactory.CURRENCY_CODE;
+        return OrderIdLogicalTypeFactory.ORDER_ID;
     }
 }
 ```
