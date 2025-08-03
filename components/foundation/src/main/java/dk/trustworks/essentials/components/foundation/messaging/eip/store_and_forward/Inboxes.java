@@ -269,7 +269,7 @@ public interface Inboxes {
                 // In these cases we rarely have other business logic that's already started a Transaction/UnitOfWork.
                 // So to simplify using the Inbox we allow adding a message to start a UnitOfWork if none exists
 
-                if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
+                if (durableQueues.getUnitOfWorkFactory().isPresent()) {
                     // Allow addMessageReceived to automatically start a new or join in an existing UnitOfWork
                     durableQueues.getUnitOfWorkFactory().get().usingUnitOfWork(() -> {
                         durableQueues.queueMessage(inboxQueueName,
@@ -288,7 +288,7 @@ public interface Inboxes {
                 // In these cases we rarely have other business logic that's already started a Transaction/UnitOfWork.
                 // So to simplify using the Inbox we allow adding a message to start a UnitOfWork if none exists
 
-                if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
+                if (durableQueues.getUnitOfWorkFactory().isPresent()) {
                     // Allow addMessageReceived to automatically start a new or join in an existing UnitOfWork
                     durableQueues.getUnitOfWorkFactory().get().usingUnitOfWork(() -> {
                         durableQueues.queueMessage(inboxQueueName,
@@ -305,7 +305,7 @@ public interface Inboxes {
 
             @Override
             public Inbox addMessagesReceived(List<Message> messages) {
-                if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
+                if (durableQueues.getUnitOfWorkFactory().isPresent()) {
                     // Allow addMessagesReceived to automatically start a new or join in an existing UnitOfWork
                     durableQueues.getUnitOfWorkFactory().get().usingUnitOfWork(() -> {
                         durableQueues.queueMessages(inboxQueueName, messages);
@@ -318,7 +318,7 @@ public interface Inboxes {
 
             @Override
             public Inbox addMessagesReceived(List<Message> messages, Duration deliveryDelay) {
-                if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
+                if (durableQueues.getUnitOfWorkFactory().isPresent()) {
                     // Allow addMessagesReceived to automatically start a new or join in an existing UnitOfWork
                     durableQueues.getUnitOfWorkFactory().get().usingUnitOfWork(() -> {
                         durableQueues.queueMessages(inboxQueueName,
