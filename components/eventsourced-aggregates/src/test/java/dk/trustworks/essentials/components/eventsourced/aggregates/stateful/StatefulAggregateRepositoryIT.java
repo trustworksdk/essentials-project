@@ -22,19 +22,17 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
-import dk.trustworks.essentials.components.eventsourced.aggregates.modern.Order;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.*;
+import dk.trustworks.essentials.components.eventsourced.aggregates.modern.Order;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.jdbi.v3.core.Jdbi;
@@ -43,8 +41,6 @@ import org.junit.jupiter.api.*;
 import org.mockito.Mockito;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
-
-import java.time.OffsetDateTime;
 
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -109,8 +105,8 @@ class StatefulAggregateRepositoryIT {
 
     @Test
     void persisting_the_first_event_does_not_create_a_snapshot() {
-        var orderId         = OrderId.random();
-        var order           = new Order(orderId, CustomerId.random(), 1234);
+        var orderId = OrderId.random();
+        var order   = new Order(orderId, CustomerId.random(), 1234);
         unitOfWorkFactory.usingUnitOfWork(() -> {
             ordersRepository.save(order);
         });
@@ -133,8 +129,8 @@ class StatefulAggregateRepositoryIT {
 
     @Test
     void persisting_two_events_creates_a_snapshot() {
-        var orderId         = OrderId.random();
-        var order           = new Order(orderId, CustomerId.random(), 1234);
+        var orderId = OrderId.random();
+        var order   = new Order(orderId, CustomerId.random(), 1234);
         order.addProduct(ProductId.random(), 10);
         var eventsToPersist = order.getUncommittedChanges();
         unitOfWorkFactory.usingUnitOfWork(() -> {
@@ -191,24 +187,4 @@ class StatefulAggregateRepositoryIT {
         return objectMapper;
     }
 
-    static class TestPersistableEventMapper implements PersistableEventMapper {
-        private final CorrelationId correlationId   = CorrelationId.random();
-        private final EventId       causedByEventId = EventId.random();
-
-        @Override
-        public PersistableEvent map(Object aggregateId, AggregateEventStreamConfiguration aggregateEventStreamConfiguration, Object event, EventOrder eventOrder) {
-            return PersistableEvent.from(EventId.random(),
-                                         aggregateEventStreamConfiguration.aggregateType,
-                                         aggregateId,
-                                         EventTypeOrName.with(event.getClass()),
-                                         event,
-                                         eventOrder,
-                                         EventRevision.of(1),
-                                         new EventMetaData(),
-                                         OffsetDateTime.now(),
-                                         causedByEventId,
-                                         correlationId,
-                                         null);
-        }
-    }
 }
