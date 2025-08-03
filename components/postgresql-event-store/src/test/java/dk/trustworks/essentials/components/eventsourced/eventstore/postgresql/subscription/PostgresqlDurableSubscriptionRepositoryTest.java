@@ -47,6 +47,6 @@ class PostgresqlDurableSubscriptionRepositoryTest {
                                                         mock(EventStore.class),
                                                         "drop");
         }).isInstanceOf(InvalidTableOrColumnNameException.class)
-          .hasMessageContaining("is a reserved keyword");
+          .hasMessageContaining("Invalid table or column name");
     }
 }
