@@ -48,7 +48,12 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * If you wish to keep the state projection and {@link EventHandler} annotated methods within an {@link AggregateState} instance, then you only need to implement the {@link WithState} interface:
  * <pre>{@code
  * public class Order extends AggregateRoot<OrderId, OrderEvent, Order> implements WithState<OrderId, OrderEvent, Order, OrderState> {
- * public Order(OrderId orderId,
+ *     // Used for rehydration
+ *     public Order(OrderId orderId) {
+ *        super(orderId);
+ *     }
+ *
+ *      public Order(OrderId orderId,
  *                  CustomerId orderingCustomerId,
  *                  int orderNumber) {
  *         super(orderId);
