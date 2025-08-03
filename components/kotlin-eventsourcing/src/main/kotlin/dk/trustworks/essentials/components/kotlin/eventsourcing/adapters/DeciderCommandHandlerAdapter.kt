@@ -106,10 +106,19 @@ class DeciderCommandHandlerAdapter<CMD, EVENT>(
         )
 
 
-        eventStore.appendToStream(
+        val persistedEventStream = eventStore.appendToStream(
             aggregateTypeConfiguration.aggregateType,
             aggregateId,
             possibleEventResult
+        )
+        val persistedEvent = persistedEventStream.firstEvent()
+        log.debug(
+            "[{}:{}] Persisted Event '{}' with Event-Order '{}' and Global-Event-Order '{}'",
+            aggregateTypeConfiguration.aggregateType,
+            aggregateId,
+            possibleEventResult.javaClass.getSimpleName(),
+            persistedEvent.eventOrder(),
+            persistedEvent.globalEventOrder()
         )
         return possibleEventResult
     }
