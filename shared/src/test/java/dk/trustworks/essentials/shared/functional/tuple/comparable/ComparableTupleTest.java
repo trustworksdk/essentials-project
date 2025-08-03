@@ -177,6 +177,64 @@ class ComparableTupleTest {
         assertThat(Tuple.of("Hi", "there", "World").toList()).isEqualTo(List.of("Hi", "there", "World"));
     }
 
+    @Test
+    void test_ComparableQuad() {
+        // Element accessors
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")._1).isEqualTo("Hi");
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")._2).isEqualTo("there");
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")._3).isEqualTo("beautiful");
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")._4).isEqualTo("World");
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")._1()).isEqualTo("Hi");
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")._2()).isEqualTo("there");
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")._3()).isEqualTo("beautiful");
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")._4()).isEqualTo("World");
+
+        // Equals
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isEqualTo(new ComparableQuad<>("Hi", "there", "beautiful", "World"));
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isEqualTo(new LeftMiddleRightAndBottom("Hi", "there", "beautiful", "World"));
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(ComparableTuple.of("hi", "there", "beautiful", "World"));
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(ComparableTuple.of("Hi", "There", "beautiful", "World"));
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(ComparableTuple.of("Hi", "there", "Beautiful", "World"));
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(ComparableTuple.of("Hi", "there", "beautiful", "world"));
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(ComparableTuple.of("Hi"));
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(ComparableTuple.of("Hi", "There"));
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World")).isNotEqualTo(ComparableTuple.of("Hi", "there", "beautiful"));
+
+        // HashCode
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World").hashCode()).isEqualTo(ComparableTuple.of("Hi", "there", "beautiful", "World").hashCode());
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World").hashCode()).isNotEqualTo(ComparableTuple.of("Hi", "There", "beautiful", "World").hashCode());
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World").hashCode()).isNotEqualTo(ComparableTuple.of("Hi", "there", "Beautiful", "World").hashCode());
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World").hashCode()).isNotEqualTo(ComparableTuple.of("Hi", "there", "beautiful", "world").hashCode());
+
+        // Compare To
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(new ComparableQuad<>(1, 2, 3, 4))).isEqualTo(0);
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(ComparableTuple.of(2, 2, 3, 4))).isLessThan(0);
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(ComparableTuple.of(1, 3, 3, 4))).isLessThan(0);
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(ComparableTuple.of(1, 2, 4, 4))).isLessThan(0);
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(ComparableTuple.of(1, 2, 3, 5))).isLessThan(0);
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(ComparableTuple.of(0, 2, 3, 4))).isGreaterThan(0);
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(ComparableTuple.of(1, 1, 3, 4))).isGreaterThan(0);
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(ComparableTuple.of(1, 2, 2, 4))).isGreaterThan(0);
+        assertThat(ComparableTuple.of(1, 2, 3, 4).compareTo(ComparableTuple.of(1, 2, 3, 3))).isGreaterThan(0);
+
+        // ToString
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World").toString()).isEqualTo("(Hi, there, beautiful, World)");
+
+        // Map
+        assertThat(ComparableTuple.of(1, 2, 3, 4).map((t1, t2, t3, t4) -> ComparableTuple.of(t1.toString(), t2.toString(), t3.toString(), t4.toString()))).isEqualTo(ComparableTuple.of("1", "2", "3", "4"));
+        assertThat(ComparableTuple.of("1", "2", "3", "4").map(Integer::parseInt, Integer::parseInt, Integer::parseInt, Integer::parseInt)).isEqualTo(ComparableTuple.of(1, 2, 3, 4));
+        assertThat(ComparableTuple.of("1", "2", "3", "4").map1(Integer::parseInt)).isEqualTo(ComparableTuple.of(1, "2", "3", "4"));
+        assertThat(ComparableTuple.of("1", "2", "3", "4").map2(Integer::parseInt)).isEqualTo(ComparableTuple.of("1", 2, "3", "4"));
+        assertThat(ComparableTuple.of("1", "2", "3", "4").map3(Integer::parseInt)).isEqualTo(ComparableTuple.of("1", "2", 3, "4"));
+        assertThat(ComparableTuple.of("1", "2", "3", "4").map4(Integer::parseInt)).isEqualTo(ComparableTuple.of("1", "2", "3", 4));
+
+        // Arity
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World").arity()).isEqualTo(4);
+
+        // ToList
+        assertThat(ComparableTuple.of("Hi", "there", "beautiful", "World").toList()).isEqualTo(List.of("Hi", "there", "beautiful", "World"));
+    }
+
     private static class Option extends ComparableSingle<String> {
         /**
          * Construct a new specialized {@link Tuple} with 1 element
@@ -210,6 +268,20 @@ class ComparableTupleTest {
          */
         public LeftMiddleAndRightSide(String leftSide, String middle, String rightSide) {
             super(leftSide, middle, rightSide);
+        }
+    }
+
+    private static class LeftMiddleRightAndBottom extends ComparableQuad<String, String, String, String> {
+        /**
+         * Construct a new specialized {@link ComparableTuple} with 4 elements
+         *
+         * @param leftSide  the first element
+         * @param middle    the second element
+         * @param rightSide the third element
+         * @param bottom    the fourth element
+         */
+        public LeftMiddleRightAndBottom(String leftSide, String middle, String rightSide, String bottom) {
+            super(leftSide, middle, rightSide, bottom);
         }
     }
 }
