@@ -17,7 +17,7 @@ To use `Reactive` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>reactive</artifactId>
-    <version>0.40.24</version>
+    <version>0.40.25</version>
 </dependency>
 ```
 

@@ -22,7 +22,7 @@ To use `Types-JDBI` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jdbi</artifactId>
-    <version>0.40.24</version>
+    <version>0.40.25</version>
 </dependency>
 ```
 

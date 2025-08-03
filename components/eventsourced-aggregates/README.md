@@ -107,7 +107,7 @@ To use `EventSourced Aggregates` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials.components/groupId>
     <artifactId>eventsourced-aggregates</artifactId>
-    <version>0.40.24</version>
+    <version>0.40.25</version>
 </dependency>
 ```
 

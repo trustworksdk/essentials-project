@@ -798,6 +798,6 @@ To use `Postgresql Event Store` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>postgresql-event-store</artifactId>
-    <version>0.40.24</version>
+    <version>0.40.25</version>
 </dependency>
 ```
