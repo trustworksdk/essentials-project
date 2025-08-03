@@ -78,16 +78,45 @@ public final class PostgresqlUtil {
     }
 
     /**
-     * Matches strings that:
-     * - Starts with a letter (either uppercase or lowercase) or an underscore.
-     * - Followed by zero or more letters (either uppercase or lowercase), digits, or underscores.
-     * - The entire string must match this pattern from start to end.
+     * Maximum length for PostgreSQL identifiers (table names, column names, function names, etc.).<br/>
+     * PostgreSQL has a default limit of 63 characters for identifiers.
      */
-    private static final Pattern VALID_SQL_TABLE_AND_COLUMN_NAME_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
+    public static final int MAX_IDENTIFIER_LENGTH = 63;
+
+    /**
+     * Defines the maximum allowable length for a qualified SQL identifier in PostgreSQL.
+     *
+     * <p>A qualified SQL identifier consists of two parts separated by a dot (e.g.,
+     * {@code schema_name.table_name}) and adheres to PostgreSQL naming conventions.
+     * The maximum length of such an identifier is calculated as twice the
+     * {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} (maximum length for a single identifier)
+     * plus one for the dot separator.
+     *
+     * <p>For example, if {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} is 63, then
+     * {@code MAX_QUALIFIED_IDENTIFIER_LENGTH} will be {@code 127}
+     * (63 characters for each part, plus 1 for the separator).
+     *
+     * @see PostgresqlUtil#MAX_IDENTIFIER_LENGTH
+     * @see PostgresqlUtil#isValidQualifiedSqlIdentifier(String)
+     * @see PostgresqlUtil#isValidSqlIdentifier(String)
+     */
+    public static final int MAX_QUALIFIED_IDENTIFIER_LENGTH = (MAX_IDENTIFIER_LENGTH * 2 + 1);
+
+    /**
+     * A unified compiled regex pattern used to validate the format of SQL identifiers.
+     * The pattern enforces the following rules:
+     * 1. The identifier must start with a letter (a-z or A-Z) or an underscore (_).
+     * 2. Subsequent characters can include letters, digits (0-9), or underscores (_).
+     * 3. The length of the identifier must not exceed {@link #MAX_IDENTIFIER_LENGTH} characters.
+     * <p>
+     * This pattern is designed to ensure compliance with PostgreSQL naming conventions
+     * and avoid potential conflicts with system or reserved identifiers.
+     */
+    public static final Pattern VALID_SQL_IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0," + (MAX_IDENTIFIER_LENGTH - 1) + "}$");
 
     /**
      * This list incorporates a broad range of reserved names, including those specific to PostgreSQL as well as standard SQL keywords, that cannot
-     * be used as COLUMN, TABLE and INDEX names.
+     * be used as COLUMN, TABLE, FUNCTION and INDEX names.
      * Developers should use this list cautiously and always cross-reference against the current version of PostgreSQL they are working with,
      * as database systems frequently update their list of reserved keywords.<br>
      * <br>
@@ -174,14 +203,15 @@ public final class PostgresqlUtil {
      * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
      * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      * <p>
-     * The method checks if the {@code tableOrColumnName}:
+     * <p>The method enforces PostgreSQL SQL naming conventions for table/column/index names. A valid function/column/index name:
      * <ul>
-     *     <li>Is not null, empty, and does not consist solely of whitespace.</li>
-     *     <li>Does not match any PostgreSQL reserved keyword (case-insensitive check).</li>
-     *     <li>Contains only characters valid for PostgreSQL identifiers: letters, digits, and underscores,
-     *         and does not start with a digit.</li>
+     *     <li>Must not be null, empty, or consist only of whitespace.</li>
+     *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified names
+     *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified names
+     *         (e.g., <code>schema_name.table_name</code>).</li>
+     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters in total length.</li>
+     *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
      * </ul>
-     * <p>
      *
      * @param tableOrColumnName the table or column name to validate.
      * @param context           optional context that will be included in any error message. null value means no context is provided
@@ -193,17 +223,17 @@ public final class PostgresqlUtil {
         if (tableOrColumnName == null || tableOrColumnName.trim().isEmpty()) {
             throw new InvalidTableOrColumnNameException("Table or column name cannot be null or empty.");
         }
-
-        // Check against reserved keywords
-        String upperCaseName = tableOrColumnName.toUpperCase().trim();
-        if (RESERVED_NAMES.contains(upperCaseName)) {
-            throw new InvalidTableOrColumnNameException(msg("The name '{}'{} is a reserved keyword and cannot be used as a table or column name.", tableOrColumnName, context != null ? (" in context: " + context) : ""));
-        }
-
-        // Validate characters in the name
-        if (!VALID_SQL_TABLE_AND_COLUMN_NAME_PATTERN.matcher(tableOrColumnName).matches()) {
-            throw new InvalidTableOrColumnNameException(msg("Invalid table or column name: '{}'{}. Names must start with a letter or underscore, followed by letters, digits, or underscores.",
-                                                            tableOrColumnName, context != null ? (" in context: " + context) : ""));
+        // Qualified name?
+        if (tableOrColumnName.contains(".")) {
+            if (!isValidQualifiedSqlIdentifier(tableOrColumnName)) {
+                throw new InvalidTableOrColumnNameException(msg("Invalid qualified table or column name: '{}'{}. Names must start with a letter or underscore, followed by letters, digits, or underscores.",
+                                                                tableOrColumnName, context != null ? (" in context: " + context) : ""));
+            }
+        } else {
+            if (!isValidSqlIdentifier(tableOrColumnName)) {
+                throw new InvalidTableOrColumnNameException(msg("Invalid table or column name: '{}'{}. Names must start with a letter or underscore, followed by letters, digits, or underscores.",
+                                                                tableOrColumnName, context != null ? (" in context: " + context) : ""));
+            }
         }
     }
 
@@ -221,13 +251,15 @@ public final class PostgresqlUtil {
      * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      * <p>
      * The method checks if the {@code tableOrColumnName}:
+     * <p>The method enforces PostgreSQL SQL naming conventions for table/column/index names. A valid function/column/index name:
      * <ul>
-     *     <li>Is not null, empty, and does not consist solely of whitespace.</li>
-     *     <li>Does not match any PostgreSQL reserved keyword (case-insensitive check).</li>
-     *     <li>Contains only characters valid for PostgreSQL identifiers: letters, digits, and underscores,
-     *         and does not start with a digit.</li>
+     *     <li>Must not be null, empty, or consist only of whitespace.</li>
+     *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified names
+     *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified names
+     *         (e.g., <code>schema_name.table_name</code>).</li>
+     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters in total length.</li>
+     *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
      * </ul>
-     * <p>
      *
      * @param tableOrColumnName the table or column name to validate.
      * @throws InvalidTableOrColumnNameException if the provided name is null, empty, matches a reserved keyword,
@@ -240,30 +272,109 @@ public final class PostgresqlUtil {
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
     /**
-     * A compiled regex pattern used to validate the format of SQL function names.
-     * The pattern enforces the following rules:
-     * 1. The name must start with a letter (a-z or A-Z) or an underscore (_).
-     * 2. Subsequent characters can include letters, digits (0-9), or underscores (_).
-     * 3. The length of the name must not exceed 63 characters.
+     * Validates whether the given string is a valid SQL identifier according to PostgreSQL naming conventions.
+     * This is a unified helper method that can be used for validating table names, column names, function names, etc.
      * <p>
-     * This pattern is designed to ensure compliance with SQL naming conventions
-     * and avoid potential conflicts with system or reserved identifiers.
+     * This method is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
+     * However, Essentials components as well as {@link PostgresqlUtil#isValidSqlIdentifier(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
+     * SQL against SQL injection threats.<br>
+     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
+     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, index names, etc.<br>
+     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
+     *
+     * <p>The method enforces PostgreSQL SQL naming conventions for identifiers. A valid identifier:
+     * <ul>
+     *     <li>Must not be null, empty, or consist only of whitespace.</li>
+     *     <li>Must match the pattern {@link PostgresqlUtil#VALID_SQL_IDENTIFIER_PATTERN}.</li>
+     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters in length.</li>
+     *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
+     * </ul>
+     *
+     * @param identifier The SQL identifier to validate.
+     * @return {@code true} if the provided {@code identifier} is valid according to PostgreSQL naming conventions
+     * and does not contain reserved keywords; {@code false} otherwise.
      */
-    public static final Pattern FN_NAME = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,62}$");
+    public static boolean isValidSqlIdentifier(String identifier) {
+        if (identifier == null || identifier.trim().isEmpty()) {
+            return false;
+        }
+
+        // Check total length
+        if (identifier.length() > MAX_IDENTIFIER_LENGTH) {
+            return false;
+        }
+
+        // Check pattern
+        if (!VALID_SQL_IDENTIFIER_PATTERN.matcher(identifier).matches()) {
+            return false;
+        }
+
+        // Check against reserved keywords
+        return !RESERVED_NAMES.contains(identifier.toUpperCase(Locale.ROOT).trim());
+    }
 
     /**
-     * A compiled regex pattern used to validate the format of fully qualified SQL function names.
-     * The pattern enforces the following rules:
-     * 1. The name must consist of two parts separated by a dot ('.').
-     * 2. Each part must start with a letter (a-z or A-Z) or an underscore (_).
-     * 3. Each part can contain letters, digits (0-9), or underscores (_) after the initial character.
-     * 4. Each part must not exceed 63 characters in length.
+     * Validates whether the given qualified identifier (e.g., "schema.table") is valid according to PostgreSQL naming conventions.
+     * This method checks both individual parts and the total length of the qualified identifier.
      * <p>
-     * This pattern ensures that the function name adheres to SQL naming conventions,
-     * including support for fully qualified names in the format of `schema_name.function_name`.
+     * This method is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
+     * However, Essentials components as well as {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
+     * SQL against SQL injection threats.<br>
+     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
+     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, index names, etc.<br>
+     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
+     *
+     * <p>The method enforces PostgreSQL SQL naming conventions for qualified identifiers. A valid qualified identifier:
+     * <ul>
+     *     <li>Must not be null, empty, or consist only of whitespace.</li>
+     *     <li>Must contain exactly one dot separator.</li>
+     *     <li>Must not start or end with a dot.</li>
+     *     <li>Must not contain consecutive dots.</li>
+     *     <li>Each part must be a valid SQL identifier according to {@link #isValidSqlIdentifier(String)}.</li>
+     *     <li>The total length must not exceed {@link PostgresqlUtil#MAX_QUALIFIED_IDENTIFIER_LENGTH} characters.</li>
+     * </ul>
+     *
+     * @param qualifiedIdentifier The qualified SQL identifier to validate (e.g., "schema.table").
+     * @return {@code true} if the provided {@code qualifiedIdentifier} is valid according to PostgreSQL naming conventions;
+     * {@code false} otherwise.
      */
-    public static final Pattern QUALIFIED_FN_NAME =
-            Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,62}\\.[a-zA-Z_][a-zA-Z0-9_]{0,62}$");
+    public static boolean isValidQualifiedSqlIdentifier(String qualifiedIdentifier) {
+        if (qualifiedIdentifier == null || qualifiedIdentifier.trim().isEmpty()) {
+            return false;
+        }
+
+        // Check total length first
+        if (qualifiedIdentifier.length() > MAX_QUALIFIED_IDENTIFIER_LENGTH) {
+            return false;
+        }
+
+        // Must not start or end with a dot
+        if (qualifiedIdentifier.startsWith(".") || qualifiedIdentifier.endsWith(".")) {
+            return false;
+        }
+
+        // Must not contain consecutive dots
+        if (qualifiedIdentifier.contains("..")) {
+            return false;
+        }
+
+        // Must contain exactly one dot
+        String[] parts = qualifiedIdentifier.split("\\.");
+        if (parts.length != 2) {
+            return false;
+        }
+
+        // Each part must be a valid identifier
+        for (var part : parts) {
+            if (!isValidSqlIdentifier(part)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
     /**
      * Validates whether the given string is a valid SQL function name.
@@ -272,15 +383,16 @@ public final class PostgresqlUtil {
      * However, Essentials components as well as {@link PostgresqlUtil#isValidFunctionName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
      * SQL against SQL injection threats.<br>
      * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
-     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
+     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, index names, etc.<br>
      * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
      *
      * <p>The method enforces PostgreSQL SQL naming conventions for function names. A valid function name:
      * <ul>
      *     <li>Must not be null, empty, or consist only of whitespace.</li>
-     *     <li>Must match the pattern {@link PostgresqlUtil#FN_NAME} for non-qualified function names
-     *         or {@link PostgresqlUtil#QUALIFIED_FN_NAME} for fully qualified function names
+     *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified function names
+     *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified function names
      *         (e.g., <code>schema_name.function_name</code>).</li>
+     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters in total length.</li>
      *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
      * </ul>
      *
@@ -303,24 +415,9 @@ public final class PostgresqlUtil {
 
         // Qualified function name?
         if (functionName.contains(".")) {
-            if (!QUALIFIED_FN_NAME.matcher(functionName).matches()) {
-                return false;
-            }
-
-            var parts = functionName.split("\\.");
-            for (var part : parts) {
-                if (RESERVED_NAMES.contains(part.toUpperCase(Locale.ROOT).trim())) {
-                    return false;
-                }
-            }
-
-            return true;
+            return isValidQualifiedSqlIdentifier(functionName);
         } else {
-            if (!FN_NAME.matcher(functionName).matches()) {
-                return false;
-            }
-
-            return !RESERVED_NAMES.contains(functionName.toUpperCase(Locale.ROOT).trim());
+            return isValidSqlIdentifier(functionName);
         }
     }
 }
