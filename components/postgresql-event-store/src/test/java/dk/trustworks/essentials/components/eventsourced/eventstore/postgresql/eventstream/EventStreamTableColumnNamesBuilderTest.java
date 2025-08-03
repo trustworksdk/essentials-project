@@ -73,7 +73,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .globalOrderColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .globalOrderColumn("invalid-name"))
@@ -91,7 +91,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .timestampColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .timestampColumn("invalid-name"))
@@ -109,7 +109,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventIdColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventIdColumn("invalid-name"))
@@ -127,7 +127,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .causedByEventIdColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .causedByEventIdColumn("invalid-name"))
@@ -145,7 +145,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .correlationIdColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .correlationIdColumn("invalid-name"))
@@ -163,7 +163,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .aggregateIdColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .aggregateIdColumn("invalid-name"))
@@ -181,7 +181,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventOrderColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventOrderColumn("invalid-name"))
@@ -199,7 +199,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventTypeColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventTypeColumn("invalid-name"))
@@ -217,7 +217,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventRevisionColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventRevisionColumn("invalid-name"))
@@ -235,7 +235,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventPayloadColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventPayloadColumn("invalid-name"))
@@ -253,7 +253,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventMetaDataColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .eventMetaDataColumn("invalid-name"))
@@ -271,7 +271,7 @@ class EventStreamTableColumnNamesBuilderTest {
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .tenantColumn("Select"))
                 .isInstanceOf(InvalidTableOrColumnNameException.class)
-                .hasMessageContaining("is a reserved keyword");
+                .hasMessageContaining("Invalid table or column name");
 
         assertThatThrownBy(() -> EventStreamTableColumnNames.builder()
                                                             .tenantColumn("invalid-name"))
