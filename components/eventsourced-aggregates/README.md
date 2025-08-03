@@ -72,13 +72,14 @@ IMPORTANT: For security reasons, Aggregate-Id's should:
 This library supports multiple flavours of Aggregate design such as:
 
 - The **modern** `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot` **(preferred)**
-- The *classic* `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.classic.AggregateRoot`
-- The *classic* with separate state
-  object `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.classic.state.AggregateRootWithState`
+  - Modern with separate state object: Have the `AggregateRoot` implement `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.WithState` and provide a State class that extends `AggregateState`
+- The *classic* `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.classic.AggregateRoot` (kept for backwards compatibility)
+  - The *classic* with separate state object `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.classic.state.AggregateRootWithState`
 - The **functional** `dk.trustworks.essentials.components.eventsourced.aggregates.flex.FlexAggregate`
 - The **Decider** pattern `dk.trustworks.essentials.components.eventsourced.aggregates.decider.Decider`
   - See `dk.trustworks.essentials.components.eventsourced.aggregates.decider.DeciderTest`
   - and `dk.trustworks.essentials.components.eventsourced.aggregates.decider.DeciderBasedCommandHandlerIT`
+- The **EventStreamDecider** pattern `dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDecider`
 
 The **modern** `AggregateRoot`, *classic* `AggregateRoot` and *classic* `AggregateRootWithState` are all examples of a
 mutable `StatefulAggregate` design.
@@ -110,7 +111,342 @@ To use `EventSourced Aggregates` just add the following Maven dependency:
 </dependency>
 ```
 
-## Persisting an Aggregate
+## Choosing Between Aggregate Patterns
+
+The EventSourced Aggregates component provides multiple patterns for different use cases and architectural preferences. Here's a comprehensive guide to help you choose:
+
+### Decision Matrix
+
+| **Criteria**               | **Modern AggregateRoot** | **WithState Pattern**   | **FlexAggregate**        | **Traditional Decider**  | **EventStreamDecider**             |
+|----------------------------|--------------------------|-------------------------|--------------------------|--------------------------|------------------------------------|
+| **Complexity**             | Simple to Moderate       | Moderate                | Moderate                 | Complex                  | Simple                             |
+| **State Management**       | Internal mutable state   | External mutable state  | Internal immutable state | External immutable state | Event stream-based immutable state |
+| **Testing**                | Unit tests               | Separated state testing | Functional testing       | Simple setup             | Simple using Given-When-Then       |
+| **Performance**            | Good                     | Good                    | Good with snapshots      | Excellent                | Excellent                          |
+| **Learning Curve**         | Low                      | Low-Medium              | Medium                   | High                     | Very Low                           |
+| **Enterprise Features**    | Yes                      | Yes                     | Yes                      | Yes                      | Basic                              |
+| **Error Handling**         | Exception-based          | Exception-based         | Exception-based          | Functional Result types  | Exception-based                    |
+| **Functional Programming** | No                       | No                      | Yes                      | Yes                      | Yes                                |
+
+### When to Use Each Pattern
+
+**🎯 Use Modern AggregateRoot when:**
+- You're new to event sourcing and want to start with familiar patterns
+- Your domain logic is straightforward and doesn't require complex state management
+- You prefer object-oriented programming approaches
+- You want automatic change tracking and good IDE support
+- You need good integration with Spring Boot and dependency injection
+
+**🎯 Use WithState Pattern when:**
+- Your aggregate state is complex and you want to separate it from business logic
+- You need to test state transitions independently from business logic
+- You want better maintainability for complex aggregates
+- You're building large aggregates with many fields and complex event handlers
+
+**🎯 Use FlexAggregate when:**
+- You prefer functional programming patterns
+- You want explicit control over state transitions
+- You're comfortable with immutable data structures
+- You need high performance with proper snapshot configuration
+- You want to avoid hidden state mutations
+
+**🎯 Use Traditional Decider when:**
+- You need sophisticated error handling with result types
+- You're building enterprise-grade systems with complex requirements
+- You want tight integration with event store optimizations
+- You need advanced features like snapshots and performance tuning
+- You're experienced with functional programming and event sourcing
+
+**🎯 Use EventStreamDecider when:**
+- You're new to event sourcing and want to learn the fundamentals
+- Your domain logic is simple and doesn't require complex error handling
+- You prefer working directly with event streams
+- You want easy-to-test, pure functions
+- You're building prototypes or simple applications
+- You value simplicity over advanced features
+
+## EventStreamDecider Pattern (Simplified Event Sourcing)
+
+⚠️ NOTE: API is experimental and subject to change!
+
+**Core Interface:** `dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDecider`
+
+The `EventStreamDecider` provides a simplified approach to event sourcing that focuses on processing commands against event streams to produce new events.  
+It operates directly on event streams rather than managing explicit state, making it more functional and easier to reason about.
+
+**Event Modeling, Slicing and the Open/Closed principle**
+
+The `EventStreamDecider` pattern is perfect for **Event Modeling** and its **slicing implementation approach**.
+This pattern naturally supports the **Open/Closed Principle** by ensuring that **only events are shared across slices** -
+each slice can independently evolve its command handling logic without affecting other slices, as long as the event contracts remain stable.
+
+**What makes this pattern ideal for slicing:**
+- **Localized Changes**: Modifications are typically confined to a single slice at a time.
+  - When you need to add new behavior or modify existing business rules, you create a new `EventStreamDecider` implementation or modify an existing one without touching other slices.
+- **Independent Evolution**: Each command slice (represented by an `EventStreamDecider`) can evolve independently.
+  - A slice that handles order creation doesn't need to know about order shipping logic - they only share the events that represent state changes.
+- **Contract Stability**: The event contracts act as the stable interface between slices.
+  - As long as events maintain backward compatibility, different slices can be developed, deployed, and modified by different teams at different cadences.
+- **Single Responsibility**: Each `EventStreamDecider` has a focused responsibility - it handles one specific command type against the event stream. This makes the code easier to understand, test, and maintain.
+
+This approach is particularly powerful for teams adopting Event Modeling where business processes are broken down into slices that can be implemented incrementally.   
+Each command handling slice becomes a self-contained `EventStreamDecider` that processes its specific commands while participating in the larger event-driven system through shared events.
+
+For developers new to this concept, think of it as microservices within a single aggregate boundary - each slice handles its own concerns but coordinates through events rather than direct calls.
+
+**Key Characteristics:**
+- **Event-Centric**: Works directly with event streams rather than maintaining state
+- **Functional**: Pure functions that given the same input always produce the same output
+- **Idempotent**: Can safely be called multiple times with the same input
+- **Stateless**: No internal state management - state is derived from events
+- **Simple**: Focused on the core decider pattern without complex infrastructure, ideal for a slicing approach to implementation
+
+```java
+// EventStreamDecider for creating orders
+public class CreateOrderDecider implements EventStreamDecider<CreateOrder, OrderEvent> {
+    
+    @Override
+    public Optional<OrderEvent> handle(CreateOrder command, List<OrderEvent> events) {
+        requireNonNull(command, "command cannot be null");
+        requireNonNull(events, "events cannot be null");
+        
+        // Check if order already exists by looking at events
+        boolean orderExists = events.stream()
+            .anyMatch(event -> event instanceof OrderCreated);
+        
+        if (orderExists) {
+            return Optional.empty(); // Idempotent - order already created
+        }
+        
+        // Create new order
+        return Optional.of(new OrderCreated(command.orderId(), command.customerId()));
+    }
+    
+    @Override
+    public boolean canHandle(Class<?> command) {
+        return CreateOrder.class.isAssignableFrom(command);
+    }
+}
+
+// EventStreamDecider for confirming orders
+public class ConfirmOrderDecider implements EventStreamDecider<ConfirmOrder, OrderEvent> {
+    
+    private final ConfirmOrderStateEvolver evolver = new ConfirmOrderStateEvolver();
+    
+    @Override
+    public Optional<OrderEvent> handle(ConfirmOrder command, List<OrderEvent> events) {
+        requireNonNull(command, "command cannot be null");
+        requireNonNull(events, "events cannot be null");
+        
+        // Rebuild current state from events
+        var currentState = EventStreamEvolver.applyEvents(evolver, events);
+        
+        if (currentState.isEmpty()) {
+            throw new IllegalStateException("Cannot confirm order that does not exist");
+        }
+        
+        var state = currentState.get();
+        
+        if (!state.canBeConfirmed()) {
+            if (state.status() == OrderStatus.CONFIRMED) {
+                // Already confirmed - idempotent behavior
+                return Optional.empty();
+            }
+            throw new IllegalStateException("Cannot confirm order in status: " + state.status());
+        }
+        
+        return Optional.of(new OrderConfirmed(command.orderId()));
+    }
+    
+    @Override
+    public boolean canHandle(Class<?> command) {
+        return ConfirmOrder.class.isAssignableFrom(command);
+    }
+}
+
+// EventStreamEvolver for rebuilding state from events (only used by ConfirmOrderDecider to maintain the Open/Closed Principle and reduce coupling between slices)
+public class ConfirmOrderStateEvolver implements EventStreamEvolver<OrderEvent, OrderState> {
+    
+    @Override
+    public Optional<ConfirmOrderState> applyEvent(OrderEvent event, Optional<ConfirmOrderState> currentState) {
+        requireNonNull(event, "event cannot be null");
+        requireNonNull(currentState, "currentState cannot be null");
+        
+        return switch (event) {
+            case OrderCreated created -> Optional.of(
+                    ConfirmOrderState.created(created.orderId(), created.customerId())
+            );
+            case OrderConfirmed confirmed -> currentState.map(state -> 
+                state.withConfirmed()
+            );
+            case OrderShipped shipped -> currentState.map(state -> 
+                state.withShipped()
+            );
+            case OrderCancelled cancelled -> currentState.map(state -> 
+                state.withCancelled(cancelled.reason())
+            );
+            default -> currentState; // Unknown event types are ignored
+        };
+    }
+}
+
+/**
+ * Immutable state representation of an order (shouldn't be shared across Deciders to maintain the Open/Close principle)
+ */
+public record ConfirmOrderState(
+        OrderId orderId,
+        CustomerId customerId,
+        OrderStatus status,
+        Instant createdAt,
+        Instant confirmedAt,
+        Instant shippedAt,
+        Instant cancelledAt,
+        String cancellationReason
+) {
+
+   public static ConfirmOrderState created(OrderId orderId, CustomerId customerId) {
+      return new ConfirmOrderState(orderId, customerId, OrderStatus.PENDING, null, null, null, null, null);
+   }
+
+   public OrderState withConfirmed() {
+      return new ConfirmOrderState(orderId, customerId, OrderStatus.CONFIRMED, createdAt, null, shippedAt, cancelledAt, cancellationReason);
+   }
+
+   public ConfirmOrderState withShipped() {
+      return new ConfirmOrderState(orderId, customerId, OrderStatus.SHIPPED, createdAt, confirmedAt, null, cancelledAt, cancellationReason);
+   }
+
+   public ConfirmOrderState withCancelled(String reason) {
+      return new ConfirmOrderState(orderId, customerId, OrderStatus.CANCELLED, createdAt, confirmedAt, shippedAt, null, reason);
+   }
+
+   public boolean canBeConfirmed() {
+      return status == OrderStatus.PENDING;
+   }
+
+   public boolean canBeShipped() {
+      return status == OrderStatus.CONFIRMED;
+   }
+
+   public boolean canBeCancelled() {
+      return status == OrderStatus.PENDING || status == OrderStatus.CONFIRMED;
+   }
+}
+```
+
+**Integration with Event Store:**
+`EventStreamDecider`'s can be integrated with the event store infrastructure using `EventStreamDeciderCommandHandlerAdapter` which handles the loading of event streams, command routing, and event persistence.  
+The `EventStreamDeciderAndAggregateTypeConfigurator` provides automatic configuration `EventStreamDeciderCommandHandlerAdapter` based on `EventStreamAggregateTypeConfiguration` and `EventStreamDecider` instances.
+
+**`EventStreamAggregateTypeConfiguration` Parameters:**
+- **AggregateType**: The logical name for the aggregate (e.g., "Orders")
+- **Aggregate ID Class**: The type of the aggregate identifier (e.g., OrderId.class)
+- **Serializer**: How to serialize/deserialize aggregate IDs to/from String values
+- **Support Checker**: Determines which deciders handle which commands
+- **Command ID Extractor**: Function to extract aggregate ID from commands
+- **Event ID Extractor**: Function to extract aggregate ID from events
+
+```java
+// Spring Boot Configuration
+@Configuration
+public class DomainConfiguration {
+    
+    @Bean
+    public EventStreamDeciderAndAggregateTypeConfigurator eventStreamDeciderConfigurator(
+            ConfigurableEventStore<?> eventStore,
+            CommandBus commandBus,
+            List<EventStreamAggregateTypeConfiguration> aggregateTypeConfigurations,
+            List<EventStreamDecider<?, ?>> deciders) {
+        return new EventStreamDeciderAndAggregateTypeConfigurator(
+            eventStore, 
+            commandBus, 
+            aggregateTypeConfigurations, 
+            deciders
+        );
+    }
+    
+    @Bean
+    public EventStreamAggregateTypeConfiguration orderAggregateConfiguration() {
+        return new EventStreamAggregateTypeConfiguration(
+            AggregateType.of("Orders"),
+            OrderId.class,
+            AggregateIdSerializer.serializerFor(OrderId.class),
+            new EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType(OrderCommand.class),
+            command -> ((OrderCommand) command).orderId(),
+            event -> ((OrderEvent) event).orderId()
+        );
+    }
+    
+    // Define your deciders as beans (or annotate them with @Component or @Service)
+    @Bean
+    public CreateOrderDecider createOrderDecider() {
+        return new CreateOrderDecider();
+    }
+    
+    @Bean
+    public ConfirmOrderDecider confirmOrderDecider() {
+        return new ConfirmOrderDecider();
+    }
+    
+    @Bean
+    public ShipOrderDecider shipOrderDecider() {
+        return new ShipOrderDecider();
+    }
+}
+
+// Manual Configuration (without Spring)
+var configurator = new EventStreamDeciderAndAggregateTypeConfigurator(
+    eventStore,
+    commandBus,
+    List.of(orderConfiguration, customerConfiguration),
+    List.of(
+        new CreateOrderDecider(),
+        new ConfirmOrderDecider(),
+        new ShipOrderDecider(),
+        new CreateCustomerDecider()
+    )
+);
+```
+
+**Testing Support:**
+`EventStreamDecider`'s can be easily tested using the `GivenWhenThenScenario` testing framework:
+
+```java
+@Test
+void shouldCreateOrderWhenNoExistingOrder() {
+    var scenario = new GivenWhenThenScenario<>(new CreateOrderDecider());
+    
+    var orderId = OrderId.random();
+    var customerId = CustomerId.random();
+    
+    scenario
+        .given() // No existing events
+        .when(new CreateOrder(orderId, customerId))
+        .then(new OrderCreated(orderId, customerId));
+}
+
+@Test
+void shouldNotCreateOrderWhenOrderAlreadyExists() {
+    var scenario = new GivenWhenThenScenario<>(new CreateOrderDecider());
+    
+    var orderId = OrderId.random();
+    var customerId = CustomerId.random();
+    
+    scenario
+        .given(new OrderCreated(orderId, customerId))
+        .when(new CreateOrder(orderId, customerId))
+        .thenExpectNoEvent(); // Idempotent behavior
+}
+```
+
+**When to Use EventStreamDecider:**
+- **Simple Command Processing**: When you need straightforward command-to-event mapping
+- **Functional Approach**: When you prefer functional programming patterns
+- **Stateless Operations**: When `EventStreamEvolver` is sufficient, and you don't need to maintain complex internal state
+- **Testing Focus**: When you want easily testable decider logic
+- **Event-Driven Design**: When your domain naturally thinks in terms of event streams
+
+## Persisting a Stateful Aggregate
 Flow showing the internal processing for persisting a new Aggregate instance:
 ```
 var unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
