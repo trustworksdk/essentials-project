@@ -258,7 +258,7 @@ public class OrderIdConversion extends BaseCharSequenceConversion<OrderId> {
 
     @Override
     protected LogicalType getLogicalType() {
-        return OrderIdLogicalTypeFactory.CURRENCY_CODE;
+        return OrderIdLogicalTypeFactory.ORDER_ID;
     }
 }
 ```
