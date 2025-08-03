@@ -36,13 +36,17 @@ public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
      * Get a required active {@link UnitOfWork}
      *
      * @return the active {@link UnitOfWork}
-     * @throws NoActiveUnitOfWorkException if the is no active {@link UnitOfWork}
+     * @throws NoActiveUnitOfWorkException if there is no active {@link UnitOfWork}
      */
     UOW getRequiredUnitOfWork();
 
     /**
      * Get the currently active {@link UnitOfWork} or create a new {@link UnitOfWork}
-     * if one is missing
+     * if one is missing.<br/>
+     * <p/>
+     * <b>IMPORTANT: Prefer using {@link #usingUnitOfWork( CheckedConsumer)} or {@link #withUnitOfWork( CheckedFunction)}
+     * to ensure a {@link UnitOfWork} is created, or an existing {@link UnitOfWork} is reused, and that the {@link UnitOfWork} is
+     * properly committed (or rolled-back in case of an Exception) after the transaction is completed.</b>
      *
      * @return a {@link UnitOfWork}
      */
@@ -74,15 +78,15 @@ public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
      * Run the <code>unitOfWorkConsumer</code> in a {@link UnitOfWork}<br>
      * It works in two different ways:<br>
      * 1.<br>
-     * If no existing {@link UnitOfWork} then a new {@link UnitOfWork} is created and started, the <code>unitOfWorkConsumer</code> is called with this {@link UnitOfWork}<br>
+     * If there isn't an existing {@link UnitOfWork} then a new {@link UnitOfWork} is created and started, the <code>unitOfWorkConsumer</code> is called with this {@link UnitOfWork}<br>
      * When the <code>unitOfWorkConsumer</code> has completed, without throwing an exception, then the created {@link UnitOfWork} is committed.<br>
-     * In case an exception was thrown then the created {@link UnitOfWork} is rolledback.<br>
+     * In case an exception was thrown then the created {@link UnitOfWork} is rolled-back.<br>
      * <br>
      * 2.<br>
      * If there's already an existing {@link UnitOfWork} then the <code>unitOfWorkConsumer</code> joins in with
      * existing {@link UnitOfWork} and the <code>unitOfWorkConsumer</code> is called with the existing {@link UnitOfWork}<br>
      * When the <code>unitOfWorkConsumer</code> has completed, without throwing an exception, then the existing {@link UnitOfWork} is NOT committed, this is instead left to the original creator of the {@link UnitOfWork} to do<br>
-     * In case an exception was thrown then the existing {@link UnitOfWork} is marked as rollback only.<br>
+     * In case an exception was thrown then the existing {@link UnitOfWork} is marked as rollback-only.<br>
      *
      * @param unitOfWorkConsumer the consumer that's called with a {@link UnitOfWork}
      */
@@ -125,15 +129,15 @@ public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
      * Run the <code>unitOfWorkFunction</code> in a {@link UnitOfWork}<br>
      * It works in two different ways:<br>
      * 1.<br>
-     * If no existing {@link UnitOfWork} then a new {@link UnitOfWork} is created and started, the <code>unitOfWorkFunction</code> is called with this {@link UnitOfWork}<br>
+     * If there isn't an existing {@link UnitOfWork} then a new {@link UnitOfWork} is created and started, the <code>unitOfWorkFunction</code> is called with this {@link UnitOfWork}<br>
      * When the <code>unitOfWorkFunction</code> has completed, without throwing an exception, then the created {@link UnitOfWork} is committed.<br>
-     * In case an exception was thrown then the created {@link UnitOfWork} is rolledback.<br>
+     * In case an exception was thrown then the created {@link UnitOfWork} is rolled-back.<br>
      * <br>
      * 2.<br>
      * If there's already an existing {@link UnitOfWork} then the <code>unitOfWorkFunction</code> joins in with
      * existing {@link UnitOfWork} and the <code>unitOfWorkFunction</code> is called with the existing {@link UnitOfWork}<br>
      * When the <code>unitOfWorkFunction</code> has completed, without throwing an exception, then the existing {@link UnitOfWork} is NOT committed, this is instead left to the original creator of the {@link UnitOfWork} to do<br>
-     * In case an exception was thrown then the existing {@link UnitOfWork} is marked as rollback only.<br>
+     * In case an exception was thrown then the existing {@link UnitOfWork} is marked as rollback-only.<br>
      *
      * @param unitOfWorkFunction the consumer that's called with a {@link UnitOfWork}
      */
