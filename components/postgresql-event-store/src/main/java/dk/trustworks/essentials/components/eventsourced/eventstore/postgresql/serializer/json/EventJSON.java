@@ -181,4 +181,19 @@ public final class EventJSON {
     public void setJsonSerializer(JSONEventSerializer jsonSerializer) {
         this.jsonSerializer = requireNonNull(jsonSerializer, "JSON serializer must not be null");
     }
+
+    /**
+     * Deserializes the JSON payload into an object of the specified type.
+     * This method is a type-specific variant of {@link #deserialize()}.
+     *
+     * @param <T> the target Java type into which the JSON will be deserialized
+     * @param deserializeToType the {@link Class} representing the desired target type
+     * @return the deserialized object of the specified type
+     * @throws JSONDeserializationException if the {@link JSONEventSerializer} is not set or if
+     *         the deserialization process fails due to an invalid or missing Java type.
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T deserialize(Class<T> deserializeToType) {
+        return (T) deserialize();
+    }
 }
