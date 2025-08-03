@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.decider;
 import dk.trustworks.essentials.shared.functional.tuple.Either;
 
 import java.util.*;
+import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -75,6 +76,25 @@ public sealed interface HandlerResult<ERROR, EVENT> {
         }
     }
 
+    /**
+     * Functional-style handling of the {@link HandlerResult}.
+     * Applies the appropriate function based on whether this is a success or error result.
+     *
+     * @param errorHandler function to handle error cases, receives the error value
+     * @param successHandler function to handle success cases, receives the list of events
+     * @param <R> the return type of both handler functions
+     * @return the result of applying the appropriate handler function
+     */
+    default <R> R fold(Function<ERROR, R> errorHandler, Function<List<EVENT>, R> successHandler) {
+        requireNonNull(errorHandler, "errorHandler cannot be null");
+        requireNonNull(successHandler, "successHandler cannot be null");
+        
+        if (isError()) {
+            return errorHandler.apply(asError().error());
+        } else {
+            return successHandler.apply(asSuccess().events());
+        }
+    }
 
     // ---- Test related methods ----
 
