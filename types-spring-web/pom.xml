@@ -30,7 +30,7 @@
     </description>
 
     <artifactId>types-spring-web</artifactId>
-    <name>essentials-types-spring-web</name>
+    <name>types-spring-web</name>
 
     <dependencies>
         <dependency>

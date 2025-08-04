@@ -31,7 +31,7 @@
     </description>
 
     <artifactId>types-jdbi</artifactId>
-    <name>essentials-types-jdbi</name>
+    <name>types-jdbi</name>
 
     <dependencies>
         <dependency>

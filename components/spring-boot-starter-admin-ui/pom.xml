@@ -32,6 +32,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-admin-ui</artifactId>
+    <name>spring-boot-starter-admin-ui</name>
     <packaging>jar</packaging>
 
     <dependencies>

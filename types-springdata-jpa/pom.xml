@@ -31,7 +31,7 @@
     </description>
 
     <artifactId>types-springdata-jpa</artifactId>
-    <name>essentials-types-springdata-jpa</name>
+    <name>types-springdata-jpa</name>
 
 
     <dependencies>

@@ -33,7 +33,7 @@
 
     <artifactId>immutable</artifactId>
     <packaging>jar</packaging>
-    <name>essentials-immutable</name>
+    <name>immutable</name>
 
     <dependencies>
         <dependency>

@@ -32,7 +32,7 @@
 
     <artifactId>types-avro</artifactId>
     <packaging>jar</packaging>
-    <name>essentials-types-avro</name>
+    <name>types-avro</name>
 
     <dependencies>
         <dependency>

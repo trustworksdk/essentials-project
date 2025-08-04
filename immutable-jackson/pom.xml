@@ -31,7 +31,7 @@
 
     <artifactId>immutable-jackson</artifactId>
     <packaging>jar</packaging>
-    <name>essentials-immutable-jackson</name>
+    <name>immutable-jackson</name>
 
     <dependencies>
         <dependency>

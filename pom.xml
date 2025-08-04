@@ -24,7 +24,7 @@
     <artifactId>parent</artifactId>
     <packaging>pom</packaging>
     <version>${revision}</version>
-    <name>essentials-parent</name>
+    <name>parent</name>
     <description>
         Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no
         dependencies on other libraries, unless explicitly mentioned.

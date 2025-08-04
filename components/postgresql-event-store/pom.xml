@@ -33,6 +33,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>postgresql-event-store</artifactId>
+    <name>postgresql-event-store</name>
     <packaging>jar</packaging>
 
 

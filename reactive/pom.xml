@@ -31,7 +31,7 @@
 
     <artifactId>reactive</artifactId>
     <packaging>jar</packaging>
-    <name>essentials-reactive</name>
+    <name>reactive</name>
 
     <dependencies>
         <dependency>

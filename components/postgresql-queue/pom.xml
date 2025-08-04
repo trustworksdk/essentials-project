@@ -32,6 +32,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>postgresql-queue</artifactId>
+    <name>postgresql-queue</name>
     <packaging>jar</packaging>
 
     <dependencies>

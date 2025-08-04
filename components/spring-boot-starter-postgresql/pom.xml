@@ -32,6 +32,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql</artifactId>
+    <name>spring-boot-starter-postgresql</name>
     <packaging>jar</packaging>
 
     <dependencies>
