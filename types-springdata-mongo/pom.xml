@@ -30,7 +30,7 @@
     </description>
 
     <artifactId>types-springdata-mongo</artifactId>
-    <name>essentials-types-springdata-mongo</name>
+    <name>types-springdata-mongo</name>
 
     <dependencies>
         <dependency>

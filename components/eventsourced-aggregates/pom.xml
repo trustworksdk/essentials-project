@@ -32,6 +32,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>eventsourced-aggregates</artifactId>
+    <name>eventsourced-aggregates</name>
     <packaging>jar</packaging>
 
     <dependencies>

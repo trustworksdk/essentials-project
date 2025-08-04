@@ -32,6 +32,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql-event-store</artifactId>
+    <name>spring-boot-starter-postgresql-event-store</name>
     <packaging>jar</packaging>
 
     <dependencies>

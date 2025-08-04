@@ -34,6 +34,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>kotlin-eventsourcing</artifactId>
+    <name>kotlin-eventsourcing</name>
     <packaging>jar</packaging>
 
     <dependencies>

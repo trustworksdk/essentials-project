@@ -32,6 +32,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>springdata-mongo-queue</artifactId>
+    <name>springdata-mongo-queue</name>
     <packaging>jar</packaging>
 
     <dependencies>

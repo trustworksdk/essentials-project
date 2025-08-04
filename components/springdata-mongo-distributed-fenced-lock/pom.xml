@@ -33,6 +33,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>springdata-mongo-distributed-fenced-lock</artifactId>
+    <name>springdata-mongo-distributed-fenced-lock</name>
     <packaging>jar</packaging>
 
     <dependencies>

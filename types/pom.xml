@@ -34,7 +34,7 @@
 
     <artifactId>types</artifactId>
     <packaging>jar</packaging>
-    <name>essentials-types</name>
+    <name>types</name>
 
     <dependencies>
         <dependency>

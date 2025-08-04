@@ -32,6 +32,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-mongodb</artifactId>
+    <name>spring-boot-starter-mongodb</name>
     <packaging>jar</packaging>
 
     <dependencies>

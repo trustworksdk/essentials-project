@@ -34,6 +34,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>postgresql-document-db</artifactId>
+    <name>postgresql-document-db</name>
     <packaging>jar</packaging>
 
     <dependencies>

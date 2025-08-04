@@ -32,7 +32,7 @@
 
     <artifactId>types-jackson</artifactId>
     <packaging>jar</packaging>
-    <name>essentials-types-jackson</name>
+    <name>types-jackson</name>
 
     <dependencies>
         <dependency>

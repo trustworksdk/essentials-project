@@ -34,6 +34,7 @@
 
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>foundation-test</artifactId>
+    <name>foundation-test</name>
     <packaging>jar</packaging>
 
     <dependencies>
