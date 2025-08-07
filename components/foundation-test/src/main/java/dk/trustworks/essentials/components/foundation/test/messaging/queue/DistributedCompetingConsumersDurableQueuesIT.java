@@ -35,9 +35,9 @@ public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUE
     public static final int NUMBER_OF_MESSAGES = 1000;
     public static final int PARALLEL_CONSUMERS = 20;
 
-    private UOW_FACTORY    unitOfWorkFactory;
-    private DURABLE_QUEUES durableQueues1;
-    private DURABLE_QUEUES durableQueues2;
+    protected UOW_FACTORY    unitOfWorkFactory;
+    protected DURABLE_QUEUES durableQueues1;
+    protected DURABLE_QUEUES durableQueues2;
 
     @BeforeEach
     void setup() {
@@ -160,7 +160,6 @@ public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUE
         softAssertions.assertThat(messages).containsAll(receivedMessages);
         softAssertions.assertAll();
 
-
         // Check no messages are delivered after our assertions
         Awaitility.await()
                   .during(Duration.ofMillis(1990))
@@ -170,8 +169,8 @@ public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUE
         consumer2.cancel();
     }
 
-    private static class RecordingQueuedMessageHandler implements QueuedMessageHandler {
-        ConcurrentLinkedQueue<Message> messages = new ConcurrentLinkedQueue<>();
+    public static class RecordingQueuedMessageHandler implements QueuedMessageHandler {
+        public ConcurrentLinkedQueue<Message> messages = new ConcurrentLinkedQueue<>();
 
         @Override
         public void handle(QueuedMessage message) {

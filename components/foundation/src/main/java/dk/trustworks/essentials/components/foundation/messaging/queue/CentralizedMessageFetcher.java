@@ -209,15 +209,15 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 var queueNames = availableWorkerSlotsPerQueue.keySet();
 // Don't use fetchNextBatchOfMessagesBatched until it properly handles competing consumers
 //                if (queueNames.size() > NUMBER_OF_ACTIVE_QUEUES_THRESHOLD) {
-//                    messages = batchCapableDurableQueues.fetchNextBatchOfMessagesBatched(
-//                            queueNames,
-//                            excludeKeysPerQueue,
-//                            availableWorkerSlotsPerQueue);
-//                } else {
-                    messages = batchCapableDurableQueues.fetchNextBatchOfMessages(
+                    messages = batchCapableDurableQueues.fetchNextBatchOfMessagesBatched(
                             queueNames,
                             excludeKeysPerQueue,
                             availableWorkerSlotsPerQueue);
+//                } else {
+//                    messages = batchCapableDurableQueues.fetchNextBatchOfMessages(
+//                            queueNames,
+//                            excludeKeysPerQueue,
+//                            availableWorkerSlotsPerQueue);
 //                }
 
                 // Debug logging when using batch fetching
