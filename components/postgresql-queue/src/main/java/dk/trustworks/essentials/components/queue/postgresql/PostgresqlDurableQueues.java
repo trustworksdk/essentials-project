@@ -1640,6 +1640,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 
                 var mappingResult = mapQueryResultsWithExceptionHandling(query);
                 var messages = mappingResult.successfulMessages();
+                Set<QueueEntryId> seenQueueEntryIds = new HashSet<>();
+                messages = messages.stream()
+                                   .filter(m -> seenQueueEntryIds.add(m.getId()))
+                                   .toList();
                 
                 // Log failed mappings for monitoring purposes
                 if (!mappingResult.failedMappings().isEmpty()) {
