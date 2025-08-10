@@ -32,6 +32,7 @@ import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder.*;
@@ -849,6 +850,7 @@ public interface EventStore {
      * @param pollingInterval                     how often should the {@link EventStore} be polled for new events. Default value is {@link #DEFAULT_POLLING_INTERVAL_MILLISECONDS}
      * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param subscriptionId                      unique subscriber id which is used for creating a unique logger name. If {@link Optional#empty()} then a UUID value is generated and used
+     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer} if empty {@link EventStorePollingOptimizer#None()} is used
      * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
      */
     default Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
@@ -856,18 +858,20 @@ public interface EventStore {
                                             Optional<Integer> loadEventsByGlobalOrderBatchSize,
                                             Optional<Duration> pollingInterval,
                                             Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
-                                            Optional<SubscriberId> subscriptionId) {
+                                            Optional<SubscriberId> subscriptionId,
+                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory) {
         requireNonNull(fromInclusiveGlobalOrder, "No fromInclusiveGlobalOrder value provided");
         return pollEvents(aggregateType,
                           fromInclusiveGlobalOrder.longValue(),
                           loadEventsByGlobalOrderBatchSize,
                           pollingInterval,
                           onlyIncludeEventIfItBelongsToTenant,
-                          subscriptionId);
+                          subscriptionId,
+                          eventStorePollingOptimizerFactory);
     }
 
     /**
-     * Asynchronously poll for new events related to the given <code>aggregateType</code> using default values - see {@link #pollEvents(AggregateType, GlobalEventOrder, Optional, Optional, Optional, Optional)}<br>
+     * Asynchronously poll for new events related to the given <code>aggregateType</code> using default values - see {@link #pollEvents(AggregateType, GlobalEventOrder, Optional, Optional, Optional, Optional, Optional)}<br>
      * The returned Flux support backpressure, e.g. by using {@link Flux#limitRate(int)}
      *
      * @param aggregateType            the aggregate type that the underlying events are associated with
@@ -879,6 +883,7 @@ public interface EventStore {
         requireNonNull(fromInclusiveGlobalOrder, "No fromInclusiveGlobalOrder value provided");
         return pollEvents(aggregateType,
                           fromInclusiveGlobalOrder.longValue(),
+                          Optional.empty(),
                           Optional.empty(),
                           Optional.empty(),
                           Optional.empty(),
@@ -896,6 +901,7 @@ public interface EventStore {
      * @param pollingInterval                     how often should the {@link EventStore} be polled for new events. Default value is {@link #DEFAULT_POLLING_INTERVAL_MILLISECONDS}
      * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param subscriptionId                      unique subscriber id which is used for creating a unique logger name. If {@link Optional#empty()} then a UUID value is generated and used
+     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer} if empty {@link EventStorePollingOptimizer#None()} is used
      * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
      */
     Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
@@ -903,7 +909,8 @@ public interface EventStore {
                                     Optional<Integer> loadEventsByGlobalOrderBatchSize,
                                     Optional<Duration> pollingInterval,
                                     Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
-                                    Optional<SubscriberId> subscriptionId);
+                                    Optional<SubscriberId> subscriptionId,
+                                    Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory);
 
     /**
      * Asynchronously poll for new events related to the given <code>aggregateType</code><br>

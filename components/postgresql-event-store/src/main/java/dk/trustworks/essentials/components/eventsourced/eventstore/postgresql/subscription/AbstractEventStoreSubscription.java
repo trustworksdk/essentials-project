@@ -16,8 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
@@ -27,7 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
-import java.util.function.Consumer;
+import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -38,31 +37,33 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public abstract class AbstractEventStoreSubscription implements EventStoreSubscription {
     protected final Logger log;
 
-    protected final EventStore eventStore;
-    protected final AggregateType aggregateType;
-    protected final SubscriberId subscriberId;
-    protected final Optional<Tenant> onlyIncludeEventsForTenant;
-    protected final EventStoreSubscriptionObserver eventStoreSubscriptionObserver;
-    protected final Consumer<EventStoreSubscription> unsubscribeCallback;
+    protected final EventStore                                   eventStore;
+    protected final AggregateType                                aggregateType;
+    protected final SubscriberId                                 subscriberId;
+    protected final Optional<Tenant>                             onlyIncludeEventsForTenant;
+    protected final EventStoreSubscriptionObserver               eventStoreSubscriptionObserver;
+    protected final Consumer<EventStoreSubscription>             unsubscribeCallback;
+    protected final Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory;
 
     protected volatile boolean started;
 
     /**
      * Constructor with common parameters for all subscription types
      *
-     * @param eventStore The event store
-     * @param aggregateType The aggregate type to subscribe to
-     * @param subscriberId The subscriber ID
-     * @param onlyIncludeEventsForTenant Optional tenant filter
+     * @param eventStore                     The event store
+     * @param aggregateType                  The aggregate type to subscribe to
+     * @param subscriberId                   The subscriber ID
+     * @param onlyIncludeEventsForTenant     Optional tenant filter
      * @param eventStoreSubscriptionObserver The subscription observer
-     * @param unsubscribeCallback Callback to execute when unsubscribing
+     * @param unsubscribeCallback            Callback to execute when unsubscribing
      */
     protected AbstractEventStoreSubscription(EventStore eventStore,
                                              AggregateType aggregateType,
                                              SubscriberId subscriberId,
                                              Optional<Tenant> onlyIncludeEventsForTenant,
                                              EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
-                                             Consumer<EventStoreSubscription> unsubscribeCallback) {
+                                             Consumer<EventStoreSubscription> unsubscribeCallback,
+                                             Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
         this.log = LoggerFactory.getLogger(this.getClass());
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
@@ -70,6 +71,7 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
         this.onlyIncludeEventsForTenant = requireNonNull(onlyIncludeEventsForTenant, "No onlyIncludeEventsForTenant provided");
         this.eventStoreSubscriptionObserver = requireNonNull(eventStoreSubscriptionObserver, "No eventStoreSubscriptionObserver provided");
         this.unsubscribeCallback = requireNonNull(unsubscribeCallback, "No unsubscribeCallback provided");
+        this.eventStorePollingOptimizerFactory = requireNonNull(eventStorePollingOptimizerFactory, "No eventStorePollingOptimizerFactory provided");
     }
 
     @Override
@@ -90,8 +92,8 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
     @Override
     public void unsubscribe() {
         log.info("[{}-{}] Initiating unsubscription",
-                subscriberId,
-                aggregateType);
+                 subscriberId,
+                 aggregateType);
         eventStoreSubscriptionObserver.unsubscribing(this);
         unsubscribeCallback.accept(this);
     }
@@ -103,16 +105,20 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
 
     /**
      * Common error handling for persisted events
-     * 
-     * @param e The persisted event that caused the error
+     *
+     * @param e     The persisted event that caused the error
      * @param cause The cause of the error
      */
     protected void onErrorHandlingEvent(PersistedEvent e, Throwable cause) {
         log.error("[{}-{}] (#{}) Skipping {} event because of error",
-                subscriberId,
-                aggregateType,
-                e.globalEventOrder(),
-                e.event().getEventTypeOrName().getValue(), cause);
+                  subscriberId,
+                  aggregateType,
+                  e.globalEventOrder(),
+                  e.event().getEventTypeOrName().getValue(), cause);
+    }
+
+    public Function<String, EventStorePollingOptimizer> getEventStorePollingOptimizerFactory() {
+        return eventStorePollingOptimizerFactory;
     }
 
     @Override

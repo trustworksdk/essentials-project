@@ -16,8 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
@@ -72,8 +71,9 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                                              PersistedEventHandler eventHandler, 
                                              EventStoreSubscriptionObserver eventStoreSubscriptionObserver, 
                                              EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings, 
-                                             Consumer<EventStoreSubscription> unsubscribeCallback) {
-        super(eventStore, aggregateType, subscriberId, onlyIncludeEventsForTenant, eventStoreSubscriptionObserver, unsubscribeCallback);
+                                             Consumer<EventStoreSubscription> unsubscribeCallback,
+                                             Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
+        super(eventStore, aggregateType, subscriberId, onlyIncludeEventsForTenant, eventStoreSubscriptionObserver, unsubscribeCallback, eventStorePollingOptimizerFactory);
         this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
         this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
         this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = requireNonNull(onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
@@ -142,7 +142,8 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                         Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize()),
                         Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
                         onlyIncludeEventsForTenant,
-                        Optional.of(subscriberId))
+                        Optional.of(subscriberId),
+                        Optional.of(eventStorePollingOptimizerFactory))
                 .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())
                 .subscribe(subscription);
     }
