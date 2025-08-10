@@ -16,19 +16,21 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
 
 import java.time.Duration;
+import java.util.function.Function;
 
 public final class EventStoreSubscriptionManagerBuilder {
-    private EventStore                    eventStore;
-    private int                           eventStorePollingBatchSize = 100;
-    private Duration                      eventStorePollingInterval  = Duration.ofMillis(500);
-    private FencedLockManager             fencedLockManager;
-    private Duration                      snapshotResumePointsEvery  = Duration.ofSeconds(1);
-    private DurableSubscriptionRepository durableSubscriptionRepository;
-    private boolean startLifeCycles = true;
+    private EventStore                                   eventStore;
+    private int                                          eventStorePollingBatchSize        = 100;
+    private Duration                                     eventStorePollingInterval         = Duration.ofMillis(500);
+    private FencedLockManager                            fencedLockManager;
+    private Duration                                     snapshotResumePointsEvery         = Duration.ofSeconds(1);
+    private DurableSubscriptionRepository                durableSubscriptionRepository;
+    private boolean                                      startLifeCycles                   = true;
+    private Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory = null;
 
     /**
      * @param eventStore the event store that the created {@link EventStoreSubscriptionManager} can manage event subscriptions against
@@ -90,13 +92,19 @@ public final class EventStoreSubscriptionManagerBuilder {
         return this;
     }
 
+    public EventStoreSubscriptionManagerBuilder setEventStorePollingOptimizerFactory(Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
+        this.eventStorePollingOptimizerFactory = eventStorePollingOptimizerFactory;
+        return this;
+    }
+
     public DefaultEventStoreSubscriptionManager build() {
         return new DefaultEventStoreSubscriptionManager(eventStore,
-                                                                                      eventStorePollingBatchSize,
-                                                                                      eventStorePollingInterval,
-                                                                                      fencedLockManager,
-                                                                                      snapshotResumePointsEvery,
-                                                                                      durableSubscriptionRepository,
-                                                                                      startLifeCycles);
+                                                        eventStorePollingBatchSize,
+                                                        eventStorePollingInterval,
+                                                        fencedLockManager,
+                                                        snapshotResumePointsEvery,
+                                                        durableSubscriptionRepository,
+                                                        startLifeCycles,
+                                                        eventStorePollingOptimizerFactory);
     }
 }

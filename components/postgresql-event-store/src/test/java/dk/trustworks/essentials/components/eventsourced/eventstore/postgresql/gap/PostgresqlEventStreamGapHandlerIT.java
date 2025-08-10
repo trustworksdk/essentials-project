@@ -123,7 +123,8 @@ class PostgresqlEventStreamGapHandlerIT {
                                                     Optional.of(10),
                                                     Optional.of(Duration.ofMillis(100)),
                                                     Optional.empty(),
-                                                    Optional.of(ordersSubscriberId))
+                                                    Optional.of(ordersSubscriberId),
+                                                    Optional.empty())
                                         .subscribe(e -> {
                                             System.out.println("Received Order event: " + e);
                                             orderEventsReceived.add(e);
