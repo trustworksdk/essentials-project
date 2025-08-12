@@ -81,15 +81,17 @@ public class BiTemporalProductPriceIT {
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
 
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        persistableEventMapper(),
-                                                                                       SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                       SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                                                       JSONColumnType.JSONB));
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy);
+                                                persistenceStrategy,
+                                                jsonSerializer);
 
         productPriceRepository = StatefulAggregateRepository.from(eventStore,
                                                                   PRODUCT_PRICE,

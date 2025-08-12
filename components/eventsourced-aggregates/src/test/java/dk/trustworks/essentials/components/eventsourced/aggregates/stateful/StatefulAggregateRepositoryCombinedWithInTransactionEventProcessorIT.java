@@ -88,14 +88,16 @@ public class StatefulAggregateRepositoryCombinedWithInTransactionEventProcessorI
 
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
-        var aggregateEventStreamConfigurationFactory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
+        var aggregateEventStreamConfigurationFactory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                       JSONColumnType.JSONB);
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      new TestPersistableEventMapper(),
-                                                                                                     aggregateEventStreamConfigurationFactory));
+                                                                                                     aggregateEventStreamConfigurationFactory),
+                                                jsonSerializer);
 
         lockManager = PostgresqlFencedLockManager.builder()
                                                  .setJdbi(jdbi)

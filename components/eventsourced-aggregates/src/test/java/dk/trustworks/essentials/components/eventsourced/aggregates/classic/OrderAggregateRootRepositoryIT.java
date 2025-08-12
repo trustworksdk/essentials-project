@@ -45,6 +45,7 @@ import reactor.core.Disposable;
 import java.time.*;
 import java.util.*;
 
+import static dk.trustworks.essentials.components.eventsourced.aggregates.TestObjectMapperFactory.createObjectMapper;
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,13 +81,15 @@ class OrderAggregateRootRepositoryIT {
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new TestPersistableEventMapper();
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                                     IdentifierColumnType.UUID,
-                                                                                                                                                                                                    JSONColumnType.JSONB)));
+                                                                                                                                                                                                    JSONColumnType.JSONB)),
+                                                jsonSerializer);
 
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
         eventStore.localEventBus().addSyncSubscriber(recordingLocalEventBusConsumer);
@@ -272,52 +275,6 @@ class OrderAggregateRootRepositoryIT {
         assertThat(asynchronousOrderEventsReceived.get(0).metaData().getJsonDeserialized()).isEqualTo(Optional.of(META_DATA));
         assertThat(asynchronousOrderEventsReceived.get(0).causedByEventId()).isEqualTo(Optional.of(eventMapper.causedByEventId));
         assertThat(asynchronousOrderEventsReceived.get(0).correlationId()).isEqualTo(Optional.of(eventMapper.correlationId));
-    }
-
-    private ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
-    }
-
-
-    /**
-     * Simple test in memory projector that just returns the underlying list of {@link PersistedEvent}'s
-     */
-    private class InMemoryListProjector implements InMemoryProjector {
-        @Override
-        public boolean supports(Class<?> projectionType) {
-            return List.class.isAssignableFrom(projectionType);
-        }
-
-        @Override
-        public <ID, PROJECTION> Optional<PROJECTION> projectEvents(AggregateType aggregateType,
-                                                                   ID aggregateId,
-                                                                   Class<PROJECTION> projectionType,
-                                                                   EventStore eventStore) {
-            var eventStream = eventStore.fetchStream(aggregateType,
-                                                     aggregateId);
-            return (Optional<PROJECTION>) eventStream.map(actualEventStream -> actualEventStream.eventList());
-        }
     }
 
 }

@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestPersistableEventMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
@@ -43,6 +44,8 @@ import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
+
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestObjectMapperFactory.createObjectMapper;
 
 @BenchmarkMode(Mode.Throughput)
 @Fork(1)
@@ -87,14 +90,16 @@ public class PostgresqlEventStoreBenchmark {
 
             aggregateType = AggregateType.of("Orders");
             unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
+            var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
             var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                            unitOfWorkFactory,
                                                                                            new TestPersistableEventMapper(),
-                                                                                           SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                           SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                           IdentifierColumnType.UUID,
                                                                                                                                                                                           JSONColumnType.JSONB));
             eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                    persistenceStrategy);
+                                                    persistenceStrategy,
+                                                    jsonSerializer);
             eventStore.addAggregateEventStreamConfiguration(aggregateType,
                                                             OrderId.class);
         }
@@ -162,50 +167,4 @@ public class PostgresqlEventStoreBenchmark {
         });
     }
 
-    private static ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
-    }
-
-    private static class TestPersistableEventMapper implements PersistableEventMapper {
-        private final CorrelationId correlationId   = CorrelationId.random();
-        private final EventId       causedByEventId = EventId.random();
-
-        @Override
-        public PersistableEvent map(Object aggregateId, AggregateEventStreamConfiguration aggregateEventStreamConfiguration, Object event, EventOrder eventOrder) {
-            return PersistableEvent.from(EventId.random(),
-                                         aggregateEventStreamConfiguration.aggregateType,
-                                         aggregateId,
-                                         EventTypeOrName.with(event.getClass()),
-                                         event,
-                                         eventOrder,
-                                         EventRevision.of(1),
-                                         EventMetaData.of("Key1", "Value1", "Key2", "Value2"),
-                                         OffsetDateTime.now(),
-                                         causedByEventId,
-                                         correlationId,
-                                         null);
-        }
-    }
 }

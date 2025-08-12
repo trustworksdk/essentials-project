@@ -16,21 +16,16 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestPersistableEventMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.messaging.*;
@@ -40,8 +35,6 @@ import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTim
 import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
 import dk.trustworks.essentials.shared.collections.Lists;
 import dk.trustworks.essentials.types.CharSequenceType;
@@ -61,6 +54,7 @@ import java.util.stream.IntStream;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.TestOrderEventProcessor.TEST_ORDERS;
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestObjectMapperFactory.createObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -74,7 +68,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @Testcontainers
 public class EventProcessorIT {
-    public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
 
     private Jdbi                                                                    jdbi;
     private EventStoreUnitOfWorkFactory<EventStoreUnitOfWork>                       unitOfWorkFactory;
@@ -118,7 +111,8 @@ public class EventProcessorIT {
                                                 Optional.empty(),
                                                 eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore,
                                                                                                     unitOfWorkFactory),
-                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver(),
+                                                jsonSerializer);
 
         fencedLockManager = PostgresqlFencedLockManager.builder()
                                                        .setEventBus(eventStore.localEventBus())
@@ -566,50 +560,4 @@ public class EventProcessorIT {
 
     // -------------------------------------------------------------------------------------------------------------------
 
-    public static ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
-    }
-
-    public static class TestPersistableEventMapper implements PersistableEventMapper {
-        private final CorrelationId correlationId   = CorrelationId.random();
-        private final EventId       causedByEventId = EventId.random();
-
-        @Override
-        public PersistableEvent map(Object aggregateId, AggregateEventStreamConfiguration aggregateEventStreamConfiguration, Object event, EventOrder eventOrder) {
-            return PersistableEvent.from(EventId.random(),
-                                         aggregateEventStreamConfiguration.aggregateType,
-                                         aggregateId,
-                                         EventTypeOrName.with(event.getClass()),
-                                         event,
-                                         eventOrder,
-                                         null, // Leave reading the EventRevision to the PersistableEvent's from method
-                                         META_DATA,
-                                         OffsetDateTime.now(),
-                                         causedByEventId,
-                                         correlationId,
-                                         null);
-        }
-    }
 }

@@ -467,13 +467,15 @@ class EventStreamDeciderIT {
         eventMapper = new TestPersistableEventMapper();
 
         // Setup event store
+        var jsonSerializer = new JacksonJSONEventSerializer(objectMapper);
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(objectMapper),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                                     IdentifierColumnType.TEXT,
-                                                                                                                                                                                                    JSONColumnType.JSONB)));
+                                                                                                                                                                                                    JSONColumnType.JSONB)),
+                                                jsonSerializer);
         eventStore.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
 
         // Setup event recording

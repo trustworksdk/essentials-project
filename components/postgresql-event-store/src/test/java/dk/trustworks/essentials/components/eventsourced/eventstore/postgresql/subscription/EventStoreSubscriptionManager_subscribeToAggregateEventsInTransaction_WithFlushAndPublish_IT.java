@@ -94,7 +94,8 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsInTransaction_With
                                                                                                                                                                                       JSONColumnType.JSONB));
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy);
+                                                persistenceStrategy,
+                                                jsonSerializer);
         eventStore.addAggregateEventStreamConfiguration(aggregateType,
                                                         OrderId.class);
         eventStore.addAggregateEventStreamConfiguration(standardSingleTenantConfiguration(PRODUCTS,
@@ -226,17 +227,17 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsInTransaction_With
         // Verify event bus publishing
         assertThat(recordingLocalEventBusConsumer.flushPersistedEvents).hasSize(totalNumberOfOrderEvents + totalNumberOfProductEvents);
         assertThat(recordingLocalEventBusConsumer.flushPersistedEvents.stream()
-                                                                             .filter(persistedEvent -> persistedEvent.aggregateType().equals(ORDERS))
-                                                                             .map(persistedEvent -> persistedEvent.globalEventOrder().longValue())
-                                                                             .collect(Collectors.toList()))
+                                                                      .filter(persistedEvent -> persistedEvent.aggregateType().equals(ORDERS))
+                                                                      .map(persistedEvent -> persistedEvent.globalEventOrder().longValue())
+                                                                      .collect(Collectors.toList()))
                 .isEqualTo(LongStream.rangeClosed(GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(),
                                                   totalNumberOfOrderEvents)
                                      .boxed()
                                      .collect(Collectors.toList()));
         assertThat(recordingLocalEventBusConsumer.flushPersistedEvents.stream()
-                                                                             .filter(persistedEvent -> persistedEvent.aggregateType().equals(PRODUCTS))
-                                                                             .map(persistedEvent -> persistedEvent.globalEventOrder().longValue())
-                                                                             .collect(Collectors.toList()))
+                                                                      .filter(persistedEvent -> persistedEvent.aggregateType().equals(PRODUCTS))
+                                                                      .map(persistedEvent -> persistedEvent.globalEventOrder().longValue())
+                                                                      .collect(Collectors.toList()))
                 .isEqualTo(LongStream.rangeClosed(GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue(),
                                                   totalNumberOfProductEvents)
                                      .boxed()

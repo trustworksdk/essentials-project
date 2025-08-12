@@ -75,14 +75,16 @@ class PostgresqlAggregateSnapshotRepository_deleteAllHistoricSnapshotsIT {
 
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
-        var aggregateEventStreamConfigurationFactory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
+        var aggregateEventStreamConfigurationFactory = SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                       JSONColumnType.JSONB);
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      new TestPersistableEventMapper(),
-                                                                                                     aggregateEventStreamConfigurationFactory));
+                                                                                                     aggregateEventStreamConfigurationFactory),
+                                                jsonSerializer);
 
         snapshotRepository = new PostgresqlAggregateSnapshotRepository(eventStore,
                                                                        unitOfWorkFactory,

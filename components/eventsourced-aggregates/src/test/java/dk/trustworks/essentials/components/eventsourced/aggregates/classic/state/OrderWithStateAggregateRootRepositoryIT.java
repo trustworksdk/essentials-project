@@ -84,13 +84,15 @@ class OrderWithStateAggregateRootRepositoryIT {
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new TestPersistableEventMapper();
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                                     IdentifierColumnType.TEXT,
-                                                                                                                                                                                                    JSONColumnType.JSON)));
+                                                                                                                                                                                                    JSONColumnType.JSON)),
+                                                jsonSerializer);
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
         eventStore.localEventBus().addSyncSubscriber(recordingLocalEventBusConsumer);
 

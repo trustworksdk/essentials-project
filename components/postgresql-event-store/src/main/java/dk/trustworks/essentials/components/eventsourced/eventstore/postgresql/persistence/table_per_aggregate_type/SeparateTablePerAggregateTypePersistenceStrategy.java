@@ -24,7 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.collections.Streams;
@@ -335,8 +335,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                 createEventStreamTable(unitOfWork.handle(), eventStreamConfiguration);
             }
             ensureIndexes(unitOfWork.handle(), eventStreamConfiguration);
-            // TODO: Revisit EventStream listening
-//            addEventStreamPostgresqlNotification(unitOfWork.handle(), eventStreamConfiguration);
+            addEventStreamPostgresqlNotification(unitOfWork.handle(), eventStreamConfiguration);
         });
         // Start listening for changes
         // TODO: Start listening
@@ -440,67 +439,22 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         var eventStreamTableName = eventStreamConfiguration.eventStreamTableName;
         var columnNames          = eventStreamConfiguration.eventStreamTableColumnNames;
 
-        if (postgresEventStreamListener.isPresent()) {
-            var update = handle.createUpdate((bind("CREATE OR REPLACE FUNCTION notify_{:tableName}_change()\n" +
-                                                           "        RETURNS trigger\n" +
-                                                           "        LANGUAGE PLPGSQL\n" +
-                                                           "       AS $$\n" +
-                                                           "       BEGIN\n" +
-                                                           "         PERFORM (\n" +
-                                                           "            WITH payload(table_name,\n" +
-                                                           "                         {:aggregateIdColumnName},\n" +
-                                                           "                         {:eventTypeColumnName},\n" +
-                                                           "                         {:eventOrderColumnName},\n" +
-                                                           "                         {:globalOrderColumnName},\n" +
-                                                           "                         {:timestampColumnName},\n" +
-                                                           "                         {:tenantColumnName}) as\n" +
-                                                           "            (\n" +
-                                                           "              SELECT '{:tableName}',\n" +
-                                                           "                     NEW.{:aggregateIdColumnName},\n" +
-                                                           "                     NEW.{:eventTypeColumnName},\n" +
-                                                           "                     NEW.{:eventOrderColumnName},\n" +
-                                                           "                     NEW.{:globalOrderColumnName},\n" +
-                                                           "                     NEW.{:timestampColumnName},\n" +
-                                                           "                     NEW.{:tenantColumnName}\n" +
-                                                           "            )\n" +
-                                                           "            SELECT pg_notify('{:tableName}', row_to_json(payload)::text)\n" +
-                                                           "              FROM payload\n" +
-                                                           "         );\n" +
-                                                           "         RETURN NULL;\n" +
-                                                           "       END;\n" +
-                                                           "       $$;",
-                                                   arg("tableName", eventStreamTableName),
-                                                   arg("aggregateIdColumnName", columnNames.aggregateIdColumn),
-                                                   arg("eventTypeColumnName", columnNames.eventTypeColumn),
-                                                   arg("eventOrderColumnName", columnNames.eventOrderColumn),
-                                                   arg("globalOrderColumnName", columnNames.globalOrderColumn),
-                                                   arg("timestampColumnName", columnNames.timestampColumn),
-                                                   arg("tenantColumnName", columnNames.tenantColumn))
-                                             ));
-//            beforeEventStreamTableNotificationFunctionCreation(update, handle);
-            update.execute();
-            log.info("[{}] Ensured event-stream Notification Function 'notify_{}_change' for table '{}' exists",
-                     eventStreamConfiguration.aggregateType,
-                     eventStreamTableName,
-                     eventStreamTableName);
-//            afterEventStreamTableNotificationFunctionCreation(numberOfChanges, update, handle);
+        // Use ListenNotify to setup notification triggers with columns needed for EventStreamChangeNotification
+        ListenNotify.addChangeNotificationTriggerToTable(
+                handle,
+                eventStreamTableName,
+                List.of(ListenNotify.SqlOperation.INSERT), // Only notify on INSERT operations for new events
+                columnNames.aggregateIdColumn,      // aggregate_id
+                columnNames.globalOrderColumn,      // global_order
+                columnNames.eventOrderColumn,       // event_order
+                columnNames.eventTypeColumn,        // event_type
+                columnNames.tenantColumn,           // tenant
+                columnNames.timestampColumn         // timestamp
+                                                        );
 
-
-            update = handle.createUpdate(bind("CREATE OR REPLACE TRIGGER notify_on_{:tableName}_changes\n" +
-                                                      "      AFTER INSERT\n" +
-                                                      "            ON {:tableName}\n" +
-                                                      "      FOR EACH ROW\n" +
-                                                      "         EXECUTE PROCEDURE notify_{:tableName}_change()",
-                                              arg("tableName", eventStreamTableName)
-                                             ));
-//            beforeEventStreamTableNotificationTriggerCreation(update, handle);
-            update.execute();
-            log.info("[{}] Ensured event-stream Notification Trigger 'notify_on_{}_changes' for table '{}' exists",
-                     eventStreamConfiguration.aggregateType,
-                     eventStreamTableName,
-                     eventStreamTableName);
-//            afterEventStreamTableNotificationTriggerCreation(numberOfChanges, update, handle);
-        }
+        log.info("[{}] Setup event-stream notification triggers for table '{}' with EventStreamChangeNotification support",
+                 eventStreamConfiguration.aggregateType,
+                 eventStreamTableName);
     }
 
 //    protected void afterEventStreamTableNotificationTriggerCreation(int numberOfChanges, Update update, Handle handle) {
@@ -959,7 +913,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
     @Override
     public Map<AggregateType, String> getSeparateTablePerAggregateEventStreamTableNames() {
         return aggregateTypeConfigurations.entrySet().stream()
-                .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().eventStreamTableName));
+                                          .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().eventStreamTableName));
     }
 
     @Override

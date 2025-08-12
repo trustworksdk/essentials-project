@@ -106,15 +106,17 @@ abstract class OrderAggregateRootRepositoryTest {
         eventMapper = new TestPersistableEventMapper();
 
         unitOfWorkFactory = createUnitOfWorkFactory();
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
-                                                                                       SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                       SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                                                       JSONColumnType.JSONB));
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy);
+                                                persistenceStrategy,
+                                                jsonSerializer);
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
         eventStore.localEventBus().addSyncSubscriber(recordingLocalEventBusConsumer);
 

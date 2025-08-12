@@ -16,16 +16,11 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.classic.objenesis.state;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.*;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.classic.objenesis.NoDefaultConstructorOrderEvents;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.classic.Event;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
@@ -34,8 +29,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -47,6 +40,7 @@ import reactor.core.Disposable;
 import java.time.*;
 import java.util.*;
 
+import static dk.trustworks.essentials.components.eventsourced.aggregates.TestObjectMapperFactory.createObjectMapper;
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.objenesisAggregateRootFactory;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -83,13 +77,15 @@ class OrderWithStateAggregateRootRepositoryIT {
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new TestPersistableEventMapper();
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                                     IdentifierColumnType.UUID,
-                                                                                                                                                                                                    JSONColumnType.JSONB)));
+                                                                                                                                                                                                    JSONColumnType.JSONB)),
+                                                jsonSerializer);
         eventStore.addAggregateEventStreamConfiguration(ORDERS,
                                                         OrderId.class);
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
@@ -276,53 +272,6 @@ class OrderWithStateAggregateRootRepositoryIT {
         assertThat(asynchronousOrderEventsReceived.get(0).metaData().getJsonDeserialized()).isEqualTo(Optional.of(META_DATA));
         assertThat(asynchronousOrderEventsReceived.get(0).causedByEventId()).isEqualTo(Optional.of(eventMapper.causedByEventId));
         assertThat(asynchronousOrderEventsReceived.get(0).correlationId()).isEqualTo(Optional.of(eventMapper.correlationId));
-    }
-
-    private ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
-    }
-
-
-    /**
-     * Simple test in memory projector that just returns the underlying list of {@link PersistedEvent}'s
-     */
-    private class InMemoryListProjector implements InMemoryProjector {
-        @Override
-        public boolean supports(Class<?> projectionType) {
-            return List.class.isAssignableFrom(projectionType);
-        }
-
-        @Override
-        public <ID, PROJECTION> Optional<PROJECTION> projectEvents(AggregateType aggregateType,
-                                                                   ID aggregateId,
-                                                                   Class<PROJECTION> projectionType,
-                                                                   EventStore eventStore) {
-            var eventStream = eventStore.fetchStream(aggregateType,
-                                                     aggregateId);
-            return (Optional<PROJECTION>) eventStream.map(actualEventStream -> actualEventStream.eventList());
-        }
     }
 
 }

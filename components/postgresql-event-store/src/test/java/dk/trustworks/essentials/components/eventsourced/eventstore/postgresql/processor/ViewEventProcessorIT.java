@@ -27,6 +27,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestPersistableEventMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.messaging.*;
@@ -51,8 +52,8 @@ import java.util.function.Consumer;
 import java.util.stream.IntStream;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
-import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessorIT.TestOrderViewEventProcessor.TEST_ORDERS;
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestObjectMapperFactory.createObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
@@ -64,7 +65,7 @@ public class ViewEventProcessorIT {
     private HikariDataSource                                                        ds;
     private Jdbi                                                                    jdbi;
     private EventStoreUnitOfWorkFactory<EventStoreUnitOfWork>                       unitOfWorkFactory;
-    private EventProcessorIT.TestPersistableEventMapper                             eventMapper;
+    private TestPersistableEventMapper                                              eventMapper;
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
@@ -95,7 +96,7 @@ public class ViewEventProcessorIT {
         jdbi.setSqlLogger(new SqlExecutionTimeLogger());
 
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
-        eventMapper = new EventProcessorIT.TestPersistableEventMapper();
+        eventMapper = new TestPersistableEventMapper();
         var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
@@ -109,7 +110,8 @@ public class ViewEventProcessorIT {
                                                 Optional.empty(),
                                                 eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore,
                                                                                                     unitOfWorkFactory),
-                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver(),
+                                                jsonSerializer);
 
         fencedLockManager = PostgresqlFencedLockManager.builder()
                                                        .setEventBus(eventStore.localEventBus())
@@ -376,11 +378,11 @@ public class ViewEventProcessorIT {
      * </ul>
      */
     public static class TestOrderViewEventProcessor extends ViewEventProcessor {
-        public static final AggregateType TEST_ORDERS = AggregateType.of("TestOrders");
-        private final PostgresqlEventStore<?> eventStore;
-        private final ConcurrentMap<AggregateType, GlobalEventOrder> resetPoints = new ConcurrentHashMap<>();
-        private Consumer<ConcurrentMap<AggregateType, GlobalEventOrder>> resetCallback;
-        private final AtomicInteger orderPlacedEventCounter = new AtomicInteger(0);
+        public static final AggregateType                                            TEST_ORDERS             = AggregateType.of("TestOrders");
+        private final       PostgresqlEventStore<?>                                  eventStore;
+        private final       ConcurrentMap<AggregateType, GlobalEventOrder>           resetPoints             = new ConcurrentHashMap<>();
+        private             Consumer<ConcurrentMap<AggregateType, GlobalEventOrder>> resetCallback;
+        private final       AtomicInteger                                            orderPlacedEventCounter = new AtomicInteger(0);
 
         public TestOrderViewEventProcessor(ViewEventProcessorDependencies eventProcessorDependencies,
                                            PostgresqlEventStore<?> eventStore) {

@@ -131,13 +131,15 @@ class DeciderBasedCommandHandlerIT {
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         objectMapper = createObjectMapper();
         eventMapper = new TestPersistableEventMapper();
+        var jsonSerializer = new JacksonJSONEventSerializer(objectMapper);
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(objectMapper),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                                     IdentifierColumnType.TEXT,
-                                                                                                                                                                                                    JSONColumnType.JSONB)));
+                                                                                                                                                                                                    JSONColumnType.JSONB)),
+                                                jsonSerializer);
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
         eventStore.localEventBus().addSyncSubscriber(recordingLocalEventBusConsumer);
 

@@ -224,14 +224,16 @@ public class EventStoreConfiguration {
                                                                                                 EventStoreEventBus eventStoreLocalEventBus,
                                                                                                 EssentialsEventStoreProperties essentialsComponentsProperties,
                                                                                                 List<EventStoreInterceptor> eventStoreInterceptors,
-                                                                                                EventStoreSubscriptionObserver eventStoreSubscriptionObserver) {
+                                                                                                EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
+                                                                                                JSONEventSerializer jsonEventSerializer) {
         var configurableEventStore = new PostgresqlEventStore<>(eventStoreUnitOfWorkFactory,
                                                                 persistenceStrategy,
                                                                 Optional.of(eventStoreLocalEventBus),
                                                                 eventStore -> essentialsComponentsProperties.isUseEventStreamGapHandler() ?
                                                                               new PostgresqlEventStreamGapHandler<>(eventStore, eventStoreUnitOfWorkFactory) :
                                                                               new NoEventStreamGapHandler<>(),
-                                                                eventStoreSubscriptionObserver);
+                                                                eventStoreSubscriptionObserver,
+                                                                jsonEventSerializer);
         configurableEventStore.addEventStoreInterceptors(eventStoreInterceptors);
         return configurableEventStore;
     }

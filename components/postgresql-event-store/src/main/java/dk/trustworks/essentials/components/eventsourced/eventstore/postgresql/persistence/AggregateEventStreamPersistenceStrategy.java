@@ -96,6 +96,7 @@ import java.util.stream.Stream;
  * It is highly recommended that the {@link AggregateEventStreamConfiguration#aggregateType}'s value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@link AggregateEventStreamConfiguration#aggregateType}'s value.<br>
  * <b>Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.</b>
+ *
  * @param <CONFIG> the {@link AggregateType} configuration type
  */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
@@ -215,12 +216,13 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
 
     /**
      * Resolve the name of the {@link GlobalEventOrder} sequence for the table that stores events related to a given {@link AggregateType}
-     * @param unitOfWork The active {@link EventStoreUnitOfWork}
+     *
+     * @param unitOfWork    The active {@link EventStoreUnitOfWork}
      * @param aggregateType The aggregateType for which we want to resolve the {@link GlobalEventOrder} sequence name
      * @return The database sequence name wrapped in an {@link Optional}. {@link Optional#empty()} if the sequence name couldn't be resolved
      */
     Optional<String> resolveGlobalEventOrderSequenceName(EventStoreUnitOfWork unitOfWork,
-                                               AggregateType aggregateType);
+                                                         AggregateType aggregateType);
 
     /**
      * Persist a List of persistable events
@@ -303,9 +305,10 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
 
     /**
      * Load all the <code>eventIds</code> related to the specified <code>aggregateType</code>
-     * @param unitOfWork the current unit of work
+     *
+     * @param unitOfWork    the current unit of work
      * @param aggregateType the aggregate type that the specified <code>eventIds</code> are associated with
-     * @param eventIds the {@link EventId}'s that we want to load the corresponding {@link PersistedEvent}'s for
+     * @param eventIds      the {@link EventId}'s that we want to load the corresponding {@link PersistedEvent}'s for
      * @return the matching {@link PersistedEvent}'s
      */
     List<PersistedEvent> loadEvents(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType, List<EventId> eventIds);

@@ -21,7 +21,6 @@ import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
@@ -29,6 +28,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
@@ -37,7 +37,6 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
 import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
-import dk.trustworks.essentials.reactive.EventHandler;
 import dk.trustworks.essentials.types.*;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
@@ -54,13 +53,13 @@ import java.util.function.Function;
 import java.util.stream.*;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestPersistableEventMapper.META_DATA;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static org.assertj.core.api.Assertions.*;
 
 @Testcontainers
 class SingleTenantPostgresqlEventStoreIT {
-    public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
     public static final AggregateType PRODUCTS  = AggregateType.of("Products");
     public static final AggregateType ORDERS    = AggregateType.of("Orders");
 
@@ -89,12 +88,13 @@ class SingleTenantPostgresqlEventStoreIT {
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new TestPersistableEventMapper();
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
                                                                                        standardSingleTenantConfiguration(aggregateType_ -> aggregateType_ + "_events",
                                                                                                                          EventStreamTableColumnNames.defaultColumnNames(),
-                                                                                                                         new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                                                         jsonSerializer,
                                                                                                                          IdentifierColumnType.UUID,
                                                                                                                          JSONColumnType.JSONB));
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
@@ -102,7 +102,8 @@ class SingleTenantPostgresqlEventStoreIT {
                                                 Optional.empty(),
                                                 eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore,
                                                                                                     unitOfWorkFactory),
-                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
+                                                new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver(),
+                                                jsonSerializer);
         eventStore.addAggregateEventStreamConfiguration(aggregateType,
                                                         AggregateIdSerializer.serializerFor(OrderId.class));
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
@@ -766,8 +767,8 @@ class SingleTenantPostgresqlEventStoreIT {
         // Append Initial Event to Stream with overlapping event order
         unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
         var appendInitialEvent = List.of(new OrderEvent.ProductAddedToOrder(orderId,
-                                                                      ProductId.of("ProductId-1"),
-                                                                      2));
+                                                                            ProductId.of("ProductId-1"),
+                                                                            2));
         assertThatThrownBy(() -> eventStore.appendToStream(aggregateType,
                                                            orderId,
                                                            EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED, // -1
@@ -779,8 +780,8 @@ class SingleTenantPostgresqlEventStoreIT {
         // Append Initial Event to Stream with overlapping event order
         unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
         var appendSecondEvent = List.of(new OrderEvent.ProductAddedToOrder(orderId,
-                                                                            ProductId.of("ProductId-1"),
-                                                                            2));
+                                                                           ProductId.of("ProductId-1"),
+                                                                           2));
         assertThatThrownBy(() -> eventStore.appendToStream(aggregateType,
                                                            orderId,
                                                            EventOrder.FIRST_EVENT_ORDER, // 0
@@ -862,7 +863,7 @@ class SingleTenantPostgresqlEventStoreIT {
         var projection = eventStore.inMemoryProjection(aggregateType,
                                                        orderId,
                                                        List.class,
-                                                       new InMemoryListProjector());
+                                                       new TestInMemoryListProjector());
         assertThat(projection).isEmpty();
 
         // When
@@ -882,7 +883,7 @@ class SingleTenantPostgresqlEventStoreIT {
         projection = eventStore.inMemoryProjection(aggregateType,
                                                    orderId,
                                                    List.class,
-                                                   new InMemoryListProjector());
+                                                   new TestInMemoryListProjector());
 
         var eventsInProjection = (List<PersistedEvent>) projection.get();
 
@@ -1559,72 +1560,4 @@ class SingleTenantPostgresqlEventStoreIT {
         return objectMapper;
     }
 
-    private static class TestPersistableEventMapper implements PersistableEventMapper {
-        private final CorrelationId correlationId   = CorrelationId.random();
-        private final EventId       causedByEventId = EventId.random();
-
-        @Override
-        public PersistableEvent map(Object aggregateId, AggregateEventStreamConfiguration aggregateEventStreamConfiguration, Object event, EventOrder eventOrder) {
-            return PersistableEvent.from(EventId.random(),
-                                         aggregateEventStreamConfiguration.aggregateType,
-                                         aggregateId,
-                                         EventTypeOrName.with(event.getClass()),
-                                         event,
-                                         eventOrder,
-                                         null, // Leave reading the EventRevision to the PersistableEvent's from method
-                                         META_DATA,
-                                         OffsetDateTime.now(),
-                                         causedByEventId,
-                                         correlationId,
-                                         null);
-        }
-    }
-
-    /**
-     * Simple test in memory projector that just returns the underlying list of {@link PersistedEvent}'s
-     */
-    private class InMemoryListProjector implements InMemoryProjector {
-        @Override
-        public boolean supports(Class<?> projectionType) {
-            return List.class.isAssignableFrom(projectionType);
-        }
-
-        @Override
-        public <ID, PROJECTION> Optional<PROJECTION> projectEvents(AggregateType aggregateType,
-                                                                   ID aggregateId,
-                                                                   Class<PROJECTION> projectionType,
-                                                                   EventStore eventStore) {
-            var eventStream = eventStore.fetchStream(aggregateType,
-                                                     aggregateId);
-            return (Optional<PROJECTION>) eventStream.map(actualEventStream -> actualEventStream.eventList());
-        }
-    }
-
-    private static class RecordingLocalEventBusConsumer implements EventHandler {
-        private final List<PersistedEvent> beforeCommitPersistedEvents  = new ArrayList<>();
-        private final List<PersistedEvent> afterCommitPersistedEvents   = new ArrayList<>();
-        private final List<PersistedEvent> afterRollbackPersistedEvents = new ArrayList<>();
-        private final List<PersistedEvent> flushPersistedEvents         = new ArrayList<>();
-
-        @Override
-        public void handle(Object event) {
-            var persistedEvents = (PersistedEvents) event;
-            if (persistedEvents.commitStage == CommitStage.Flush) {
-                flushPersistedEvents.addAll(persistedEvents.events);
-            } else if (persistedEvents.commitStage == CommitStage.BeforeCommit) {
-                beforeCommitPersistedEvents.addAll(persistedEvents.events);
-            } else if (persistedEvents.commitStage == CommitStage.AfterCommit) {
-                afterCommitPersistedEvents.addAll(persistedEvents.events);
-            } else {
-                afterRollbackPersistedEvents.addAll(persistedEvents.events);
-            }
-        }
-
-        private void clear() {
-            beforeCommitPersistedEvents.clear();
-            afterCommitPersistedEvents.clear();
-            afterRollbackPersistedEvents.clear();
-            flushPersistedEvents.clear();
-        }
-    }
 }

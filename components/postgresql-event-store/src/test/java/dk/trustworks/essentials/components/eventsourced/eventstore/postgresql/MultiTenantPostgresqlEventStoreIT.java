@@ -27,6 +27,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestPersistableEventMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
@@ -48,12 +49,12 @@ import java.time.*;
 import java.util.*;
 import java.util.stream.*;
 
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test.TestPersistableEventMapper.META_DATA;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
 class MultiTenantPostgresqlEventStoreIT {
-    public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
     public static final AggregateType PRODUCTS  = AggregateType.of("Products");
     public static final AggregateType ORDERS    = AggregateType.of("Orders");
 
@@ -85,12 +86,13 @@ class MultiTenantPostgresqlEventStoreIT {
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new TestPersistableEventMapper();
+        var jsonSerializer = createJSONSerializer();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
                                                                                        SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardConfiguration(aggregateType_ -> aggregateType_ + "_events",
                                                                                                                                                                           EventStreamTableColumnNames.defaultColumnNames(),
-                                                                                                                                                                          createJSONSerializer(),
+                                                                                                                                                                          jsonSerializer,
                                                                                                                                                                           IdentifierColumnType.UUID,
                                                                                                                                                                           JSONColumnType.JSONB,
                                                                                                                                                                           new TenantSerializer.TenantIdSerializer()));
@@ -98,7 +100,8 @@ class MultiTenantPostgresqlEventStoreIT {
                                                                  OrderId.class);
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy);
+                                                persistenceStrategy,
+                                                jsonSerializer);
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
         eventStore.localEventBus().addSyncSubscriber(recordingLocalEventBusConsumer);
         tenantId = TenantId.of(UUID.randomUUID().toString());
@@ -543,27 +546,6 @@ class MultiTenantPostgresqlEventStoreIT {
         return new JacksonJSONEventSerializer(objectMapper);
     }
 
-    private class TestPersistableEventMapper implements PersistableEventMapper {
-        private final CorrelationId correlationId   = CorrelationId.random();
-        private final EventId       causedByEventId = EventId.random();
-
-        @Override
-        public PersistableEvent map(Object aggregateId, AggregateEventStreamConfiguration aggregateEventStreamConfiguration, Object event, EventOrder eventOrder) {
-            return PersistableEvent.from(EventId.random(),
-                                         aggregateEventStreamConfiguration.aggregateType,
-                                         aggregateId,
-                                         EventTypeOrName.with(event.getClass()),
-                                         event,
-                                         eventOrder,
-                                         EventRevision.of(1),
-                                         META_DATA,
-                                         OffsetDateTime.now(),
-                                         causedByEventId,
-                                         correlationId,
-                                         tenantId);
-        }
-    }
-
     /**
      * Simple test in memory projector that just returns the underlying list of {@link PersistedEvent}'s
      */
@@ -591,7 +573,7 @@ class MultiTenantPostgresqlEventStoreIT {
 
         @Override
         public void handle(Object event) {
-            var persistedEvents = (PersistedEvents)event;
+            var persistedEvents = (PersistedEvents) event;
             if (persistedEvents.commitStage == CommitStage.BeforeCommit) {
                 beforeCommitPersistedEvents.addAll(persistedEvents.events);
             } else if (persistedEvents.commitStage == CommitStage.AfterCommit) {

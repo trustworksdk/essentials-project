@@ -92,7 +92,8 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
                                                                                                                                                                                       JSONColumnType.JSONB));
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
-                                                persistenceStrategy);
+                                                persistenceStrategy,
+                                                jsonSerializer);
         eventStore.addAggregateEventStreamConfiguration(aggregateType,
                                                         OrderId.class);
         eventStore.addAggregateEventStreamConfiguration(standardSingleTenantConfiguration(PRODUCTS,

@@ -46,13 +46,13 @@ import reactor.core.Disposable;
 import java.time.*;
 import java.util.*;
 
+import static dk.trustworks.essentials.components.eventsourced.aggregates.TestPersistableEventMapper.META_DATA;
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.objenesisAggregateRootFactory;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayName("Objenesis Classic OrderAggregateRootRepositoryTest")
 @Testcontainers
 class OrderAggregateRootRepositoryIT {
-    public static final EventMetaData META_DATA = EventMetaData.of("Key1", "Value1", "Key2", "Value2");
     public static final AggregateType ORDERS    = AggregateType.of("Orders");
 
     private Jdbi                                                                    jdbi;
@@ -82,14 +82,16 @@ class OrderAggregateRootRepositoryIT {
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new TestPersistableEventMapper();
+        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(jsonSerializer,
                                                                                                                                                                                                     IdentifierColumnType.UUID,
                                                                                                                                                                                                     JSONColumnType.JSONB)
-                                                ));
+                                                                                                     ),
+                                                jsonSerializer);
         eventStore.addAggregateEventStreamConfiguration(ORDERS,
                                                         OrderId.class);
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();

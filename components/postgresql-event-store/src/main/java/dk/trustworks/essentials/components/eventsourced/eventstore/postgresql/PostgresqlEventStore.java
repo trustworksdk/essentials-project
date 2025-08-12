@@ -25,12 +25,15 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.reactive.EventBus;
+import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.time.StopWatch;
 import dk.trustworks.essentials.types.LongRange;
 import org.slf4j.*;
@@ -45,7 +48,6 @@ import java.util.function.Function;
 import java.util.stream.*;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptorChain.newInterceptorChainForOperation;
-import static dk.trustworks.essentials.shared.Exceptions.isCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain.sortInterceptorsByOrder;
@@ -69,6 +71,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     private final EventStoreUnitOfWorkFactory<EventStoreUnitOfWork> unitOfWorkFactory;
     private final AggregateEventStreamPersistenceStrategy<CONFIG>   persistenceStrategy;
     private final EventStoreSubscriptionObserver                    eventStoreSubscriptionObserver;
+    private final ReactiveEventStreamSubscriptionManager            reactiveSubscriptionManager;
 
 
     /**
@@ -89,15 +92,18 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      *
      * @param unitOfWorkFactory                       the unit of work factory
      * @param aggregateEventStreamPersistenceStrategy the persistence strategy - please see {@link AggregateEventStreamPersistenceStrategy} documentation regarding <b>Security</b> considerations
+     * @param jsonEventSerializer                     The JSON serializer used to serialize events and objects to/from JSON
      * @param <STRATEGY>                              the persistence strategy type
      */
     public <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
-                                                                                                   STRATEGY aggregateEventStreamPersistenceStrategy) {
+                                                                                                   STRATEGY aggregateEventStreamPersistenceStrategy,
+                                                                                                   JSONEventSerializer jsonEventSerializer) {
         this(unitOfWorkFactory,
              aggregateEventStreamPersistenceStrategy,
              Optional.empty(),
              eventStore -> new NoEventStreamGapHandler<>(),
-             new NoOpEventStoreSubscriptionObserver());
+             new NoOpEventStoreSubscriptionObserver(),
+             jsonEventSerializer);
     }
 
     /**
@@ -106,16 +112,22 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      *
      * @param unitOfWorkFactory                       the unit of work factory
      * @param aggregateEventStreamPersistenceStrategy the persistence strategy - please see {@link AggregateEventStreamPersistenceStrategy} documentation regarding <b>Security</b> considerations
+     * @param eventStoreSubscriptionObserver          The {@link EventStoreSubscriptionObserver} that will be used the {@link EventStore} and {@link EventStoreSubscriptionManager} to track and
+     *                                                measure statistics related to {@link EventStoreSubscription}'s
+     *                                                and calls to {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional)}
+     * @param jsonEventSerializer                     The JSON serializer used to serialize events and objects to/from JSON
      * @param <STRATEGY>                              the persistence strategy type
      */
     public <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
                                                                                                    STRATEGY aggregateEventStreamPersistenceStrategy,
-                                                                                                   EventStoreSubscriptionObserver eventStoreSubscriptionObserver) {
+                                                                                                   EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
+                                                                                                   JSONEventSerializer jsonEventSerializer) {
         this(unitOfWorkFactory,
-                aggregateEventStreamPersistenceStrategy,
-                Optional.empty(),
-                eventStore -> new NoEventStreamGapHandler<>(),
-                eventStoreSubscriptionObserver);
+             aggregateEventStreamPersistenceStrategy,
+             Optional.empty(),
+             eventStore -> new NoEventStreamGapHandler<>(),
+             eventStoreSubscriptionObserver,
+             jsonEventSerializer);
     }
 
 
@@ -129,13 +141,15 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      * @param eventStoreSubscriptionObserver          The {@link EventStoreSubscriptionObserver} that will be used the {@link EventStore} and {@link EventStoreSubscriptionManager} to track and
      *                                                measure statistics related to {@link EventStoreSubscription}'s
      *                                                and calls to {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional)}
+     * @param jsonEventSerializer                     The JSON serializer used to serialize events and objects to/from JSON
      * @param <STRATEGY>                              the persistence strategy type
      */
     public <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
                                                                                                    STRATEGY aggregateEventStreamPersistenceStrategy,
                                                                                                    Optional<EventStoreEventBus> eventStoreLocalEventBusOption,
                                                                                                    Function<PostgresqlEventStore<CONFIG>, EventStreamGapHandler<CONFIG>> eventStreamGapHandlerFactory,
-                                                                                                   EventStoreSubscriptionObserver eventStoreSubscriptionObserver) {
+                                                                                                   EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
+                                                                                                   JSONEventSerializer jsonEventSerializer) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.persistenceStrategy = requireNonNull(aggregateEventStreamPersistenceStrategy, "No eventStreamPersistenceStrategy provided");
         requireNonNull(eventStoreLocalEventBusOption, "No eventStoreLocalEventBus option provided");
@@ -144,6 +158,17 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         this.eventStreamGapHandler = eventStreamGapHandlerFactory.apply(this);
         this.eventStoreSubscriptionObserver = requireNonNull(eventStoreSubscriptionObserver, "No eventStoreSubscriptionObserver provided");
 
+        // Initialize reactive subscription manager
+        this.reactiveSubscriptionManager = new ReactiveEventStreamSubscriptionManager(
+                ((GenericHandleAwareUnitOfWorkFactory<?>) unitOfWorkFactory).getJdbi(),
+                requireNonNull(jsonEventSerializer, "No jsonEventSerializer provided"),
+                eventStoreEventBus,
+                Duration.ofMillis(10), // Faster polling interval for MultiTableChangeListener to achieve low reactive latency in tests
+                persistenceStrategy,
+                eventStoreSubscriptionObserver
+        );
+        this.reactiveSubscriptionManager.start();
+
         eventStoreInterceptors = new CopyOnWriteArrayList<>();
         inMemoryProjectors = new HashSet<>();
         inMemoryProjectorPerProjectionType = new ConcurrentHashMap<>();
@@ -151,41 +176,47 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
 
     /**
      * Create a {@link PostgresqlEventStore} without EventStreamGapHandler (specifically with {@link NoEventStreamGapHandler})<br>
-     * Same as calling {@link #PostgresqlEventStore(EventStoreUnitOfWorkFactory, AggregateEventStreamPersistenceStrategy)}
+     * Same as calling {@link #PostgresqlEventStore(EventStoreUnitOfWorkFactory, AggregateEventStreamPersistenceStrategy, JSONEventSerializer)}
      *
      * @param unitOfWorkFactory                       the unit of work factory
      * @param aggregateEventStreamPersistenceStrategy the persistence strategy - please see {@link AggregateEventStreamPersistenceStrategy} documentation regarding <b>Security</b> considerations
+     * @param jsonEventSerializer                     The JSON serializer used to serialize events and objects to/from JSON
      * @param <CONFIG>                                The concrete {@link AggregateEventStreamConfiguration}
      * @param <STRATEGY>                              the persistence strategy type
      * @return new {@link PostgresqlEventStore} instance
      */
     public static <CONFIG extends AggregateEventStreamConfiguration, STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore withoutGapHandling(EventStoreUnitOfWorkFactory unitOfWorkFactory,
-                                                                                                                                                                               STRATEGY aggregateEventStreamPersistenceStrategy) {
+                                                                                                                                                                               STRATEGY aggregateEventStreamPersistenceStrategy,
+                                                                                                                                                                               JSONEventSerializer jsonEventSerializer) {
         return new PostgresqlEventStore<>(unitOfWorkFactory,
                                           aggregateEventStreamPersistenceStrategy,
                                           Optional.empty(),
                                           eventStore -> new NoEventStreamGapHandler<>(),
-                                          new NoOpEventStoreSubscriptionObserver());
+                                          new NoOpEventStoreSubscriptionObserver(),
+                                          jsonEventSerializer);
     }
 
     /**
      * Create a {@link PostgresqlEventStore} with {@link EventStreamGapHandler} (specifically with {@link PostgresqlEventStreamGapHandler})<br>
-     * Same as calling {@link #PostgresqlEventStore(EventStoreUnitOfWorkFactory, AggregateEventStreamPersistenceStrategy, Optional, Function, EventStoreSubscriptionObserver)} with an empty {@link EventStoreEventBus} {@link Optional}
+     * Same as calling {@link #PostgresqlEventStore(EventStoreUnitOfWorkFactory, AggregateEventStreamPersistenceStrategy, Optional, Function, EventStoreSubscriptionObserver, JSONEventSerializer)} with an empty {@link EventStoreEventBus} {@link Optional}
      * and {@link NoOpEventStoreSubscriptionObserver}
      *
      * @param unitOfWorkFactory                       the unit of work factory
      * @param aggregateEventStreamPersistenceStrategy the persistence strategy - please see {@link AggregateEventStreamPersistenceStrategy} documentation regarding <b>Security</b> considerations
+     * @param jsonEventSerializer                     The JSON serializer used to serialize events and objects to/from JSON
      * @param <CONFIG>                                The concrete {@link AggregateEventStreamConfiguration}
      * @param <STRATEGY>                              the persistence strategy type
      * @return new {@link PostgresqlEventStore} instance
      */
     public static <CONFIG extends AggregateEventStreamConfiguration, STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore withGapHandling(EventStoreUnitOfWorkFactory unitOfWorkFactory,
-                                                                                                                                                                            STRATEGY aggregateEventStreamPersistenceStrategy) {
+                                                                                                                                                                            STRATEGY aggregateEventStreamPersistenceStrategy,
+                                                                                                                                                                            JSONEventSerializer jsonEventSerializer) {
         return new PostgresqlEventStore<>(unitOfWorkFactory,
                                           aggregateEventStreamPersistenceStrategy,
                                           Optional.empty(),
                                           eventStore -> new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),
-                                          new NoOpEventStoreSubscriptionObserver());
+                                          new NoOpEventStoreSubscriptionObserver(),
+                                          jsonEventSerializer);
     }
 
     /**
@@ -204,6 +235,10 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     @Override
     public EventBus localEventBus() {
         return eventStoreEventBus;
+    }
+
+    public ReactiveEventStreamSubscriptionManager getReactiveSubscriptionManager() {
+        return reactiveSubscriptionManager;
     }
 
     @Override
@@ -482,7 +517,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         var lastBatchSizeForThisQuery            = new AtomicLong(batchFetchSize);
         var nextFromInclusiveGlobalOrder         = new AtomicLong(fromInclusiveGlobalOrder);
         var subscriptionGapHandler               = subscriberId.map(eventStreamGapHandler::gapHandlerFor);
-        var actualSubscriberId = subscriberId.orElse(NO_SUBSCRIBER_ID);
+        var actualSubscriberId                   = subscriberId.orElse(NO_SUBSCRIBER_ID);
         var persistedEventsFlux = Flux.defer(() -> {
             EventStoreUnitOfWork unitOfWork;
             try {
@@ -628,6 +663,337 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                             .onBackpressureDrop()
                                             .publishOn(Schedulers.newSingle("Publish-" + subscriberId.orElse(NO_SUBSCRIBER_ID) + "-" + aggregateType, true)));
     }
+
+    /**
+     * Creates a reactive stream of events for the given aggregate type that combines immediate PostgreSQL Listen/Notify
+     * notifications with intelligent fallback polling. This provides sub-millisecond latency for new events while
+     * maintaining reliability during connection issues or quiet periods.
+     *
+     * @param aggregateType                       the type of aggregate to poll for events
+     * @param fromInclusiveGlobalOrder            the global order to start polling from (inclusive)
+     * @param loadEventsByGlobalOrderBatchSize    the batch size for loading events
+     * @param onlyIncludeEventIfItBelongsToTenant tenant filtering option
+     * @param subscriberId                        the subscriber ID for tracking and logging
+     * @return a Flux that emits PersistedEvents with immediate notifications and intelligent backoff
+     */
+    public Flux<PersistedEvent> pollEventsReactive(AggregateType aggregateType,
+                                                   long fromInclusiveGlobalOrder,
+                                                   Optional<Integer> loadEventsByGlobalOrderBatchSize,
+                                                   Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+                                                   Optional<SubscriberId> subscriberId) {
+        requireNonNull(aggregateType, "You must supply an aggregateType");
+        requireNonNull(onlyIncludeEventIfItBelongsToTenant, "You must supply a onlyIncludeEventIfItBelongsToTenant option");
+        requireNonNull(subscriberId, "You must supply a subscriberId option");
+
+        var eventStreamLogName  = "ReactiveEventStream:" + aggregateType + ":" + subscriberId.orElseGet(SubscriberId::random);
+        var eventStoreStreamLog = LoggerFactory.getLogger(EventStore.class.getName() + ".ReactivePollingEventStream");
+
+        log.debug("[{}] Creating reactive event stream for '{}' starting from global order {}",
+                  eventStreamLogName, aggregateType, fromInclusiveGlobalOrder);
+
+        // State used for polling
+        long batchFetchSize = loadEventsByGlobalOrderBatchSize.orElse(DEFAULT_QUERY_BATCH_SIZE);
+        var consecutiveNoPersistedEventsReturned = new AtomicInteger(0);
+        var lastBatchSizeForThisQuery            = new AtomicLong(batchFetchSize);
+        var nextFromInclusiveGlobalOrder         = new AtomicLong(fromInclusiveGlobalOrder);
+        var subscriptionGapHandler               = subscriberId.map(eventStreamGapHandler::gapHandlerFor);
+        var actualSubscriberId                   = subscriberId.orElse(NO_SUBSCRIBER_ID);
+
+        // Subscribe to notifications for immediate polling triggers
+        var notificationStream = reactiveSubscriptionManager.subscribeToAggregateType(aggregateType)
+                .filter(notification -> notification.getGlobalOrder() >= nextFromInclusiveGlobalOrder.get())
+                .doOnNext(notification -> eventStoreStreamLog.trace("[{}] Received immediate notification: {}",
+                        eventStreamLogName, notification))
+                .map(EventStreamChangeNotification::getGlobalOrder)
+                .distinct(); // Avoid duplicate processing of the same global order
+
+        // Build a polling flux (single cycle) that we will repeat with dynamic backoff
+        var singlePollFlux = Flux.defer(() -> {
+            EventStoreUnitOfWork unitOfWork;
+            try {
+                unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+            } catch (Exception e) {
+                if (IOExceptionUtil.isIOException(e)) {
+                    eventStoreStreamLog.debug(msg("[{}] Experienced a IO/Connection related issue '{}'. Will return an empty Flux",
+                            eventStreamLogName,
+                            e.getClass().getSimpleName()),
+                            e);
+                } else {
+                    eventStoreStreamLog.error(msg("[{}] Experienced a non-IO related issue '{}'. Will return an empty Flux",
+                            eventStreamLogName,
+                            e.getClass().getSimpleName()),
+                            e);
+                }
+                return Flux.<PersistedEvent>empty();
+            }
+
+            try {
+                var resolveBatchSizeForThisQueryTiming = StopWatch.start("resolveBatchSizeForThisQuery (" + actualSubscriberId + ", " + aggregateType + ")");
+                long batchSizeForThisQuery = resolveBatchSizeForThisQuery(aggregateType,
+                        eventStreamLogName,
+                        eventStoreStreamLog,
+                        lastBatchSizeForThisQuery.get(),
+                        batchFetchSize,
+                        consecutiveNoPersistedEventsReturned,
+                        nextFromInclusiveGlobalOrder,
+                        unitOfWork);
+                eventStoreSubscriptionObserver.resolvedBatchSizeForEventStorePoll(actualSubscriberId,
+                        aggregateType,
+                        batchFetchSize,
+                        Long.MAX_VALUE,
+                        lastBatchSizeForThisQuery.get(),
+                        consecutiveNoPersistedEventsReturned.get(),
+                        nextFromInclusiveGlobalOrder.get(),
+                        batchSizeForThisQuery,
+                        resolveBatchSizeForThisQueryTiming.stop().getDuration()
+                );
+
+                if (batchSizeForThisQuery == 0) {
+                    int emptyCount = consecutiveNoPersistedEventsReturned.incrementAndGet();
+                    lastBatchSizeForThisQuery.set(batchFetchSize);
+
+                    eventStoreStreamLog.debug("[{}] Skipping polling as no new events have been persisted since last poll",
+                            eventStreamLogName);
+                    // Record empty poll and allow backoff to increase
+                    reactiveSubscriptionManager.recordEmptyPoll(aggregateType, emptyCount);
+                    return Flux.<PersistedEvent>empty();
+                } else {
+                    lastBatchSizeForThisQuery.set(batchSizeForThisQuery);
+                }
+
+                var globalOrderRange = LongRange.from(nextFromInclusiveGlobalOrder.get(), batchSizeForThisQuery);
+                var transientGapsToIncludeInQuery = subscriptionGapHandler.map(gapHandler -> gapHandler.findTransientGapsToIncludeInQuery(aggregateType, globalOrderRange))
+                        .orElse(null);
+
+                var loadEventsByGlobalOrderTiming = StopWatch.start("loadEventsByGlobalOrder(" + actualSubscriberId + ", " + aggregateType + ")");
+                var persistedEvents = loadEventsByGlobalOrder(aggregateType,
+                        globalOrderRange,
+                        transientGapsToIncludeInQuery,
+                        onlyIncludeEventIfItBelongsToTenant).collect(Collectors.toList());
+                eventStoreSubscriptionObserver.eventStorePolled(actualSubscriberId,
+                        aggregateType,
+                        globalOrderRange,
+                        transientGapsToIncludeInQuery,
+                        onlyIncludeEventIfItBelongsToTenant,
+                        persistedEvents,
+                        loadEventsByGlobalOrderTiming.stop().getDuration());
+                subscriptionGapHandler.ifPresent(gapHandler -> {
+                    var reconcileGapsTiming = StopWatch.start("reconcileGaps(" + actualSubscriberId + ", " + aggregateType + ")");
+                    gapHandler.reconcileGaps(aggregateType,
+                            globalOrderRange,
+                            persistedEvents,
+                            transientGapsToIncludeInQuery);
+                    eventStoreSubscriptionObserver.reconciledGaps(actualSubscriberId,
+                            aggregateType,
+                            globalOrderRange,
+                            transientGapsToIncludeInQuery, persistedEvents,
+                            reconcileGapsTiming.stop().getDuration());
+
+                });
+                unitOfWork.commit();
+                if (persistedEvents.size() > 0) {
+                    consecutiveNoPersistedEventsReturned.set(0);
+                    if (log.isTraceEnabled()) {
+                        eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events: {}",
+                                eventStreamLogName,
+                                globalOrderRange,
+                                transientGapsToIncludeInQuery,
+                                persistedEvents.size(),
+                                persistedEvents.stream().map(PersistedEvent::globalEventOrder).collect(Collectors.toList()));
+                    } else {
+                        eventStoreStreamLog.debug("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned {} events",
+                                eventStreamLogName,
+                                globalOrderRange,
+                                transientGapsToIncludeInQuery,
+                                persistedEvents.size());
+                    }
+                    // Record activity to reset backoff
+                    reactiveSubscriptionManager.recordPollingActivity(aggregateType, persistedEvents.size());
+                } else {
+                    consecutiveNoPersistedEventsReturned.incrementAndGet();
+                    eventStoreStreamLog.trace("[{}] loadEventsByGlobalOrder using globalOrderRange {} and transientGapsToIncludeInQuery {} returned no events",
+                            eventStreamLogName,
+                            globalOrderRange,
+                            transientGapsToIncludeInQuery);
+                    reactiveSubscriptionManager.recordEmptyPoll(aggregateType, consecutiveNoPersistedEventsReturned.get());
+                }
+
+                return Flux.fromIterable(persistedEvents);
+            } catch (RuntimeException e) {
+                log.error(msg("[{}] Polling failed", eventStreamLogName), e);
+                if (unitOfWork != null) {
+                    try {
+                        unitOfWork.rollback(e);
+                    } catch (Exception rollbackException) {
+                        log.error(msg("[{}] Failed to rollback unit of work", eventStreamLogName), rollbackException);
+                    }
+                }
+                eventStoreStreamLog.error(msg("[{}] Returning Error for '{}' EventStream with nextFromInclusiveGlobalOrder {}",
+                        eventStreamLogName,
+                        aggregateType,
+                        nextFromInclusiveGlobalOrder.get()),
+                        e);
+                return Flux.error(e);
+            }
+        }).onErrorResume(throwable -> {
+            if (isCriticalError(throwable)) {
+                return Flux.error(throwable);
+            }
+            eventStoreStreamLog.error(msg("[{}] Failed: {}",
+                    eventStreamLogName,
+                    throwable.getMessage()),
+                    throwable);
+            return Flux.empty();
+        });
+
+        // Schedule repeats using the reactive backoff strategy
+        final ReactivePollingBackoffStrategy backoffStrategy =
+                java.util.Optional.ofNullable(reactiveSubscriptionManager.getBackoffStrategy(aggregateType))
+                        .orElseGet(ReactivePollingBackoffStrategy::new);
+
+        var scheduledPollingFlux = Mono.delay(backoffStrategy.getCurrentInterval())
+                .thenMany(singlePollFlux)
+                .repeatWhen(signals -> signals
+                        .flatMap(ignored -> Mono.delay(backoffStrategy.getCurrentInterval()))
+                        .onBackpressureDrop()
+                        .publishOn(Schedulers.newSingle("Publish-" + actualSubscriberId + "-" + aggregateType, true))
+                );
+
+        // Merge notification-triggered polling with scheduled polling
+        return Flux.merge(
+                notificationStream.flatMap(globalOrder -> {
+                    eventStoreStreamLog.debug("[{}] Triggering immediate poll for global order {}", eventStreamLogName, globalOrder);
+                    return pollForSingleEvent(aggregateType, globalOrder, onlyIncludeEventIfItBelongsToTenant);
+                }),
+                scheduledPollingFlux
+        )
+                .distinct(PersistedEvent::globalEventOrder)
+                .doOnNext(event -> {
+                    final long nextGlobalOrder = event.globalEventOrder().longValue() + 1L;
+                    long prev = nextFromInclusiveGlobalOrder.get();
+                    if (nextGlobalOrder > prev) {
+                        eventStoreStreamLog.trace("[{}] Updating nextFromInclusiveGlobalOrder from {} to {}",
+                                eventStreamLogName,
+                                prev,
+                                nextGlobalOrder);
+                        nextFromInclusiveGlobalOrder.set(nextGlobalOrder);
+                    }
+                })
+                .doOnError(error -> eventStoreStreamLog.error("[{}] Error in reactive event stream", eventStreamLogName, error))
+                .onErrorResume(throwable -> {
+                    if (isCriticalError(throwable)) {
+                        eventStoreStreamLog.error("[{}] Critical error in reactive stream, failing fast", eventStreamLogName, throwable);
+                        return Flux.error(throwable);
+                    }
+                    eventStoreStreamLog.warn("[{}] Non-critical error in reactive stream. Resuming with existing scheduled polling/backoff: {}",
+                            eventStreamLogName, throwable.getMessage());
+
+                    // Resume using existing scheduled polling flux and preserve pointer updates
+                    return scheduledPollingFlux
+                            .distinct(PersistedEvent::globalEventOrder)
+                            .doOnNext(event -> {
+                                final long nextGlobalOrder = event.globalEventOrder().longValue() + 1L;
+                                long prev = nextFromInclusiveGlobalOrder.get();
+                                if (nextGlobalOrder > prev) {
+                                    eventStoreStreamLog.trace("[{}] Updating nextFromInclusiveGlobalOrder from {} to {}",
+                                            eventStreamLogName,
+                                            prev,
+                                            nextGlobalOrder);
+                                    nextFromInclusiveGlobalOrder.set(nextGlobalOrder);
+                                }
+                            })
+                            .onErrorResume(inner -> {
+                                if (isCriticalError(inner)) {
+                                    eventStoreStreamLog.error("[{}] Critical error in fallback polling, failing fast", eventStreamLogName, inner);
+                                    return Flux.error(inner);
+                                }
+                                eventStoreStreamLog.warn("[{}] Non-critical error in fallback polling: {}. Suppressing and waiting for next cycle.",
+                                        eventStreamLogName, inner.getMessage());
+                                return Flux.empty();
+                            });
+                });
+    }
+
+    /**
+     * Polls for a single event with the specified global order.
+     * Used by the reactive notification system to immediately fetch events that were just inserted.
+     */
+    private Flux<PersistedEvent> pollForSingleEvent(AggregateType aggregateType,
+                                                    Long globalOrder,
+                                                    Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        return Flux.defer(() -> {
+            try {
+                var unitOfWork = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+                var events = loadEventsByGlobalOrder(aggregateType,
+                                                     LongRange.only(globalOrder),
+                                                     null,
+                                                     onlyIncludeEventIfItBelongsToTenant)
+                        .collect(Collectors.toList());
+                unitOfWork.commit();
+
+                // Record activity with reactive subscription manager
+                reactiveSubscriptionManager.recordPollingActivity(aggregateType, events.size());
+
+                return Flux.fromIterable(events);
+            } catch (Exception e) {
+                if (isCriticalError(e)) {
+                    log.error("Critical error polling for single event with global order {}: {}", globalOrder, e.getMessage(), e);
+                    return Flux.error(e);
+                } else {
+                    log.debug("Non-critical error polling for single event with global order {}: {}", globalOrder, e.getMessage());
+                    // Record empty poll due to error
+                    reactiveSubscriptionManager.recordEmptyPoll(aggregateType, 1);
+                    return Flux.empty(); // Return empty on non-critical errors, regular polling will catch up
+                }
+            }
+        });
+    }
+
+    /**
+     * Determines if an error is critical and should cause the reactive stream to fail,
+     * or if it's recoverable and should be handled gracefully.
+     *
+     * @param throwable the error to examine
+     * @return true if the error is critical, false if it's recoverable
+     */
+    private boolean isCriticalError(Throwable throwable) {
+        // Critical database connectivity issues
+        if (IOExceptionUtil.isIOException(throwable)) {
+            return true;
+        }
+
+        // Configuration or security issues are critical
+        if (throwable instanceof IllegalArgumentException ||
+                throwable instanceof SecurityException ||
+                throwable instanceof IllegalStateException) {
+            return true;
+        }
+
+        // OutOfMemoryError and other JVM issues are critical
+        if (throwable instanceof OutOfMemoryError ||
+                throwable instanceof StackOverflowError) {
+            return true;
+        }
+
+        // Check root cause for SQL connection issues
+        Throwable rootCause = Exceptions.getRootCause(throwable);
+        if (rootCause instanceof java.sql.SQLException) {
+            java.sql.SQLException sqlException = (java.sql.SQLException) rootCause;
+            String                sqlState     = sqlException.getSQLState();
+
+            // Connection issues are critical
+            if (sqlState != null && (
+                    sqlState.startsWith("08") ||    // Connection exception
+                            sqlState.startsWith("57") ||    // Operator intervention (shutdown, etc.)
+                            sqlState.equals("53300"))) {    // Too many connections
+                return true;
+            }
+        }
+
+        // Most other errors are recoverable (transient database issues, parsing errors, etc.)
+        return false;
+    }
+
 
     private long resolveBatchSizeForThisQuery(AggregateType aggregateType,
                                               String eventStreamLogName,
@@ -983,7 +1349,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                                       persistedEvent.aggregateType(),
                                       persistedEvent.event().getEventTypeOrNamePersistenceValue(),
                                       persistedEvent.globalEventOrder());
-            var publishEventTiming  = StopWatch.start("publishEventToSink (" + subscriberId + ", " + aggregateType + ")");
+            var publishEventTiming = StopWatch.start("publishEventToSink (" + subscriberId + ", " + aggregateType + ")");
             sink.next(persistedEvent);
             eventStoreSubscriptionObserver.publishEvent(subscriberId,
                                                         aggregateType,
