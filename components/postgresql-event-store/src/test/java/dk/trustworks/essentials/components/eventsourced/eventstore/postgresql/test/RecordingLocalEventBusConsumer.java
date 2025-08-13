@@ -31,11 +31,14 @@ public class RecordingLocalEventBusConsumer implements EventHandler {
     public final List<PersistedEvent> beforeCommitPersistedEvents = new ArrayList<>();
     public final List<PersistedEvent> afterCommitPersistedEvents = new ArrayList<>();
     public final List<PersistedEvent> afterRollbackPersistedEvents = new ArrayList<>();
+    public final List<PersistedEvent> flushPersistedEvents         = new ArrayList<>();
 
     @Override
     public void handle(Object event) {
         var persistedEvents = (PersistedEvents) event;
-        if (persistedEvents.commitStage == CommitStage.BeforeCommit) {
+        if (persistedEvents.commitStage == CommitStage.Flush) {
+            flushPersistedEvents.addAll(persistedEvents.events);
+        } else if (persistedEvents.commitStage == CommitStage.BeforeCommit) {
             beforeCommitPersistedEvents.addAll(persistedEvents.events);
         } else if (persistedEvents.commitStage == CommitStage.AfterCommit) {
             afterCommitPersistedEvents.addAll(persistedEvents.events);
@@ -51,5 +54,6 @@ public class RecordingLocalEventBusConsumer implements EventHandler {
         beforeCommitPersistedEvents.clear();
         afterCommitPersistedEvents.clear();
         afterRollbackPersistedEvents.clear();
+        flushPersistedEvents.clear();
     }
 }
