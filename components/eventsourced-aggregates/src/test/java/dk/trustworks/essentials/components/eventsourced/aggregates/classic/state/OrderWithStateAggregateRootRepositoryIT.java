@@ -109,6 +109,7 @@ class OrderWithStateAggregateRootRepositoryIT {
                                                    Optional.empty(),
                                                    Optional.of(Duration.ofMillis(100)),
                                                    Optional.empty(),
+                                                   Optional.empty(),
                                                    Optional.empty())
                                        .subscribe(event -> asynchronousOrderEventsReceived.add(event));
     }
