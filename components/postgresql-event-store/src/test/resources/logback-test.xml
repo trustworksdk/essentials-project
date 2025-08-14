@@ -30,6 +30,7 @@
     <logger name="dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory" level="INFO"/>
     <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWork" level="INFO"/>
     <logger name="dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory" level="INFO"/>
+    <!--<logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.JitteredEventStorePollingOptimizer" level="TRACE"/>-->
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>

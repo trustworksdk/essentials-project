@@ -199,10 +199,11 @@ public class EssentialsEventStoreProperties {
      * {@link EventStoreSubscriptionManager} properties
      */
     public static class EventStoreSubscriptionManagerProperties {
-        private int                                              eventStorePollingBatchSize = 10;
-        private Duration                                         eventStorePollingInterval  = Duration.ofMillis(100);
-        private Duration                                         snapshotResumePointsEvery  = Duration.ofSeconds(10);
-        private EssentialsComponentsProperties.MetricsProperties metrics                    = new EssentialsComponentsProperties.MetricsProperties();
+        private int                                              eventStorePollingBatchSize   = 10;
+        private Duration                                         eventStorePollingInterval    = Duration.ofMillis(100);
+        private Duration                                         maxEventStorePollingInterval = Duration.ofMillis(2000);
+        private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(10);
+        private EssentialsComponentsProperties.MetricsProperties metrics                      = new EssentialsComponentsProperties.MetricsProperties();
 
         /**
          * How many events should The {@link EventStore} maximum return when polling for events
@@ -238,6 +239,24 @@ public class EssentialsEventStoreProperties {
          */
         public void setEventStorePollingInterval(Duration eventStorePollingInterval) {
             this.eventStorePollingInterval = eventStorePollingInterval;
+        }
+
+        /**
+         * Retrieves the maximum interval at which the EventStore is polled for new events.
+         *
+         * @return the maximum polling interval for the EventStore
+         */
+        public Duration getMaxEventStorePollingInterval() {
+            return maxEventStorePollingInterval;
+        }
+
+        /**
+         * Sets the maximum interval at which the EventStore is polled for new events.
+         *
+         * @param maxEventStorePollingInterval the maximum polling interval for the EventStore
+         */
+        public void setMaxEventStorePollingInterval(Duration maxEventStorePollingInterval) {
+            this.maxEventStorePollingInterval = maxEventStorePollingInterval;
         }
 
         /**

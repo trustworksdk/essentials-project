@@ -167,6 +167,11 @@ public class EventStoreConfiguration {
                                             .setEventStorePollingInterval(eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval())
                                             .setSnapshotResumePointsEvery(eventStoreProperties.getSubscriptionManager().getSnapshotResumePointsEvery())
                                             .setStartLifeCycles(essentialsComponentsProperties.getLifeCycles().isStartLifeCycles())
+                                            .setEventStorePollingOptimizerFactory(eventSteamName -> new JitteredEventStorePollingOptimizer(eventSteamName,
+                                                                                                                                           eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval().toMillis(),
+                                                                                                                                           (long) (eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval().toMillis() * 0.5d),
+                                                                                                                                           eventStoreProperties.getSubscriptionManager().getMaxEventStorePollingInterval().toMillis(),
+                                                                                                                                           0.1d))
                                             .build();
     }
 
@@ -401,18 +406,18 @@ public class EventStoreConfiguration {
                                        EventStore eventStore,
                                        DurableSubscriptionRepository durableSubscriptionRepository) {
         return new DefaultEventStoreApi(securityProvider,
-                eventStore,
-                durableSubscriptionRepository);
+                                        eventStore,
+                                        durableSubscriptionRepository);
     }
 
     @Bean
     @ConditionalOnMissingBean
     public PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi(EssentialsSecurityProvider securityProvider,
                                                                                EventStore eventStore) {
-        var postgresqlEventStore = (PostgresqlEventStore<?>)eventStore;
+        var postgresqlEventStore           = (PostgresqlEventStore<?>) eventStore;
         var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerAggregateEventStreamTableNames();
         return new DefaultPostgresqlEventStoreStatisticsApi(securityProvider,
-                eventStore.getUnitOfWorkFactory(),
-                aggregateEventStreamTableNames);
+                                                            eventStore.getUnitOfWorkFactory(),
+                                                            aggregateEventStreamTableNames);
     }
 }

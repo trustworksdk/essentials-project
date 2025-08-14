@@ -16,8 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -63,6 +62,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     private ScheduledExecutorService resumePointsScheduledExecutorService;
     private final EventStoreSubscriptionObserver eventStoreSubscriptionObserver;
     private final EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings;
+    private final Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory;
 
     public DefaultEventStoreSubscriptionManager(EventStore eventStore,
                                                 int eventStorePollingBatchSize,
@@ -71,6 +71,17 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                                 Duration snapshotResumePointsEvery,
                                                 DurableSubscriptionRepository durableSubscriptionRepository,
                                                 boolean startLifeCycles) {
+        this(eventStore, eventStorePollingBatchSize, eventStorePollingInterval, fencedLockManager, snapshotResumePointsEvery, durableSubscriptionRepository, startLifeCycles, null);
+    }
+
+    public DefaultEventStoreSubscriptionManager(EventStore eventStore,
+                                                int eventStorePollingBatchSize,
+                                                Duration eventStorePollingInterval,
+                                                FencedLockManager fencedLockManager,
+                                                Duration snapshotResumePointsEvery,
+                                                DurableSubscriptionRepository durableSubscriptionRepository,
+                                                boolean startLifeCycles,
+                                                Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
         requireTrue(eventStorePollingBatchSize >= 1, "eventStorePollingBatchSize must be >= 1");
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         requireNonNull(eventStorePollingInterval, "No eventStorePollingInterval provided");
@@ -82,6 +93,7 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         this.eventStoreSubscriptionManagerSettings = new EventStoreSubscriptionManagerSettings(eventStorePollingBatchSize,
                 eventStorePollingInterval,
                 snapshotResumePointsEvery);
+        this.eventStorePollingOptimizerFactory = eventStorePollingOptimizerFactory != null ? eventStorePollingOptimizerFactory : this::createEventStorePollingOptimizer;
 
         log.info("[{}] Using {} using {} with snapshotResumePointsEvery: {}, eventStorePollingBatchSize: {}, eventStorePollingInterval: {}, " +
                         "eventStoreSubscriptionObserver: {}, startLifeCycles: {}",
@@ -94,6 +106,23 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                 eventStoreSubscriptionObserver,
                 startLifeCycles
         );
+    }
+
+    /**
+     * Creates a new instance of EventStorePollingOptimizer for optimizing the polling behavior
+     * of the event store based on the provided event stream log name and the current subscription
+     * manager settings.
+     * @param eventStreamLogName the name of the event stream log (usually a combination of subscriber ID
+     *                           and aggregate type used for identification and logging purposes)
+     * @return an instance of EventStorePollingOptimizer configured with jittered backoff logic
+     *         based on the polling interval and other settings
+     */
+    private EventStorePollingOptimizer createEventStorePollingOptimizer(String eventStreamLogName) {
+        return new JitteredEventStorePollingOptimizer(eventStreamLogName,
+                                                      eventStoreSubscriptionManagerSettings.eventStorePollingInterval().toMillis(),
+                                                      (long) (eventStoreSubscriptionManagerSettings.eventStorePollingInterval().toMillis() * 0.5d),
+                                                      eventStoreSubscriptionManagerSettings.eventStorePollingInterval().toMillis() * 20,
+                                                      0.1);
     }
 
     @Override
@@ -263,7 +292,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                         eventHandler,
                         eventStoreSubscriptionObserver,
                         eventStoreSubscriptionManagerSettings,
-                        this::unsubscribe));
+                        this::unsubscribe,
+                        eventStorePollingOptimizerFactory));
     }
 
     @Override
@@ -290,7 +320,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                         eventHandler,
                         eventStoreSubscriptionObserver,
                         eventStoreSubscriptionManagerSettings,
-                        this::unsubscribe));
+                        this::unsubscribe,
+                        eventStorePollingOptimizerFactory));
     }
 
     @Override
@@ -316,7 +347,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                         eventHandler,
                         eventStoreSubscriptionObserver,
                         eventStoreSubscriptionManagerSettings,
-                        this::unsubscribe));
+                        this::unsubscribe,
+                        eventStorePollingOptimizerFactory));
     }
 
     @Override
@@ -336,7 +368,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                         onlyIncludeEventsForTenant,
                         eventHandler,
                         eventStoreSubscriptionObserver,
-                        this::unsubscribe
+                        this::unsubscribe,
+                        eventStorePollingOptimizerFactory
                 ));
     }
 
@@ -355,7 +388,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                         onlyIncludeEventsForTenant,
                         eventHandler,
                         eventStoreSubscriptionObserver,
-                        this::unsubscribe));
+                        this::unsubscribe,
+                        eventStorePollingOptimizerFactory));
     }
 
     /**

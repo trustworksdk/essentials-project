@@ -1226,14 +1226,16 @@ class SingleTenantPostgresqlEventStoreIT {
                                                                              Optional.of(2),
                                                                              Optional.of(Duration.ofMillis(100)),
                                                                              Optional.empty(),
-                                                                             Optional.of(productsSubscriberId))
+                                                                             Optional.of(productsSubscriberId),
+                                                                             Optional.empty())
                                                                  .limitRate(10),
                                ordersSubscriberId -> eventStore.pollEvents(ORDERS,
                                                                            GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
                                                                            Optional.of(10),
                                                                            Optional.of(Duration.ofMillis(100)),
                                                                            Optional.empty(),
-                                                                           Optional.of(ordersSubscriberId))
+                                                                           Optional.of(ordersSubscriberId),
+                                                                           Optional.empty())
                                                                .limitRate(10));
     }
 
@@ -1244,13 +1246,15 @@ class SingleTenantPostgresqlEventStoreIT {
                                                                              Optional.of(2),
                                                                              Optional.of(Duration.ofMillis(100)),
                                                                              Optional.empty(),
-                                                                             Optional.of(productsSubscriberId)),
+                                                                             Optional.of(productsSubscriberId),
+                                                                             Optional.empty()),
                                ordersSubscriberId -> eventStore.pollEvents(ORDERS,
                                                                            GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
                                                                            Optional.of(10),
                                                                            Optional.of(Duration.ofMillis(100)),
                                                                            Optional.empty(),
-                                                                           Optional.of(ordersSubscriberId)));
+                                                                           Optional.of(ordersSubscriberId),
+                                                                           Optional.empty()));
     }
 
     @Test
@@ -1285,7 +1289,8 @@ class SingleTenantPostgresqlEventStoreIT {
                                                       Optional.of(2),
                                                       Optional.of(Duration.ofMillis(50)),
                                                       Optional.empty(),
-                                                      Optional.of(productsSubscriberId))
+                                                      Optional.of(productsSubscriberId),
+                                                      Optional.empty())
                                           .subscribe(e -> {
                                               System.out.println("Received Product event: " + e);
                                               productEventsReceived.add(e);
@@ -1297,7 +1302,8 @@ class SingleTenantPostgresqlEventStoreIT {
                                                     Optional.of(10),
                                                     Optional.of(Duration.ofMillis(50)),
                                                     Optional.empty(),
-                                                    Optional.of(ordersSubscriberId))
+                                                    Optional.of(ordersSubscriberId),
+                                                    Optional.empty())
                                         .subscribe(e -> {
                                             System.out.println("Received Order event: " + e);
                                             orderEventsReceived.add(e);
@@ -1406,7 +1412,8 @@ class SingleTenantPostgresqlEventStoreIT {
                                                     Optional.of(batchSize),
                                                     Optional.of(Duration.ofMillis(50)),
                                                     Optional.empty(),
-                                                    Optional.of(ordersSubscriberId))
+                                                    Optional.of(ordersSubscriberId),
+                                                    Optional.empty())
                                         .subscribe(e -> {
                                             System.out.println("Received Order event: " + e);
                                             orderEventsReceived.add(e);
