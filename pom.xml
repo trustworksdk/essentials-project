@@ -151,6 +151,7 @@
         <module>components/postgresql-document-db</module>
         <module>components/vaadin-ui</module>
         <module>components/spring-boot-starter-admin-ui</module>
+        <module>components/mssql-queue</module>
     </modules>
 
 
