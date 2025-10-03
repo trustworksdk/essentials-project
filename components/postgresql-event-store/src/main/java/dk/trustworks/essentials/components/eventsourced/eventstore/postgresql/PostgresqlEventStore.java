@@ -129,7 +129,7 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      * @param eventStreamGapHandlerFactory            the {@link EventStreamGapHandler} to use for tracking event stream gaps
      * @param eventStoreSubscriptionObserver          The {@link EventStoreSubscriptionObserver} that will be used the {@link EventStore} and {@link EventStoreSubscriptionManager} to track and
      *                                                measure statistics related to {@link EventStoreSubscription}'s
-     *                                                and calls to {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional)}
+     *                                                and calls to {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}
      * @param <STRATEGY>                              the persistence strategy type
      */
     public <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,

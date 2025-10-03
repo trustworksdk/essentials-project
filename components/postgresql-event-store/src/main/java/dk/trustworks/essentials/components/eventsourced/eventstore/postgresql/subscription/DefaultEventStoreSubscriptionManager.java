@@ -71,7 +71,14 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
                                                 Duration snapshotResumePointsEvery,
                                                 DurableSubscriptionRepository durableSubscriptionRepository,
                                                 boolean startLifeCycles) {
-        this(eventStore, eventStorePollingBatchSize, eventStorePollingInterval, fencedLockManager, snapshotResumePointsEvery, durableSubscriptionRepository, startLifeCycles, null);
+        this(eventStore,
+             eventStorePollingBatchSize,
+             eventStorePollingInterval,
+             fencedLockManager,
+             snapshotResumePointsEvery,
+             durableSubscriptionRepository,
+             startLifeCycles,
+             null);
     }
 
     public DefaultEventStoreSubscriptionManager(EventStore eventStore,

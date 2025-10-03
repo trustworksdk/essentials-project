@@ -16,8 +16,12 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.*;
-
+/**
+ * Interface for optimizing polling behavior of an event store. This interface provides
+ * mechanisms to adjust polling intervals and strategies based on the results of previous
+ * polling attempts. Implementations can define specific backoff or jitter strategies to
+ * manage polling efficiency and load on the system.
+ */
 public interface EventStorePollingOptimizer {
     static EventStorePollingOptimizer None() {
         return new EventStorePollingOptimizer() {
