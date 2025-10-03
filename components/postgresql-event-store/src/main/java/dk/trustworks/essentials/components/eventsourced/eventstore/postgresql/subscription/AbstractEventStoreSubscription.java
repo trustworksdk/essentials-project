@@ -56,6 +56,7 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
      * @param onlyIncludeEventsForTenant     Optional tenant filter
      * @param eventStoreSubscriptionObserver The subscription observer
      * @param unsubscribeCallback            Callback to execute when unsubscribing
+     * @param eventStorePollingOptimizerFactory Factory to create EventStorePollingOptimizers
      */
     protected AbstractEventStoreSubscription(EventStore eventStore,
                                              AggregateType aggregateType,
@@ -117,6 +118,11 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
                   e.event().getEventTypeOrName().getValue(), cause);
     }
 
+    /**
+     * Retrieves the factory function for creating instances of {@link EventStorePollingOptimizer}.
+     *
+     * @return a function that takes a string parameter and returns an {@link EventStorePollingOptimizer} instance.
+     */
     public Function<String, EventStorePollingOptimizer> getEventStorePollingOptimizerFactory() {
         return eventStorePollingOptimizerFactory;
     }

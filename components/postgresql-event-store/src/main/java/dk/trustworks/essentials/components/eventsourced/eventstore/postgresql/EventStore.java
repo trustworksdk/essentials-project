@@ -71,8 +71,8 @@ public interface EventStore {
      */
     int DEFAULT_QUERY_BATCH_SIZE              = 100;
     /**
-     * Default Polling Interface for {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional)}/
-     * {@link #pollEvents(AggregateType, GlobalEventOrder, Optional, Optional, Optional, Optional)}
+     * Default Polling Interface for {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}/
+     * {@link #pollEvents(AggregateType, GlobalEventOrder, Optional, Optional, Optional, Optional, Optional)}
      */
     int DEFAULT_POLLING_INTERVAL_MILLISECONDS = 500;
 
