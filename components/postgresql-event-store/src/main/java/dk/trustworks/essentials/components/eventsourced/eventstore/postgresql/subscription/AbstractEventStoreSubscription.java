@@ -17,13 +17,10 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
-import dk.trustworks.essentials.components.foundation.types.Tenant;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import dk.trustworks.essentials.components.foundation.types.*;
+import org.slf4j.*;
 
 import java.util.Optional;
 import java.util.function.*;
@@ -50,13 +47,13 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
     /**
      * Constructor with common parameters for all subscription types
      *
-     * @param eventStore                     The event store
-     * @param aggregateType                  The aggregate type to subscribe to
-     * @param subscriberId                   The subscriber ID
-     * @param onlyIncludeEventsForTenant     Optional tenant filter
-     * @param eventStoreSubscriptionObserver The subscription observer
-     * @param unsubscribeCallback            Callback to execute when unsubscribing
-     * @param eventStorePollingOptimizerFactory Factory to create EventStorePollingOptimizers
+     * @param eventStore                        The event store
+     * @param aggregateType                     The aggregate type to subscribe to
+     * @param subscriberId                      The subscriber ID
+     * @param onlyIncludeEventsForTenant        Optional tenant filter
+     * @param eventStoreSubscriptionObserver    The subscription observer
+     * @param unsubscribeCallback               Callback to execute when unsubscribing
+     * @param eventStorePollingOptimizerFactory Factory to create EventStorePollingOptimizers - input String parameter is the {@code eventStreamLogName} that is used label for logs (e.g., subscriberId+aggregateType)
      */
     protected AbstractEventStoreSubscription(EventStore eventStore,
                                              AggregateType aggregateType,

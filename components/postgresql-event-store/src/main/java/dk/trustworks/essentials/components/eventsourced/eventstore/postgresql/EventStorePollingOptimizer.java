@@ -46,7 +46,7 @@ public interface EventStorePollingOptimizer {
 
             @Override
             public String toString() {
-                return "EventStorePollingOptimizer";
+                return "NoEventStorePollingOptimizer";
             }
         };
     }
@@ -55,6 +55,7 @@ public interface EventStorePollingOptimizer {
 
     void eventStorePollingReturnedEvents();
 
+    @Deprecated
     boolean shouldSkipPolling();
 
     long currentDelayMs();

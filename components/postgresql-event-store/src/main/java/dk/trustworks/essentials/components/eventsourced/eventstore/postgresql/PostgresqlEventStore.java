@@ -29,8 +29,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.su
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
-import dk.trustworks.essentials.components.foundation.messaging.queue.*;
-import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.reactive.EventBus;
 import dk.trustworks.essentials.shared.time.StopWatch;
@@ -807,10 +805,12 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
                 if (numberOfEventsPublished == 0) {
                     pollingOptimizer.eventStorePollingReturnedNoEvents();
                     eventStoreStreamLog.trace("[{}] Skipping polling cycle based on optimizer", eventStreamLogName);
-                    try {
-                        Thread.sleep(pollingOptimizer.currentDelayMs());
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+                    if (pollingOptimizer.currentDelayMs() > 0) {
+                        try {
+                            Thread.sleep(pollingOptimizer.currentDelayMs());
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
                     }
                 } else {
                     pollingOptimizer.eventStorePollingReturnedEvents();

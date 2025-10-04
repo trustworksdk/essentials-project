@@ -87,11 +87,29 @@ public final class EventStoreSubscriptionManagerBuilder {
         return this;
     }
 
+    /**
+     * Configures whether the lifecycle tasks for the {@link EventStoreSubscriptionManager} should automatically start.
+     *
+     * @param startLifeCycles {@code true} to enable automatic starting of lifecycle tasks,
+     *                        {@code false} to disable it.
+     * @return this builder instance for method chaining.
+     */
     public EventStoreSubscriptionManagerBuilder setStartLifeCycles(boolean startLifeCycles) {
         this.startLifeCycles = startLifeCycles;
         return this;
     }
 
+    /**
+     * Configures the {@link EventStorePollingOptimizer} factory for this builder. The factory is responsible
+     * for creating {@link EventStorePollingOptimizer} instances to optimize the polling behavior
+     * of the event store during event subscription management. This allows for customizable
+     * polling strategies, such as backoff mechanisms or dynamic interval adjustments, to improve efficiency.
+     *
+     * @param eventStorePollingOptimizerFactory a factory function to create {@link EventStorePollingOptimizer}'s<br>
+     *                                          Input String parameter is the {@code eventStreamLogName} that is used label for logs (e.g., subscriberId+aggregateType).<br>
+     *                                          Passing {@code null} causes the {@link DefaultEventStoreSubscriptionManager} to use the {@link JitteredEventStorePollingOptimizer} strategy.
+     * @return this {@link EventStoreSubscriptionManagerBuilder} instance, for method chaining.
+     */
     public EventStoreSubscriptionManagerBuilder setEventStorePollingOptimizerFactory(Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
         this.eventStorePollingOptimizerFactory = eventStorePollingOptimizerFactory;
         return this;

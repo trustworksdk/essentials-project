@@ -850,7 +850,8 @@ public interface EventStore {
      * @param pollingInterval                     how often should the {@link EventStore} be polled for new events. Default value is {@link #DEFAULT_POLLING_INTERVAL_MILLISECONDS}
      * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param subscriptionId                      unique subscriber id which is used for creating a unique logger name. If {@link Optional#empty()} then a UUID value is generated and used
-     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer} if empty {@link EventStorePollingOptimizer#None()} is used
+     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer}; Input String parameter is the {@code eventStreamLogName} that is used label for logs (e.g., subscriberId+aggregateType).<br>
+     *                                            If empty {@link EventStorePollingOptimizer#None()} is used.
      * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
      */
     default Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
@@ -901,7 +902,8 @@ public interface EventStore {
      * @param pollingInterval                     how often should the {@link EventStore} be polled for new events. Default value is {@link #DEFAULT_POLLING_INTERVAL_MILLISECONDS}
      * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      * @param subscriptionId                      unique subscriber id which is used for creating a unique logger name. If {@link Optional#empty()} then a UUID value is generated and used
-     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer} if empty {@link EventStorePollingOptimizer#None()} is used
+     * @param eventStorePollingOptimizerFactory   factory to create {@link EventStorePollingOptimizer}; Input String parameter is the {@code eventStreamLogName} that is used label for logs (e.g., subscriberId+aggregateType).<br>
+     *                                            If empty {@link EventStorePollingOptimizer#None()} is used.
      * @return a {@link Flux} that asynchronously will publish events associated with the provided <code>aggregateType</code>
      */
     Flux<PersistedEvent> pollEvents(AggregateType aggregateType,
