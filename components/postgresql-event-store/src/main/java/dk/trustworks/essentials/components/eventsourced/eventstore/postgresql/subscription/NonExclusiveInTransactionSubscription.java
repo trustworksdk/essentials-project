@@ -17,14 +17,12 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.CommitStage;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.PersistedEvents;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
-import dk.trustworks.essentials.components.foundation.types.SubscriberId;
-import dk.trustworks.essentials.components.foundation.types.Tenant;
+import dk.trustworks.essentials.components.foundation.types.*;
+import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.time.StopWatch;
 
 import java.util.Optional;
@@ -124,6 +122,7 @@ public class NonExclusiveInTransactionSubscription extends AbstractEventStoreSub
     protected void onErrorHandlingEvent(PersistedEvent e, Throwable cause) {
         // TODO: Add better retry mechanism, poison event handling, etc.
         super.onErrorHandlingEvent(e, cause);
+        Exceptions.sneakyThrow(cause);
     }
 
     @Override
