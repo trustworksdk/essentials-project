@@ -25,6 +25,7 @@ import org.junit.jupiter.api.*;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
+import org.testcontainers.images.PullPolicy;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.utility.DockerImageName;
 
@@ -49,7 +50,8 @@ public class PgCronRepositoryIT {
             .withUsername("postgres")
             .withPassword("postgres")
             .withLogConsumer(new Slf4jLogConsumer(LoggerFactory.getLogger("pgcontainer")))
-            .withStartupAttempts(1);
+            .withStartupAttempts(1)
+            .withImagePullPolicy((DockerImageName ignored) -> false); // never pull if the image isn’t present locally
 
     private static Jdbi                  jdbi;
     private        JdbiUnitOfWorkFactory unitOfWorkFactory;
@@ -60,6 +62,11 @@ public class PgCronRepositoryIT {
         jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(),
                            postgreSQLContainer.getUsername(),
                            postgreSQLContainer.getPassword());
+    }
+
+    @AfterAll
+    static void dumpLogs() {
+        System.out.println(postgreSQLContainer.getLogs());
     }
 
     @BeforeEach
