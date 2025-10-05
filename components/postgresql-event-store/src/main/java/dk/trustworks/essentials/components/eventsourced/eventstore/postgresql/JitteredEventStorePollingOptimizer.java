@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The {@code JitteredEventStorePollingOptimizer} implements the {@link EventStorePollingOptimizer} interface
+ * The {@link JitteredEventStorePollingOptimizer} implements the {@link EventStorePollingOptimizer} interface
  * and provides a polling optimization mechanism with backoff and jitter capabilities. This class is used
  * to dynamically adjust polling intervals for an event store, reducing load while maintaining responsiveness.
  *
@@ -35,20 +35,20 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public class JitteredEventStorePollingOptimizer implements EventStorePollingOptimizer {
     private static final Logger log = LoggerFactory.getLogger(JitteredEventStorePollingOptimizer.class);
 
-    private final long pollingIntervalMs;
-    private final long incrementMs;
-    private final long maxBackoffMs;
+    private final long   pollingIntervalMs;
+    private final long   incrementMs;
+    private final long   maxBackoffMs;
     private final double jitterRatio;       // e.g. 0.20 = ±20%
     private final String eventStreamLogName;
 
     private final AtomicLong backoffMs = new AtomicLong(0L);
 
     /**
-     * @param eventStreamLogName           label for logs (e.g., subscriberId+aggregateType)
-     * @param pollingIntervalMs base polling interval in ms (>0)
-     * @param incrementMs       linear backoff increment in ms (>0)
-     * @param maxBackoffMs      max backoff in ms (>= pollingIntervalMs)
-     * @param jitterRatio       jitter fraction in [0.0..0.5] (e.g., 0.20 for ±20%)
+     * @param eventStreamLogName label for logs (e.g., subscriberId+aggregateType)
+     * @param pollingIntervalMs  base polling interval in ms (>0)
+     * @param incrementMs        linear backoff increment in ms (>0)
+     * @param maxBackoffMs       max backoff in ms (>= pollingIntervalMs)
+     * @param jitterRatio        jitter fraction in [0.0..0.5] (e.g., 0.20 for ±20%)
      */
     public JitteredEventStorePollingOptimizer(String eventStreamLogName,
                                               long pollingIntervalMs,
@@ -60,7 +60,7 @@ public class JitteredEventStorePollingOptimizer implements EventStorePollingOpti
         if (maxBackoffMs < pollingIntervalMs) throw new IllegalArgumentException("maxBackoffMs must be >= pollingIntervalMs");
         if (jitterRatio < 0.0 || jitterRatio > 0.5) throw new IllegalArgumentException("jitterRatio must be in [0.0..0.5]");
 
-        this.eventStreamLogName = requireNonNull(eventStreamLogName, "eventStreamLogName must be non-null" );
+        this.eventStreamLogName = requireNonNull(eventStreamLogName, "eventStreamLogName must be non-null");
         this.pollingIntervalMs = pollingIntervalMs;
         this.incrementMs = incrementMs;
         this.maxBackoffMs = maxBackoffMs;
@@ -104,7 +104,7 @@ public class JitteredEventStorePollingOptimizer implements EventStorePollingOpti
         }
 
         double delta = ThreadLocalRandom.current().nextDouble(-jitterRatio, jitterRatio);
-        long sleep = Math.max(0L, Math.round(base * (1.0 + delta)));
+        long   sleep = Math.max(0L, Math.round(base * (1.0 + delta)));
 
         log.trace("[{}] Sleep after empty poll: base={} ms, jitterRatio={}, sleep={} ms",
                   eventStreamLogName, base, jitterRatio, sleep);

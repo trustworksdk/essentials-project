@@ -6,10 +6,13 @@ FROM postgres:17.5-bookworm AS builder
 ARG PG_CRON_TAG=v1.6.4
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends wget ca-certificates gnupg \
+ && apt-get install -y --no-install-recommends ca-certificates wget gnupg \
  && install -d /usr/share/postgresql-common/pgdg \
  && wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
       | gpg --dearmor > /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg \
+   && gpg --dry-run --import --import-options show-only \
+        /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg \
+        | grep -q "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8" \
  && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] \
       http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list \

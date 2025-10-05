@@ -15,8 +15,8 @@
  */
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
+import org.slf4j.*;
 
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * (by skipping poll cycles) when no events are returned, up to a configured max delay.
  * When events are returned, the optimizer resets the effective delay.
  *
- * Semantics mirror SimpleQueuePollingOptimizer for DurableQueues, but adapted to the event store API.
+ * Semantics mirror SimpleQueuePollingOptimizer for {@link DurableQueues}, but adapted to the event store API.
  */
 public final class SimpleEventStorePollingOptimizer implements EventStorePollingOptimizer {
     private static final Logger log = LoggerFactory.getLogger(SimpleEventStorePollingOptimizer.class);

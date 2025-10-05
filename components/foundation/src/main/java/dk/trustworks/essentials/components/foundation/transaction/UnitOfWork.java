@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.foundation.transaction;
 
+import java.util.List;
+
 public interface UnitOfWork {
     /**
      * Start the {@link UnitOfWork} and any underlying transaction
@@ -63,18 +65,17 @@ public interface UnitOfWork {
     }
 
     /**
-     * TODO: Adjust example to the new API
      * Register a resource (e.g. an Aggregate) that should have its {@link UnitOfWorkLifecycleCallback} called during {@link UnitOfWork} operation.<br>
      * Example:
      * <pre>{@code
      * Aggregate aggregate = unitOfWork.registerLifecycleCallbackForResource(aggregate.loadFromEvents(event),
      *                                                                       new AggregateRootRepositoryUnitOfWorkLifecycleCallback()));
      * }</pre>
-     * Where the Aggreg
+     * Where the AggregateRootRepositoryUnitOfWorkLifecycleCallback is defined as:
      * <pre>{@code
      * class AggregateRootRepositoryUnitOfWorkLifecycleCallback implements UnitOfWorkLifecycleCallback<AGGREGATE_TYPE> {
      *     @Override
-     *     public void beforeCommit(UnitOfWork unitOfWork, java.util.List<AGGREGATE_TYPE> associatedResources) {
+     *     public void beforeCommit(UnitOfWork unitOfWork, List<AGGREGATE_TYPE> associatedResources) {
      *         log.trace("beforeCommit processing {} '{}' registered with the UnitOfWork being committed", associatedResources.size(), aggregateType.getName());
      *         associatedResources.forEach(aggregate -> {
      *             log.trace("beforeCommit processing '{}' with id '{}'", aggregateType.getName(), aggregate.aggregateId());
@@ -94,17 +95,17 @@ public interface UnitOfWork {
      *     }
      *
      *     @Override
-     *     public void afterCommit(UnitOfWork unitOfWork, java.util.List<AGGREGATE_TYPE> associatedResources) {
+     *     public void afterCommit(UnitOfWork unitOfWork, List<AGGREGATE_TYPE> associatedResources) {
      *
      *     }
      *
      *     @Override
-     *     public void beforeRollback(UnitOfWork unitOfWork, java.util.List<AGGREGATE_TYPE> associatedResources, Exception causeOfTheRollback) {
+     *     public void beforeRollback(UnitOfWork unitOfWork, List<AGGREGATE_TYPE> associatedResources, Throwable causeOfTheRollback) {
      *
      *     }
      *
      *     @Override
-     *     public void afterRollback(UnitOfWork unitOfWork, java.util.List<AGGREGATE_TYPE> associatedResources, Exception causeOfTheRollback) {
+     *     public void afterRollback(UnitOfWork unitOfWork, List<AGGREGATE_TYPE> associatedResources, Throwable causeOfTheRollback) {
      *
      *     }
      * }
@@ -117,4 +118,18 @@ public interface UnitOfWork {
      * @return the <code>resource</code> or a proxy to it
      */
     <T> T registerLifecycleCallbackForResource(T resource, UnitOfWorkLifecycleCallback<T> associatedUnitOfWorkCallback);
+
+    /**
+     * Retrieves the list of resources (such as Aggregate instances) that are associated with a given {@link UnitOfWorkLifecycleCallback}.<br>
+     * This method ensures that the provided {@link UnitOfWorkLifecycleCallback} is non-null,
+     * and fetches the corresponding resources from an internal storage mechanism.
+     *
+     * @param associatedUnitOfWorkCallback the {@link UnitOfWorkLifecycleCallback} for which associated resources should be retrieved.
+     *                                     Must not be {@code null}.
+     * @param <T>                          the type of the resources managed by the provided {@link UnitOfWorkLifecycleCallback}.
+     * @return an unmodifiable {@link List} of resources associated with the specified {@link UnitOfWorkLifecycleCallback},
+     * or {@code empty} if no resources are associated.
+     * @throws IllegalArgumentException if the provided {@link UnitOfWorkLifecycleCallback} is {@code null}.
+     */
+    <T> List<T> getUnitOfWorkLifecycleCallbackResources(UnitOfWorkLifecycleCallback<T> associatedUnitOfWorkCallback);
 }

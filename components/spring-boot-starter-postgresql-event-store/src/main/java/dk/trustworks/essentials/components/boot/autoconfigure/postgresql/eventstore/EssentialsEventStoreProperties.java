@@ -242,7 +242,8 @@ public class EssentialsEventStoreProperties {
         }
 
         /**
-         * Retrieves the maximum interval at which the EventStore is polled for new events.
+         * Retrieves the maximum interval at which the EventStore is polled for new events. Default is 2000 ms.<br>
+         * Used as input to the {@link JitteredEventStorePollingOptimizer} configured with the default {@link EventStoreSubscriptionManager}
          *
          * @return the maximum polling interval for the EventStore
          */
@@ -251,7 +252,8 @@ public class EssentialsEventStoreProperties {
         }
 
         /**
-         * Sets the maximum interval at which the EventStore is polled for new events.
+         * Sets the maximum interval at which the EventStore is polled for new events. Default is 2000 ms.<br>
+         * Used as input to the {@link JitteredEventStorePollingOptimizer} configured with the default {@link EventStoreSubscriptionManager}
          *
          * @param maxEventStorePollingInterval the maximum polling interval for the EventStore
          */

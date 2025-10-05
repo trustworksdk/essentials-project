@@ -308,7 +308,7 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
 
     private void invokeHandler(PersistedEvent event, UnitOfWork unitOfWork, AggregateType aggregateType, SubscriberId subscriberId) {
         try {
-            log.info("[{}-{}] Processing event: {} using unit of work '{}'", subscriberId, aggregateType, event, unitOfWork.info());
+            log.debug("[{}-{}] Processing event: {} using unit of work '{}'", subscriberId, aggregateType, event, unitOfWork.info());
             patternMatchingHandlerDelegate.accept(OrderedMessage.of(event.event().deserialize(),
                                                                     resolveAggregateIdSerializer(event.aggregateType()).serialize(event.aggregateId()),
                                                                     event.eventOrder().value(),

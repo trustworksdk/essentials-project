@@ -20,7 +20,7 @@ To use `spring-boot-starter-postgresql-event-store` to add the following depende
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql-event-store</artifactId>
-    <version>0.40.25</version>
+    <version>0.40.26</version>
 </dependency>
 ```
 
@@ -55,7 +55,8 @@ This will ensure to include the `spring-boot-starter-postgresql` starter and its
   - ```
       essentials.event-store.subscription-manager.event-store-polling-batch-size=5
       essentials.event-store.subscription-manager.snapshot-resume-points-every=2s
-      essentials.event-store.subscription-manager.event-store-polling-interval=200
+      essentials.event-store.subscription-manager.event-store-polling-interval=200ms
+      essentials.event-store.subscription-manager.max-event-store-polling-interval=2000ms
      ```
 - `MicrometerTracingEventStoreInterceptor` if property `management.tracing.enabled` has value `true`
   - The default `MicrometerTracingEventStoreInterceptor` values can be overridden using Spring properties:
