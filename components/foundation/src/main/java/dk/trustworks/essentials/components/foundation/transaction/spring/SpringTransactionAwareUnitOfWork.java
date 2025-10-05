@@ -32,6 +32,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * @param <TRX_MGR> the {@link PlatformTransactionManager} specialization that this {@link SpringTransactionAwareUnitOfWork} is compatible with
  * @param <UOW>     the {@link SpringTransactionAwareUnitOfWork} specialization
  */
+@SuppressWarnings("unchecked")
 public class SpringTransactionAwareUnitOfWork<TRX_MGR extends PlatformTransactionManager, UOW extends SpringTransactionAwareUnitOfWork<TRX_MGR, UOW>> implements UnitOfWork {
     private static final Logger log = LoggerFactory.getLogger(SpringTransactionAwareUnitOfWork.class);
 
@@ -188,5 +189,11 @@ public class SpringTransactionAwareUnitOfWork<TRX_MGR extends PlatformTransactio
         List<Object> resources = unitOfWorkLifecycleCallbackResources.computeIfAbsent((UnitOfWorkLifecycleCallback<Object>) associatedUnitOfWorkCallback, callback -> new LinkedList<>());
         resources.add(resource);
         return resource;
+    }
+
+    @Override
+    public <T> List<T> getUnitOfWorkLifecycleCallbackResources(UnitOfWorkLifecycleCallback<T> associatedUnitOfWorkCallback) {
+        requireNonNull(associatedUnitOfWorkCallback, "You must provide a UnitOfWorkLifecycleCallback");
+        return (List<T>) Collections.unmodifiableList(unitOfWorkLifecycleCallbackResources.getOrDefault(associatedUnitOfWorkCallback, List.of()));
     }
 }

@@ -104,6 +104,7 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
         return Optional.ofNullable(unitOfWorks.get());
     }
 
+    @SuppressWarnings("unchecked")
     public static class GenericHandleAwareUnitOfWork implements HandleAwareUnitOfWork {
         private final Logger log = LoggerFactory.getLogger(GenericHandleAwareUnitOfWork.class);
 
@@ -274,6 +275,12 @@ public abstract class GenericHandleAwareUnitOfWorkFactory<UOW extends HandleAwar
             List<Object> resources = unitOfWorkLifecycleCallbackResources.computeIfAbsent((UnitOfWorkLifecycleCallback<Object>) associatedUnitOfWorkCallback, callback -> new LinkedList<>());
             resources.add(resource);
             return resource;
+        }
+
+        @Override
+        public <T> List<T> getUnitOfWorkLifecycleCallbackResources(UnitOfWorkLifecycleCallback<T> associatedUnitOfWorkCallback) {
+            requireNonNull(associatedUnitOfWorkCallback, "You must provide a UnitOfWorkLifecycleCallback");
+            return (List<T>) Collections.unmodifiableList(unitOfWorkLifecycleCallbackResources.getOrDefault(associatedUnitOfWorkCallback, List.of()));
         }
 
         @Override

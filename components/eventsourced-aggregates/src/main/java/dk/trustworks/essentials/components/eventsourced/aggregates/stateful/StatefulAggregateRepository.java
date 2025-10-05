@@ -545,6 +545,18 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
             log.trace("Trying to load {} with id '{}' and expectedLatestEventOrder {}", aggregateImplementationType.getName(), aggregateId, expectedLatestEventOrder);
             var unitOfWork = eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork();
 
+            var existingAggregatesInThisUnitOfWork = unitOfWork.getUnitOfWorkLifecycleCallbackResources(unitOfWorkCallback);
+            if (existingAggregatesInThisUnitOfWork != null) {
+                var sameAggregate = existingAggregatesInThisUnitOfWork.stream()
+                                                                      .filter(aggregate -> aggregate.aggregateId().equals(aggregateId))
+                                                                      .findFirst();
+                if (sameAggregate.isPresent()) {
+                    log.debug("[{}:{}] Found existing aggregate already associated with the UnitOfWork - returning it",
+                              aggregateType, aggregateId);
+                    return sameAggregate;
+                }
+            }
+
             Optional<AggregateSnapshot> aggregateSnapshot = aggregateSnapshotRepository.flatMap(repository -> repository.loadSnapshot(aggregateType,
                                                                                                                                       aggregateId,
                                                                                                                                       aggregateRootImplementationType()));
@@ -574,7 +586,8 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
                 return aggregateSnapshot.map(snapshot -> {
                     log.debug("[{}:{}] Returning '{}' SNAPSHOT as it's up-to-date as of eventOrderOfLastIncludedEvent: {}",
                               aggregateType, aggregateId, aggregateImplementationType.getName(), aggregateSnapshot.get().eventOrderOfLastIncludedEvent);
-                    return (AGGREGATE_IMPL_TYPE) snapshot.aggregateSnapshot;
+                    return unitOfWork.registerLifecycleCallbackForResource((AGGREGATE_IMPL_TYPE) snapshot.aggregateSnapshot,
+                                                                           unitOfWorkCallback);
                 });
             } else if (aggregateSnapshot.isEmpty() && potentialPersistedEventStream.isEmpty()) {
                 log.debug("[{}:{}] Didn't find any '{}' events using loadMoreEventsWithEventOrderFromAndIncluding: {}",
