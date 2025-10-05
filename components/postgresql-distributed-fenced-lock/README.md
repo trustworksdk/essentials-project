@@ -38,7 +38,7 @@ To use `PostgreSQL Distributed Fenced Lock` just add the following Maven depende
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>postgresql-distributed-fenced-lock</artifactId>
-    <version>0.40.25</version>
+    <version>0.40.26</version>
 </dependency>
 ```
 

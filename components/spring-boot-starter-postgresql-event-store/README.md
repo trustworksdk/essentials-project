@@ -20,7 +20,7 @@ To use `spring-boot-starter-postgresql-event-store` to add the following depende
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql-event-store</artifactId>
-    <version>0.40.25</version>
+    <version>0.40.26</version>
 </dependency>
 ```
 

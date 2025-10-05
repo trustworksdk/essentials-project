@@ -17,7 +17,7 @@ To use `Shared` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>shared</artifactId>
-    <version>0.40.25</version>
+    <version>0.40.26</version>
 </dependency>
 ```
 
