@@ -474,7 +474,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
          * @param aggregateImplementationType       the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
          * @param aggregateSnapshotRepository       optional (may be null) {@link AggregateSnapshotRepository}
          */
-        private <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
+        protected <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
                                                                                                       CONFIG aggregateEventStreamConfiguration,
                                                                                                       StatefulAggregateInstanceFactory statefulAggregateInstanceFactory,
                                                                                                       Class<ID> aggregateIdType,
@@ -503,7 +503,7 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
          * @param aggregateImplementationType      the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
          * @param aggregateSnapshotRepository      optional (may be null) {@link AggregateSnapshotRepository}
          */
-        private <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
+        protected <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
                                                                                                       AggregateType aggregateType,
                                                                                                       StatefulAggregateInstanceFactory statefulAggregateInstanceFactory,
                                                                                                       Class<ID> aggregateIdType,
