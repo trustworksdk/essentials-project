@@ -23,7 +23,7 @@ To use `Types-Jackson` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jackson</artifactId>
-    <version>0.40.26</version>
+    <version>0.40.27</version>
 </dependency>
 ```
 
