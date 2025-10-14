@@ -18,7 +18,7 @@ To use `spring-boot-starter-postgresql` to add the following dependency:
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-postgresql</artifactId>
-    <version>0.40.26</version>
+    <version>0.40.27</version>
 </dependency>
 ```
 

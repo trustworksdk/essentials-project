@@ -33,7 +33,7 @@ To use `MongoDB Durable Queue` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>springdata-mongo-queue</artifactId>
-    <version>0.40.26</version>
+    <version>0.40.27</version>
 </dependency>
 ```
 You need to decide on which `TransactionalMode` to run the `MongoDurableQueues` in.

@@ -42,7 +42,7 @@ To use `foundation` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>foundation</artifactId>
-    <version>0.40.26</version>
+    <version>0.40.27</version>
 </dependency>
 ```
 

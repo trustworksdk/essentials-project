@@ -25,7 +25,7 @@ To use `Types-SpringData-JPA` just add the following Maven dependency:
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-springdata-jpa</artifactId>
-    <version>0.40.26</version>
+    <version>0.40.27</version>
 </dependency>
 ```
 
