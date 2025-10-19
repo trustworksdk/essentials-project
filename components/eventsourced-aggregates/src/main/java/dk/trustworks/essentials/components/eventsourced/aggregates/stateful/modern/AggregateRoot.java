@@ -183,7 +183,7 @@ public abstract class AggregateRoot<ID, EVENT_TYPE, AGGREGATE_TYPE extends Aggre
     @Override
     public void markChangesAsCommitted() {
         uncommittedEvents = new ArrayList<>();
-        eventOrderOfLastRehydratedEvent = null;
+        eventOrderOfLastRehydratedEvent = eventOrderOfLastAppliedEvent;
     }
 
     @Override

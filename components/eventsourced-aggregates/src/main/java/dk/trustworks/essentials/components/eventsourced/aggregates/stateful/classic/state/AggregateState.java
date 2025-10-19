@@ -204,7 +204,7 @@ public abstract class AggregateState<ID, EVENT_TYPE extends Event<ID>> {
      */
     public void markChangesAsCommitted() {
         uncommittedChanges = new ArrayList<>();
-        eventOrderOfLastRehydratedEvent = null;
+        eventOrderOfLastRehydratedEvent = eventOrderOfLastAppliedEvent;
     }
 
     /**
