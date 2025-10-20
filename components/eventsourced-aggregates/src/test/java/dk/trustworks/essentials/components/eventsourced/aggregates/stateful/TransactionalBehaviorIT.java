@@ -145,7 +145,7 @@ import static org.assertj.core.api.Assertions.*;
  *
  * <p><b>Test:</b></p>
  * <ul>
- *   <li>{@link #concurrent_event_handlers_loading_same_aggregate_should_not_cause_optimistic_concurrency_exception()}</li>
+ *   <li>{@link #multiple_event_handlers_loading_same_aggregate_should_not_cause_optimistic_concurrency_exception()}</li>
  * </ul>
  */
 @Testcontainers
@@ -367,8 +367,8 @@ public class TransactionalBehaviorIT {
     // ==============================================================================================================================
 
     @Test
-    void concurrent_event_handlers_loading_same_aggregate_should_not_cause_optimistic_concurrency_exception() {
-        log.info("---------- Scenario 2: Concurrent Event Handlers Loading Same Aggregate -------");
+    void multiple_event_handlers_loading_same_aggregate_should_not_cause_optimistic_concurrency_exception() {
+        log.info("---------- Scenario 2: Multiple Event Handlers Loading Same Aggregate -------");
 
         // Given: Two event processors both reacting to OrderCreated event
         var eventProcessorDeps = new EventProcessorDependencies(
@@ -425,6 +425,70 @@ public class TransactionalBehaviorIT {
                 .hasSize(2)
                 .contains(ProductId.of("PRODUCT_A"), ProductId.of("PRODUCT_B"));
     }
+
+    // ==============================================================================================================================
+    // SCENARIO 3: Multiple changes to an existing Aggregate across different InTransactionEventProcessors within the same UnitOfWork
+    // ==============================================================================================================================
+
+    @Test
+    void multiple_chained_events_on_existing_aggregate_test() {
+        log.info("---------- Scenario 3: Multiple chained Event Handlers on an existing Aggregate (AggregateRoot) -------");
+
+        // Given: Command handler and event processor that reacts to ProductAdded
+        var eventProcessorDeps = new EventProcessorDependencies(
+                eventStoreSubscriptionManager,
+                inboxes,
+                commandBus,
+                List.of()
+        );
+
+        commandHandler = new OrderCommandHandler(eventProcessorDeps, ordersRepository);
+        commandHandler.start();
+
+        // EventProcessorP3 reacts to ProductAdded and applies another event
+        var eventProcessorP3 = new EventProcessorP3(eventProcessorDeps, ordersRepository);
+        eventProcessorP3.start();
+
+        var orderId = OrderId.random();
+        var createCmd = new CreateOrderCommand(orderId, CustomerId.random());
+
+        // First: Create the aggregate
+        assertThatCode(() -> commandBus.send(createCmd))
+                .as("Aggregate creation should not throw exception")
+                .doesNotThrowAnyException();
+
+        // When: Send command which adds a product to an existing order
+        // This triggers P3 to react to ProductAdded and append OrderConfirmed event to the same aggregate
+        var addProductCmd = new AddProductCommand(orderId, ProductId.of("PRODUCT_A"));
+        
+        // Then: Should NOT throw exception
+        assertThatCode(() -> commandBus.send(addProductCmd))
+                .as("Event processor should successfully modify the existing aggregate without OptimisticAppendToStreamException")
+                .doesNotThrowAnyException();
+
+        // Verify events were added successfully
+        var stream = unitOfWorkFactory.withUnitOfWork(() -> eventStore.fetchStream(ORDERS, orderId));
+
+        assertThat(stream).isPresent();
+        assertThat(stream.get().eventList())
+                .as("Should have OrderCreated + ProductAdded + OrderConfirmed events")
+                .hasSize(3)
+                .satisfies(events -> {
+                    assertThat((Object) events.get(0).event().deserialize()).isInstanceOf(TestOrderEvent.OrderCreated.class);
+                    assertThat((Object) events.get(1).event().deserialize()).isInstanceOf(TestOrderEvent.ProductAdded.class);
+                    assertThat((Object) events.get(2).event().deserialize()).isInstanceOf(TestOrderEvent.OrderConfirmed.class);
+                });
+
+        // Verify aggregate state
+        var order = unitOfWorkFactory.withUnitOfWork(() -> ordersRepository.load(orderId));
+        assertThat(order.products).hasSize(1).contains(ProductId.of("PRODUCT_A"));
+        assertThat(order.confirmed).isTrue();
+
+        eventProcessorP3.stop();
+    }
+
+   
+
 
     // ========================================================================================================
     // TEST AGGREGATE
@@ -513,6 +577,9 @@ public class TransactionalBehaviorIT {
     // ========================================================================================================
 
     private record CreateOrderCommand(OrderId orderId, CustomerId customerId) {
+    }
+
+    private record AddProductCommand(OrderId orderId, ProductId productId) {
     }
 
     // ========================================================================================================
@@ -650,6 +717,13 @@ public class TransactionalBehaviorIT {
             log.debug("@CmdHandler: Creating order {} (for concurrent test)", cmd.orderId);
             repository.save(new TestOrder(cmd.orderId, cmd.customerId));
         }
+
+        @CmdHandler
+        void handle(AddProductCommand cmd) {
+            log.debug("@CmdHandler: Adding product {} to order {}", cmd.productId, cmd.orderId);
+            var order = repository.load(cmd.orderId);
+            order.addProduct(cmd.productId);
+        }
     }
 
     /**
@@ -719,6 +793,40 @@ public class TransactionalBehaviorIT {
             log.debug("P2: Reacting to OrderCreated {} -> adding PRODUCT_B", event.orderId);
             var order = repository.load(event.orderId);
             order.addProduct(ProductId.of("PRODUCT_B"));
+        }
+    }
+
+    /**
+     * Event processor P3 - reacts to ProductAdded and confirms the order.
+     * <p>
+     * Used in Scenario 3 to test chained event processing on an existing aggregate.
+     * <p>
+     * This processor loads the aggregate and applies OrderConfirmed event when a product is added.
+     */
+    private static class EventProcessorP3 extends InTransactionEventProcessor {
+        private final StatefulAggregateRepository<OrderId, TestOrderEvent, TestOrder> repository;
+
+        protected EventProcessorP3(EventProcessorDependencies eventProcessorDependencies,
+                                   StatefulAggregateRepository<OrderId, TestOrderEvent, TestOrder> repository) {
+            super(eventProcessorDependencies, false);
+            this.repository = repository;
+        }
+
+        @Override
+        public String getProcessorName() {
+            return "EventProcessorP3";
+        }
+
+        @Override
+        protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
+            return List.of(ORDERS);
+        }
+
+        @MessageHandler
+        void on(TestOrderEvent.ProductAdded event) {
+            log.debug("P3: Reacting to ProductAdded {} -> confirming order", event.orderId);
+            var order = repository.load(event.orderId);
+            order.confirm();
         }
     }
 
