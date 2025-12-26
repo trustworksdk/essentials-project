@@ -209,8 +209,8 @@ public final class DurableQueuesMicrometerTracingInterceptor implements DurableQ
 
     private ReceiverContext<MessageMetaData> createTraceContextForMessage(QueuedMessage queuedMessage) {
         requireNonNull(queuedMessage, "No queuedMessage provided");
-        var context = new ReceiverContext<>(MessageMetaData::get,
-                                            Kind.CONSUMER);
+        var context = new ReceiverContext<>((MessageMetaData carrier, String key) -> carrier.get(key),
+                                                           Kind.CONSUMER);
         context.setCarrier(queuedMessage.getMetaData());
         return context;
     }

@@ -72,6 +72,75 @@ public final class MessageMetaData implements Map<String, String>, Serializable 
         return metaData.get(key);
     }
 
+    /**
+     * Gets the value associated with the key and converts it to the specified type.
+     * Supports conversion to common types like Long, Integer, Boolean, Double, etc.
+     *
+     * @param key the key whose associated value is to be returned
+     * @param type the class of the type to convert to
+     * @param <T> the type to convert the value to
+     * @return the value converted to the specified type, or null if the key doesn't exist
+     * @throws IllegalArgumentException if the value cannot be converted to the specified type
+     */
+    public <T> T get(Object key, Class<T> type) {
+        String value = metaData.get(key);
+        if (value == null) {
+            return null;
+        }
+
+        return convertValue(value, type);
+    }
+
+    /**
+     * Gets the value associated with the key and converts it to the specified type, wrapped in an {@link Optional}.
+     * Supports conversion to common types like Long, Integer, Boolean, Double, etc.
+     * This method never throws exceptions for missing keys - instead they result in an {@link Optional#empty()}.
+     *
+     * @param key the key whose associated value is to be returned
+     * @param type the class of the type to convert to
+     * @param <T> the type to convert the value to
+     * @return {@link Optional} containing the value converted to the specified type, or {@link Optional#empty()} if the key doesn't exist
+     * @throws IllegalArgumentException if the value cannot be converted to the specified type. Note the exception message contains the value that couldn't be converted!
+     */
+    public <T> Optional<T> getOptional(Object key, Class<T> type) {
+        String value = metaData.get(key);
+        if (value == null) {
+            return Optional.empty();
+        }
+
+        try {
+            return Optional.of(convertValue(value, type));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Cannot convert value '" + value + "' for key '" + key + "' to type " + type.getName(), e);
+        }
+    }
+
+
+    @SuppressWarnings("unchecked")
+    private <T> T convertValue(String value, Class<T> type) {
+        requireNonNull(type, "Type class cannot be null");
+
+        if (type == String.class) {
+            return (T) value;
+        } else if (type == Long.class || type == long.class) {
+            return (T) Long.valueOf(value);
+        } else if (type == Integer.class || type == int.class) {
+            return (T) Integer.valueOf(value);
+        } else if (type == Boolean.class || type == boolean.class) {
+            return (T) Boolean.valueOf(value);
+        } else if (type == Double.class || type == double.class) {
+            return (T) Double.valueOf(value);
+        } else if (type == Float.class || type == float.class) {
+            return (T) Float.valueOf(value);
+        } else if (type == Short.class || type == short.class) {
+            return (T) Short.valueOf(value);
+        } else if (type == Byte.class || type == byte.class) {
+            return (T) Byte.valueOf(value);
+        } else {
+            throw new IllegalArgumentException("Unsupported type conversion: " + type.getName());
+        }
+    }
+
 
     @Override
     public String put(String key, String value) {
