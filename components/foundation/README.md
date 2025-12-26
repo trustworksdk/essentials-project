@@ -73,11 +73,190 @@ Durable Queue concept that supports **queuing** a `Message` on to a Queue. Each 
 unique `QueueEntryId`.
 
 ### Ordered Messages
-If you're queuing with `OrderedMessage` then, IF and only IF,  only a single cluster node is consuming from the Queue, 
-such as with an `Inbox` or `Outbox` configured with `MessageConsumptionMode#SingleGlobalConsumer` (which uses a FencedLock to 
-coordinate message consumption across cluster nodes)
-in order to be able to guarantee that `OrderedMessage`'s are delivered in `OrderedMessage#order` per `OrderedMessage#key`
-across as many `numberOfParallelMessageConsumers` as you wish to use.
+
+When using `OrderedMessage`, message delivery `OrderedMessage#order` (per `OrderedMessage#key`) is guaranteed even with multiple parallel consumers (`numberOfParallelMessageConsumers`), 
+provided that only a **single cluster node** is consuming from the Queue at any given time.
+
+This can be achieved by using `MessageConsumptionMode#SingleGlobalConsumer` (available in `Inbox` or `Outbox` configurations). 
+This mode uses a `FencedLock` to coordinate consumption across cluster nodes, ensuring that only one node processes messages while still allowing that node to use multiple parallel consumer threads.
+
+#### Understanding OrderedMessage Processing
+
+`OrderedMessage`'s are designed to handle events or messages that must be processed in a specific order based on their **key** (typically an Aggregate ID) 
+and **order** (typically a sequential `EventOrder` number that is a per aggregate instance `event-sequence-number`).  
+This is critical for event-driven systems where maintaining the chronological sequence of events per aggregate is essential for data consistency.
+
+##### Key Concepts
+
+- **OrderedMessage.key**: Identifies the entity/aggregate the message relates to (e.g., `Order-123`, `Customer-456`)
+- **OrderedMessage.order**: Represents the sequential order of messages for a given key (e.g., event order 0, 1, 2, 3...)
+
+##### Single-Node Processing with Parallel Consumers
+
+```java
+// Example: Single node with 10 parallel consumers
+durableQueues.consumeFromQueue(
+    ConsumeFromQueue.builder()
+        .setQueueName(QueueName.of("OrderEvents"))
+        .setParallelConsumers(10)  // Multiple threads on this node
+        .setQueueMessageHandler(messageHandler)
+        .build()
+);
+```
+
+When running `DurableQueues` on a **single node**, even with multiple parallel processing threads, `OrderedMessage`'s are guaranteed to be processed in order per key.
+Both message fetching approaches support this:
+
+**Centralized Message Fetcher** (PostgreSQL with `useCentralizedMessageFetcher=true`):
+- Uses a single polling thread per `DurableQueues` instance to fetch messages from the database
+- Tracks which `OrderedMessage.key`'s are currently being processed using `inProcessOrderedKeys`
+- Before dispatching a message to a worker thread, it checks if another message with the same key is already being processed
+
+**Traditional Message Fetcher** (MongoDB, or PostgreSQL with `useCentralizedMessageFetcher=false`):
+- Each consumer thread in `DefaultDurableQueueConsumer` tracks in-process keys via `orderedMessageDeliveryThreads`
+- When fetching the next message, the query excludes keys that are currently being processed by other threads
+
+**In both approaches:**
+- If a message with key `Order-123` is being processed, no other message with key `Order-123` will be dispatched until the current one completes
+- Messages with **different keys** (e.g., `Order-123` and `Order-456`) can be processed in parallel across all threads
+- **Result**: OrderedMessages are guaranteed to be processed in order per key, while different keys can be processed concurrently
+
+##### Multi-Node Processing - The Challenge
+
+When running `DurableQueues` across **multiple nodes** (cluster) they are all connected to the same database:
+
+```
+┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
+│   Node 1        │      │   Node 2        │      │   Node 3        │
+│ ┌─────────────┐ │      │ ┌─────────────┐ │      │ ┌─────────────┐ │
+│ │DurableQueues│ │      │ │DurableQueues│ │      │ │DurableQueues│ │
+│ │10 threads   │ │      │ │10 threads   │ │      │ │10 threads   │ │
+│ └─────────────┘ │      │ └─────────────┘ │      │ └─────────────┘ │
+└────────┬────────┘      └────────┬────────┘      └────────┬────────┘
+         │                        │                        │
+         └────────────────────────┴────────────────────────┘
+                                  │
+                        ┌─────────▼─────────┐
+                        │  Shared Database  │
+                        │   (PostgreSQL)    │
+                        └───────────────────┘
+```
+
+
+**The Problem:**
+- Each node's `DurableQueues` instance acts as a distributed **competing consumer**
+- **Without coordination**, messages for the same aggregate (`Order-123`) can be processed out of order across nodes
+- The in-process key tracking (whether via `inProcessOrderedKeys` or `orderedMessageDeliveryThreads`) only works **within a single node**, not across the cluster
+  - Node 1 might fetch and process `Order-123:event-5`, while Node 2 fetches `Order-123:event-4`
+
+**Why this happens:**
+- Each node independently polls the database for messages
+- Database-level locking (like `SELECT ... FOR UPDATE SKIP LOCKED`) only prevents the same message from being consumed twice
+- It does **NOT** prevent different messages with the same key from being consumed by different nodes simultaneously
+
+##### The Solution: Inbox/Outbox with SingleGlobalConsumer
+
+The **Inbox** and **Outbox** patterns solve this by supporting `MessageConsumptionMode.SingleGlobalConsumer` in combination with a `FencedLock`:
+
+```java
+// Inbox configuration for ordered message processing
+Inbox inbox = inboxes.getOrCreateInbox(
+    InboxConfig.builder()
+        .setInboxName(InboxName.of("OrderEventsInbox"))
+        .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)  // IMPORTANT!
+        .setNumberOfParallelMessageConsumers(10)  // Still supports parallel message processing within the active node
+        .setRedeliveryPolicy(redeliveryPolicy)
+        .build(),
+    messageHandler
+);
+```
+
+**How it works:**
+
+1. **FencedLock Coordination**:
+    - The `FencedLockManager` ensures only ONE node in the cluster can actively consume from the `Inbox`/`Outbox`'s underlying `DurableQueue` at any time
+    - Other nodes are on standby for failover
+
+2. **Single Active Consumer**:
+    - Only the node holding the `FencedLock` will poll for and process messages
+    - This node can still use multiple parallel threads (e.g., 10 threads) internally
+    - The `CentralizedMessageFetcher` on the active node ensures proper ordering using `inProcessOrderedKeys`
+
+3. **Cluster-Wide Ordering Guarantee**:
+    - Since only ONE node consumes at a time, the ordering coordination happens in a single place
+    - Messages for `Order-123` are processed in sequence: event-0, event-1, then event-2, then event-3...
+    - Messages for different aggregates (`Order-123`, `Order-456`) can still be processed in parallel
+
+4. **Failover**:
+    - If the active node crashes, another node acquires the lock and takes over
+    - The new node continues processing messages in order
+
+**Visualization:**
+
+```
+Cluster with Inbox/Outbox using SingleGlobalConsumer:
+
+┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
+│   Node 1        │      │   Node 2        │      │   Node 3        │
+│ ┌─────────────┐ │      │ ┌─────────────┐ │      │ ┌─────────────┐ │
+│ │   ACTIVE    │◄┼──────┼─│  STANDBY    │ │      │ │  STANDBY    │ │
+│ │ Inbox       │ │ Lock │ │  Inbox      │ │      │ │  Inbox      │ │
+│ │10 threads   │ │      │ │             │ │      │ │             │ │
+│ └─────────────┘ │      │ └─────────────┘ │      │ └─────────────┘ │
+└────────┬────────┘      └─────────────────┘      └─────────────────┘
+         │                                           
+         │  Processes messages in order per key
+         │  while utilizing 10 parallel threads
+         │
+┌────────▼─────────┐
+│ Shared Database  │
+│  + FencedLock    │
+└──────────────────┘
+```
+
+
+##### Important Limitations
+
+**Distributed Lock Guarantees:**
+- `FencedLock` provides strong coordination guarantees but is not 100% perfect
+- In rare cases (network partitions, node crashes), split-brain scenarios can occur temporarily
+- See `FencedLockManager` documentation for details on limitations and edge cases
+- **Design for idempotency**: Message handlers should handle duplicate/out-of-order messages gracefully
+
+**When to Use Each Mode:**
+
+| Scenario | Configuration | Ordering Guarantee | Performance |
+|----------|--------------|-------------------|------|
+| Single node, unordered messages | `GlobalCompetingConsumers` | ❌ None | Highest |
+| Single node, ordered messages | `GlobalCompetingConsumers` | ✅ Per key, within node | High |
+| Multi-node, unordered messages | `GlobalCompetingConsumers` | ❌ None | Highest (distributed) |
+| Multi-node, ordered messages | `SingleGlobalConsumer` + `FencedLock` | ✅ Per key, cluster-wide | Medium (single active consumer) |
+
+##### Real-World Example: Event Sourcing
+
+When working with Event Sourcing (see `EventProcessor`):
+
+```java
+// Events are converted to OrderedMessages
+OrderedMessage.of(
+    orderCreatedEvent,           // Event payload
+    "Order-123",                 // key = aggregateId
+    1L                          // order = eventOrder
+);
+
+OrderedMessage.of(
+    orderItemAddedEvent,
+    "Order-123",
+    2L
+);
+```
+
+
+The `EventProcessor` uses an `Inbox` with `SingleGlobalConsumer` to ensure:
+- Events for `Order-123` are processed in sequence: OrderCreated(0), then OrderItemAdded(1)
+- Events for different orders can be processed in parallel
+- Only one node in the cluster actively processes events (with multiple threads)
+- Other nodes provide automatic failover
 
 ### Transactional Queueing of a Message (supported by `PostgresqlDurableQueues` and `MongoDurableQueues`)
 
