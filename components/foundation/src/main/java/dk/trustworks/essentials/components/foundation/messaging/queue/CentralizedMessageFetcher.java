@@ -426,16 +426,14 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 continue;
             }
 
-            // Ensure we have at least one slot available (even if max workers is reached)
-            // to prevent complete starvation when using a small number of workers
+            // Calculate available slots based on active workers.
+            // Note: Using Math.max(0, ...) is intentional - do not change to Math.max(1, ...) since it causes
+            // Over-fetching when all workers are busy, which in term causes messages to pile up in the worker pool queue.
+            // If messages wait longer than messageHandlingTimeout here, they are reset as "stuck" and
+            // become available for other instances to fetch, potentially leading to duplicate consumption.
+            // See Bug #19: DurableQueues messages consumed multiple times with multiple pods.
             int activeWorkers  = reg.activeWorkers.get();
-            int availableSlots = Math.max(1, reg.maxParallelConsumers - activeWorkers);
-
-            // Adjust the slots to prevent overloading when nearing capacity
-            if (activeWorkers > 0 && activeWorkers >= reg.maxParallelConsumers * 0.8) {
-                // When we're at 80% capacity or higher, limit new slots 
-                availableSlots = Math.min(availableSlots, 2);
-            }
+            int availableSlots = Math.max(0, reg.maxParallelConsumers - activeWorkers);
 
             // Add result to map
             result.put(queueName, availableSlots);

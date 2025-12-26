@@ -33,6 +33,8 @@
     <logger name="dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues$1" level="DEBUG"/> <!-- PatternMatchingMethodInvoker -->
     <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer" level="TRACE"/>
     <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer.MessageHandlingFailures" level="TRACE"/>
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedQueuePollingOptimizer" level="TRACE"/>
+    <logger name="dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener" level="INFO"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>
