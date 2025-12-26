@@ -67,13 +67,15 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <java.version>17</java.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
         <kotlin.version>2.1.21</kotlin.version>
         <revision>DEV-SNAPSHOT</revision>
         <skipDependencyCheck>false</skipDependencyCheck>
 
         <spring-boot.version>3.3.13</spring-boot.version>
         <spring-framework-bom.version>6.1.21</spring-framework-bom.version>
-        <reactor-bom.version>2024.0.11</reactor-bom.version>
+        <reactor-bom.version>2024.0.13</reactor-bom.version>
         <spring-data-mongodb.version>4.3.13</spring-data-mongodb.version>
         <spring-data-jpa.version>3.3.13</spring-data-jpa.version>
         <objenesis.version>3.4</objenesis.version>
@@ -82,49 +84,49 @@
         <awaitility.version>4.3.0</awaitility.version>
         <assertj.version>3.27.6</assertj.version>
         <mongodb-driver-sync.version>5.0.1</mongodb-driver-sync.version>
-        <log4j-to-slf4j.version>2.25.2</log4j-to-slf4j.version>
+        <log4j-to-slf4j.version>2.25.3</log4j-to-slf4j.version>
         <json-smart.version>2.5.2</json-smart.version>
         <json-path.version>2.9.0</json-path.version>
         <snakeyaml.version>2.4</snakeyaml.version>
         <micrometer.version>1.13.15</micrometer.version>
         <micrometer-tracing.version>1.3.13</micrometer-tracing.version>
-        <junit-bom.version>5.14.0</junit-bom.version>
-        <testcontainers-bom.version>1.21.3</testcontainers-bom.version>
-        <jdbi3-bom.version>3.49.5</jdbi3-bom.version>
-        <jackson-bom.version>2.19.2</jackson-bom.version>
-        <mockito-bom.version>5.20.0</mockito-bom.version>
-        <logback.version>1.5.19</logback.version>
-        <avro.version>1.12.0</avro.version>
+        <junit-bom.version>5.14.1</junit-bom.version>
+        <testcontainers-bom.version>2.0.3</testcontainers-bom.version>
+        <jdbi3-bom.version>3.51.0</jdbi3-bom.version>
+        <jackson-bom.version>2.20.1</jackson-bom.version>
+        <mockito-bom.version>5.21.0</mockito-bom.version>
+        <logback.version>1.5.23</logback.version>
+        <avro.version>1.12.1</avro.version>
         <commons-compress.version>1.28.0</commons-compress.version>
-        <commons-lang3.version>3.19.0</commons-lang3.version>
+        <commons-lang3.version>3.20.0</commons-lang3.version>
         <xmlunit-core.version>2.10.4</xmlunit-core.version>
         <vaadin.version>24.7.14</vaadin.version>
         <spring.security.version>6.3.10</spring.security.version>
         <kaributesting.version>2.3.0</kaributesting.version>
         <kaributesting.servlet.version>1.3.24</kaributesting.servlet.version>
-        <tomcat-embed.version>10.1.48</tomcat-embed.version>
+        <tomcat-embed.version>10.1.50</tomcat-embed.version>
 
         <dokka.version>2.0.0</dokka.version>
         <maven-dependency-plugin.version>3.9.0</maven-dependency-plugin.version>
         <maven-project-info-reports-plugin.version>3.9.0</maven-project-info-reports-plugin.version>
         <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
         <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
-        <maven-resources-plugin.version>3.3.1</maven-resources-plugin.version>
+        <maven-resources-plugin.version>3.4.0</maven-resources-plugin.version>
         <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
         <maven-site-plugin.version>3.21.0</maven-site-plugin.version>
-        <maven-jar-plugin.version>3.4.2</maven-jar-plugin.version>
-        <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
+        <maven-jar-plugin.version>3.5.0</maven-jar-plugin.version>
+        <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
         <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
         <maven-failsafe-plugin.version>3.5.4</maven-failsafe-plugin.version>
         <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
         <maven-compiler-plugin.version>3.14.1</maven-compiler-plugin.version>
-        <versions-maven-plugin.version>2.19.1</versions-maven-plugin.version>
+        <versions-maven-plugin.version>2.20.1</versions-maven-plugin.version>
         <maven-enforcer-plugin.version>3.6.2</maven-enforcer-plugin.version>
         <minimum-maven-version>3.8.8</minimum-maven-version>
-        <dependency-check-maven.version>12.1.8</dependency-check-maven.version>
-        <flatten-maven-plugin.version>1.7.2</flatten-maven-plugin.version>
+        <dependency-check-maven.version>12.1.9</dependency-check-maven.version>
+        <flatten-maven-plugin.version>1.7.3</flatten-maven-plugin.version>
         <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
-        <maven.docker.plugin.version>0.46.0</maven.docker.plugin.version>
+        <maven.docker.plugin.version>0.48.0</maven.docker.plugin.version>
         <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
     </properties>
 
