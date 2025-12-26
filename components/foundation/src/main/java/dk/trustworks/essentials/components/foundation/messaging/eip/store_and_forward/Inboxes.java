@@ -42,12 +42,63 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The {@link Inbox} itself supports Message Redelivery in case the Message consumer experiences failures.<br>
  * This means that the Message consumer, registered with the {@link Inbox}, can and will receive Messages more than once and therefore its message handling has to be idempotent.
  * <p>
- * If you're working with {@link OrderedMessage}'s then the {@link Inbox} consumer must be configured
- * with {@link InboxConfig#getMessageConsumptionMode()} having value {@link MessageConsumptionMode#SingleGlobalConsumer}
- * in order to be able to guarantee that {@link OrderedMessage}'s are delivered in {@link OrderedMessage#getOrder()} per {@link OrderedMessage#getKey()}
- * across as many {@link InboxConfig#numberOfParallelMessageConsumers} as you wish to use.
+ * <b>Ordered Messages and Multi-Node Deployments</b><br>
+ * If you're working with {@link OrderedMessage}'s (messages that must be processed in sequence based on their {@link OrderedMessage#getKey()} and {@link OrderedMessage#getOrder()}),
+ * special configuration is required to guarantee ordering in multi-node deployments:
+ * <ul>
+ *   <li><b>Required Configuration:</b> The {@link Inbox} consumer MUST be configured with {@link InboxConfig#getMessageConsumptionMode()} set to
+ *       {@link MessageConsumptionMode#SingleGlobalConsumer}</li>
+ *   <li><b>Why:</b> In a multi-node cluster where all {@link DurableQueues} instances act as competing consumers, messages with the same
+ *       {@link OrderedMessage#getKey()} but different {@link OrderedMessage#getOrder()}'s can be processed out of order across nodes,
+ *       since coordination only occurs within a single {@link DurableQueues} instance</li>
+ *   <li><b>How it Works:</b> {@link MessageConsumptionMode#SingleGlobalConsumer} uses a {@link FencedLock} to ensure only ONE node
+ *       in the cluster actively consumes from the {@link Inbox} at any time, with automatic failover to standby nodes</li>
+ *   <li><b>Parallel Processing:</b> The active node can still utilize multiple parallel threads (configured via
+ *       {@link InboxConfig#numberOfParallelMessageConsumers}) to process messages with different keys concurrently</li>
+ *   <li><b>Ordering Guarantee:</b> This configuration guarantees that {@link OrderedMessage}'s are delivered in
+ *       {@link OrderedMessage#getOrder()} per {@link OrderedMessage#getKey()} across the entire cluster, regardless of how many
+ *       parallel message consumers you configure</li>
+ * </ul>
+ * <p>
+ * <b>Example Configuration for Ordered Messages:</b>
+ * <pre>{@code
+ * Inbox inbox = inboxes.getOrCreateInbox(
+ *     InboxConfig.builder()
+ *         .setInboxName(InboxName.of("OrderEventsInbox"))
+ *         .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)  // Required for OrderedMessages
+ *         .setNumberOfParallelMessageConsumers(10)  // Can still use multiple threads on the active node
+ *         .setRedeliveryPolicy(redeliveryPolicy)
+ *         .build(),
+ *     messageHandler
+ * );
+ * }</pre>
+ * <p>
+ * <b>How Ordering is Maintained:</b>
+ * <ol>
+ *   <li><b>Lock Acquisition:</b> One node acquires the {@link FencedLock} and becomes the active consumer</li>
+ *   <li><b>Other Nodes Standby:</b> All other nodes wait in standby mode, monitoring the lock</li>
+ *   <li><b>Ordered Processing:</b> The active node ensures messages with the same key are processed sequentially
+ *       (coordinated by the message fetcher), while different keys can be processed in parallel across worker threads</li>
+ *   <li><b>Failover:</b> If the active node fails, another node automatically acquires the lock and continues processing</li>
+ * </ol>
+ * <p>
+ * <b>Important Notes:</b>
+ * <ul>
+ *   <li><b>Single Node Deployments:</b> Ordering works automatically even without {@link MessageConsumptionMode#SingleGlobalConsumer},
+ *       but using it doesn't hurt performance and makes your configuration consistent across environments</li>
+ *   <li><b>Idempotency:</b> Always design message handlers to be idempotent, as {@link FencedLock} provides strong but not perfect
+ *       guarantees (see {@link FencedLockManager} for limitations)</li>
+ *   <li><b>Performance Trade-off:</b> {@link MessageConsumptionMode#SingleGlobalConsumer} limits consumption to one active node at a time,
+ *       which may reduce overall throughput compared to {@link MessageConsumptionMode#GlobalCompetingConsumers} where all nodes actively consume.
+ *       However, the active node can still use multiple parallel threads for processing messages with different keys.</li>
+ * </ul>
  *
  * @see DurableQueueBasedInboxes
+ * @see OrderedMessage
+ * @see MessageConsumptionMode
+ * @see DurableQueues
+ * @see FencedLock
+ * @see FencedLockManager
  */
 public interface Inboxes {
     /**

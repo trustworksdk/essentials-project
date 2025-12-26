@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
 import dk.trustworks.essentials.components.foundation.Lifecycle;
-import dk.trustworks.essentials.components.foundation.fencedlock.FencedLock;
+import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
@@ -54,10 +54,95 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Poison Messages/Dead-Letter-Messages won't be delivered to a {@link DurableQueueConsumer}, unless they're explicitly resurrected call {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
  * <p>
  * <b>Ordered Messages</b><br>
- * If you're queuing with {@link OrderedMessage} then, IF and only IF, only a single cluster node is consuming from the Queue,
- * such as with an {@link Inbox} or {@link Outbox} configured with {@link MessageConsumptionMode#SingleGlobalConsumer} (which uses a {@link FencedLock} to
- * coordinate message consumption across cluster nodes) in order to be able to guarantee that {@link OrderedMessage}'s are delivered in {@link OrderedMessage#getOrder()} per
- * {@link OrderedMessage#getKey()} across as many parallel message consumers as you wish to use.
+ * {@link OrderedMessage}'s are designed for scenarios where messages must be processed in a specific sequence based on their {@link OrderedMessage#getKey()} (typically an Aggregate ID)
+ * and {@link OrderedMessage#getOrder()} (typically a per aggregate instance event sequence number). Common use cases include Event Sourcing, CQRS projections, and any scenario where maintaining
+ * chronological order per entity is critical.
+ * <p>
+ * <b>Single-Node Deployment:</b><br>
+ * When running {@link DurableQueues} on a single node (even with multiple parallel processing threads configured via {@code parallelConsumers}),
+ * {@link OrderedMessage}'s ARE guaranteed to be processed in {@link OrderedMessage#getOrder()} per {@link OrderedMessage#getKey()}.
+ * Both message fetching approaches support this:
+ * <ul>
+ *   <li><b>Centralized Message Fetcher</b> (PostgreSQL with {@code useCentralizedMessageFetcher=true}):<br>
+ *       Uses a single polling thread to fetch messages from the database and tracks which {@link OrderedMessage#getKey()}'s
+ *       are currently being processed via {@code inProcessOrderedKeys}. Before dispatching a message to a worker thread,
+ *       it verifies no other message with the same key is being processed.</li>
+ *   <li><b>Traditional Message Fetcher</b> (MongoDB, or PostgreSQL with {@code useCentralizedMessageFetcher=false}):<br>
+ *       Each consumer thread in {@link DefaultDurableQueueConsumer} tracks in-process keys via {@code orderedMessageDeliveryThreads}.
+ *       When fetching the next message, the query excludes keys that are currently being processed by other threads.</li>
+ * </ul>
+ * In both approaches, messages with different keys can be processed in parallel across all available worker threads,
+ * while messages with the same key are processed sequentially.
+ * <p>
+ * <b>Multi-Node Deployment - Competing Consumers:</b><br>
+ * When running {@link DurableQueues} across multiple nodes in a cluster (all sharing the same database), the situation changes fundamentally:
+ * <ul>
+ *   <li>Each node's {@link DurableQueues} instance acts as a <b>competing consumer</b>, independently polling the database</li>
+ *   <li>The in-process key tracking (whether via {@code inProcessOrderedKeys} or {@code orderedMessageDeliveryThreads})
+ *       only works within a single node, NOT across the cluster</li>
+ *   <li>Database-level locking ({@code SELECT ... FOR UPDATE SKIP LOCKED}) prevents the <b>same message</b> from being consumed twice,
+ *       but does NOT prevent <b>different messages with the same key</b> from being consumed by different nodes simultaneously</li>
+ *   <li><b>Example of out-of-order processing:</b> Node 1 might fetch and process {@code Order-123:event-5} while Node 2 simultaneously
+ *       fetches and processes {@code Order-123:event-3}, violating the ordering guarantee</li>
+ *   <li><b>Result:</b> {@link OrderedMessage}'s related to the same {@link OrderedMessage#getKey()} can be processed out of sync
+ *       across different nodes, as coordination only occurs within each individual {@link DurableQueues} instance</li>
+ * </ul>
+ * <p>
+ * <b>Solution for Multi-Node Ordered Message Processing:</b><br>
+ * To guarantee {@link OrderedMessage} ordering across a cluster, you MUST use either {@link Inbox} or {@link Outbox}
+ * configured with {@link MessageConsumptionMode#SingleGlobalConsumer}:
+ * <ul>
+ *   <li>Uses a {@link FencedLock} to ensure only ONE node in the cluster actively consumes messages at a time</li>
+ *   <li>The active node can still utilize multiple parallel worker threads (configured via {@code numberOfParallelMessageConsumers})</li>
+ *   <li>Other nodes remain in standby mode, ready for automatic failover if the active node fails</li>
+ *   <li>Since only one node consumes, all ordering coordination happens in a single place (via either message fetcher approach)</li>
+ *   <li><b>Result:</b> {@link OrderedMessage}'s are guaranteed to be processed in {@link OrderedMessage#getOrder()} per
+ *       {@link OrderedMessage#getKey()} across the entire cluster, while still allowing parallel processing of different keys</li>
+ * </ul>
+ * <p>
+ * <b>Important Limitations:</b><br>
+ * {@link FencedLock} provides strong consistency guarantees but is not 100% perfect due to distributed systems challenges:
+ * <ul>
+ *   <li>Network partitions can cause temporary split-brain scenarios</li>
+ *   <li>Node crashes during processing may cause brief inconsistencies</li>
+ *   <li>Always design message handlers to be idempotent to handle potential duplicates or redeliveries</li>
+ * </ul>
+ * See {@link FencedLockManager} for detailed information on lock guarantees and limitations.
+ * <p>
+ * <b>Summary:</b>
+ * <table border="1">
+ *   <tr>
+ *     <th>Deployment</th>
+ *     <th>Configuration</th>
+ *     <th>Ordered Message Guarantee</th>
+ *     <th>Notes</th>
+ *   </tr>
+ *   <tr>
+ *     <td>Single Node</td>
+ *     <td>Any</td>
+ *     <td>✅ Yes (per key)</td>
+ *     <td>Coordinated within node by message fetcher</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Multi-Node</td>
+ *     <td>{@link DurableQueues} directly</td>
+ *     <td>❌ No</td>
+ *     <td>Competing consumers, no cross-node coordination</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Multi-Node</td>
+ *     <td>{@link Inbox}/{@link Outbox} with {@link MessageConsumptionMode#SingleGlobalConsumer}</td>
+ *     <td>✅ Yes (per key, cluster-wide)</td>
+ *     <td>Uses {@link FencedLock} for single active consumer with failover</td>
+ *   </tr>
+ * </table>
+ *
+ * @see Inbox
+ * @see Outbox
+ * @see OrderedMessage
+ * @see CentralizedMessageFetcher
+ * @see DefaultDurableQueueConsumer
+ * @see MessageConsumptionMode
  */
 public interface DurableQueues extends Lifecycle {
     /**

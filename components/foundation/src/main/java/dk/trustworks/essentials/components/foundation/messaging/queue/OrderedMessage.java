@@ -16,13 +16,128 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLock;
+import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
+
 import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
- * Represents a message that will be delivered in order.<br>
- * This, of course, requires that messages are queued in order and that the consumer is single-threaded or provides additional coordination.<br>
- * All messages sharing the same {@link #key}, will be delivered according to their {@link #order}<br>
- * An example of a message key is the id of the entity/aggregate the message relates to
+ * Represents a message that must be delivered and processed in a specific order relative to other messages
+ * sharing the same {@link #key}.
+ * <p>
+ * {@link OrderedMessage}'s are designed for scenarios where maintaining the chronological sequence of messages
+ * per entity is critical, such as:
+ * <ul>
+ *   <li><b>Event Sourcing:</b> Processing domain events in the order they occurred per aggregate</li>
+ *   <li><b>CQRS Projections:</b> Building read models that reflect the correct state</li>
+ *   <li><b>Change Data Capture:</b> Applying database changes in sequence</li>
+ *   <li><b>Workflow Processing:</b> Executing workflow steps in the correct order</li>
+ * </ul>
+ * <p>
+ * <b>Key Concepts:</b>
+ * <ul>
+ *   <li><b>{@link #key}:</b> Identifies the entity/aggregate the message relates to (e.g., {@code "Order-123"},
+ *       {@code "Customer-456"}). All messages with the same key are delivered in {@link #order} sequence.</li>
+ *   <li><b>{@link #order}:</b> The sequential position of this message relative to others with the same key
+ *       (e.g., event order 0, 1, 2, 3...). Typically corresponds to an event sequence number.</li>
+ * </ul>
+ * <p>
+ * <b>Example - Event Sourcing:</b>
+ * <pre>{@code
+ * // Queue events for Order-123 in sequence
+ * durableQueues.queueMessage(queueName, OrderedMessage.of(
+ *     orderCreatedEvent,    // payload
+ *     "Order-123",          // key = aggregateId
+ *     0L                    // order = eventOrder
+ * ));
+ *
+ * durableQueues.queueMessage(queueName, OrderedMessage.of(
+ *     orderItemAddedEvent,
+ *     "Order-123",
+ *     1L
+ * ));
+ *
+ * durableQueues.queueMessage(queueName, OrderedMessage.of(
+ *     orderShippedEvent,
+ *     "Order-123",
+ *     2L
+ * ));
+ * }</pre>
+ * <p>
+ * <b>Ordering Guarantees:</b>
+ * <p>
+ * <table border="1">
+ *   <tr>
+ *     <th>Deployment</th>
+ *     <th>Configuration</th>
+ *     <th>Ordering Guarantee</th>
+ *     <th>Notes</th>
+ *   </tr>
+ *   <tr>
+ *     <td>Single Node</td>
+ *     <td>Any</td>
+ *     <td>✅ Yes (per key)</td>
+ *     <td>Coordinated within the node by message fetcher</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Multi-Node</td>
+ *     <td>{@link DurableQueues} directly</td>
+ *     <td>❌ No</td>
+ *     <td>Competing consumers have no cross-node coordination</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Multi-Node</td>
+ *     <td>{@link Inbox}/{@link Outbox} with {@link MessageConsumptionMode#SingleGlobalConsumer}</td>
+ *     <td>✅ Yes (per key, cluster-wide)</td>
+ *     <td>Uses {@link FencedLock} for single active consumer with failover</td>
+ *   </tr>
+ * </table>
+ * <p>
+ * <b>Single-Node Processing:</b><br>
+ * When running {@link DurableQueues} on a single node, even with multiple parallel processing threads
+ * (configured via {@code parallelConsumers}), ordering is guaranteed. Both message fetching approaches
+ * support this:
+ * <ul>
+ *   <li><b>Centralized Message Fetcher</b> (PostgreSQL with {@code useCentralizedMessageFetcher=true}):
+ *       Uses a single polling thread that tracks in-process keys via {@code inProcessOrderedKeys}</li>
+ *   <li><b>Traditional Message Fetcher</b> (MongoDB, or PostgreSQL with {@code useCentralizedMessageFetcher=false}):
+ *       Each consumer thread tracks in-process keys via {@code orderedMessageDeliveryThreads} in
+ *       {@link DefaultDurableQueueConsumer} and excludes those keys when fetching the next message</li>
+ * </ul>
+ * In both cases, messages with <b>different keys</b> can be processed in parallel across all worker threads,
+ * while messages with the <b>same key</b> are processed sequentially.
+ * <p>
+ * <b>Multi-Node Processing - The Challenge:</b><br>
+ * When running {@link DurableQueues} across multiple nodes (all sharing the same database):
+ * <ul>
+ *   <li>Each node's {@link DurableQueues} instance acts as a <b>competing consumer</b></li>
+ *   <li>The {@code inProcessOrderedKeys} tracking only works within a single node</li>
+ *   <li>Database locking prevents the <b>same message</b> from being consumed twice, but does NOT prevent
+ *       <b>different messages with the same key</b> from being consumed by different nodes simultaneously</li>
+ *   <li><b>Example:</b> Node 1 might process {@code Order-123:event-5} while Node 2 simultaneously
+ *       processes {@code Order-123:event-3}, violating the ordering guarantee</li>
+ * </ul>
+ * <p>
+ * <b>Solution for Multi-Node Ordered Processing:</b><br>
+ * Use {@link Inbox} or {@link Outbox} configured with {@link MessageConsumptionMode#SingleGlobalConsumer}:
+ * <ul>
+ *   <li>A {@link FencedLock} ensures only ONE node in the cluster actively consumes at a time</li>
+ *   <li>The active node can still use multiple parallel worker threads</li>
+ *   <li>Other nodes remain on standby for automatic failover</li>
+ *   <li>All ordering coordination happens in a single place via {@link CentralizedMessageFetcher}</li>
+ * </ul>
+ * <p>
+ * <b>Important:</b><br>
+ * Always design message handlers to be <b>idempotent</b> to handle potential duplicates or redeliveries,
+ * especially in distributed systems where network partitions or node failures can cause edge cases.
+ *
+ * @see DurableQueues
+ * @see CentralizedMessageFetcher
+ * @see DefaultDurableQueueConsumer
+ * @see Inbox
+ * @see Outbox
+ * @see MessageConsumptionMode#SingleGlobalConsumer
+ * @see FencedLock
  */
 public class OrderedMessage extends Message {
     /**
