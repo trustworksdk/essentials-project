@@ -54,7 +54,7 @@ public enum TransactionalMode {
      * When changing an entity and queueing/de-queueing happens in ONE shared transaction (NOTE this requires that the entity storage and the queue storage
      * to use the same database - e.g. Postgresql or MongoDB) then the shared database transaction guarantees that all the data storage operations
      * are committed or rollback as one<br>
-     * The disadvantage of this is that any explicit {@link UnitOfWork#markAsRollbackOnly()}/{@link UnitOfWork#markAsRollbackOnly(Exception)}, either directly our through e.g. {@link UnitOfWorkControllingCommandBusInterceptor},
+     * The disadvantage of this is that any explicit {@link UnitOfWork#markAsRollbackOnly()}/{@link UnitOfWork#markAsRollbackOnly(Throwable)}, either directly our through e.g. {@link UnitOfWorkControllingCommandBusInterceptor},
      * will cause the message handling to rollback and the message will retry indefinitely without any delay (i.e. the {@link RedeliveryPolicy} is ignored because message handling is rolledback)
      */
     FullyTransactional,
@@ -65,7 +65,7 @@ public enum TransactionalMode {
      * For these cases you can configure the {@link TransactionalMode} as {@link #SingleOperationTransaction} where queueing and de-queueing are performed using separate (single document)
      * transactions and where acknowledging/retry is performed as a separate transaction.<br>
      * During queueing if there is an existing {@link UnitOfWork} in progress, then the queue operation will join the existing {@link UnitOfWork}<br>
-     * The advantage of this transactional mode is that any explicit {@link UnitOfWork#markAsRollbackOnly()}/{@link UnitOfWork#markAsRollbackOnly(Exception)}, either directly our through e.g. {@link UnitOfWorkControllingCommandBusInterceptor},
+     * The advantage of this transactional mode is that any explicit {@link UnitOfWork#markAsRollbackOnly()}/{@link UnitOfWork#markAsRollbackOnly(Throwable)}, either directly our through e.g. {@link UnitOfWorkControllingCommandBusInterceptor},
      * will NOT cause any message handling rollback, instead the normal {@link RedeliveryPolicy} will take effect as expected.
      */
     SingleOperationTransaction
