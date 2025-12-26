@@ -95,6 +95,19 @@ To mitigate the risk of SQL injection attacks, external or untrusted inputs shou
 
 **Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.**
 
+--- 
+
+To use `Postgresql Event Store` just add the following Maven dependency:
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>postgresql-event-store</artifactId>
+    <version>0.40.27</version>
+</dependency>
+```
+---
+
 # Aggregate-Id
 
 In event sourcing, an Aggregate-Id is a unique identifier that groups together related events belonging to the same business entity (aggregate). It plays a crucial role in:
@@ -792,12 +805,430 @@ public class MyEventHandler extends PatternMatchingTransactionalPersistedEventHa
 }
 ```
 
-To use `Postgresql Event Store` just add the following Maven dependency:
+---
 
-```xml
-<dependency>
-    <groupId>dk.trustworks.essentials.components</groupId>
-    <artifactId>postgresql-event-store</artifactId>
-    <version>0.40.27</version>
-</dependency>
+# In-Memory Projections in Essentials EventStore
+
+## Overview
+
+In-Memory Projections enable read-only reconstruction of state from event streams **without persistence** of the projections.  
+They're ideal for queries, validations, and custom read models where you don't need transactional guarantees.
+
+**Key Point:** In-memory projections are **not** associated with a `UnitOfWork` - changes won't be persisted.
+
+---
+
+## Registering Global InMemoryProjectors
+
+You can register projectors globally with the `EventStore` and it will automatically select the appropriate projector based on the projection type.
+
+### Registering a Projector
+
+```java
+// During ConfigurableEventStore setup
+eventStore.addGenericInMemoryProjector(new OrderStateProjector());
+
+Optional<OrderState> state = eventStore.inMemoryProjection(
+    AggregateType.of("Orders"),
+    orderId,
+    OrderState.class // EventStore automatically uses OrderStateProjector to project events for the Orders aggregate with the given orderId
+);
+```
+
+
+### How It Works
+
+The `EventStore` queries each registered projector using `supports(Class<?> projectionType)` 
+and uses the first one that returns `true`:
+
+```java
+public class OrderStateProjector implements InMemoryProjector {
+    
+    @Override
+    public boolean supports(Class<?> projectionType) {
+        // EventStore will use this projector for OrderState.class
+        return OrderState.class.equals(projectionType);
+    }
+    
+    @Override
+    public <ID, PROJECTION> Optional<PROJECTION> projectEvents(...) {
+        // projection logic
+    }
+}
+```
+
+
+### Setup Example
+
+```java
+// Application setup
+public class EventStoreConfiguration {
+    
+    public ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> createEventStore(
+            EventStoreUnitOfWorkFactory unitOfWorkFactory,
+            AggregateEventStreamPersistenceStrategy persistenceStrategy) {
+        
+        var eventStore = new PostgresqlEventStore<>(
+            unitOfWorkFactory,
+            persistenceStrategy
+        );
+        
+        // Register projectors globally
+        eventStore.addGenericInMemoryProjector(new OrderSummaryProjector());
+        eventStore.addGenericInMemoryProjector(new OrderStateProjector());
+        
+        return eventStore;
+    }
+}
+```
+
+
+### Usage example
+
+Once projectors are registered, you can create projections without passing a projector:
+
+```java
+// Query service using registered projectors
+public class OrderQueryService {
+    private final EventStore eventStore;
+    
+    public OrderSummary getOrderSummary(OrderId orderId) {
+        // EventStore automatically uses OrderSummaryProjector
+        return eventStore.inMemoryProjection(
+            AggregateType.of("Orders"),
+            orderId,
+            OrderSummary.class
+        ).orElseThrow(() -> new OrderNotFoundException(orderId));
+    }
+    
+    public OrderState getOrderState(OrderId orderId) {
+        // EventStore automatically uses OrderStateProjector
+        return eventStore.inMemoryProjection(
+            AggregateType.of("Orders"),
+            orderId,
+            OrderState.class
+        ).orElseThrow(() -> new OrderNotFoundException(orderId));
+    }
+}
+```
+
+### Usage with Explicit Projector
+
+Registered projectors serve as defaults, but you can also use adhoc explicit projector:
+
+```java
+var orderSummary = eventStore.inMemoryProjection(
+        ORDERS,
+        id,
+        OrderSummaryDTO.class,
+        new OrderSummaryDTOProjector());
+```
+---
+
+## Custom InMemoryProjector Example
+
+### Understanding Event Deserialization
+
+> When working with `PersistedEvent`, the `event()` method returns an `EventJSON` object.  
+> You must call `deserialize()` to get the actual Java event object:
+
+```java
+PersistedEvent persistedEvent = ...;
+EventJSON eventJson = persistedEvent.event();
+OrderEvent actualEvent = (OrderEvent) eventJson.deserialize();
+```
+
+> You can also use `EventStreamEvolver.extractEventsAsList` or `EventStreamEvolver.extractEvents` for Event stream focused deserialization 
+
+### Simple DTO Projection
+
+```java
+public class OrderSummaryProjector implements InMemoryProjector {
+    
+    @Override
+    public boolean supports(Class<?> projectionType) {
+        return OrderSummary.class.equals(projectionType);
+    }
+    
+    @Override
+    public <ID, PROJECTION> Optional<PROJECTION> projectEvents(
+            AggregateType aggregateType,
+            ID aggregateId,
+            Class<PROJECTION> projectionType,
+            EventStore eventStore) {
+        
+        return eventStore.fetchStream(aggregateType, aggregateId)
+            .map(stream -> {
+                var summary = new OrderSummary();
+                // Note: Can also use EventStreamEvolver.extractEvents(stream, OrderEvent.class).forEach(...) to avoid manually calling deserialize()
+                stream.eventList().forEach(pe -> {
+                    // Deserialize EventJSON to get the actual event
+                    switch (pe.event().deserialize()) {
+                        case OrderCreated e -> {
+                            summary.orderId = e.orderId();
+                            summary.createdAt = e.timestamp();
+                        }
+                        case ProductAdded e -> {
+                            summary.itemCount++;
+                            summary.total += e.price();
+                        }
+                        default -> {}
+                    }
+                });
+                return (PROJECTION) summary;
+            });
+    }
+}
+
+// Register globally
+eventStore.addGenericInMemoryProjector(new OrderSummaryProjector());
+
+// Use without an explicit projector parameter
+Optional<OrderSummary> summary = eventStore.inMemoryProjection(
+    ORDERS, orderId, OrderSummary.class
+);
+```
+
+---
+
+## EventStreamEvolver (from `event-sourced-aggregates`) - Functional Projections
+
+### What is EventStreamEvolver?
+
+A pure, functional interface for deriving state by applying events sequentially (left-fold pattern).
+
+**Characteristics:**
+- **Functional:** Pure function - same input always produces same output
+- **Immutable:** Creates new state instances
+- **Composable:** Can be chained
+- **Testable:** Easy to unit test
+
+### Creating an EventStreamEvolver
+
+```java
+public record OrderState(
+    OrderId orderId,
+    CustomerId customerId,
+    OrderStatus status,
+    List<OrderItem> items
+) {
+    public OrderState withStatus(OrderStatus newStatus) {
+        return new OrderState(orderId, customerId, newStatus, items);
+    }
+    
+    public OrderState withItem(OrderItem item) {
+        var updatedItems = new ArrayList<>(items);
+        updatedItems.add(item);
+        return new OrderState(orderId, customerId, status, List.copyOf(updatedItems));
+    }
+}
+
+public class OrderEvolver implements EventStreamEvolver<OrderEvent, OrderState> {
+    
+    @Override
+    public Optional<OrderState> applyEvent(OrderEvent event, Optional<OrderState> currentState) {
+        return switch (event) {
+            case OrderCreated e -> Optional.of(
+                new OrderState(e.orderId(), e.customerId(), OrderStatus.PENDING, List.of())
+            );
+            
+            case ProductAdded e -> currentState.map(state ->
+                state.withItem(new OrderItem(e.productId(), e.quantity()))
+            );
+            
+            case OrderConfirmed e -> currentState.map(state ->
+                state.withStatus(OrderStatus.CONFIRMED)
+            );
+            
+            default -> currentState;
+        };
+    }
+}
+```
+
+
+### Standalone Usage (Without EventStore)
+
+```java
+List<OrderEvent> events = List.of(
+    new OrderCreated(orderId, customerId),
+    new ProductAdded(orderId, productId, 2),
+    new OrderConfirmed(orderId)
+);
+
+var evolver = new OrderEvolver();
+Optional<OrderState> finalState = EventStreamEvolver.applyEvents(evolver, events);
+
+finalState.ifPresent(state -> {
+    System.out.println("Status: " + state.status());
+    System.out.println("Items: " + state.items().size());
+});
+```
+
+---
+
+## Combining EventStreamEvolver with InMemoryProjector
+
+### EventStreamEvolver-Based Projector
+
+```java
+public class OrderStateProjector implements InMemoryProjector {
+    private final OrderEvolver evolver = new OrderEvolver();
+    
+    @Override
+    public boolean supports(Class<?> projectionType) {
+        return OrderState.class.equals(projectionType);
+    }
+    
+    @Override
+    public <ID, PROJECTION> Optional<PROJECTION> projectEvents(
+            AggregateType aggregateType,
+            ID aggregateId,
+            Class<PROJECTION> projectionType,
+            EventStore eventStore) {
+        
+        return eventStore.fetchStream(aggregateType, aggregateId)
+            .flatMap(stream -> {
+                // Extract and deserialize events from the stream
+                // Note: Can also use EventStreamEvolver.extractEventsAsList(stream, OrderEvent.class) to avoid manually calling deserialize()
+                List<OrderEvent> events = stream.eventList().stream()
+                    .map(pe -> (OrderEvent) pe.event().deserialize())
+                    .toList();
+                
+                // Apply events using the evolver
+                return EventStreamEvolver.applyEvents(evolver, events);
+            });
+    }
+}
+
+// Register globally
+eventStore.addGenericInMemoryProjector(new OrderStateProjector());
+```
+
+
+### Usage with EventStore
+
+```java
+// With a preregistered projector - clean and simple
+Optional<OrderState> state = eventStore.inMemoryProjection(
+    AggregateType.of("Orders"),
+    orderId,
+    OrderState.class
+);
+
+state.ifPresent(s -> {
+    System.out.println("Order: " + s.orderId());
+    System.out.println("Status: " + s.status());
+    System.out.println("Items: " + s.items().size());
+});
+```
+
+
+---
+
+## Using EventStreamEvolver with EventStore (Direct Fetch)
+
+```java
+var evolver = new OrderEvolver();
+
+Optional<OrderState> state = eventStore
+    .fetchStream(AggregateType.of("Orders"), orderId)
+    .flatMap(persistedEventsStream -> {
+        // Deserialize to OrderEvent from PersistedEvents.EventJSON
+        List<OrderEvent> events = EventStreamEvolver.extractEventsAsList(persistedEventsStream, OrderEvent.class);
+        
+        return EventStreamEvolver.applyEvents(evolver, events);
+    });
+```
+
+---
+
+## Use Cases
+
+### 1. Validation in Command Handlers
+
+```java
+public class ConfirmOrderDecider implements EventStreamDecider<ConfirmOrder, OrderEvent> {
+    private final OrderEvolver evolver = new OrderEvolver();
+    
+    @Override
+    public Optional<OrderEvent> handle(ConfirmOrder cmd, List<OrderEvent> events) {
+        // Note: In EventStreamDecider the Events are already deserialized to the runtime type (OrderEvent)
+        Optional<OrderState> state = EventStreamEvolver.applyEvents(evolver, events);
+        
+        if (state.isEmpty()) throw new IllegalStateException("Order not found");
+        if (state.get().items().isEmpty()) throw new IllegalStateException("No items");
+        // Idempotency check
+        if (state.get().status() == OrderStatus.CONFIRMED) return Optional.empty();
+        
+        return Optional.of(new OrderConfirmed(cmd.orderId()));
+    }
+    
+    @Override
+    public boolean canHandle(Class<?> command) {
+        return ConfirmOrder.class.equals(command);
+    }
+}
+```
+
+
+### 2. Read Model Queries
+
+```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
+
+public class OrderQueryService {
+    private final EventStore eventStore;
+
+    public OrderQueryService(ConfigurableEventStore<?> eventStore) {
+        this.eventStore = eventStore;
+        eventStore.addGenericInMemoryProjector(new OrderSummaryDTOProjector());
+    }
+
+    public OrderSummaryDTO getOrderSummary(OrderId orderId) {
+        // OrderSummaryDTOProjector automatically selected based on OrderSummaryDTO.class
+        return eventStore.inMemoryProjection(ORDERS, orderId, OrderSummaryDTO.class)
+                         .orElseThrow(() -> new OrderNotFoundException(orderId));
+    }
+}
+```
+
+
+### 3. Event Processing
+
+```java
+public class OrderEventProcessor extends AbstractEventProcessor {
+    // No projector field needed
+
+    public void onOrderEvent(OrderEvent event) {
+        // Automatically uses the previously registered OrderStateProjector
+        getEventStore()
+                .inMemoryProjection(ORDERS, event.orderId(), OrderState.class)
+                .ifPresent(state -> {
+                    if (state.items().size() > 10) {
+                        notifyWarehouse(state);
+                    }
+                });
+    }
+}
+```
+
+
+### 4. Conditional Processing Based on State
+
+```java
+public class OrderStateChecker {
+    private final EventStore eventStore;
+    private final OrderEvolver evolver = new OrderEvolver();
+
+    public boolean canShipOrder(OrderId orderId) {
+        return eventStore.fetchStream(ORDERS, orderId)
+                         .flatMap(persistedEventsStream -> {
+                             var eventsStream = EventStreamEvolver.extractEvents(persistedEventsStream, OrderEvent.class);
+                             return EventStreamEvolver.applyEvents(evolver, eventsStream.toList());
+                         })
+                         .map(state -> state.status() == OrderStatus.CONFIRMED && !state.items().isEmpty())
+                         .orElse(false);
+    }
+}
 ```
