@@ -270,6 +270,92 @@ public class Either<T1, T2> implements Tuple<Either<T1, T2>> {
         return new Either<>(_1, r2);
     }
 
+    /**
+     * Pattern matching style: applies one of the two functions depending on which element has a value,
+     * and returns the result.<br>
+     * <br>
+     * This is useful for handling both cases of an {@link Either} in a single expression:
+     * <pre>{@code
+     * Either<ValidationError, Order> result = validateOrder(orderData);
+     * String message = result.fold(
+     *     error -> "Validation failed: " + error.getMessage(),
+     *     order -> "Order " + order.getId() + " processed successfully"
+     * );
+     * }</pre>
+     *
+     * @param ifIs1 the function to apply if {@link #is_1()} is true
+     * @param ifIs2 the function to apply if {@link #is_2()} is true
+     * @param <R>   the result type of both functions
+     * @return the result of applying the appropriate function
+     */
+    public <R> R fold(Function<? super T1, ? extends R> ifIs1,
+                      Function<? super T2, ? extends R> ifIs2) {
+        requireNonNull(ifIs1, "You must supply an ifIs1 function");
+        requireNonNull(ifIs2, "You must supply an ifIs2 function");
+        if (is_1()) {
+            return ifIs1.apply(_1);
+        } else {
+            return ifIs2.apply(_2);
+        }
+    }
+
+    /**
+     * FlatMap the <b>second</b> element of this {@link Either} using the mapping function that returns an {@link Either}.<br>
+     * If this {@link Either} has {@link #is_1()}, then the mapping function is not applied and this {@link Either}
+     * is returned with the types adjusted.<br>
+     * <br>
+     * This is useful for chaining operations that may fail:
+     * <pre>{@code
+     * Either<Error, ProcessedOrder> processed = validateOrder(orderData)
+     *     .flatMap(order -> enrichOrder(order))
+     *     .flatMap(enriched -> persistOrder(enriched));
+     * }</pre>
+     *
+     * @param mappingFunction the mapping function that transforms T2 into an Either&lt;T1, R2&gt;
+     * @param <R2>            the type of the second element in the resulting {@link Either}
+     * @return the result of applying the mapping function if {@link #is_2()}, otherwise this {@link Either} with adjusted types
+     */
+    @SuppressWarnings("unchecked")
+    public <R2> Either<T1, R2> flatMap2(Function<? super T2, ? extends Either<T1, R2>> mappingFunction) {
+        requireNonNull(mappingFunction, "You must supply a mapping function");
+        if (is_1()) {
+            return (Either<T1, R2>) this;
+        } else {
+            return mappingFunction.apply(_2);
+        }
+    }
+
+    /**
+     * FlatMap the <b>first</b> element of this {@link Either} using the mapping function that returns an {@link Either}.<br>
+     * If this {@link Either} has {@link #is_2()}, then the mapping function is not applied and this {@link Either}
+     * is returned with the types adjusted.<br>
+     *
+     * @param mappingFunction the mapping function that transforms T1 into an Either&lt;R1, T2&gt;
+     * @param <R1>            the type of the first element in the resulting {@link Either}
+     * @return the result of applying the mapping function if {@link #is_1()}, otherwise this {@link Either} with adjusted types
+     */
+    @SuppressWarnings("unchecked")
+    public <R1> Either<R1, T2> flatMap1(Function<? super T1, ? extends Either<R1, T2>> mappingFunction) {
+        requireNonNull(mappingFunction, "You must supply a mapping function");
+        if (is_2()) {
+            return (Either<R1, T2>) this;
+        } else {
+            return mappingFunction.apply(_1);
+        }
+    }
+
+    /**
+     * Convert this {@link Either} to a {@link Result} with semantic naming.
+     * <br>
+     * The first element (T1) becomes the error type and the second element (T2) becomes the success type.
+     *
+     * @return a new {@link Result} with the same values as this Either
+     * @see Result#fromEither(Either)
+     */
+    public Result<T1, T2> toResult() {
+        return Result.fromEither(this);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
