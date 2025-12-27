@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import java.util.Optional;
 
 /**
- * Responsible for performing an in memory projection of a given aggregate instances event stream.<br>
+ * Responsible for performing an in-memory projection of a given aggregate instances event stream.<br>
  * Note: Unless the {@link InMemoryProjector} explicitly states otherwise, an
  * in memory projection is not automatically associated with a {@link UnitOfWork} and any changes to the projection
  * won't automatically be persisted.
@@ -37,12 +37,12 @@ public interface InMemoryProjector {
     boolean supports(Class<?> projectionType);
 
     /**
-     * Perform an in memory projection of a given aggregate instances event stream.<br>
+     * Perform an in-memory projection of a given aggregate instances event stream.<br>
      * Note: Unless the {@link InMemoryProjector} explicitly states otherwise, an
-     * in memory projection is not automatically associated with a {@link UnitOfWork} and any changes to the projection
-     * won't automatically be persisted.<br>
+     * in-memory projection is not automatically associated with a {@link UnitOfWork} and any changes to the projection
+     * won't automatically be persisted.
      *
-     * @param aggregateType  the name of the aggregate' event stream
+     * @param aggregateType  the name of the aggregate's event stream
      * @param aggregateId    the identifier for the aggregate instance
      * @param projectionType the type of projection result
      * @param <ID>           the aggregate id type

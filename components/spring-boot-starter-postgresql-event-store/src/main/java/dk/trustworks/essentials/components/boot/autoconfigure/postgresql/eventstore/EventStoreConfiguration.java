@@ -23,6 +23,8 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
+import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
@@ -239,6 +241,24 @@ public class EventStoreConfiguration {
                                                                 eventStoreSubscriptionObserver);
         configurableEventStore.addEventStoreInterceptors(eventStoreInterceptors);
         return configurableEventStore;
+    }
+
+    /**
+     * The {@link AnnotationBasedInMemoryProjector} that allows projecting events onto POJO classes
+     * using {@link EventHandler} annotated methods on the POJO class.
+     * <p>
+     * This projector is automatically registered with the {@link EventStore} when
+     * {@code essentials.eventstore.add-annotation-based-in-memory-projector} is {@code true} (default).
+     *
+     * @param eventStore the {@link ConfigurableEventStore} to register the projector with
+     * @return the {@link AnnotationBasedInMemoryProjector} instance
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "essentials.eventstore", name = "add-annotation-based-in-memory-projector", havingValue = "true", matchIfMissing = true)
+    public AnnotationBasedInMemoryProjector annotationBasedInMemoryProjector(ConfigurableEventStore<?> eventStore) {
+        var projector = new AnnotationBasedInMemoryProjector();
+        eventStore.addGenericInMemoryProjector(projector);
+        return projector;
     }
 
     @Bean

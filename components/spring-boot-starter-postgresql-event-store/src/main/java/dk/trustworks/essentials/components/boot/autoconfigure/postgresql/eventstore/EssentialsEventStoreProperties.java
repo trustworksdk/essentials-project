@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
@@ -50,11 +51,12 @@ import java.time.Duration;
 @Configuration
 @ConfigurationProperties(prefix = "essentials.eventstore")
 public class EssentialsEventStoreProperties {
-    private IdentifierColumnType                             identifierColumnType     = IdentifierColumnType.TEXT;
-    private JSONColumnType                                   jsonColumnType           = JSONColumnType.JSONB;
-    private boolean                                          useEventStreamGapHandler = true;
-    private boolean                                          verboseTracing           = false;
-    private EssentialsComponentsProperties.MetricsProperties metrics                  = new EssentialsComponentsProperties.MetricsProperties();
+    private IdentifierColumnType                             identifierColumnType              = IdentifierColumnType.TEXT;
+    private JSONColumnType                                   jsonColumnType                    = JSONColumnType.JSONB;
+    private boolean                                          useEventStreamGapHandler          = true;
+    private boolean                                          verboseTracing                    = false;
+    private boolean                                          addAnnotationBasedInMemoryProjector = true;
+    private EssentialsComponentsProperties.MetricsProperties metrics                           = new EssentialsComponentsProperties.MetricsProperties();
 
     private final EventStoreSubscriptionManagerProperties subscriptionManager = new EventStoreSubscriptionManagerProperties();
 
@@ -139,6 +141,24 @@ public class EssentialsEventStoreProperties {
      */
     public void setUseEventStreamGapHandler(boolean useEventStreamGapHandler) {
         this.useEventStreamGapHandler = useEventStreamGapHandler;
+    }
+
+    /**
+     * Should the {@link AnnotationBasedInMemoryProjector} be automatically added to the {@link EventStore}? (default true)
+     *
+     * @return true if the {@link AnnotationBasedInMemoryProjector} should be automatically added to the {@link EventStore}
+     */
+    public boolean isAddAnnotationBasedInMemoryProjector() {
+        return addAnnotationBasedInMemoryProjector;
+    }
+
+    /**
+     * Should the {@link AnnotationBasedInMemoryProjector} be automatically added to the {@link EventStore}? (default true)
+     *
+     * @param addAnnotationBasedInMemoryProjector true if the {@link AnnotationBasedInMemoryProjector} should be automatically added to the {@link EventStore}
+     */
+    public void setAddAnnotationBasedInMemoryProjector(boolean addAnnotationBasedInMemoryProjector) {
+        this.addAnnotationBasedInMemoryProjector = addAnnotationBasedInMemoryProjector;
     }
 
     /**
