@@ -58,6 +58,11 @@ This will ensure to include the `spring-boot-starter-postgresql` starter and its
       essentials.event-store.subscription-manager.event-store-polling-interval=200ms
       essentials.event-store.subscription-manager.max-event-store-polling-interval=2000ms
      ```
+- `AnnotationBasedInMemoryProjector` which allows projecting events onto POJO classes using `@EventHandler` annotated methods on the POJO class (enabled by default)
+  - This projector is automatically registered with the `EventStore` unless disabled:
+  - ```
+    essentials.event-store.add-annotation-based-in-memory-projector=false
+    ```
 - `MicrometerTracingEventStoreInterceptor` if property `management.tracing.enabled` has value `true`
   - The default `MicrometerTracingEventStoreInterceptor` values can be overridden using Spring properties:
   - ```
