@@ -16,8 +16,6 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.decider;
 
-import dk.trustworks.essentials.shared.functional.tuple.Either;
-
 import java.util.*;
 import java.util.function.Function;
 
@@ -187,7 +185,7 @@ public sealed interface HandlerResult<ERROR, EVENT> {
      * @param error   the error to return
      * @param <EVENT> The type of Events that can be returned by {@link Handler#handle(Object, Object)} and applied in the {@link StateEvolver#applyEvent(Object, Object)}
      * @param <ERROR> The type of Error that can be returned by the {@link Handler#handle(Object, Object)} method
-     * @return An {@link Either} with {@link Either#_1} containing the <code>error</code>
+     * @return An {@link Error} containing the <code>error</code>
      */
     static <EVENT, ERROR> HandlerResult.Error<ERROR, EVENT> error(ERROR error) {
         requireNonNull(error, "No error provided");
@@ -200,7 +198,7 @@ public sealed interface HandlerResult<ERROR, EVENT> {
      * @param events  the events to return (is allowed to be empty)
      * @param <EVENT> The type of Events that can be returned by {@link Handler#handle(Object, Object)} and applied in the {@link StateEvolver#applyEvent(Object, Object)}
      * @param <ERROR> The type of Error that can be returned by the {@link Handler#handle(Object, Object)} method
-     * @return An {@link Either} with {@link Either#_2} containing a list of <code>events</code>
+     * @return  A {@link Success} containing a list of <code>events</code>
      */
     static <EVENT, ERROR> HandlerResult.Success<ERROR, EVENT> events(EVENT... events) {
         return new HandlerResult.Success<>(events);
@@ -212,7 +210,7 @@ public sealed interface HandlerResult<ERROR, EVENT> {
      * @param events  the events to return (is allowed to be empty)
      * @param <EVENT> The type of Events that can be returned by {@link Handler#handle(Object, Object)} and applied in the {@link StateEvolver#applyEvent(Object, Object)}
      * @param <ERROR> The type of Error that can be returned by the {@link Handler#handle(Object, Object)} method
-     * @return An {@link Either} with {@link Either#_2} containing a list of <code>events</code>
+     * @return A {@link Success} containing a list of <code>events</code>
      */
     static <EVENT, ERROR> HandlerResult.Success<ERROR, EVENT> events(List<EVENT> events) {
         return new HandlerResult.Success<>(events);
