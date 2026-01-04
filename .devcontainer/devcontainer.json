@@ -1,0 +1,177 @@
+{
+	"name": "Essentials Java DevContainer Environment",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"args": {
+			"JAVA_VERSION": "17",
+			"INSTALL_MAVEN": "true",
+			"INSTALL_GRADLE": "false",
+			"INSTALL_RIPGREP": "true",
+			"MAVEN_VERSION": "3.9.11"
+		}
+	},
+	"features": {
+		// Enable Docker-in-Docker support, from the official devcontainer feature, for TestContainers integration
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"version": "latest",
+			"moby": true,
+			"dockerDashComposeVersion": "v2"
+		},
+		// Install Node.js from the official devcontainer feature.
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "latest"
+		}
+	},
+	// Run as non-root user for improved security.
+	"remoteUser": "vscode",
+
+	// Container environment variables
+	"containerEnv": {
+		"LANG": "en_US.UTF-8",
+		"LANGUAGE": "en_US:en",
+		"LC_ALL": "en_US.UTF-8",
+		// Enable Docker Content Trust for image verification
+		"DOCKER_CONTENT_TRUST": "1",
+		// JetBrains specific environment variables
+		"JETBRAINS_REMOTE_DEV_NON_INTERACTIVE": "1",
+		"JAVA_HOME": "/usr/lib/jvm/msopenjdk-current",
+		// IDE shared indexes for performance
+		"SHARED_INDEXES_BASE_URL": "file:///home/vscode/.cache/shared-indexes",
+		// JVM options for better container performance
+		"JAVA_TOOL_OPTIONS":"-XX:+UseContainerSupport -XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=40 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp",
+		// Maven options for better performance
+		"MAVEN_OPTS": "-XX:MaxRAMPercentage=20 -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m -XX:InitialCodeCacheSize=64m"
+	},
+	// Docker volumes for persistence - no initialization needed!
+	"mounts": [
+		// Persist Claude Code settings and authentication
+		"source=devcontainer-claude-code-config,target=/home/vscode/.config/claude-code,type=volume,consistency=cached",
+		"source=devcontainer-claude-code-cache,target=/home/vscode/.cache/claude-code,type=volume,consistency=cached",
+		// Persist Maven repository cache (write-on-download, read-heavy workload)
+		"source=devcontainer-maven-repo,target=/home/vscode/.m2/repository,type=volume,consistency=cached",
+		// Persist Gradle cache (write-on-download, read-heavy workload)
+		"source=devcontainer-gradle-cache,target=/home/vscode/.gradle,type=volume,consistency=cached",
+		// JetBrains specific caches (container-managed, host-consistent backups)
+		"source=devcontainer-jetbrains-config,target=/home/vscode/.config/JetBrains,type=volume,consistency=cached",
+		"source=devcontainer-jetbrains-cache,target=/home/vscode/.cache/JetBrains,type=volume,consistency=cached",
+		"source=devcontainer-jetbrains-share,target=/home/vscode/.local/share/JetBrains,type=volume,consistency=cached",
+		"source=devcontainer-java-userprefs,target=/home/vscode/.java/.userPrefs,type=volume,consistency=cached",
+		// Shared IDE indexes for better performance (container-managed)
+		"source=devcontainer-ide-indexes,target=/home/vscode/.cache/shared-indexes,type=volume,consistency=cached",
+		// Optional: Add a shared workspace cache volume (container-managed)
+		"source=devcontainer-workspace-cache,target=/home/vscode/.cache/workspace,type=volume,consistency=cached"
+	],
+
+	// Resource limits to prevent container resource exhaustion attacks
+	"runArgs": [
+		"--cpus=4",
+		"--memory=6g",
+		"--pids-limit=100",
+		"--security-opt", "apparmor=docker-default",
+		"--network=bridge"
+	],
+
+	// Forward no ports by default
+	"forwardPorts": [
+		// 8080,  // Spring Boot default
+		// 8081,  // Alternative service port
+		// 5005,  // Java debug port (JetBrains/JDWP)
+		// 63342, // JetBrains built-in server
+		// 5432,  // PostgreSQL
+		// 9092,  // Kafka
+		// 27017  // MongoDB
+	],
+	// Automatically forward ports that are listening
+	"otherPortsAttributes": {
+		"onAutoForward": "notify"
+	},
+	// Port labels for clarity
+	"portsAttributes": {
+		"5005": {
+			"label": "Java Debug (JDWP)",
+			"onAutoForward": "notify"
+		},
+		"8080": {
+			"label": "Spring Boot",
+			"onAutoForward": "notify"
+		},
+		"63342": {
+			"label": "JetBrains Server",
+			"onAutoForward": "silent"
+		}
+	},
+
+	"customizations": {
+		// Automatically install VS Code extensions for Java, Maven, and Gradle support.
+		"vscode": {
+			"extensions": [
+                "vscjava.vscode-java-pack",
+                "vscjava.vscode-maven",
+                "vscjava.vscode-gradle",
+                "vscjava.vscode-spring-initializr",
+                "vscjava.vscode-spring-boot-dashboard",
+                "github.copilot",
+                "github.copilot-chat",
+                "ms-azuretools.vscode-docker",
+                "vscjava.vscode-java-test",
+                "sonarsource.sonarlint-vscode"
+			],
+			"settings": {
+				// Java settings optimized for DDD and Event Sourcing
+				"java.configuration.updateBuildConfiguration": "automatic",
+				"java.completion.enabled": true,
+				"java.completion.favoriteStaticMembers": [
+					"org.mockito.Mockito.*",
+					"org.assertj.core.api.Assertions.*"
+				],
+				"java.saveActions.organizeImports": true,
+				"java.dependency.syncWithFolderExplorer": true,
+				"java.configuration.runtimes": [
+					{
+						"name": "JavaSE",
+						"path": "/usr/lib/jvm/msopenjdk-current",
+						"default": true
+					}
+				],
+				// Maven settings
+				"maven.executable.preferMavenWrapper": false,
+				"maven.pomfile.autoUpdateEffectivePOM": true,
+				// Gradle settings
+				"gradle.nestedProjects": true,
+				"gradle.autoDetect": true,
+				// Editor settings
+				"editor.suggestSelection": "first",
+				"editor.quickSuggestionsDelay": 500,
+				"editor.suggestOnTriggerCharacters": true,
+				"editor.tabCompletion": "on",
+				"editor.formatOnSave": true,
+				"editor.codeActionsOnSave": {
+					"source.organizeImports": true
+				},
+				// Terminal settings
+				"terminal.integrated.defaultProfile.linux": "bash",
+				"terminal.integrated.profiles.linux": {
+					"bash": {
+						"path": "/bin/bash",
+						"args": ["-l"]
+					}
+				},
+				// Telemetry Configuration
+				"telemetry.telemetryLevel": "off",
+				"redhat.telemetry.enabled": false,
+				"java.telemetry.enabled": false
+			}
+		},
+		"jetbrains": {
+			"gateway": {
+				"enabled": true
+			},
+			"backend": "IntelliJ"
+		}
+	},
+	// Lifecycle scripts
+    "onCreateCommand": "echo 'DevContainer created successfully!'",
+	"postCreateCommand": "npm config set ignore-scripts true && npm install -g npm@latest && npm install -g @anthropic-ai/claude-code && if [ -f .devcontainer/maven-settings.xml ]; then cp .devcontainer/maven-settings.xml ~/.m2/settings.xml; fi && echo 'Post-create setup completed successfully!'",
+    "postStartCommand": "git config --global --add safe.directory /workspace && git config --global pull.rebase true",
+    "shutdownAction": "stopContainer"
+}
