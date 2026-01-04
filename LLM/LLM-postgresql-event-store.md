@@ -392,11 +392,11 @@ subscriptionManager.batchSubscribeToAggregateEventsAsynchronously(
 
 ### Choose Processor
 
-| Processor | Processing | Exclusive | Latency | Consistency | Replay | Best For |
-|-----------|-----------|-----------|---------|-------------|--------|----------|
-| `EventProcessor` | Async (Inbox) | Yes | Higher | Eventual | Yes | External integrations, long ops |
-| `InTransactionEventProcessor` | Sync (in-tx) | Configurable | Lowest | Strong | No | Consistent projections |
-| `ViewEventProcessor` | Direct + queue on failure | Yes | Low | Eventual | Yes | Low-latency views |
+| Processor | Processing                      | Exclusive | Latency | Consistency | Replay | Best For |
+|-----------|---------------------------------|-----------|---------|-------------|--------|----------|
+| `EventProcessor` | Async (Inbox)                   | Yes | Higher | Eventual | Yes | External integrations, long ops |
+| `InTransactionEventProcessor` | Sync (in-tx)                    | Configurable | Lowest | Strong | No | Consistent projections |
+| `ViewEventProcessor` | Async Direct + queue on failure | Yes | Low | Eventual | Yes | Low-latency views |
 
 
 ### EventProcessor (Inbox-based)
