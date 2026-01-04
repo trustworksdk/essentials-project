@@ -40,7 +40,9 @@
 		// JVM options for better container performance
 		"JAVA_TOOL_OPTIONS":"-XX:+UseContainerSupport -XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=40 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp",
 		// Maven options for better performance
-		"MAVEN_OPTS": "-XX:MaxRAMPercentage=20 -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m -XX:InitialCodeCacheSize=64m"
+		"MAVEN_OPTS": "-XX:MaxRAMPercentage=20 -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m -XX:InitialCodeCacheSize=64m",
+		// Node.js memory settings for Claude Code and other tools
+		"NODE_OPTIONS": "--max-old-space-size=8192"
 	},
 	// Docker volumes for persistence - no initialization needed!
 	"mounts": [
@@ -65,7 +67,7 @@
 	// Resource limits to prevent container resource exhaustion attacks
 	"runArgs": [
 		"--cpus=4",
-		"--memory=6g",
+		"--memory=10g",
 		"--pids-limit=100",
 		"--security-opt", "apparmor=docker-default",
 		"--network=bridge"
