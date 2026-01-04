@@ -70,7 +70,7 @@
         <notes><![CDATA[
    file name: postgresql-1.17.2.jar
    ]]></notes>
-        <packageUrl regex="true">^pkg:maven/org\.testcontainers/postgresql@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/org\.testcontainers/testcontainers\-postgresql@.*$</packageUrl>
         <cpe>cpe:/a:www-sql_project:www-sql</cpe>
     </suppress>
     <suppress>
@@ -283,5 +283,28 @@
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/org\.xmlunit/xmlunit-core@.*$</packageUrl>
         <cpe>cpe:/a:ada:ada</cpe>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: testcontainers-mongodb-2.0.3.jar
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.testcontainers/testcontainers-mongodb@.*$</packageUrl>
+        <cpe>cpe:/a:mongodb:mongodb</cpe>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: testcontainers-postgresql-2.0.3.jar
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.testcontainers/testcontainers-postgresql@.*$</packageUrl>
+        <cpe>cpe:/a:postgresql:postgresql</cpe>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: angus-activation-2.0.0.jar
+    CVE-2025-7962 is a false positive, as it only affects the Angus Jakarta Mail module
+    and is not an issue with the activation library itself.
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.eclipse\.angus/angus-activation@.*$</packageUrl>
+        <cpe>cpe:/a:eclipse:jakarta_mail</cpe>
     </suppress>
 </suppressions>

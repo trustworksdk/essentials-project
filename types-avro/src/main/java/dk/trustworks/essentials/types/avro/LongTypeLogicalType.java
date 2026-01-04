@@ -16,15 +16,15 @@
 
 package dk.trustworks.essentials.types.avro;
 
-import dk.trustworks.essentials.types.*;
+import dk.trustworks.essentials.types.LongType;
 import org.apache.avro.*;
 
 /**
- * Base {@link Conversion} for all custom types of type {@link LongType}.<br>
+ * Logical-Type for {@link LongType}<br>
  * <b>NOTICE:</b> This Conversion requires that AVRO field/property must be use the AVRO primitive type: <b><code>long</code></b><br>
  * <br>
  * Each concrete {@link LongType} that must be support Avro serialization and deserialization must have a dedicated
- * {@link Conversion}, {@link LogicalType} and {@link LogicalTypes.LogicalTypeFactory} pair registered with the <b><code>avro-maven-plugin</code></b>.<br>
+ * {@link Conversion} and {@link LogicalTypes.LogicalTypeFactory} pair registered with the <b><code>avro-maven-plugin</code></b>.<br>
  * <br>
  * <b>Important:</b> The AVRO field/property must be use the AVRO primitive type: <b><code>long</code></b><br>
  * <pre>{@code
@@ -98,56 +98,19 @@ import org.apache.avro.*;
  *     </executions>
  * </plugin>
  * }</pre>
- * <b><u>Create a Record the uses the "Quantity" logical type</u></b><br>
- * Example IDL <code>"order.avdl"</code>:<br>
- * <pre>{@code
- * @namespace("dk.trustworks.essentials.types.avro.test")
- * protocol Test {
- *   record Order {
- *       string           id;
- *       @logicalType("Quantity")
- *       long            quanity;
- *   }
- * }
- * }</pre>
- * <br>
- * This will generate an Order class that looks like this:
- * <pre>{@code
- * public class Order extends SpecificRecordBase implements SpecificRecord {
- *   ...
- *   private java.lang.String id;
- *   private com.myproject.types.Quantity quantity;
- *   ...
- * }
- * }</pre>
  *
- * @param <T> the concrete {@link LongType} sub-type
- * @see LongTypeLogicalType
+ * @see BaseLongTypeConversion
  */
-public abstract class BaseLongTypeConversion<T extends LongType<T>> extends Conversion<T> {
-    protected abstract LogicalType getLogicalType();
-
-    @Override
-    public final Schema getRecommendedSchema() {
-        return getLogicalType().addToSchema(Schema.create(Schema.Type.LONG));
+public class LongTypeLogicalType extends LogicalType {
+    public LongTypeLogicalType(String logicalTypeName) {
+        super(logicalTypeName);
     }
 
     @Override
-    public final String getLogicalTypeName() {
-        return getLogicalType().getName();
-    }
-
-    @Override
-    public T fromLong(Long value, Schema schema, LogicalType type) {
-        return value == null ?
-               null :
-               SingleValueType.from(value, getConvertedType());
-    }
-
-    @Override
-    public Long toLong(T value, Schema schema, LogicalType type) {
-        return value == null ?
-               null :
-               value.longValue();
+    public void validate(Schema schema) {
+        super.validate(schema);
+        if (schema.getType() != Schema.Type.LONG) {
+            throw new IllegalArgumentException("'" + getName() + "' can only be used with type '" + Schema.Type.LONG.getName() + "'. Invalid schema: " + schema.toString(true));
+        }
     }
 }

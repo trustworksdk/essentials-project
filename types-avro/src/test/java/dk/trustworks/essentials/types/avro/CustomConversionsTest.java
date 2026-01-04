@@ -17,8 +17,8 @@
 package dk.trustworks.essentials.types.avro;
 
 import dk.trustworks.essentials.types.*;
+import dk.trustworks.essentials.types.avro.test.*;
 import dk.trustworks.essentials.types.avro.test.Money;
-import dk.trustworks.essentials.types.avro.test.Order;
 import dk.trustworks.essentials.types.avro.test.types.*;
 import org.apache.avro.io.*;
 import org.apache.avro.specific.*;
@@ -66,6 +66,7 @@ public class CustomConversionsTest {
                          .setLastUpdated(LastUpdated.now())
                          .setTransactionTime(TransactionTime.now())
                          .setTransferTime(TransferTime.now())
+                         .setQuantity(Quantity.of(42L))
                          .build();
 
         // When
@@ -92,6 +93,7 @@ public class CustomConversionsTest {
         assertThat(deserializedOrder.getLastUpdated().value()).isCloseTo(order.getLastUpdated().value(), within(100, ChronoUnit.MICROS));
         assertThat(deserializedOrder.getTransactionTime().value()).isCloseTo(order.getTransactionTime().value(), within(100, ChronoUnit.MICROS));
         assertThat(deserializedOrder.getTransferTime().value()).isCloseTo(order.getTransferTime().value(), within(100, ChronoUnit.MICROS));
+        assertThat(deserializedOrder.getQuantity()).isEqualTo(order.getQuantity());
     }
 
     @SuppressWarnings("unchecked")

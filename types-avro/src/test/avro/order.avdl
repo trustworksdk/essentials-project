@@ -32,6 +32,8 @@ protocol Test {
       long transactionTime;
       @logicalType("TransferTime")
       long transferTime;
+      @logicalType("Quantity")
+      long quantity;
 
       array<@logicalType("CurrencyCode") string>  arrayOfCurrencies;
       map<@logicalType("CurrencyCode") string>  mapOfCurrencyValues;

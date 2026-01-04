@@ -1173,10 +1173,10 @@ public class EssentialsComponentsProperties {
 
     public static class ReactiveProperties {
         private int    eventBusBackpressureBufferSize             = LocalEventBus.DEFAULT_BACKPRESSURE_BUFFER_SIZE;
-        private int    eventBusParallelThreads                    = Runtime.getRuntime().availableProcessors();
+        private int    eventBusParallelThreads                    = Math.min(Runtime.getRuntime().availableProcessors(), 4);
         private int    overflowMaxRetries                         = LocalEventBus.DEFAULT_OVERFLOW_MAX_RETRIES;
         private double queuedTaskCapFactor                        = LocalEventBus.QUEUED_TASK_CAP_FACTOR;
-        private int    commandBusParallelSendAndDontWaitConsumers = Runtime.getRuntime().availableProcessors();
+        private int    commandBusParallelSendAndDontWaitConsumers = Math.min(Runtime.getRuntime().availableProcessors(), 4);
 
         /**
          * The number of parallel {@link CommandBus#sendAndDontWait(Object)} consumers. Default is the number of available processors
@@ -1274,7 +1274,7 @@ public class EssentialsComponentsProperties {
      */
     public static class SchedulerProperties {
         private boolean enabled         = true;
-        private int     numberOfThreads = Runtime.getRuntime().availableProcessors();
+        private int     numberOfThreads = Math.min(Runtime.getRuntime().availableProcessors(), 4);
 
         /**
          * Checks whether the scheduler is enabled.
