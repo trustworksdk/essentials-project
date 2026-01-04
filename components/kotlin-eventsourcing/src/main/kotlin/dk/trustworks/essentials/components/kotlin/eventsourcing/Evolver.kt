@@ -16,6 +16,11 @@
 
 package dk.trustworks.essentials.components.kotlin.eventsourcing
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver.Companion.applyEvents
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver.Companion.extractEvents
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver.Companion.extractEventsAsList
+
 /**
  * A [Decider] or View related interface, which can apply `EVENT`<(s) to a *aggregate/projection/view* `STATE` instance
  *
@@ -57,6 +62,62 @@ fun interface Evolver<EVENT, STATE> {
                             currentState
                         )
                     }!!
+        }
+
+        /**
+         * Extracts and filters events from an [AggregateEventStream] of a specified type.
+         *
+         * This method processes the event stream by:
+         * - Deserializing each persisted event into its runtime type representation
+         * - Filtering events that match the specified type [E]
+         * - Casting them to the specified type
+         * - Returning them as a Sequence
+         *
+         * ### Usage Example:
+         * ```kotlin
+         * val persistedEventsStream: AggregateEventStream<*> = ... // Obtain or build an event stream
+         * // Deserializes from PersistedEvents.EventJSON to OrderEvent
+         * val eventsSequence: Sequence<OrderEvent> = Evolver.extractEvents<OrderEvent>(persistedEventsStream)
+         * val state = Evolver.applyEvents(evolver, null, eventsSequence.toList())
+         * ```
+         *
+         * @param E The specific type of events to extract
+         * @param stream The [AggregateEventStream] containing serialized events
+         * @return A [Sequence] of events matching the specified type after deserialization
+         * @see applyEvents
+         * @see extractEventsAsList
+         */
+        inline fun <reified E> extractEvents(stream: AggregateEventStream<*>): Sequence<E> {
+            return stream.eventList().asSequence()
+                .map { it.event().deserialize<Any>() }
+                .filterIsInstance<E>()
+        }
+
+        /**
+         * Extracts and filters events from an [AggregateEventStream] of a specified type.
+         *
+         * This method processes the event stream by:
+         * - Deserializing each persisted event into its runtime type representation
+         * - Filtering events that match the specified type [E]
+         * - Casting them to the specified type
+         * - Returning them as a List
+         *
+         * ### Usage Example:
+         * ```kotlin
+         * val persistedEventsStream: AggregateEventStream<*> = ... // Obtain or build an event stream
+         * // Deserializes from PersistedEvents.EventJSON to OrderEvent
+         * val events: List<OrderEvent> = Evolver.extractEventsAsList<OrderEvent>(persistedEventsStream)
+         * val state = Evolver.applyEvents(evolver, null, events)
+         * ```
+         *
+         * @param E The specific type of events to extract
+         * @param stream The [AggregateEventStream] containing serialized events
+         * @return A [List] of events matching the specified type after deserialization
+         * @see applyEvents
+         * @see extractEvents
+         */
+        inline fun <reified E> extractEventsAsList(stream: AggregateEventStream<*>): List<E> {
+            return extractEvents<E>(stream).toList()
         }
     }
 }

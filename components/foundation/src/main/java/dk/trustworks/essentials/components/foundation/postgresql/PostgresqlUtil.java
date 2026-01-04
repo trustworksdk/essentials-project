@@ -209,7 +209,7 @@ public final class PostgresqlUtil {
      *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified names
      *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified names
      *         (e.g., <code>schema_name.table_name</code>).</li>
-     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters in total length.</li>
+     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} characters (for schema prefixed names) in total length.</li>
      *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
      * </ul>
      *
@@ -251,13 +251,13 @@ public final class PostgresqlUtil {
      * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
      * <p>
      * The method checks if the {@code tableOrColumnName}:
-     * <p>The method enforces PostgreSQL SQL naming conventions for table/column/index names. A valid function/column/index name:
+     * <p>The method enforces PostgreSQL SQL naming conventions for function/table/column/index names. A valid function/column/index name:
      * <ul>
      *     <li>Must not be null, empty, or consist only of whitespace.</li>
      *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified names
      *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified names
      *         (e.g., <code>schema_name.table_name</code>).</li>
-     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters in total length.</li>
+     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} characters (for schema prefixed names) in total length.</li>
      *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
      * </ul>
      *
@@ -392,7 +392,7 @@ public final class PostgresqlUtil {
      *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified function names
      *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified function names
      *         (e.g., <code>schema_name.function_name</code>).</li>
-     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters in total length.</li>
+     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} characters (for schema prefixed names) in total length.</li>
      *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
      * </ul>
      *

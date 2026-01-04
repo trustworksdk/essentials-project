@@ -176,7 +176,7 @@ public final class LocalEventBus implements EventBus {
      */
     public static class Builder {
         private String busName                = "default";
-        private int    parallelThreads        = Runtime.getRuntime().availableProcessors();
+        private int    parallelThreads        = Math.min(Runtime.getRuntime().availableProcessors(), 4);
         private int    backpressureBufferSize = DEFAULT_BACKPRESSURE_BUFFER_SIZE;
         private int    overflowMaxRetries     = DEFAULT_OVERFLOW_MAX_RETRIES;
         private double queuedTaskCapFactor    = QUEUED_TASK_CAP_FACTOR;

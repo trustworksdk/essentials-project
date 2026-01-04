@@ -33,7 +33,7 @@ import java.util.function.Consumer;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Experimental: The {@code ViewEventProcessor} class is an abstraction for processing events that are projected into views (e.g. in a relational database).
+ * Experimental: The {@code ViewEventProcessor} class is an abstraction for processing events that are projected into views (e.g. in a relational database).<br>
  * It integrates with a distributed locking mechanism to ensure exclusive access during processing.<br>
  * {@link PersistedEvent}'s are processed directly and only in case of an error handling the event will this event (and later events associated with the same aggregate id)
  * by queued onto the underlying durable queue associated with this processor.

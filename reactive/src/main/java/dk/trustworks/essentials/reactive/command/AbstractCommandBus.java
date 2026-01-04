@@ -24,7 +24,6 @@ import reactor.core.scheduler.Schedulers;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -147,7 +146,7 @@ public abstract class AbstractCommandBus implements CommandBus {
                                                                     commandHandlersThatCanHandleCommand.size(),
                                                                     CommandHandler.class.getSimpleName(),
                                                                     commandType.getName(),
-                                                                    commandHandlersThatCanHandleCommand.stream().map(Object::toString).collect(Collectors.toList())));
+                                                                    commandHandlersThatCanHandleCommand.stream().map(Object::toString).toList()));
 
             } else {
                 return commandHandlersThatCanHandleCommand.get(0);

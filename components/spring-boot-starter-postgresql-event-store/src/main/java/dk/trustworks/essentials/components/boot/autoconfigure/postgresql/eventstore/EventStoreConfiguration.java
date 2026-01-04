@@ -30,7 +30,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ap
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver;
@@ -271,6 +271,40 @@ public class EventStoreConfiguration {
                                                           propagator.get(),
                                                           observationRegistry.get(),
                                                           essentialsComponentsProperties.isVerboseTracing());
+    }
+
+    /**
+     * The {@link FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream} interceptor that publishes
+     * {@link PersistedEvents} to the {@link EventStoreEventBus} immediately after {@code appendToStream()} completes,
+     * using {@link CommitStage#Flush}.
+     * <p>
+     * <b>Default behavior (when this interceptor is NOT enabled):</b><br>
+     * Events are published to the {@link EventStoreEventBus} only at {@link CommitStage#BeforeCommit} and {@link CommitStage#AfterCommit}.
+     * This means in-transaction subscribers receive events just before the transaction commits.
+     * <p>
+     * <b>When enabled:</b><br>
+     * This interceptor <b>additionally</b> publishes events at {@link CommitStage#Flush} immediately after each
+     * {@code appendToStream()} call. This enables in-transaction subscribers (e.g., {@code subscribeToAggregateEventsInTransaction})
+     * to react to events as soon as they are appended, rather than waiting for the transaction to reach the commit phase.
+     * <p>
+     * <b>Use cases for enabling:</b>
+     * <ul>
+     *   <li>In-transaction projections that need events immediately after each append</li>
+     *   <li>Saga coordination where you need to react to each append individually within the same transaction</li>
+     *   <li>{@code subscribeToAggregateEventsInTransaction} receiving events at Flush stage for immediate processing</li>
+     * </ul>
+     * <p>
+     * Enabled via: {@code essentials.eventstore.auto-flush-and-publish-after-append-to-stream=true}
+     * <p>
+     * Default is {@code false} for backwards compatibility.
+     *
+     * @return the {@link FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream} interceptor
+     * @see EssentialsEventStoreProperties#isAutoFlushAndPublishAfterAppendToStream()
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "essentials.eventstore", name = "auto-flush-and-publish-after-append-to-stream", havingValue = "true")
+    public FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream flushAndPublishPersistedEventsToEventBusRightAfterAppendToStream() {
+        return new FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream();
     }
 
     /**

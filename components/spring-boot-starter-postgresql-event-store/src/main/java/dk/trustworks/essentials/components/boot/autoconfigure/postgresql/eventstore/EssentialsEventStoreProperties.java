@@ -19,8 +19,10 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -51,12 +53,13 @@ import java.time.Duration;
 @Configuration
 @ConfigurationProperties(prefix = "essentials.eventstore")
 public class EssentialsEventStoreProperties {
-    private IdentifierColumnType                             identifierColumnType              = IdentifierColumnType.TEXT;
-    private JSONColumnType                                   jsonColumnType                    = JSONColumnType.JSONB;
-    private boolean                                          useEventStreamGapHandler          = true;
-    private boolean                                          verboseTracing                    = false;
-    private boolean                                          addAnnotationBasedInMemoryProjector = true;
-    private EssentialsComponentsProperties.MetricsProperties metrics                           = new EssentialsComponentsProperties.MetricsProperties();
+    private IdentifierColumnType                             identifierColumnType                  = IdentifierColumnType.TEXT;
+    private JSONColumnType                                   jsonColumnType                        = JSONColumnType.JSONB;
+    private boolean                                          useEventStreamGapHandler              = true;
+    private boolean                                          verboseTracing                        = false;
+    private boolean                                          addAnnotationBasedInMemoryProjector   = true;
+    private boolean                                          autoFlushAndPublishAfterAppendToStream = false;
+    private EssentialsComponentsProperties.MetricsProperties metrics                               = new EssentialsComponentsProperties.MetricsProperties();
 
     private final EventStoreSubscriptionManagerProperties subscriptionManager = new EventStoreSubscriptionManagerProperties();
 
@@ -159,6 +162,86 @@ public class EssentialsEventStoreProperties {
      */
     public void setAddAnnotationBasedInMemoryProjector(boolean addAnnotationBasedInMemoryProjector) {
         this.addAnnotationBasedInMemoryProjector = addAnnotationBasedInMemoryProjector;
+    }
+
+    /**
+     * Should the {@link FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream} interceptor be automatically
+     * added to the {@link EventStore}? (default false for backwards compatibility)
+     * <p>
+     * <b>Default behavior (when disabled):</b><br>
+     * Events are published to the {@link EventStoreEventBus} at {@link CommitStage#BeforeCommit}
+     * and {@link CommitStage#AfterCommit} only.
+     * This means in-transaction subscribers receive events just before the transaction commits.
+     * <p>
+     * <b>When enabled:</b><br>
+     * This interceptor <b>additionally</b> publishes {@link PersistedEvents} to the EventBus <b>immediately after</b>
+     * each {@code appendToStream()} call completes, using {@link CommitStage#Flush}.
+     * This enables in-transaction subscribers to react to events as soon as they are appended, rather than waiting
+     * for the transaction to reach the commit phase.
+     * <p>
+     * <b>Use cases for enabling:</b>
+     * <ul>
+     *   <li>In-transaction projections that need events immediately after each append (not just at BeforeCommit)</li>
+     *   <li>Saga coordination where you need to react to each append individually within the same transaction</li>
+     *   <li>{@code subscribeToAggregateEventsInTransaction} receiving events at Flush stage for immediate processing</li>
+     * </ul>
+     * <p>
+     * <b>YAML example:</b>
+     * <pre>{@code
+     * essentials:
+     *   eventstore:
+     *     auto-flush-and-publish-after-append-to-stream: true
+     * }</pre>
+     * <b>Properties example:</b>
+     * <pre>{@code
+     * essentials.eventstore.auto-flush-and-publish-after-append-to-stream=true
+     * }</pre>
+     *
+     * @return true if the {@link FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream} interceptor should be added
+     * @see FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream
+     */
+    public boolean isAutoFlushAndPublishAfterAppendToStream() {
+        return autoFlushAndPublishAfterAppendToStream;
+    }
+
+    /**
+     * Should the {@link FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream} interceptor be automatically
+     * added to the {@link EventStore}? (default false for backwards compatibility)
+     * <p>
+     * <b>Default behavior (when disabled):</b><br>
+     * Events are published to the {@link EventStoreEventBus} at {@link CommitStage#BeforeCommit}
+     * and {@link CommitStage#AfterCommit} only.
+     * This means in-transaction subscribers receive events just before the transaction commits.
+     * <p>
+     * <b>When enabled:</b><br>
+     * This interceptor <b>additionally</b> publishes {@link PersistedEvents} to the EventBus <b>immediately after</b>
+     * each {@code appendToStream()} call completes, using {@link CommitStage#Flush}.
+     * This enables in-transaction subscribers to react to events as soon as they are appended, rather than waiting
+     * for the transaction to reach the commit phase.
+     * <p>
+     * <b>Use cases for enabling:</b>
+     * <ul>
+     *   <li>In-transaction projections that need events immediately after each append (not just at BeforeCommit)</li>
+     *   <li>Saga coordination where you need to react to each append individually within the same transaction</li>
+     *   <li>{@code subscribeToAggregateEventsInTransaction} receiving events at Flush stage for immediate processing</li>
+     * </ul>
+     * <p>
+     * <b>YAML example:</b>
+     * <pre>{@code
+     * essentials:
+     *   eventstore:
+     *     auto-flush-and-publish-after-append-to-stream: true
+     * }</pre>
+     * <b>Properties example:</b>
+     * <pre>{@code
+     * essentials.eventstore.auto-flush-and-publish-after-append-to-stream=true
+     * }</pre>
+     *
+     * @param autoFlushAndPublishAfterAppendToStream true to add the interceptor
+     * @see FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream
+     */
+    public void setAutoFlushAndPublishAfterAppendToStream(boolean autoFlushAndPublishAfterAppendToStream) {
+        this.autoFlushAndPublishAfterAppendToStream = autoFlushAndPublishAfterAppendToStream;
     }
 
     /**

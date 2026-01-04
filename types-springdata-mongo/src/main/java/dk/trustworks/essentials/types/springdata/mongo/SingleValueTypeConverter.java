@@ -23,7 +23,7 @@ import org.springframework.core.convert.converter.GenericConverter;
 
 import java.time.*;
 import java.util.*;
-import java.util.stream.*;
+import java.util.stream.Stream;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -114,7 +114,7 @@ public final class SingleValueTypeConverter implements GenericConverter {
         allConverters.addAll(explicitCharSequenceTypeToObjectIdConverters.stream()
                                                                          .flatMap(singleValueType -> Stream.of(new ConvertiblePair(String.class, singleValueType),
                                                                                                                new ConvertiblePair(ObjectId.class, singleValueType)))
-                                                                         .collect(Collectors.toList()));
+                                                                         .toList());
 
         allConverters.addAll(Set.of(
                 new ConvertiblePair(SingleValueType.class, Object.class), // Needed for Map Key conversions

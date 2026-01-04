@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.i
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.*;
+import dk.trustworks.essentials.shared.interceptor.Interceptor;
 
 import java.util.*;
 import java.util.stream.Stream;
@@ -28,7 +29,7 @@ import java.util.stream.Stream;
  * Each interceptor method allows you to perform before, after or around interceptor logic according to your needs.<br>
  * An interceptor is added using {@link ConfigurableEventStore#addEventStoreInterceptor(EventStoreInterceptor)}
  */
-public interface EventStoreInterceptor {
+public interface EventStoreInterceptor extends Interceptor {
 
     /**
      * Intercept the {@link AppendToStream} operation (which includes {@link EventStore#startStream(AggregateType, Object, List)}/{@link EventStore#appendToStream(AppendToStream)})

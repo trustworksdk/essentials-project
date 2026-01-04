@@ -92,7 +92,7 @@ public final class EventTypeOrName extends Either<EventType, EventName> {
     }
 
     /**
-     * Does first element (aka- {@link EventType}) in this tuple have a non-null value
+     * Does the first element (aka- {@link EventType}) in this tuple have a non-null value
      *
      * @return true if the {@link EventType} element in this tuple has a non-null value
      * @see #ifHasEventType(Consumer)

@@ -131,6 +131,7 @@
                                 <logicalTypeFactory>dk.trustworks.essentials.types.avro.test.LastUpdatedLogicalTypeFactory</logicalTypeFactory>
                                 <logicalTypeFactory>dk.trustworks.essentials.types.avro.test.TransactionTimeLogicalTypeFactory</logicalTypeFactory>
                                 <logicalTypeFactory>dk.trustworks.essentials.types.avro.test.TransferTimeLogicalTypeFactory</logicalTypeFactory>
+                                <logicalTypeFactory>dk.trustworks.essentials.types.avro.test.QuantityLogicalTypeFactory</logicalTypeFactory>
                             </customLogicalTypeFactories>
                             <customConversions>
                                 <conversion>dk.trustworks.essentials.types.avro.CurrencyCodeConversion</conversion>
@@ -145,6 +146,7 @@
                                 <conversion>dk.trustworks.essentials.types.avro.test.LastUpdatedConversion</conversion>
                                 <conversion>dk.trustworks.essentials.types.avro.test.TransactionTimeConversion</conversion>
                                 <conversion>dk.trustworks.essentials.types.avro.test.TransferTimeConversion</conversion>
+                                <conversion>dk.trustworks.essentials.types.avro.test.QuantityConversion</conversion>
                             </customConversions>
                         </configuration>
                     </execution>
