@@ -1,36 +1,42 @@
-# Essentials Java building blocks
+# Reactive Module
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies on other libraries, unless explicitly mentioned.
+> In-memory event bus and command bus for event-driven applications within a single JVM
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and strongly typed code, which doesn't depend on other libraries or frameworks, but
-instead allows easy integrations with many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+This module provides reactive building blocks for event-driven architecture: `LocalEventBus` for pub/sub event processing and `LocalCommandBus` for CQRS command handling. Built on Project Reactor for backpressure-aware async processing, using utilities from the [shared](../shared) module for interceptor chains and reflection-based handler dispatch.
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+> **NOTE:** This library is WORK-IN-PROGRESS
 
-## Reactive
+**LLM Context:** [LLM-reactive.md](../LLM/LLM-reactive.md)
 
-This library contains the smallest set of supporting reactive building blocks needed for other Essentials libraries.
+## Table of Contents
+- [Installation](#installation)
+- [Quick Reference](#quick-reference)
+- [LocalEventBus](#localeventbus)
+- [LocalCommandBus](#localcommandbus)
+- [Command Interceptors](#command-interceptors)
+- [Spring Integration](#spring-integration)
+- [Best Practices](#best-practices)
 
-To use `Reactive` just add the following Maven dependency:
-```
+## Installation
+
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>reactive</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Reactive` usually needs additional third party dependencies to work, such as:
-```
+**Required dependency** (provided scope - add to your project):
+```xml
 <dependency>
     <groupId>io.projectreactor</groupId>
     <artifactId>reactor-core</artifactId>
 </dependency>
 ```
 
-And for Spring support dependencies such as:
-```
+**Optional dependencies** for Spring integration:
+```xml
 <dependency>
     <groupId>org.springframework</groupId>
     <artifactId>spring-beans</artifactId>
@@ -41,163 +47,316 @@ And for Spring support dependencies such as:
 </dependency>
 ```
 
-### LocalEventBus
-Simple event bus that supports both synchronous and asynchronous subscribers that are registered and listening for events published within the local the JVM  
-You can have multiple instances of the `LocalEventBus` deployed with the local JVM, but usually one event bus is sufficient.
+## Quick Reference
 
+| Component | Purpose |
+|-----------|---------|
+| **LocalEventBus** | Publish/subscribe event bus with sync and async handlers |
+| **LocalCommandBus** | CQRS command bus with single-handler-per-command enforcement |
+| **AnnotatedEventHandler** | Annotation-based event handler routing via `@Handler` |
+| **AnnotatedCommandHandler** | Annotation-based command handler routing via `@Handler`/`@CmdHandler` |
+| **CommandBusInterceptor** | Intercept commands before/after handling |
+| **ReactiveHandlersBeanPostProcessor** | Auto-register Spring beans as handlers |
+
+## LocalEventBus
+
+Pub/sub event bus supporting synchronous and asynchronous subscribers. Multiple handlers can receive the same event.
+
+**Why use LocalEventBus?** Decouples event producers from consumers.  
+Synchronous handlers execute in the publishing thread (within same transaction).  
+Asynchronous handlers process in parallel with backpressure support.
+
+### Basic Usage
+
+```java
+// Create event bus
+LocalEventBus eventBus = new LocalEventBus("OrderEvents", 3,
+    (subscriber, event, exception) -> log.error("Handler {} failed on {}", subscriber, event, exception));
+
+// Register handlers
+eventBus.addSyncSubscriber(event -> {
+    if (event instanceof OrderCreated created) {
+        reserveInventory(created.orderId());
+    }
+});
+
+eventBus.addAsyncSubscriber(event -> {
+    if (event instanceof OrderCreated created) {
+        sendConfirmationEmail(created.customerId());
+    }
+});
+
+// Publish events
+eventBus.publish(new OrderCreated(orderId, customerId));
 ```
-LocalEventBus localEventBus    = new LocalEventBus("TestBus", 3, (failingSubscriber, event, exception) -> log.error("...."));
-                  
-localEventBus.addAsyncSubscriber(orderEvent -> {
-           ...
-       });
 
-localEventBus.addSyncSubscriber(orderEvent -> {
-             ...
-       });
-                  
-localEventBus.publish(new OrderCreatedEvent());
+### Builder API
+
+```java
+LocalEventBus eventBus = LocalEventBus.builder()
+    .busName("OrderEvents")
+    .parallelThreads(5)                          // Async handler threads (default: 1-4 depending on CPU count)
+    .backpressureBufferSize(1024)                // Buffer size (default: 1024)
+    .overflowMaxRetries(20)                      // Retry attempts on overflow (default: 20)
+    .queuedTaskCapFactor(1.5)                    // Queued task capacity factor (default: 1.5)
+    .onErrorHandler((subscriber, event, ex) ->
+        log.error("Handler {} failed", subscriber, ex))
+    .build();
 ```
 
-If you wish to colocate multiple related Event handling methods inside the same class and use it together with the 
-`LocalEventBus` then you can extend the `AnnotatedEventHandler` class and annotate each event handler method with the
-`@Handler` annotation.
+### Annotation-Based Handlers
 
-```
-public class OrderEventsHandler extends AnnotatedEventHandler {
+Colocate related event handlers in a single class using `@Handler`:
+
+```java
+public class OrderEventHandler extends AnnotatedEventHandler {
 
     @Handler
     void handle(OrderCreated event) {
+        log.info("Order created: {}", event.orderId());
+        inventoryService.reserve(event.orderId());
     }
 
     @Handler
     void handle(OrderCancelled event) {
+        log.info("Order cancelled: {}", event.orderId());
+        inventoryService.release(event.orderId());
+    }
+}
+
+// Register with bus
+eventBus.addSyncSubscriber(new OrderEventHandler(inventoryService));
+```
+
+**Learn more:** See [AnnotatedEventHandlerTest.java](src/test/java/dk/trustworks/essentials/reactive/AnnotatedEventHandlerTest.java) and [LocalEventBusTest.java](src/test/java/dk/trustworks/essentials/reactive/LocalEventBusTest.java)
+
+### Sync vs Async Handlers
+
+| Subscriber Type | Thread | Error Handling | Use Case |
+|-----------------|--------|----------------|----------|
+| **Sync** (`addSyncSubscriber`) | Publisher thread | Exception propagates, rolls back `UnitOfWork` | Critical business logic, same transaction |
+| **Async** (`addAsyncSubscriber`) | Bounded elastic pool | Error handler callback, no rollback | Notifications, I/O operations |
+
+**Critical:** 
+- Sync handler exceptions will roll back the publishing `UnitOfWork`. 
+
+## LocalCommandBus
+
+CQRS command bus enforcing single-handler-per-command. Commands express intent to change state; handlers are the single authority for processing each command type.
+
+**Why use LocalCommandBus?** Provides location transparency - senders don't know which handler processes commands. Enforces CQRS principle that each command has exactly one handler.
+
+### Handler Requirements
+
+- **Exactly one handler per command type** - throws `NoCommandHandlerFoundException` or `MultipleCommandHandlersFoundException`
+- Handlers optionally return values (e.g., generated IDs)
+- CQRS principle: prefer returning minimal data or void
+
+### Sending Commands
+
+```java
+LocalCommandBus commandBus = new LocalCommandBus();
+commandBus.addCommandHandler(new CreateOrderHandler(orderRepository));
+
+// Synchronous - blocks until complete
+OrderId orderId = commandBus.send(new CreateOrder(customerId, items));
+
+// Asynchronous with result - returns Mono
+Mono<OrderId> result = commandBus.sendAsync(new CreateOrder(customerId, items));
+OrderId orderId = result.block(Duration.ofSeconds(5));
+
+// Fire-and-forget - no result, no waiting
+commandBus.sendAndDontWait(new SendOrderConfirmation(orderId));
+
+// Delayed fire-and-forget
+commandBus.sendAndDontWait(new SendReminder(orderId), Duration.ofHours(24));
+```
+Critical:
+- For async handlers with retry/durability needs, use `DurableLocalCommandBus` from the [foundation](../components/foundation) module.
+
+### Command Handler Implementation
+
+**Interface-based handler** (single command):
+
+```java
+public class CreateOrderHandler implements CommandHandler {
+
+    @Override
+    public boolean canHandle(Class<?> commandType) {
+        return CreateOrder.class.equals(commandType);
+    }
+
+    @Override
+    public Object handle(Object command) {
+        var createOrder = (CreateOrder) command;
+        var order = Order.create(createOrder.customerId(), createOrder.items());
+        return orderRepository.save(order).getId();
     }
 }
 ```
 
-# CommandBus / LocalCommandBus / DurableLocalCommandBus
+**Annotation-based handler** (multiple commands in one class):
 
-The `CommandBus` pattern decouples the sending of commands from their handling by introducing an indirection between the command and its corresponding `CommandHandler`.  
-This design provides **location transparency**, meaning that the sender does not need to know which handler will process the command.  
-The `LocalCommandBus` is the default implementation of the CommandBus pattern.
+Supports both `@Handler` and `@CmdHandler` annotations:
 
-## Single CommandHandler Requirement
+```java
+public class OrderCommandHandler extends AnnotatedCommandHandler {
 
-- **Exactly One Handler:** Every command must have one, and only one, `CommandHandler`.
-  - If **no handler is found**, a `NoCommandHandlerFoundException` is thrown.
-  - If **more than one handler is found**, a `MultipleCommandHandlersFoundException` is thrown.
+    @Handler
+    private OrderId handle(CreateOrder cmd) {
+        var order = Order.create(cmd.customerId(), cmd.items());
+        return orderRepository.save(order).getId();
+    }
 
-## Command Processing and Return Values
-
-- **No Expected Return Value:** According to CQRS principles, command handling typically does not return a value.
-- **Optional Return Value:** The API allows a `CommandHandler` to return a value if necessary (for example, a server-generated ID).
-
-## Sending Commands
-
-Commands can be dispatched in different ways depending on your needs:
-
-1. **Synchronous processing**
-  - **Method:** `CommandBus.send(Object)`
-  - **Usage:** Use this when you need to process a command immediately and receive instant feedback on success or failure.
-
-2. **Asynchronous processing with Feedback**
-  - **Method:** `CommandBus.sendAsync(Object)`
-  - **Usage:** Returns a `Mono` that will eventually contain the result of the command processing. This is useful when you want asynchronous processing but still need to know the outcome.
-
-3. **Fire-and-Forget Asynchronous Processing**
-  - **Method:** `CommandBus.sendAndDontWait(Object)` or `CommandBus.sendAndDontWait(Object, Duration)`
-  - **Usage:** Sends a command without waiting for a result. This is true asynchronous fire-and-forget processing.
-  - **Note:** If durability is required (ensuring the command is reliably processed), consider using `DurableLocalCommandBus` from the `essentials-components`'s `foundation` module instead.
-
-## Handling Command Processing Failures
-
-### Using `send` / `sendAsync`
-
-- **Immediate Error Feedback:** These methods provide quick feedback if command processing fails (e.g., due to business validation errors), making error handling straightforward.
-
-### Using `sendAndDontWait`
-
-- **Delayed Asynchronous processing:** Commands sent via this method are processed in a true asynchronous fire-and-forget fashion, with an optional delay.
-- **Spring Boot Starters Default:** When using the Essentials Spring Boot starters, the default `CommandBus` implementation is `DurableLocalCommandBus`, which places `sendAndDontWait` commands on a `DurableQueue` for reliable processing.
-- **Exception Handling:** Because processing is asynchronous fire-and-forget (and because commands may be processed on a different node or after a JVM restart), exceptions can not be captured by the caller.
-  - **Error Management:** The `SendAndDontWaitErrorHandler` takes care of handling exceptions that occur during asynchronous command processing.
-  - **Retries:** The `DurableLocalCommandBus` is configured with a `RedeliveryPolicy` to automatically retry commands that fail.
-
-## Summary
-
-- **For Immediate Feedback:**  
-  Use `CommandBus.send` or `CommandBus.sendAsync` to simplify error handling with instant feedback on command processing.
-
-- **For True Asynchronous, Fire-and-Forget Processing:**  
-  Use `CommandBus.sendAndDontWait` when you require asynchronous processing with retry capabilities.
-  - Be aware that error handling is deferred to the `SendAndDontWaitErrorHandler` and managed by any configured `RedeliveryPolicy`.
-
-```
-var commandBus = new LocalCommandBus();
-commandBus.addCommandHandler(new CreateOrderCommandHandler(...));
-commandBus.addCommandHandler(new ImburseOrderCommandHandler(...));
- 
-var optionalResult = commandBus.send(new CreateOrder(...));
-// or
-var monoWithOptionalResult = commandBus.sendAsync(new ImbuseOrder(...))
-                                       .block(Duration.ofMillis(1000));
-```
-
-In case you need to colocate multiple related command handling methods inside a single class then you 
-should have your command handling class extend `AnnotatedCommandHandler` and annotate each command handler method with either 
-the `@Handler` or `@CmdHandler` annotation.
-
-Example:  
-```
-public class OrdersCommandHandler extends AnnotatedCommandHandler {
-
-     @Handler
-     private OrderId handle(CreateOrder cmd) {
-        ...
-     }
-
-     @CmdHandler
-     private void someMethod(ReimburseOrder cmd) {
-        ...
-     }
+    @CmdHandler  // @Handler and @CmdHandler are interchangeable
+    private void handle(CancelOrder cmd) {
+        var order = orderRepository.findById(cmd.orderId())
+            .orElseThrow(() -> new OrderNotFoundException(cmd.orderId()));
+        order.cancel(cmd.reason());
+        orderRepository.save(order);
+    }
 }
 ```
+
+**Learn more:** See [AnnotatedCommandHandlerTest.java](src/test/java/dk/trustworks/essentials/reactive/command/AnnotatedCommandHandlerTest.java) and [LocalCommandBusTest.java](src/test/java/dk/trustworks/essentials/reactive/command/LocalCommandBusTest.java)
+
+### Error Handling
+
+| Method | Error Behavior |
+|--------|----------------|
+| `send()` | Exception propagates to caller |
+| `sendAsync()` | Exception in Mono error channel |
+| `sendAndDontWait()` | Exception passed to `SendAndDontWaitErrorHandler` |
+
+For `sendAndDontWait`, configure error handling:
+
+```java
+LocalCommandBus commandBus = new LocalCommandBus(
+    (exception, command, handler) -> {
+        log.error("Command {} failed in {}", command.getClass().getSimpleName(), handler, exception);
+        // Custom error handling (e.g., dead letter queue)
+    }
+);
+```
+
+**For durability and retries:** 
+- Use `DurableLocalCommandBus` from the [foundation](../components/foundation) module, which persists `sendAndDontWait` commands to a `DurableQueue`.
 
 ## Command Interceptors
-You can register `CommandBusInterceptor`'s (such as the `dk.trustworks.essentials.components.foundation.reactive.command.UnitOfWorkControllingCommandBusInterceptor`
-from the PostgresqlEventStore module from [Essentials Components/postgresql-event-store](https://github.com/trustworksdk/essentials-project/tree/main/components/postgresql-event-store), which allows you to 
-intercept Commands before and after they're being handled by the `LocalCommandBus`
 
-Example:
-```
-var commandBus = new LocalCommandBus(new UnitOfWorkControllingCommandBusInterceptor(unitOfWorkFactory));
+Intercept commands before and after handling for cross-cutting concerns (security, logging, transactions).
+
+**Interface:** `dk.trustworks.essentials.reactive.command.interceptor.CommandBusInterceptor`
+
+### Creating Interceptors
+
+```java
+public class UnitOfWorkInterceptor implements CommandBusInterceptor {
+
+    @Override
+    public Object interceptSend(Object command, CommandBusInterceptorChain chain) {
+        return unitOfWorkFactory.withUnitOfWork(uow -> chain.proceed());
+    }
+
+    @Override
+    public Object interceptSendAsync(Object command, CommandBusInterceptorChain chain) {
+        return unitOfWorkFactory.withUnitOfWork(uow -> chain.proceed());
+    }
+
+    @Override
+    public void interceptSendAndDontWait(Object command, CommandBusInterceptorChain chain) {
+        unitOfWorkFactory.withUnitOfWork(uow -> {
+            chain.proceed();
+            return null;
+        });
+    }
+}
 ```
 
-You can also add interceptors to the `LocalCommandBus` later:
-```
-var commandBus = new LocalCommandBus();
-commandBus.addInterceptor(new UnitOfWorkControllingCommandBusInterceptor(unitOfWorkFactory));
+### Interceptor Ordering
+
+Use `@InterceptorOrder` annotation (lower number = higher priority):
+
+```java
+@InterceptorOrder(1)  // Runs first
+public class SecurityInterceptor implements CommandBusInterceptor { ... }
+
+@InterceptorOrder(10)  // Runs after security
+public class LoggingInterceptor implements CommandBusInterceptor { ... }
 ```
 
-## Spring support
-When using Spring or Spring Boot it will be easier to register the `LocalEventBus`, `LocalCommandBus`, `CommandHandler` and `EventHandler` instances as `@Bean`'s or `@Component`'s
-and automatically have the `CommandHandler` beans registered as with the single `LocalCommandBus` bean and the `EventHandler` beans registered as subscribers with the single `LocalEventBus` bean.
+### Registering Interceptors
 
-All you need to do is to add a `@Bean` of type `ReactiveHandlersBeanPostProcessor`:
+```java
+// At construction
+LocalCommandBus commandBus = new LocalCommandBus(
+    new SecurityInterceptor(),
+    new UnitOfWorkInterceptor()
+);
 
+// Or later
+commandBus.addInterceptor(new LoggingInterceptor());
 ```
+Note: Interceptors are automatically sorted by the CommandBus according to their `@InterceptorOrder`.
+
+**Learn more:** See [DefaultCommandBusInterceptorChainTest.java](src/test/java/dk/trustworks/essentials/reactive/command/interceptor/DefaultCommandBusInterceptorChainTest.java)
+
+## Spring Integration
+
+Without Spring integration, you must manually register each handler:
+
+```java
+// Manual registration (tedious for many handlers)
+commandBus.addCommandHandler(new OrderCommandHandler());
+commandBus.addCommandHandler(new PaymentCommandHandler());
+eventBus.addSyncSubscriber(new InventoryEventHandler());
+eventBus.addAsyncSubscriber(new NotificationHandler());
+```
+
+`ReactiveHandlersBeanPostProcessor` eliminates this boilerplate by automatically discovering and registering handler beans.
+
+### How It Works
+
+When Spring initializes beans, the post-processor:
+1. Scans all beans in the application context
+2. Finds beans implementing `CommandHandler` or `EventHandler`
+3. Registers them with the appropriate bus automatically
+
+| Bean Type | Annotation | Registration |
+|-----------|------------|--------------|
+| `CommandHandler` | (none needed) | `CommandBus.addCommandHandler()` |
+| `EventHandler` | (none) | `EventBus.addSyncSubscriber()` |
+| `EventHandler` | `@AsyncEventHandler` | `EventBus.addAsyncSubscriber()` |
+
+**Requirements:**
+- One `CommandBus` bean must exist in the context (for command handlers)
+- One or more `EventBus` beans must exist (event handlers register with all of them)
+- Handlers are automatically unregistered when beans are destroyed
+
+### Configuration
+
+```java
 @Configuration
-public class ReactiveHandlersConfiguration {
-    @Bean static ReactiveHandlersBeanPostProcessor reactiveHandlersBeanPostProcessor() {
+public class ReactiveConfig {
+
+    // Enable automatic handler registration
+    @Bean
+    static ReactiveHandlersBeanPostProcessor reactiveHandlersBeanPostProcessor() {
         return new ReactiveHandlersBeanPostProcessor();
     }
-    
+
+    // Required: at least one EventBus bean
     @Bean
     public LocalEventBus localEventBus() {
-        return new LocalEventBus("Test", 3, (failingSubscriber, event, exception) -> log.error(msg("Error for '{}' handling {}", failingSubscriber, event), exception));
+        return LocalEventBus.builder()
+            .busName("ApplicationEvents")
+            .parallelThreads(10)
+            .onErrorHandler((subscriber, event, ex) ->
+                log.error("Event handler error", ex))
+            .build();
     }
-    
+
+    // Required: exactly one CommandBus bean
     @Bean
     public LocalCommandBus localCommandBus() {
         return new LocalCommandBus();
@@ -205,39 +364,79 @@ public class ReactiveHandlersConfiguration {
 }
 ```
 
-`EventHandler`'s and `CommandHandler`'s can be registered in Spring as `@Beans` or `@Components`:
-```
-@Component
-public static class MyCommandHandler implements CommandHandler {
+### Handler Examples
 
+Just annotate handlers with `@Component` - registration happens automatically:
+
+```java
+// CommandHandler: automatically registered with CommandBus
+@Component
+public class OrderCommandHandler implements CommandHandler {
     @Override
     public boolean canHandle(Class<?> commandType) {
-        return ...;
+        return CreateOrder.class.equals(commandType);
     }
 
     @Override
-    public Object handle(Object command) {
-        ...
-    }
+    public Object handle(Object command) { ... }
 }
 
+// EventHandler: automatically registered as SYNC subscriber
 @Component
-public static class MyEventHandler implements EventHandler {
+public class InventoryEventHandler implements EventHandler {
     @Override
-    public void handle(Object e) {
-        ...
-    }
+    public void handle(Object event) { ... }
 }
-```
-Per default the `EventHandler`'s are registered as **synchronous** event subscribers, unless you add the `@AsyncEventHandler` to the `EventHandler` class, in which case the `EventHandler` is 
-registered as an asynchronous subscriber:
-```
+
+// EventHandler + @AsyncEventHandler: registered as ASYNC subscriber
 @Component
 @AsyncEventHandler
-public static class MyEventHandler implements EventHandler {
+public class NotificationHandler implements EventHandler {
     @Override
-    public void handle(Object e) {
-        ...
-    }
+    public void handle(Object event) { ... }
 }
 ```
+
+**Learn more:** See [ReactiveHandlersBeanPostProcessorTest.java](src/test/java/dk/trustworks/essentials/reactive/spring/ReactiveHandlersBeanPostProcessorTest.java)
+
+## Best Practices
+
+### Event vs Command Design
+
+| Aspect | Command | Event |
+|--------|---------|-------|
+| **Naming** | Imperative (`CreateOrder`) | Past tense (`OrderCreated`) |
+| **Intent** | Request to change state | Fact that happened |
+| **Handlers** | Exactly one | Multiple allowed |
+| **Can fail** | Yes | No (represents past fact) |
+| **Return value** | Optional (IDs, minimal data) | None |
+
+### When to Use Sync vs Async Event Handlers
+
+**Sync handlers** for:
+- Critical business logic that must complete before transaction commits
+- Operations that should roll back on failure
+- Maintaining data consistency within a bounded context
+
+**Async handlers** for:
+- Notifications (email, push)
+- Cross-system integrations
+- Non-critical logging/analytics
+
+### Command Durability Considerations
+
+`LocalCommandBus.sendAndDontWait()` is **non-durable**:
+- Commands lost on JVM restart
+- No retry on failure
+- Suitable for non-critical operations
+
+For durability, use `DurableLocalCommandBus` from the [foundation](../components/foundation) module:
+- Commands persisted to `DurableQueue`
+- Automatic retry with `RedeliveryPolicy`
+- Survives JVM restarts
+
+## See Also
+
+- [LLM-reactive.md](../LLM/LLM-reactive.md) - API reference for LLM assistance
+- [foundation](../components/foundation) - `DurableLocalCommandBus`, `UnitOfWork`, `Inbox/Outbox`
+- [shared](../shared) - `InterceptorChain`, `PatternMatchingMethodInvoker`

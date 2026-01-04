@@ -1,51 +1,20 @@
-# Essentials Components - Foundation Types
+# Foundation Types - LLM Reference
 
-> **NOTE:** **The library is WORK-IN-PROGRESS**
-
-Common strongly-typed identifiers and event-sourcing types used across the Essentials Components.
-
-**LLM Context:** [LLM-foundation-types.md](../../LLM/LLM-foundation-types.md)
-
-## Table of Contents
-
-- [Maven Dependency](#maven-dependency)
-- [Overview](#overview)
+## Quick Facts
+- **Package**: `dk.trustworks.essentials.components.foundation.types`
+- **Purpose**: Common strongly-typed identifiers and value objects for event-sourcing and multi-tenancy
+- **Dependencies**: `types`, `shared`
+- **Used by**: `foundation`, `postgresql-event-store`, `eventsourced-aggregates`, all event-sourcing components
+- **Status**: WORK-IN-PROGRESS
+  
+## TOC
 - [Type Overview](#type-overview)
-- ⚠️ [Security](#security)
 - [General Identifiers](#general-identifiers)
 - [Multi-Tenancy](#multi-tenancy)
 - [Event Store Types](#event-store-types)
-- [Event Ordering](#event-ordering)
-- [Versioning](#versioning)
 - [Utilities](#utilities)
+- ⚠️ [Security](#security)
 - [Usage Patterns](#usage-patterns)
-- [Integration with Types Module](#integration-with-types-module)
-- [Gotchas](#gotchas)
-
-## Maven Dependency
-
-```xml
-<dependency>
-    <groupId>dk.trustworks.essentials.components</groupId>
-    <artifactId>foundation-types</artifactId>
-    <version>${essentials.version}</version>
-</dependency>
-```
-
-**Note**: Usually transitively included by `foundation`, `postgresql-event-store`, or `eventsourced-aggregates`.
-
-## Overview
-
-This module provides reusable type-safe identifiers and value objects for:
-- **Correlation and tracking** - Track operations across service boundaries
-- **Event sourcing operations** - Event identification, ordering, and versioning
-- **Multi-tenancy support** - Tenant isolation and scoping
-
-**Package**: `dk.trustworks.essentials.components.foundation.types`
-
-**Dependencies**: `types`, `shared`
-
-**Used by**: `foundation`, `postgresql-event-store`, `eventsourced-aggregates`, all event-sourcing components
 
 ## Type Overview
 
@@ -60,93 +29,9 @@ This module provides reusable type-safe identifiers and value objects for:
 
 ---
 
-## Security
-
-### ⚠️ Critical: SQL Injection Risk
-
-The components allow customization of table/column/index/function names that are used with **String concatenation** → SQL injection risk.
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL injection.
-
-### AggregateType SQL Injection Risk
-
-**⚠️ CRITICAL WARNING**: When using `AggregateType` with `SeparateTablePerAggregateTypePersistenceStrategy`, the value is converted to a table name and used in SQL statements via string concatenation.
-
-**This exposes `postgresql-event-store` to SQL injection attacks.**
-
-#### Validation Layer
-
-`SeparateTablePerAggregateTypePersistenceStrategy` calls `PostgresqlUtil.checkIsValidTableOrColumnName(String)` for initial validation:
-
-```java
-// Validation rules:
-// - Start with letter (A-Z) or underscore (_)
-// - Subsequent: letters, digits (0-9), underscores
-// - No reserved SQL/PostgreSQL keywords
-// - Max 63 characters
-
-// Examples
-PostgresqlUtil.checkIsValidTableOrColumnName("Order");      // ✅ OK
-PostgresqlUtil.checkIsValidTableOrColumnName("Customer");   // ✅ OK
-PostgresqlUtil.checkIsValidTableOrColumnName("SELECT");     // ❌ Throws - reserved keyword
-PostgresqlUtil.checkIsValidTableOrColumnName("123_table");  // ❌ Throws - starts with digit
-PostgresqlUtil.checkIsValidTableOrColumnName("drop; --");   // ❌ Throws - invalid characters
-```
-
-**⚠️ IMPORTANT**: This validation is **NOT exhaustive protection**.
-
-#### Developer Responsibilities
-
-**MUST:**
-1. **NEVER** use user input directly for `AggregateType`
-2. Derive `AggregateType` only from **controlled, trusted sources**:
-    - Hard-coded constants
-    - Enum values
-    - Pre-validated whitelist
-3. Implement **additional sanitization** beyond built-in validation
-
-**Pattern - Safe Usage:**
-
-```java
-// ✅ SAFE - Hard-coded constant
-AggregateType ORDER = AggregateType.of("Orders");
-
-// ✅ SAFE - Enum-based
-public enum AggregateTypes {
-    ORDER("Orders"),
-    CUSTOMER("Customers");
-
-    private final AggregateType type;
-    AggregateTypes(String name) { this.type = AggregateType.of(name); }
-    public AggregateType getType() { return type; }
-}
-
-// ✅ SAFE - Whitelist validation
-private static final Set<String> ALLOWED_AGGREGATE_TYPES =
-    Set.of("Orders", "Customers", "Products");
-
-public AggregateType createAggregateType(String input) {
-    if (!ALLOWED_AGGREGATE_TYPES.contains(input)) {
-        throw new ValidationException("Invalid aggregate type: " + input);
-    }
-    return AggregateType.of(input);
-}
-
-// ❌ DANGEROUS - User input
-@PostMapping("/events/{aggregateType}")
-public void appendEvent(@PathVariable String aggregateType, @RequestBody Event event) {
-    eventStore.appendToStream(
-        AggregateType.of(aggregateType),  // SQL INJECTION RISK!
-        event.getAggregateId(),
-        event
-    );
-}
-```
-
-See [postgresql-event-store Security](../postgresql-event-store/README.md#security) for full details.
-
----
-
 ## General Identifiers
+
+**Package**: `dk.trustworks.essentials.components.foundation.types`
 
 ### CorrelationId
 
@@ -160,14 +45,6 @@ CorrelationId.random()
 // Usage
 CorrelationId correlationId = CorrelationId.random();
 logger.info("Processing with correlation: {}", correlationId);
-
-// Propagate through call chain
-MDC.put("correlationId", correlationId.toString());
-try {
-    processOrder(orderId, correlationId);
-} finally {
-    MDC.remove("correlationId");
-}
 ```
 
 ### EventId
@@ -188,7 +65,7 @@ PersistedEvent event = PersistedEvent.of(eventId, aggregateId, payload);
 
 Unique message identifier that a user can associate a message with.
 
-**Note**: `MessageId` is a user value object, internally `DurableQueues` uses `QueueEntryId` as the unique technical identifier for each queued message.
+Note: `MessageId` is a user value object, internally `DurableQueues` uses `QueueEntryId` as the unique technical identifier for each queued message.
 
 ```java
 // Construction
@@ -210,12 +87,10 @@ SubscriberId.of(CharSequence value)
 
 // Usage
 SubscriberId subscriberId = SubscriberId.of("OrderEventProcessor");
-
-subscriptionManager.subscribeToAggregateEventsAsynchronously(
+eventStore.subscribeToAggregateEventsInTransaction(
     subscriberId,
     aggregateType,
     GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
-    Optional.empty(), // No TenantId filter
     handler
 );
 ```
@@ -223,6 +98,8 @@ subscriptionManager.subscribeToAggregateEventsAsynchronously(
 ---
 
 ## Multi-Tenancy
+
+**Package**: `dk.trustworks.essentials.components.foundation.types`
 
 ### Tenant Interface
 
@@ -256,6 +133,8 @@ List<Order> orders = repository.findByTenantId(tenantId);
 
 ## Event Store Types
 
+**Package**: `dk.trustworks.essentials.components.foundation.types`
+
 ### AggregateType
 
 Identifies the aggregate type (e.g., "Orders", "Customers").
@@ -283,7 +162,7 @@ eventStore.appendToStream(orderType, orderId, events);
 | `Accounts` | `Account` | Account events stream |
 | `Customers` | `Customer` | Customer events stream |
 
-**⚠️ CRITICAL SECURITY WARNING**: See [Security](#security) section above.
+**⚠️ CRITICAL SECURITY WARNING**: See [Security](#security) section below.
 
 ### EventName
 
@@ -407,18 +286,13 @@ stream.eventList().forEach(pe -> {
     }
 });
 
-// Subscribe using PatternMatchingPersistedEventHandler
-subscriptionManager.subscribeToAggregateEventsAsynchronously(
+// Subscribe using EventType
+eventStore.subscribeToAggregateEventsInTransaction(
     subscriberId,
     aggregateType,
-    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
-    Optional.empty(), // No tenant filter
-    new PatternMatchingPersistedEventHandler() {
-        @SubscriptionEventHandler
-        public void handle(OrderCreated event) {
-            // Type-safe event handling
-        }
-    }
+    EventTypeOrName.with(OrderCreated.class),  // Type-safe
+    resumePoint,
+    handler
 );
 ```
 
@@ -444,21 +318,13 @@ stream.eventList().forEach(pe -> {
     }
 });
 
-// Subscribe using PatternMatchingPersistedEventHandler
-subscriptionManager.subscribeToAggregateEventsAsynchronously(
+// Subscribe using EventName
+eventStore.subscribeToAggregateEventsInTransaction(
     subscriberId,
     aggregateType,
-    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
-    Optional.empty(), // No tenant filter
-    new PatternMatchingPersistedEventHandler() {
-        @SubscriptionEventHandler
-        private void handle(String json, PersistedEvent metadata) {
-            if (metadata.event().getEventName().isPresent()) {
-                String eventName = metadata.event().getEventName().get().toString();
-                // Handle named event with raw JSON
-            }
-        }
-    }
+    EventTypeOrName.with(EventName.of("ExternalOrderReceived")),
+    resumePoint,
+    handler
 );
 ```
 
@@ -475,6 +341,8 @@ subscriptionManager.subscribeToAggregateEventsAsynchronously(
 ---
 
 ## Event Ordering
+
+**Package**: `dk.trustworks.essentials.components.foundation.types`
 
 Two types of ordering track event positions at different scopes:
 
@@ -521,11 +389,10 @@ GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER  // Constant: 1L
 // Usage
 GlobalEventOrder resumePoint = GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER;
 
-subscriptionManager.subscribeToAggregateEventsAsynchronously(
+eventStore.subscribeToAggregateEventsInTransaction(
     subscriberId,
     aggregateType,
     resumePoint,
-    Optional.empty(), // No tenant filter
     event -> {
         process(event);
         // Subscription automatically tracks GlobalEventOrder
@@ -540,6 +407,8 @@ subscriptionManager.subscribeToAggregateEventsAsynchronously(
 ---
 
 ## Versioning
+
+**Package**: `dk.trustworks.essentials.components.foundation.types`
 
 ### EventRevision
 
@@ -628,6 +497,8 @@ public class ProductEvent {
 
 ## Utilities
 
+**Package**: `dk.trustworks.essentials.components.foundation.types`
+
 ### RandomIdGenerator
 
 ```java
@@ -642,10 +513,93 @@ CorrelationId id = CorrelationId.of(RandomIdGenerator.generate());
 EventId eventId = EventId.of(RandomIdGenerator.generate());
 ```
 
-**Note**: Uses per default `UUID.randomUUID().toString()` internally, unless `com.fasterxml.uuid.Generators` is available on the classpath,
-in which case it uses `Generators.timeBasedGenerator().generate().toString()`.
+**Note**: Uses `UUID.randomUUID().toString()` internally.
 
-You can override the default generator(s) by calling `RandomIdGenerator.overrideRandomIdGenerator`
+---
+
+## Security
+
+### ⚠️ Critical: SQL Injection Risk
+
+The components allow customization of table/column/index/function-names that are used with **String concatenation** → SQL injection risk.  
+While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL injection.
+
+### AggregateType SQL Injection Risk
+
+**⚠️ CRITICAL WARNING**: When using `AggregateType` with `SeparateTablePerAggregateTypePersistenceStrategy`, the value is converted to a table name and used in SQL statements via string concatenation.
+
+**This exposes `postgresql-event-store` to SQL injection attacks.**
+
+#### Validation Layer
+
+`SeparateTablePerAggregateTypePersistenceStrategy` calls `PostgresqlUtil.checkIsValidTableOrColumnName(String)` for initial validation:
+
+```java
+// Validation rules:
+// - Start with letter (A-Z) or underscore (_)
+// - Subsequent: letters, digits (0-9), underscores
+// - No reserved SQL/PostgreSQL keywords
+// - Max 63 characters
+
+// Examples
+PostgresqlUtil.checkIsValidTableOrColumnName("Order");      // ✅ OK
+PostgresqlUtil.checkIsValidTableOrColumnName("Customer");   // ✅ OK
+PostgresqlUtil.checkIsValidTableOrColumnName("SELECT");     // ❌ Throws - reserved keyword
+PostgresqlUtil.checkIsValidTableOrColumnName("123_table");  // ❌ Throws - starts with digit
+PostgresqlUtil.checkIsValidTableOrColumnName("drop; --");   // ❌ Throws - invalid characters
+```
+
+**⚠️ IMPORTANT**: This validation is **NOT exhaustive protection**.
+
+#### Developer Responsibilities
+
+**MUST:**
+1. **NEVER** use user input directly for `AggregateType`
+2. Derive `AggregateType` only from **controlled, trusted sources**:
+   - Hard-coded constants
+   - Enum values
+   - Pre-validated whitelist
+3. Implement **additional sanitization** beyond built-in validation
+
+**Pattern - Safe Usage:**
+
+```java
+// ✅ SAFE - Hard-coded constant
+AggregateType ORDER = AggregateType.of("Order");
+
+// ✅ SAFE - Enum-based
+public enum AggregateTypes {
+    ORDER("Order"),
+    CUSTOMER("Customer");
+
+    private final AggregateType type;
+    AggregateTypes(String name) { this.type = AggregateType.of(name); }
+    public AggregateType getType() { return type; }
+}
+
+// ✅ SAFE - Whitelist validation
+private static final Set<String> ALLOWED_AGGREGATE_TYPES =
+    Set.of("Order", "Customer", "Product");
+
+public AggregateType createAggregateType(String input) {
+    if (!ALLOWED_AGGREGATE_TYPES.contains(input)) {
+        throw new ValidationException("Invalid aggregate type: " + input);
+    }
+    return AggregateType.of(input);
+}
+
+// ❌ DANGEROUS - User input
+@PostMapping("/events/{aggregateType}")
+public void appendEvent(@PathVariable String aggregateType, @RequestBody Event event) {
+    eventStore.appendToStream(
+        AggregateType.of(aggregateType),  // SQL INJECTION RISK!
+        event.getAggregateId(),
+        event
+    );
+}
+```
+
+See [postgresql-event-store Security](./LLM-postgresql-event-store.md#security) for full details.
 
 ---
 
@@ -809,13 +763,15 @@ EventMetadata metadata = EventMetadata.builder()
 
 ### Typed vs Named Events in Subscriptions
 
+See [Typed Events vs Named Events](#typed-events-vs-named-events) section for detailed comparison.
+
 ```java
 // Subscribe to all events for an aggregate type
 subscriptionManager.subscribeToAggregateEventsAsynchronously(
     SubscriberId.of("MixedEventHandler"),
     ORDER_TYPE,
     GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
-    Optional.empty(), // No tenant filter
+    Optional.empty(),
     new PatternMatchingPersistedEventHandler() {
         // Typed Events - automatic deserialization and routing
         @SubscriptionEventHandler
@@ -904,7 +860,7 @@ eventStore.appendToStream(
 
 ## Integration with Types Module
 
-All foundation types extend base classes from [types](../../types/README.md):
+All foundation types extend base classes from [types](./LLM-types.md):
 
 ```java
 // CharSequenceType subclasses
@@ -929,10 +885,24 @@ EventRevision extends IntegerType<EventRevision>
 ```
 
 **Benefit**: Inherits all `SingleValueType` features:
-- Jackson serialization (with [types-jackson](../../types-jackson/README.md))
-- Spring Data MongoDB persistence (with [types-springdata-mongo](../../types-springdata-mongo/README.md))
-- JDBI argument support (with [types-jdbi](../../types-jdbi/README.md))
-- Spring Web converters (with [types-spring-web](../../types-spring-web/README.md))
+- Jackson serialization (with [types-jackson](./LLM-types-jackson.md))
+- Spring Data MongoDB persistence (with [types-springdata-mongo](./LLM-types-springdata-mongo.md))
+- JDBI argument support (with [types-jdbi](./LLM-types-jdbi.md))
+- Spring Web converters (with [types-spring-web](./LLM-types-spring-web.md))
+
+---
+
+## Maven Dependency
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>foundation-types</artifactId>
+    <version>${essentials.version}</version>
+</dependency>
+```
+
+**Note**: Usually transitively included by `foundation`, `postgresql-event-store`, or `eventsourced-aggregates`.
 
 ---
 
@@ -955,8 +925,8 @@ EventRevision extends IntegerType<EventRevision>
 
 ## See Also
 
-- [LLM-foundation-types.md](../../LLM/LLM-foundation-types.md) - LLM-optimized reference
-- [types](../../types/README.md) - Base `SingleValueType` patterns
-- [foundation](../foundation/README.md) - Foundation components using these types
-- [postgresql-event-store](../postgresql-event-store/README.md) - Event Store implementation
-- [eventsourced-aggregates](../eventsourced-aggregates/README.md) - Event-sourced aggregate framework
+- [README](../components/foundation-types/README.md) - Full documentation
+- [LLM-types.md](./LLM-types.md) - Base `SingleValueType` patterns
+- [LLM-foundation.md](./LLM-foundation.md) - Foundation components using these types
+- [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md) - Event Store implementation
+- [LLM-eventsourced-aggregates.md](./LLM-eventsourced-aggregates.md) - Event-sourced aggregate framework

@@ -1,44 +1,42 @@
-# Essentials Java building blocks
+# Types-Jackson
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies
-on other libraries, unless explicitly mentioned.
+> Jackson serialization/deserialization support for Essentials `types` module
 
+This module enables automatic JSON serialization and deserialization for all `SingleValueType` implementations using [Jackson (FasterXML)](https://github.com/FasterXML/jackson).
 
+> **NOTE:** This library is WORK-IN-PROGRESS
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and
-strongly typed code, which doesn't depend on other libraries or frameworks, but instead allows easy integrations with
-many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+**LLM Context:** [LLM-types-jackson.md](../LLM/LLM-types-jackson.md)
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+## Table of Contents
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Supported Types](#supported-types)
+- [CharSequenceType Requirements](#charsequencetype-requirements)
+- [JSR-310 Temporal Types](#jsr-310-temporal-types)
+- [Map Key Deserialization](#map-key-deserialization)
+- [ObjectMapper Factory](#objectmapper-factory)
 
-## Types-Jackson
+## Installation
 
-This library focuses purely on providing [Jackson (FasterXML)](https://github.com/FasterXML/jackson) serialization and deserialization support
-for the **types** defined in the Essentials `types` library.
-
-To use `Types-Jackson` just add the following Maven dependency:
-
-```
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jackson</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Types-Jackson` usually needs additional third party dependencies to work, such as:
-
-```
-<dependency>
-    <groupId>org.slf4j</groupId>
-    <artifactId>slf4j-api</artifactId>
-</dependency>
-
+**Required dependencies** (provided scope - add to your project):
+```xml
 <dependency>
     <groupId>com.fasterxml.jackson.core</groupId>
     <artifactId>jackson-databind</artifactId>
 </dependency>
+```
+
+**Recommended dependencies** for full functionality:
+```xml
 <dependency>
     <groupId>com.fasterxml.jackson.datatype</groupId>
     <artifactId>jackson-datatype-jdk8</artifactId>
@@ -49,71 +47,89 @@ To use `Types-Jackson` just add the following Maven dependency:
 </dependency>
 ```
 
-**NOTE:**
-**This library is WORK-IN-PROGRESS**
+## Quick Start
 
-### Configuration
+Base package: `dk.trustworks.essentials.jackson.types`  
 
-All you need to do is to add the `dk.trustworks.essentials.types.EssentialTypesJacksonModule` to your `ObjectMapper`
-configuration.
+Register `EssentialTypesJacksonModule` with your `ObjectMapper`:
 
-Example:
-
-```
+```java
+ObjectMapper objectMapper = new ObjectMapper();
 objectMapper.registerModule(new EssentialTypesJacksonModule());
 ```
 
-Alternatively you can use the `EssentialTypesJacksonModule.createObjectMapper()` static method that creates a new
-`ObjectMapper` with the `EssentialTypesJacksonModule` registered combined with an opinionated default configuration.
+Or use the convenience factory with opinionated defaults:
 
-It also supports registering additional Jackson modules:
-
+```java
+ObjectMapper objectMapper = EssentialTypesJacksonModule.createObjectMapper(
+    new Jdk8Module(),
+    new JavaTimeModule()
+);
 ```
-ObjectMapper objectMapper = EssentialTypesJacksonModule.createObjectMapper(new EssentialsImmutableJacksonModule(), new Jdk8Module(), new JavaTimeModule());
+
+**Serialization just works:**
+
+```java
+public record Order(OrderId id, CustomerId customerId, Amount total) {}
+
+Order order = new Order(
+    OrderId.of("ORD-123"),
+    CustomerId.of("CUST-456"),
+    Amount.of("99.99")
+);
+
+String json = objectMapper.writeValueAsString(order);
+// {"id":"ORD-123","customerId":"CUST-456","total":99.99}
+
+Order deserialized = objectMapper.readValue(json, Order.class);
 ```
 
-### `CharSequenceType`
+**Note:** For Jackson 2.18+, ensure your `CharSequenceType` subclasses have both `CharSequence` and `String` constructors. See [CharSequenceType Requirements](#charsequencetype-requirements).
 
-To retain compatibility with Jackson version 2.18.* subclasses of `CharSequenceType` must provide
-two constructors, on that accepts a `String` and one that accepts a `CharSequence`
+**Learn more:** See [EssentialTypesJacksonModuleTest.java](src/test/java/dk/trustworks/essentials/jackson/EssentialTypesJacksonModuleTest.java)
 
-Example:
+## Supported Types
+
+| Type Category | Serialized As | Example |
+|---------------|---------------|---------|
+| `CharSequenceType` | JSON string | `"ORD-123"` |
+| `NumberType` (`IntegerType`, `LongType`, `BigDecimalType`, etc.) | JSON number | `99.99` |
+| `Money` | JSON object | `{"amount":"99.99","currency":"USD"}` |
+| `JSR310SingleValueType` | ISO-8601 string | `"2024-01-15T10:30:00Z"` |
+
+## CharSequenceType Requirements
+
+For Jackson 2.18+ compatibility, `CharSequenceType` subclasses must provide **two constructors**:
+
 ```java
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
+    // Required: CharSequence constructor
     public OrderId(CharSequence value) {
         super(value);
     }
-    
+
+    // Required for Jackson 2.18+: String constructor
     public OrderId(String value) {
         super(value);
+    }
+
+    public static OrderId of(CharSequence value) {
+        return new OrderId(value);
     }
 }
 ```
 
-### JSR 310 Semantic Types
+**Why both constructors?** Jackson 2.18+ changed how it handles `CharSequence` parameters. The `String` constructor ensures reliable deserialization.
 
-This library also supports `JSR310SingleValueType` which wraps existing JSR-310 types (java.time):
+## JSR-310 Temporal Types
 
-| `JSR310SingleValueType` specialization | Value Type |
-|----------------------------------|-------------------------|
-| `InstantType`                    | `Instant`               |
-| `LocalDateTimeType`              | `LocalDateTime`         |
-| `LocalDateType`                  | `LocalDate`             |
-| `LocalTimeType`                  | `LocalTime`             |
-| `OffsetDateTimeType`             | `OffsetDateTime`        |
-| `ZonedDateTimeType`              | `ZonedDateTime`         |
+For temporal types extending `JSR310SingleValueType`, add `@JsonCreator` to the constructor:
 
-Each concrete `JSR310SingleValueType` **MUST** specify a `@JsonCreator` constructor.  
-Example: `TransactionTime` which is a concrete `ZonedDateTimeType`:
-```
+```java
 public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
     @JsonCreator
     public TransactionTime(ZonedDateTime value) {
         super(value);
-    }
-
-    public static TransactionTime of(ZonedDateTime value) {
-        return new TransactionTime(value);
     }
 
     public static TransactionTime now() {
@@ -122,13 +138,22 @@ public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
 }
 ```
 
-### Jackson Map key deserialization
+**Supported JSR-310 base types:**
 
-Serialization of `SingleValueType`'s works automatically for `Map` key's and value's, but to deserialize a `Map` that has a Key of type `SingleValueType`, then you need to specify a `KeyDeserializer`.
+| Base Type | Wrapped Value |
+|-----------|---------------|
+| `InstantType` | `Instant` |
+| `LocalDateTimeType` | `LocalDateTime` |
+| `LocalDateType` | `LocalDate` |
+| `LocalTimeType` | `LocalTime` |
+| `OffsetDateTimeType` | `OffsetDateTime` |
+| `ZonedDateTimeType` | `ZonedDateTime` |
 
-Luckily these are easy to create:
+## Map Key Deserialization
 
-```
+Serialization of `SingleValueType` as Map keys works automatically. For **deserialization**, create a custom `KeyDeserializer`:
+
+```java
 public class ProductIdKeyDeserializer extends KeyDeserializer {
     @Override
     public Object deserializeKey(String key, DeserializationContext ctxt) {
@@ -137,15 +162,53 @@ public class ProductIdKeyDeserializer extends KeyDeserializer {
 }
 ```
 
-with the `ProductIdKeyDeserializer` we can now serialize `Map`'s that specify `ProductId` as keys:
+Annotate the field:
 
-```
+```java
 public class Order {
-    public OrderId                  id;
+    public OrderId id;
 
     @JsonDeserialize(keyUsing = ProductIdKeyDeserializer.class)
     public Map<ProductId, Quantity> orderLines;
-    
-    ...
 }
 ```
+
+**JSON representation:**
+```json
+{
+  "id": "ORD-123",
+  "orderLines": {
+    "PROD-001": 2,
+    "PROD-002": 1
+  }
+}
+```
+
+## ObjectMapper Factory
+
+`EssentialTypesJacksonModule.createObjectMapper()` provides an opinionated configuration:
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| Field visibility | `ANY` | Serialize all fields regardless of access modifier |
+| Getter/setter detection | `NONE` | Use fields only, not getters/setters |
+| Unknown properties | Ignored | Don't fail on extra JSON fields |
+| Empty beans | Allowed | Serialize objects with no properties |
+| Transient marker | Propagated | Respect `transient` keyword |
+| Date format | ISO-8601 | Timestamps as strings, not numbers |
+
+**Customize with additional modules:**
+
+```java
+ObjectMapper objectMapper = EssentialTypesJacksonModule.createObjectMapper(
+    new Jdk8Module(),           // Optional support
+    new JavaTimeModule(),       // java.time support
+    new ParameterNamesModule()  // Constructor parameter names
+);
+```
+
+## See Also
+
+- [LLM-types-jackson.md](../LLM/LLM-types-jackson.md) - API reference for LLM assistance
+- [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
+- [immutable-jackson](../immutable-jackson) - Jackson support for immutable value objects

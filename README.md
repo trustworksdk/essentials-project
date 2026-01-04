@@ -1,707 +1,781 @@
-# Essentials Java building blocks
+```
+ ╔════════════════════════════════════════════════════════════════════════════════════════╗
+ ║                                                                                        ║
+ ║     ███████╗███████╗███████╗███████╗███╗   ██╗████████╗██╗ █████╗ ██╗     ███████╗     ║
+ ║     ██╔════╝██╔════╝██╔════╝██╔════╝████╗  ██║╚══██╔══╝██║██╔══██╗██║     ██╔════╝     ║
+ ║     █████╗  ███████╗███████╗█████╗  ██╔██╗ ██║   ██║   ██║███████║██║     ███████╗     ║
+ ║     ██╔══╝  ╚════██║╚════██║██╔══╝  ██║╚██╗██║   ██║   ██║██╔══██║██║     ╚════██║     ║
+ ║     ███████╗███████║███████║███████╗██║ ╚████║   ██║   ██║██║  ██║███████╗███████║     ║
+ ║     ╚══════╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝     ║
+ ║                                                                                        ║
+ ║                     Java 17+ Building Blocks for Strongly-Typed Code                   ║
+ ║                                                                                        ║
+ ╚════════════════════════════════════════════════════════════════════════════════════════╝
+```
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies
-on other libraries, unless explicitly mentioned.
+> High-level, strongly-typed building blocks for Java 17+ applications—framework-independent core with seamless integrations
 
-> **NOTE:** **The libraries are WORK-IN-PROGRESS**!
->- ---
-> [Cloud Create](https://github.com/cloudcreate-dk) originally developed the [Essentials project](https://github.com/cloudcreate-dk/essentials-project).   
-> As of May 8th 2025, [Trustworks](https://www.trustworks.dk) has assumed responsibility for further development of the project.
-> 
-> **Compatibility Note:**
-> *Trustworks' Essentials release version **0.40.24** remains API and functionally compatible with Cloud Create's version **0.40.24** (that was released on the 5th of May 2025). 
-> Migration requires only updating module names and package references from `dk.cloudcreate` to `dk.trustworks`.*
-> 
-> Essentials remain released under version 2.0 of the [Apache License](https://www.apache.org/licenses/LICENSE-2.0)
+📖 **LLM Context:** [LLM.md](LLM/LLM.md)
 
-# Security
+> **NOTE:** This library is WORK-IN-PROGRESS
 
-Several of the components, as well as their subcomponents and/or supporting classes, allows the user of the components to provide customized:
+---
 
-- table names
-- column names
-- collection names
-- etc.
+## Table of Contents
 
-By using naming conventions for Postgresql table/column/index names and MongoDB Collection names, Essentials attempts to provide an initial layer of defense intended to reduce the risk of malicious
-input.    
-**However, Essentials does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL and Mongo Queries/Updates against injection threats.**
-> The responsibility for implementing protective measures against malicious API input and configuration values lies exclusively with the users/developers using the Essentials components and its
-> supporting classes.  
-> Users must ensure thorough sanitization and validation of API input parameters, SQL table/column/index names as well as MongoDB collection names.
+- [What is Essentials?](#what-is-essentials)
+- [License](#license)
+- [Why Choose Essentials?](#why-choose-essentials)
+- [When Should You Use This?](#when-should-you-use-this)
+- [Quick Start](#quick-start)
+- [Module Overview](#module-overview)
+  - [Core Modules](#core-modules)
+  - [Type Integrations](#type-integrations)
+  - [Advanced Components](#advanced-components)
+- [Getting Started](#getting-started)
+- [Version Compatibility](#version-compatibility)
+- ⚠️ [Security](#security)
+- [Testing](#testing)
+- [Resources](#resources)
 
-**Insufficient attention to these practices may leave the application vulnerable to attacks, endangering the security and integrity of the database.**
 
-> Please see the **Security** notices for [components README.md](components/README.md), as well as **Security** notices for the individual components, to familiarize yourself with the security
-> risks related to using the Components:
-> - [foundation-types](components/foundation-types/README.md)
-> - [postgresql-distributed-fenced-lock](components/postgresql-distributed-fenced-lock/README.md)
-> - [springdata-mongo-distributed-fenced-lock](components/springdata-mongo-distributed-fenced-lock/README.md)
-> - [postgresql-queue](components/postgresql-queue/README.md)
-> - [springdata-mongo-queue](components/springdata-mongo-queue/README.md)
-> - [postgresql-event-store](components/postgresql-event-store/README.md)
-> - [eventsourced-aggregates](components/eventsourced-aggregates/README.md)
-> - [kotlin-eventsourcing](components/kotlin-eventsourcing/README.md)
-> - [postgresql-document-db](components/postgresql-document-db/README.md)
-> - [spring-boot-starter-postgresql](components/spring-boot-starter-postgresql/README.md)
-> - [spring-boot-starter-postgresql-event-store](components/spring-boot-starter-postgresql-event-store/README.md)
-> - [spring-boot-starter-mongodb](components/spring-boot-starter-mongodb/README.md)
+---
 
+## What is Essentials?
+
+Essentials is a set of Java 17+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
+
+**Core Modules:** Zero-dependency utilities providing **semantic types**, immutable value objects, functional primitives, and reactive patterns.
+
+**Integration Modules:** Seamless support for Jackson, Spring Boot, Spring Data, JPA, JDBI, Avro, and more.
+
+**Advanced Components:** Production-ready infrastructure patterns (`Event Store`, `Event Sourcing`, `Distributed Locks`, `Durable Queues`, `Inbox`/`Outbox`) using your existing PostgreSQL or MongoDB database.
+
+**Choose your path:**
+- Use **core modules** for strongly-typed domain modeling in any Java application using **semantic types** (think `OrderId` instead of `String`)
+- Add **integration modules** for framework-specific serialization and persistence of **semantic types**
+- Use **components** for distributed systems requiring event sourcing, queues, and coordination
+
+---
 ## License
 
-Essentials is released under version 2.0 of the [Apache License](https://www.apache.org/licenses/LICENSE-2.0)
+Essentials is released under version 2.0 of the [Apache License](https://www.apache.org/licenses/LICENSE-2.0).
 
-## Versions
+--- 
 
-| Essentials version                                                             | Java compatibility | Spring Boot compatibility | Notes                      |
-|--------------------------------------------------------------------------------|--------------------|---------------------------|----------------------------|
-| [0.40.24-](https://github.com/trustworksdk/essentials-project/tree/main)     | 17+                | 3.3.x                     | Under active development   |
+## Why Choose Essentials?
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and
-strongly typed code, which doesn't depend on other libraries or frameworks, but instead allows easy integrations with
-many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+### ✅ Eliminate Primitive Obsession
 
-All essentials modules that depend on third party dependencies, such as Spring, JDBI, etc. are using the Maven `provided` scope for these dependencies.
-Dependencies with `provided` scope are only available at compile time and in the test classpath of the Essentials project.
-This means that any dependencies with `provided` scope are not transitive (i.e. not available for projects that depend on Essentials), which also means that the user of Essentials
-need to add these third party dependencies (such as Spring, JDBI, Postgresql JDBC driver, etc.) to their project themselves.
+Stop passing `String orderId, String customerId` and hoping you get the order right. Semantic types make code self-documenting and catch errors at compile time:
 
-Each module's README.md will provide information about which third party dependencies that are typically for the Essentials module to be functional.
+```java
+// Before: What are these strings? Easy to mix up!
+public void processOrder(String orderId, String customerId, BigDecimal amount) { ... }
+processOrder(customerId, orderId, amount);  // Compiles, but wrong!
 
-## Essentials modules overview
-
-![Essentials modules overview](images/all-essentials-modules.png)
-
-## Advanced Components
-
-See: [Essentials Components](components/README.md) for information about **components** such as `EventStore`, `EventSourced Aggregates`, `FencedLocks`, `DurableQueues`, `DurableLocalCommandbus`,
-`Inbox`, `Outbox`, `EventProcessor` and `DocumentDBRepository`
-
-Components also includes **Spring Boot** auto-configuration modules which specializes in either Postgresql or MongoDB:
-
-- See [spring-boot-starter-postgresql](components/spring-boot-starter-postgresql/README.md)
-- See [spring-boot-starter-postgresql-event-store](components/spring-boot-starter-postgresql-event-store/README.md)
-- See [spring-boot-starter-mongodb](components/spring-boot-starter-mongodb/README.md)
-- See [kotlin-eventsourcing](components/kotlin-eventsourcing/README.md)
-- See [postgresql-document-db](components/postgresql-document-db/README.md)
-
-
-## Shared
-
-This library contains the smallest set of supporting building blocks needed for other Essentials libraries, such as:
-
-- **Tuples**
-    - E.g. `Triple<String, Long, BigDecimal> tuple = Tuple.of("Hello", 100L, new BigDecimal("125.95"));`
-- **Collections**
-    - E.g. `Stream<Pair<Integer, String>> indexedStream = Lists.toIndexedStream(List.of("A", "B", "C"));`
-- **Functional Interfaces**
-    - E.g. `Tuple.of("Hello", 100L, new BigDecimal("125.95")).map((_1, _2, _3) -> Tuple.of(_1.toString(), _2.toString(), _3.toString))`
-    - Checked variant of the classic Functional-Interfaces (`Runnable`, `Consumer`, `Supplier`, `Function`, `BiFunction` and `TripleFunction`)
-      that behaves like the normal Functional-Interface, but which allows checked `Exception`'s to be thrown from their method:
-        - `CheckedRunnable`
-        - `CheckedConsumer`
-        - `CheckedSupplier`
-        - `CheckedFunction`
-        - `CheckedBiFunction`
-        - `CheckedTripleFunction`
-- `FailFast` argument validation (Objects.requireNonNull replacement)
-    - E.g. `FailFast.requireNonBlank(fieldName, "You must supply a fieldName");`
-- **`If` expression** that supports both simple boolean predicate/condition and fixed value return values as well as lambda predicates and return value suppliers:
-    - ```
-    String description = If(value < 0, () -> "Negative number").
-                         ElseIf(() -> value == 0, "Zero").
-                         Else("Positive number");
-    ```
-- `GenericType`
-    - With `GenericType` you can specify and capture parameterized type information: `var genericType = new GenericType<List<Money>>(){};`
-- `StopWatch` for timing different methods/operations
-- `Exceptions` that allow `sneakyThrow` and getting a stacktrace as a String
-- SLF4J compatible **Message formatter**
-    - E.g. `msg("Failed to find static method '{}' on type '{}' taking arguments of {}", methodName, type.getName(), Arrays.toString(argumentTypes))`
-- High level **Reflection** API
-    - E.g. `Reflector.reflectOn(someType).invokeStatic("of");`
-- `PatternMatchingMethodInvoker` which supports creating your own reflective pattern matching method invokers.
-- `MessageTemplates`, `MessageTemplate` and `Message` for structured Messages that support typed parameters.
-- **Interceptor Pattern Support** that allows configuring method interception using `Interceptor` and `InterceptorChain` for implementing before, after or around operation interceptor logic
-
-![Essentials modules](images/essentials-modules.png)
-
-To use `Shared` just add the following Maven dependency:
-
-```
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>shared</artifactId>
-    <version>0.40.27</version>
-</dependency>
+// After: Compiler catches mistakes
+public void processOrder(OrderId orderId, CustomerId customerId, Amount amount) { ... }
+processOrder(customerId, orderId, amount);  // Compile error!
 ```
 
-See [shared](shared/README.md) for more information
+Creating semantic types takes just 4 lines:
 
-## Types
-
-This library focuses purely on providing base semantic types and utility types that can be used to better documented and more
-strongly typed code.  
-With this libraries `SingleValueType` concept you can create your High Level semantic types that works well using e.g. Jackson,
-Spring Data Mongo, etc:
-
-```
-public class CreateOrder {
-    public final OrderId                  id;
-    public final Amount                   totalAmountWithoutSalesTax;
-    public final Currency                 currency;
-    public final Percentage               salesTax;
-    public final Map<ProductId, Quantity> orderLines;
-
-    ...
-}
-```
-
-where a minimal custom identifier looks like this:
-
-```
+```java
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
-    public OrderId(CharSequence value) {
-        super(value);
-    }
+    public OrderId(CharSequence value) { super(value); }
+    public OrderId(String value) { super(value); }
+    public static OrderId of(CharSequence value) { return new OrderId(value); }
 }
 ```
 
-To use `Types` just add the following Maven dependency:
+### ✅ Zero-Dependency Core
 
-```
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types</artifactId>
-    <version>0.40.27</version>
-</dependency>
-```
+Core modules (`shared`, `types`, `immutable`, `reactive`) have **no runtime dependencies** (except SLF4J as `provided`). Your application controls its dependency tree.
 
-See [types](types/README.md) for more information
+### ✅ Framework-Independent with Easy Integrations
 
-## Reactive
+Write your domain logic once. Integrate with your preferred frameworks through dedicated modules:
 
-This library contains the smallest set of supporting reactive building blocks needed for other Essentials libraries
+| Framework | Module | Purpose                                                      |
+|-----------|--------|--------------------------------------------------------------|
+| Jackson | `types-jackson` | JSON serialization for **Sematic Types**                     |
+| Spring Data MongoDB | `types-springdata-mongo` | MongoDB persistence for **Sematic Types**                    |
+| Spring Data JPA | `types-springdata-jpa` | JPA persistence for **Sematic Types**                        |
+| JDBI v3 | `types-jdbi` | `Jdbi` SQL argument and result mapping for **Sematic Types** |
+| Apache Avro | `types-avro` | Binary serialization for **Sematic Types**                                        |
+| Spring WebMvc/WebFlux | `types-spring-web` | Path/request parameter conversion for **Sematic Types**         |
 
-To use `Reactive` just add the following Maven dependency:
+### ✅ Provided Scope for Third-Party Dependencies
 
-```
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>reactive</artifactId>
-    <version>0.40.27</version>
-</dependency>
-```
+Integration modules use Maven `provided` scope—dependencies are **NOT transitive**.  
+You control which versions of Jackson, Spring, and other frameworks your application uses!
 
-See [reactive](reactive/README.md) for more information
-
-### LocalEventBus
-
-Simple event bus that supports both synchronous and asynchronous subscribers that are registered and listening for events published within the local the JVM  
-You can have multiple instances of the LocalEventBus deployed with the local JVM, but usually one event bus is sufficient.
-
-```
-LocalEventBus localEventBus    = new LocalEventBus("TestBus", 3, (failingSubscriber, event, exception) -> log.error("...."));
-                  
-localEventBus.addAsyncSubscriber(orderEvent -> {
-           ...
-       });
-
-localEventBus.addSyncSubscriber(orderEvent -> {
-             ...
-       });
-                  
-localEventBus.publish(new OrderCreatedEvent());
- ```
-
-### LocalCommandBus
-
-The `LocalCommandBus` provides an indirection between a command and the `CommandHandler` that's capable of handling the command.
-Commands can be sent synchronously using `#send(Object)` or asynchronously using `#sendAsync(Object)` that returns a `Mono`.
-The handling of a command usually doesn't return any value (according to the principles of CQRS), however the `LocalCommandBus` API allows
-a `CommandHandler` to return a value if needed (e.g. such as a server generated id)
-
-```
-var commandBus = new LocalCommandBus();
-commandBus.addCommandHandler(new CreateOrderCommandHandler(...));
-commandBus.addCommandHandler(new ImburseOrderCommandHandler(...));
- 
-var optionalResult = commandBus.send(new CreateOrder(...));
-// or
-var monoWithOptionalResult = commandBus.sendAsync(new ImbuseOrder(...))
-                                       .block(Duration.ofMillis(1000));
-```
-
-## Immutable
-
-This library focuses purely on providing utility classes that make it easier to create **simple** immutable types/classes, that
-doesn't rely on code generators.
-
-The base type `ImmutableValueObject` supports creating immutable (i.e. an object where its values cannot change after object instantiation/creation) **Value Object**  
-The core feature set of `ImmutableValueObject` is that it provides default implementations for `toString`, `equals` and `hashCode`, but you're always free to override this and provide your own
-implementation.
-
-Example:
-
-```
-public class ImmutableOrder extends ImmutableValueObject {
-    public final OrderId                  orderId;
-    public final CustomerId               customerId;
-    @Exclude.EqualsAndHashCode
-    public final Percentage               percentage;
-    @Exclude.ToString
-    public final Money                    totalPrice;
-
-    public ImmutableOrder(OrderId orderId,
-                          CustomerId customerId,
-                          Percentage percentage,
-                          EmailAddress email,
-                          Money totalPrice) {
-        this.orderId = orderId;
-        this.customerId = customerId;
-        this.percentage = percentage;
-        this.totalPrice = totalPrice;
-    }
-}
-```
-
-To use `Immutable` just add the following Maven dependency:
-
-```
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>immutable</artifactId>
-    <version>0.40.27</version>
-</dependency>
-```
-
-See [immutable](immutable/README.md) for more information
-
-## Immutable Jackson
-
-This library focuses purely on providing [Jackson (FasterXML)](https://github.com/FasterXML/jackson) deserialization support for immutable classes or other classes that don't have a suitable creator
-(constructor, or no-arg static factory method, etc.).  
-This is very useful for when you're using `Record`'s (in Java 14+) or other types supporting immutable objects, as it allows Jackson to create an object instance without requiring
-a matching constructing.
-
-Using this module means that you can deserialize an immutable class such as this one that only consists of `public final` fields and a single constructor that doesn't allow initialization of
-all fields values during deserialization.
-
-``` 
-public final class ImmutableOrder {
-    public final OrderId       orderId;
-    public final CustomerId    customerId;
-    public final Money         totalPrice;
-    public final LocalDateTime orderedTimestamp;
-
-    public ImmutableOrder(OrderId orderId,
-                          CustomerId customerId,
-                          Money totalPrice) {
-        this.orderId = orderId;
-        this.customerId = customerId;
-        this.totalPrice = totalPrice;
-        this.orderedTimestamp = LocalDateTime.now();
-    }
-}
-```
-
-### Configuration
-
-All you need to do is to add the `dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule` to your `ObjectMapper`
-configuration.
-
-Example:
-
-```
-objectMapper.registerModule(new EssentialsImmutableJacksonModule());
-```
-
-To use `Immutable-Jackson` just add the following Maven dependency:
-
-```
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>immutable-jackson</artifactId>
-    <version>0.40.27</version>
-</dependency>
-```
-
-See [immutable-jackson](immutable-jackson/README.md) for more information
-
-## Types Jackson
-
-This library focuses purely on providing [Jackson (FasterXML)](https://github.com/FasterXML/jackson) serialization and deserialization support
-for the **types** defined in the Essentials `types` library.
-
-All you need to do is to add the `dk.trustworks.essentials.types.EssentialTypesJacksonModule` to your `ObjectMapper` configuration:
-
-```
-objectMapper.registerModule(new EssentialTypesJacksonModule());
-```
-
-To use `Types-Jackson` just add the following Maven dependency:
-
-```
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jackson</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
+</dependency>
+<!-- You add Jackson yourself at your preferred version -->
+<dependency>
+    <groupId>com.fasterxml.jackson.core</groupId>
+    <artifactId>jackson-databind</artifactId>
+    <version>${jackson.version}</version>
 </dependency>
 ```
 
-See [types-jackson](types-jackson/README.md) for more information
+### ✅ Production-Ready Infrastructure Components
 
-## Types Spring Data Mongo
+For distributed applications, Essentials Components provide:
+- **Event Store** with subscriptions and processors (PostgreSQL)
+- **Event Sourcing** with `AggregateRoot`s, `Decider`, `Evolver`, `Repositories`, `Snapshot Repositories` (PostgreSQL)
+- **Distributed Fenced Locks** for leader election and singleton workers
+- **Durable Queues** with retry, DLQ, and ordered delivery
+- **Inbox/Outbox** patterns for reliable messaging
 
-This library focuses purely on providing [Spring Data MongoDB](https://spring.io/projects/spring-data-mongodb) persistence support for the **types** defined in the
-Essentials `types` library.
+All using your existing database—no Redis, Kafka, Axon-Server, or EventStoreDB required for intra-service coordination.
 
-All you need to do is to register the following Spring Beans to your Spring configuration:
+### Database & Technology Support
 
-```
-@Bean
-public SingleValueTypeRandomIdGenerator registerIdGenerator() {
-    return new SingleValueTypeRandomIdGenerator();
-}
+#### Foundation Components
 
-@Bean
-public MongoCustomConversions mongoCustomConversions() {
-    return new MongoCustomConversions(List.of(new SingleValueTypeConverter()));
-}
-```
+| Database | Locks | Queues | Inbox/Outbox | Transaction Support    |
+|----------|-------|--------|--------------|------------------------|
+| **PostgreSQL** | ✅ | ✅ | ✅ | JDBI + Spring JDBC/JPA |
+| **MongoDB** | ✅ | ✅ | ✅ | Spring Data MongoDB    |
 
-to support this Entity (including automatic Id generation):
+#### Event-Driven Components (PostgreSQL Only)
 
-```
-@Document
-public class Order {
-    @Id
-    public OrderId id;
-    public CustomerId customerId;
-    public AccountId accountId;
-    public Map<ProductId, Quantity> orderLines;
-    
-    ...
-}    
-```
+| Database | Event Store | Subscriptions | Event Processor | Aggregates |
+|----------|-------------|---------------|-----------------|------------|
+| **PostgreSQL** | ✅ Full-featured | ✅ | ✅ | ✅ |
+| **MongoDB** | ❌ | ❌ | ❌ | ❌ |
 
-To use `Types-SpringData-Mongo` just add the following Maven dependency:
+---
 
-```
+## When Should You Use This?
+
+### ✅ Good Fit
+
+| Use Case | Recommended Modules                                                                                                           |
+|----------|-------------------------------------------------------------------------------------------------------------------------------|
+| **Strongly-typed domain models** | `types` + framework integrations (including Kotlin support)                                                                   |
+| **Immutable value objects** | `immutable`, `immutable-jackson`                                                                                              |
+| **Event-driven architecture** | `reactive` (`EventBus`, `CommandBus`)                                                                                         |
+| **Event sourcing & CQRS** | Components: `postgresql-event-store`, `eventsourced-aggregates` and for Kotlin `kotlin-eventsourcing`, `kotlin-eventsourcing` |
+| **Distributed coordination** | Components: `postgresql-distributed-fenced-lock`, `postgresql-queue`, `springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock` |
+| **Reliable messaging** | Components: `foundation` (`Inbox`/`Outbox`)                                                                                       |
+
+### ❌ Not a Good Fit
+
+- **Cross-service messaging** at scale—use Kafka, RabbitMQ
+- **Cross-service distributed locks**—use Zookeeper, etcd
+- **Extreme throughput requirements**—millions of events/second need specialized stores
+
+---
+
+## Quick Start
+
+### Path 1: Strongly-Typed Domain Models
+
+**1. Add dependencies:**
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-springdata-mongo</artifactId>
-    <version>0.40.27</version>
+    <artifactId>types</artifactId>
+    <version>${essentials.version}</version>
 </dependency>
-```
-
-See [types-springdata-mongo](types-springdata-mongo/README.md) for more information
-
-## Types Spring Data JPA
-
-This library focuses purely on providing [Spring Data JPA](https://spring.io/projects/spring-data-jpa) persistence support for the **types** defined in the
-Essentials `types` library.
-
-> **Warning: The Types Spring Data JPA module is very experimental & unstable - subject to be removed**
-
-Example:
-
-```
-@Entity
-@Table(name = "orders")
-public class Order {
-    @Id
-    public OrderId                  id;
-    public CustomerId               customerId;
-    public AccountId                accountId;
-    @ElementCollection
-    public Map<ProductId, Quantity> orderLines;
-    
-    ...
-}
-```
-
-will work out of the box without the need for any custom `AttributeConverter`'s. BUT we currently don't support
-automatic Id generation.
-
-See [types-springdata-jpa](types-springdata-jpa/README.md) for more information
-
-## Types Spring Web
-
-This library focuses purely on providing [Spring](https://spring.io/projects/spring-framework) [WebMvc/MVC](https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#spring-web)
-and [WebFlux](https://docs.spring.io/spring-framework/docs/current/reference/html/web-reactive.html#spring-webflux) `Converter` support for the **types** defined in the
-Essentials `types` library.
-
-To use `Types-Spring-Web` just add the following Maven dependency:
-
-```
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-spring-web</artifactId>
-    <version>0.40.27</version>
+    <artifactId>types-jackson</artifactId>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-Using this library will allow you to deserialize `@PathVariable` `@RequestParam` method parameters of type `SingleValueType` for **WebMvc**
-
-```
-@PostMapping("/order/for-customer/{customerId}/update/total-price")
-public ResponseEntity<Order> updatePrice(@PathVariable CustomerId customerId,
-                                         @RequestParam("price") Amount price) {
-    ...
-}
-```
-
-and for **WebFlux**
-
-```
-@PostMapping("/reactive-order/for-customer/{customerId}/update/total-price")
-public Mono<Order> updatePrice(@PathVariable CustomerId customerId,
-                               @RequestParam("price") Amount price) {
-    ...
-}
-```
-
-See [types-spring-web](types-spring-web/README.md) for more information
-
-## Types JDBI (v3)
-
-This library focuses purely on providing [JDBI v3](https://jdbi.org) **argument** support for the **types** defined in the Essentials `types`
-library.
-
-You need to register your own `ArgumentFactory` with the `Jdbi` or `Handle` instance:
-
-```
-Jdbi jdbi = Jdbi.create("jdbc:h2:mem:test");
-jdbi.registerArgument(new OrderIdArgumentFactory());
-jdbi.registerArgument(new CustomerIdArgumentFactory());
-jdbi.registerArgument(new ProductIdArgumentFactory());
-jdbi.registerArgument(new AccountIdArgumentFactory());
-    
-var orderId    = OrderId.random();
-var customerId = CustomerId.random();
-var productId  = ProductId.random();
-var accountId  = AccountId.random();
-
-handle.useHandle(handle -> handle.createUpdate("INSERT INTO orders(id, customer_id, product_id, account_id) VALUES (:id, :customerId, :productId, :accountId)")
-                                  .bind("id", orderId)
-                                  .bind("customerId", customerId)
-                                  .bind("productId", productId)
-                                  .bind("accountId", accountId)
-                                  .execute());
-```
-
-where `CustomerId` is defined as:
-
-```
-public class CustomerId extends CharSequenceType<CustomerId> implements Identifier {
-    public CustomerId(CharSequence value) {
-        super(value);
-    }
-}
-```
-
-And the `CustomerIdArgumentFactory` of type `CharSequenceType` must extend `CharSequenceTypeArgumentFactory`:
-
-```
-public class CustomerIdArgumentFactory extends CharSequenceTypeArgumentFactory<CustomerId> {
-}
-```
-
-To use `Types-JDBI` just add the following Maven dependency:
-
-```
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-jdbi</artifactId>
-    <version>0.40.27</version>
-</dependency>
-```
-
-See [types-jdbi](types-jdbi/README.md) for more information
-
-## Types Avro
-
-This library focuses purely on providing [AVRO](https://avro.apache.org) serialization and deserialization support for the **types** defined in the Essentials `types` library.
-
-To use `Types-Avro` just add the following Maven dependency:
-
-```
-<dependency>
-    <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-avro</artifactId>
-    <version>0.40.27</version>
-</dependency>
-```
-
-See [types-avro](types-avro/README.md) for more information
-
-Some concrete `Types` such as `Amount`, `Percentage` and `CurrencyCode` come with supported our of the box.  
-This allows you to define Avro schema/IDL protocol and directly refer these logical-types in your Avro Schema/IDL protocol.
-
-Example `order.avdl`:
-
-```
-@namespace("dk.trustworks.essentials.types.avro.test")
-protocol Test {
-  record Order {
-      string           id;
-      @logicalType("Amount")
-      string           totalAmountWithoutSalesTax;
-      @logicalType("CurrencyCode")
-      string           currency;
-      @logicalType("CountryCode")
-      string           country;
-      @logicalType("Percentage")
-      string           salesTax;
-      @logicalType("EmailAddress")
-      string           email;
-  }
-}
-```
-
-Let's say you want to introduce your own `OrderId` type:
-
-```
-package com.myproject.types;
-
+**2. Create semantic types:**
+```java
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
-    public OrderId(CharSequence value) {
+    public OrderId(CharSequence value) { super(value); }
+    public OrderId(String value) { super(value); }
+    public static OrderId of(CharSequence value) { return new OrderId(value); }
+    public static OrderId random() { return new OrderId(RandomIdGenerator.generate()); }
+}
+
+public class Quantity extends IntegerType<Quantity> {
+    public Quantity(Integer value) {
         super(value);
+        FailFast.requireTrue(value >= 0, "Quantity cannot be negative");
     }
-
-    public static OrderId of(CharSequence value) {
-        return new OrderId(value);
-    }
+    public static Quantity of(int value) { return new Quantity(value); }
 }
 ```
 
-and you want to use it in your Avro schema/IDL protocol:
-
-```
-@namespace("dk.trustworks.essentials.types.avro.test")
-protocol Test {
-  record Order {
-      @logicalType("OrderId")
-      string           id;
-      @logicalType("Amount")
-      string           totalAmountWithoutSalesTax;
-      @logicalType("CurrencyCode")
-      string           currency;
-      @logicalType("CountryCode")
-      string           country;
-      @logicalType("Percentage")
-      string           salesTax;
-      @logicalType("EmailAddress")
-      string           email;
-  }
+**3. Use in your domain:**
+```java
+public class CreateOrder {
+    public final OrderId                  id;
+    public final Amount                   totalAmount;
+    public final CurrencyCode             currency;
+    public final Percentage               salesTax;
+    public final Map<ProductId, Quantity> orderLines;
 }
 ```
 
-then you will need to define the following classes:
-
-#### 1. Create the `OrderIdLogicalType` and `OrderIdLogicalTypeFactory`
-
+**4. Configure Jackson:**
+```java
+objectMapper.registerModule(new EssentialTypesJacksonModule());
 ```
-package com.myproject.types.avro;
 
-public class OrderIdLogicalTypeFactory implements LogicalTypes.LogicalTypeFactory {
-    public static final LogicalType ORDER_ID = new CurrencyCodeLogicalType("OrderId");
+### Path 2: Event-Driven Components (Spring Boot)
 
-    @Override
-    public LogicalType fromSchema(Schema schema) {
-        return ORDER_ID;
-    }
+For distributed applications with event sourcing, queues, and locks:
 
-    @Override
-    public String getTypeName() {
-        return ORDER_ID.getName();
-    }
+**1. Add Spring Boot starter:**
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>spring-boot-starter-postgresql-event-store</artifactId>
+    <version>${essentials.version}</version>
+</dependency>
+```
 
-    public static class OrderIdLogicalType extends LogicalType {
-        public OrderIdLogicalType(String logicalTypeName) {
-            super(logicalTypeName);
-        }
+**2. Configure database:**
+```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/myapp
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+```
 
-        @Override
-        public void validate(Schema schema) {
-            super.validate(schema);
-            if (schema.getType() != Schema.Type.STRING) {
-                throw new IllegalArgumentException("'" + getName() + "' can only be used with type '" + Schema.Type.STRING.getName() + "'. Invalid schema: " + schema.toString(true));
-            }
-        }
-    }
+**3. Inject auto-configured components:**
+```java
+@Service
+public class OrderService {
+    private final EventStore eventStore;
+    private final DurableQueues queues;
+    private final FencedLockManager locks;
+
+    // All auto-configured by Spring Boot—just inject and use
 }
 ```
 
-#### 2. Create the `OrderIdConversion`
+See [Essentials Components](components/README.md) for complete documentation.
+
+---
+
+## Module Overview
 
 ```
-package com.myproject.types.avro;
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   ESSENTIALS MODULE OVERVIEW                                    │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
 
-public class OrderIdConversion extends BaseCharSequenceConversion<OrderId> {
-    @Override
-    public Class<OrderId> getConvertedType() {
-        return OrderId.class;
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ SPRING BOOT AUTO-CONFIGURATION                                                                  │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  spring-boot-starter-postgresql          spring-boot-starter-postgresql-event-store             │
+│  spring-boot-starter-mongodb             spring-boot-starter-admin-ui                           │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                   │
+                                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ COMPONENTS - PostgreSQL                                                                         │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐       │
+│  │ postgresql-event-store   │  │ eventsourced-aggregates  │  │ kotlin-eventsourcing     │       │
+│  │ (EventStore, Subs, Proc) │  │ (AggregateRoot, Decider) │  │ (Kotlin DSL)             │       │
+│  └──────────────────────────┘  └──────────────────────────┘  └──────────────────────────┘       │
+│  ┌──────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐       │
+│  │postgresql-distributed-   │  │ postgresql-queue         │  │ postgresql-document-db   │       │
+│  │fenced-lock               │  │ (DurableQueues+DLQ)      │  │ (Kotlin DocumentDB)      │       │
+│  └──────────────────────────┘  └──────────────────────────┘  └──────────────────────────┘       │
+│  ┌──────────────────────────┐                                                                   │
+│  │spring-postgresql-event-  │                                                                   │
+│  │store (Spring Tx)         │                                                                   │
+│  └──────────────────────────┘                                                                   │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ COMPONENTS - MongoDB                                                                            │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  ┌────────────────────────────────────┐  ┌────────────────────────────────────┐                 │
+│  │ springdata-mongo-distributed-      │  │ springdata-mongo-queue             │                 │
+│  │ fenced-lock                        │  │ (DurableQueues+DLQ)                │                 │
+│  └────────────────────────────────────┘  └────────────────────────────────────┘                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ COMPONENTS - Foundation & UI                                                                    │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
+│  │ foundation-types │  │ foundation       │  │ foundation-test  │  │ vaadin-ui        │         │
+│  │ (Common Types)   │  │ (UnitOfWork,     │  │ (Test Utils)     │  │ (Admin UI)       │         │
+│  │                  │  │  Inbox/Outbox)   │  │                  │  │                  │         │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘         │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                   │
+                                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ TYPE INTEGRATIONS (provided scope - framework-specific)                                         │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  types-jackson          types-springdata-mongo    types-springdata-jpa    types-jdbi            │
+│  types-avro             types-spring-web          immutable-jackson                             │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                   │
+                                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ CORE MODULES (zero dependencies except SLF4J as provided)                                       │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                         │
+│  │ shared       │  │ types        │  │ immutable    │  │ reactive     │                         │
+│  │ (Tuples,     │  │ (Semantic    │  │ (Immutable   │  │ (EventBus,   │                         │
+│  │  Reflection, │  │  Types)      │  │  Value       │  │  CommandBus) │                         │
+│  │  Validation) │  │              │  │  Objects)    │  │              │                         │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘                         │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Core Modules
+
+Zero-dependency building blocks:
+
+| Module | Purpose | Documentation |
+|--------|---------|---------------|
+| [shared](shared/README.md) | Tuples, collections, reflection, validation, exceptions, message formatting | [LLM](LLM/LLM-shared.md) |
+| [types](types/README.md) | Semantic types via `SingleValueType` (OrderId, Amount, Percentage, etc.) | [LLM](LLM/LLM-types.md) |
+| [immutable](immutable/README.md) | Immutable value objects with auto-generated `equals`/`hashCode`/`toString` | [LLM](LLM/LLM-immutable.md) |
+| [reactive](reactive/README.md) | LocalEventBus, LocalCommandBus for in-memory event-driven patterns | [LLM](LLM/LLM-reactive.md) |
+
+**Core Module Dependencies:**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        CORE MODULE DEPENDENCY GRAPH                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                           ┌──────────────────────┐
+                           │                      │
+                           │      reactive        │
+                           │                      │
+                           │  • LocalEventBus     │
+                           │  • LocalCommandBus   │
+                           │  • Interceptors      │
+                           │                      │
+                           └──────────┬───────────┘
+                                      │
+                                      │ depends on
+                                      │
+                                      ▼
+     ┌────────────────────┐      ┌──────────────────────┐
+     │                    │      │                      │
+     │     immutable      │      │        types         │
+     │                    │      │                      │
+     │  • ValueObject     │      │  • SingleValueType   │
+     │  • @Exclude        │      │  • Amount, %         │
+     │    annotations     │      │  • CurrencyCode      │
+     │                    │      │  • Identifiers       │
+     │                    │      │                      │
+     └────────────────────┘      └───────────┬──────────┘
+              │                              │
+              │                              │ depends on
+              │                              │
+              │                              ▼
+              │                 ┌──────────────────────────────────┐
+              │                 │                                  │
+              └────────────────▶│           shared                 │
+                                │                                  │
+                                │  • Tuples (Pair, Triple)         │
+                                │  • FailFast validation           │
+                                │  • Reflection (Reflector)        │
+                                │  • Collections utilities         │
+                                │  • MessageFormatter              │
+                                │  • Checked* interfaces           │
+                                │  • InterceptorChain              │
+                                │  • PatternMatchingInvoker        │
+                                │                                  │
+                                │  Zero dependencies               │
+                                │  (except SLF4J as provided)      │
+                                │                                  │
+                                └──────────────────────────────────┘
+
+Legend:
+  ▼  = depends on
+  Module dependencies are managed via Maven with zero transitive runtime dependencies
+```
+
+### Type Integrations
+
+Type-Integration [LLM Documentation](LLM/LLM-types-integrations.md)
+
+Framework-specific support for semantic types (all use `provided` scope):
+
+| Module | Framework | Purpose | LLM Documentation                        |
+|--------|-----------|---------|------------------------------------------|
+| [types-jackson](types-jackson/README.md) | Jackson | JSON serialization/deserialization | [LLM](LLM/LLM-types-jackson.md)          |
+| [types-springdata-mongo](types-springdata-mongo/README.md) | Spring Data MongoDB | MongoDB persistence + ID generation | [LLM](LLM/LLM-types-springdata-mongo.md) |
+| [types-springdata-jpa](types-springdata-jpa/README.md) | Spring Data JPA | JPA persistence (experimental) | [LLM](LLM/LLM-types-springdata-jpa.md)   |
+| [types-jdbi](types-jdbi/README.md) | JDBI v3 | SQL argument/column mapping | [LLM](LLM/LLM-types-jdbi.md)             |
+| [types-avro](types-avro/README.md) | Apache Avro | Binary serialization with logical types | [LLM](LLM/LLM-types-avro.md)             |
+| [types-spring-web](types-spring-web/README.md) | Spring WebMvc/WebFlux | `@PathVariable`/`@RequestParam` conversion | [LLM](LLM/LLM-types-spring-web.md)       |
+| [immutable-jackson](immutable-jackson/README.md) | Jackson | Deserialization for immutable classes | [LLM](LLM/LLM-immutable-jackson.md)      |
+
+### Advanced Components
+
+Production-ready infrastructure patterns. See [Essentials Components](components/README.md) for complete documentation.  
+Components [LLM Documentation](LLM/LLM-components.md)
+
+**Spring Boot Starters:**
+
+| Starter | What It Provides | LLM Documentation |
+|---------|------------------|-------------------|
+| [spring-boot-starter-postgresql](components/spring-boot-starter-postgresql/README.md) | UnitOfWork, FencedLocks, DurableQueues, Inbox/Outbox, CommandBus | [LLM](LLM/LLM-spring-boot-starter-modules.md) |
+| [spring-boot-starter-postgresql-event-store](components/spring-boot-starter-postgresql-event-store/README.md) | All above + EventStore, Subscriptions, EventProcessors, Aggregates | [LLM](LLM/LLM-spring-boot-starter-modules.md) |
+| [spring-boot-starter-mongodb](components/spring-boot-starter-mongodb/README.md) | MongoDB equivalents of foundation components | [LLM](LLM/LLM-spring-boot-starter-modules.md) |
+
+**Component Modules:**
+
+| Module | Purpose                                                       | LLM Documentation |
+|--------|---------------------------------------------------------------|-------------------|
+| [postgresql-event-store](components/postgresql-event-store/README.md) | Full-featured Event Store with subscriptions and gap handling | [LLM](LLM/LLM-postgresql-event-store.md) |
+| [eventsourced-aggregates](components/eventsourced-aggregates/README.md) | AggregateRoot, Decider, Evolver patterns for DDD              | [LLM](LLM/LLM-eventsourced-aggregates.md) |
+| [postgresql-distributed-fenced-lock](components/postgresql-distributed-fenced-lock/README.md) | PostgreSQL distributed locking with fence tokens              | [LLM](LLM/LLM-postgresql-distributed-fenced-lock.md) |
+| [postgresql-queue](components/postgresql-queue/README.md) | PostgreSQL durable message queues with retry and DLQ          | [LLM](LLM/LLM-postgresql-queue.md) |
+| [springdata-mongo-distributed-fenced-lock](components/springdata-mongo-distributed-fenced-lock/README.md) | MongoDB distributed locking with fence tokens                 | [LLM](LLM/LLM-springdata-mongo-distributed-fenced-lock.md) |
+| [springdata-mongo-queue](components/springdata-mongo-queue/README.md) | MongoDB durable message queues with retry and DLQ             | [LLM](LLM/LLM-springdata-mongo-queue.md) |
+| [postgresql-document-db](components/postgresql-document-db/README.md) | Kotlin Document database using PostgreSQL JSONB               | [LLM](LLM/LLM-postgresql-document-db.md) |
+| [kotlin-eventsourcing](components/kotlin-eventsourcing/README.md) | Kotlin DSL for functional event sourcing                      | [LLM](LLM/LLM-kotlin-eventsourcing.md) |
+
+**Event Sourcing Stack Dependencies:**
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                         EVENT SOURCING COMPONENT DEPENDENCIES                        │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+
+                        ┌────────────────────────────────────┐
+                        │                                    │
+                        │  spring-boot-starter-postgresql-   │
+                        │  event-store                       │
+                        │                                    │
+                        │  Auto-configures entire stack:     │
+                        │  • EventStore + Repositories       │
+                        │  • Subscriptions + Processors      │
+                        │  • UnitOfWork + Foundation         │
+                        │                                    │
+                        └─────────────┬──────────────────────┘
+                                      │
+                                      │ auto-configures
+                                      │
+                ┌─────────────────────┼─────────────────────┐
+                │                     │                     │
+                ▼                     ▼                     ▼
+┌──────────────────────────┐  ┌──────────────────────┐  ┌──────────────────────────┐
+│                          │  │                      │  │                          │
+│  eventsourced-aggregates │  │ kotlin-eventsourcing │  │ spring-postgresql-       │
+│                          │  │      (optional)      │  │ event-store              │
+│  • AggregateRoot         │  │  • Kotlin DSL        │  │                          │
+│  • StatefulAggregate     │  │  • Decider           │  │  • Spring Tx support     │
+│  • Decider pattern       │  │  • EventEvolver      │  │  • @Transactional        │
+│  • EventStreamDecider    │  │  • Functional style  │  │    integration           │
+│  • Repositories          │  │                      │  │                          │
+│  • Snapshot support      │  │                      │  │                          │
+│                          │  │                      │  │                          │
+└────────────┬─────────────┘  └──────────┬───────────┘  └────────────┬─────────────┘
+             │                           │                           │
+             │                           │                           │
+             └───────────────────────────┼───────────────────────────┘
+                                         │
+                                         │ depends on
+                                         │
+                                         ▼
+                         ┌───────────────────────────────────┐
+                         │                                   │
+                         │   postgresql-event-store          │
+                         │                                   │
+                         │   Core Event Store:               │
+                         │   • ConfigurableEventStore        │
+                         │   • Event persistence             │
+                         │   • Event streaming               │
+                         │   • Subscriptions (with gaps)     │
+                         │   • GlobalEventOrder tracking     │
+                         │   • EventProcessor framework      │
+                         │   • Multitenancy support          │
+                         │   • Interceptors                  │
+                         │                                   │
+                         └─────────────┬─────────────────────┘
+                                       │
+                                       │ depends on
+                                       │
+                     ┌─────────────────┼─────────────────┐
+                     │                 │                 │
+                     ▼                 ▼                 ▼
+         ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+         │                  │  │                  │  │                  │
+         │ foundation-      │  │  foundation      │  │  postgresql-     │
+         │ types            │  │                  │  │  queue           │
+         │                  │  │  • UnitOfWork    │  │                  │
+         │ • EventId        │  │  • Inbox/Outbox  │  │  • DurableQueues │
+         │ • EventOrder     │  │  • FencedLock    │  │  • Used by       │
+         │ • Aggregate      │  │  • DurableQueues │  │    EventProc     │
+         │   Type           │  │  • CommandBus    │  │                  │
+         │ • Correlation    │  │                  │  │                  │
+         │   Id             │  │                  │  │                  │
+         │                  │  │                  │  │                  │
+         └────────┬─────────┘  └────────┬─────────┘  └──────────────────┘
+                  │                     │
+                  │                     │
+                  │                     └──────────────────────┐
+                  │                                            │
+                  │ depends on                                 │
+                  │                                            │
+                  ▼                                            ▼
+      ┌──────────────────┐                          ┌──────────────────┐
+      │                  │                          │                  │
+      │  types           │                          │  reactive        │
+      │                  │                          │                  │
+      │  • Semantic      │                          │  • EventBus      │
+      │    types         │                          │  • CommandBus    │
+      │                  │                          │  • Interceptors  │
+      │                  │                          │                  │
+      └────────┬─────────┘                          └────────┬─────────┘
+               │                                             │
+               │                                             │
+               └───────────────────────────────┬─────────────┘
+                                               │
+                                               │ depends on
+                                               │
+                                               ▼
+                                   ┌──────────────────────┐
+                                   │                      │
+                                   │      shared          │
+                                   │                      │
+                                   │  • Tuples            │
+                                   │  • Reflection        │
+                                   │  • MessageFormatter  │
+                                   │  • InterceptorChain  │
+                                   │                      │
+                                   └──────────────────────┘
+
+Note: PostgreSQL JDBC driver, JDBI v3, Jackson and Project Reactor are required runtime dependencies
+```
+
+---
+
+## Getting Started
+
+### Example 1: Semantic Types with Jackson
+
+```java
+// 1. Define types
+public class CustomerId extends CharSequenceType<CustomerId> implements Identifier {
+    public CustomerId(CharSequence value) { super(value); }
+    public CustomerId(String value) { super(value); }
+    public static CustomerId of(CharSequence value) { return new CustomerId(value); }
+}
+
+// 2. Use in commands/events
+public record CreateOrder(
+    OrderId orderId,
+    CustomerId customerId,
+    Amount totalAmount,
+    CurrencyCode currency
+) {}
+
+// 3. Configure Jackson
+ObjectMapper mapper = new ObjectMapper();
+mapper.registerModule(new EssentialTypesJacksonModule());
+
+// 4. Serialize/deserialize automatically
+String json = mapper.writeValueAsString(new CreateOrder(
+    OrderId.of("ORD-123"),
+    CustomerId.of("CUST-456"),
+    Amount.of("199.99"),
+    CurrencyCode.USD
+));
+// {"orderId":"ORD-123","customerId":"CUST-456","totalAmount":"199.99","currency":"USD"}
+```
+
+### Example 2: LocalEventBus for Event-Driven Architecture
+
+```java
+// Create event bus
+LocalEventBus eventBus = LocalEventBus.builder()
+    .busName("OrderEvents")
+    .parallelThreads(5)
+    .onErrorHandler((subscriber, event, ex) -> log.error("Handler failed", ex))
+    .build();
+
+// Register handlers
+eventBus.addSyncSubscriber(event -> {
+    if (event instanceof OrderCreated created) {
+        inventoryService.reserve(created.orderId());
     }
+});
 
-    @Override
-    protected LogicalType getLogicalType() {
-        return OrderIdLogicalTypeFactory.ORDER_ID;
+eventBus.addAsyncSubscriber(event -> {
+    if (event instanceof OrderCreated created) {
+        emailService.sendConfirmation(created.customerId());
+    }
+});
+
+// Publish events
+eventBus.publish(new OrderCreated(orderId, customerId));
+```
+
+### Example 3: LocalCommandBus for CQRS
+
+```java
+// Create command bus with handlers
+LocalCommandBus commandBus = new LocalCommandBus();
+commandBus.addCommandHandler(new OrderCommandHandler(orderRepository));
+
+// Send commands
+OrderId orderId = commandBus.send(new CreateOrder(customerId, items));
+
+// Or async
+Mono<OrderId> result = commandBus.sendAsync(new CreateOrder(customerId, items));
+```
+
+### Example 4: Immutable Value Objects
+
+```java
+public class ImmutableOrder extends ImmutableValueObject {
+    public final OrderId                  orderId;
+    public final CustomerId               customerId;
+    @Exclude.EqualsAndHashCode  // Metadata, not part of identity
+    public final Instant                  createdAt;
+    @Exclude.ToString           // Don't log sensitive data
+    public final Money                    totalPrice;
+
+    public ImmutableOrder(OrderId orderId, CustomerId customerId,
+                          Instant createdAt, Money totalPrice) {
+        this.orderId = orderId;
+        this.customerId = customerId;
+        this.createdAt = createdAt;
+        this.totalPrice = totalPrice;
     }
 }
+
+// Auto-generated equals/hashCode/toString based on non-excluded fields
 ```
 
-#### 3. Register the `OrderIdConversion` and `OrderIdLogicalTypeFactory` with the `avro-maven-plugin`
+---
 
-```
-<plugin>
-    <groupId>org.apache.avro</groupId>
-    <artifactId>avro-maven-plugin</artifactId>
-    <version>${avro.version}</version>
-    <executions>
-        <execution>
-            <phase>generate-test-sources</phase>
-            <goals>
-                <goal>idl-protocol</goal>
-            </goals>
-            <configuration>
-                <stringType>String</stringType>
-                <enableDecimalLogicalType>false</enableDecimalLogicalType>
-                <customLogicalTypeFactories>
-                    <logicalTypeFactory>dk.trustworks.essentials.types.avro.CurrencyCodeLogicalTypeFactory</logicalTypeFactory>
-                    <logicalTypeFactory>dk.trustworks.essentials.types.avro.AmountLogicalTypeFactory</logicalTypeFactory>
-                    <logicalTypeFactory>dk.trustworks.essentials.types.avro.PercentageLogicalTypeFactory</logicalTypeFactory>
-                    <logicalTypeFactory>dk.trustworks.essentials.types.avro.CountryCodeLogicalTypeFactory</logicalTypeFactory>
-                    <logicalTypeFactory>dk.trustworks.essentials.types.avro.EmailAddressLogicalTypeFactory</logicalTypeFactory>
-                    <logicalTypeFactory>com.myproject.types.avro.OrderIdLogicalTypeFactory</logicalTypeFactory>
-                </customLogicalTypeFactories>
-                <customConversions>
-                    <conversion>dk.trustworks.essentials.types.avro.CurrencyCodeConversion</conversion>
-                    <conversion>dk.trustworks.essentials.types.avro.AmountConversion</conversion>
-                    <conversion>dk.trustworks.essentials.types.avro.PercentageConversion</conversion>
-                    <conversion>dk.trustworks.essentials.types.avro.CountryCodeConversion</conversion>
-                    <conversion>dk.trustworks.essentials.types.avro.EmailAddressConversion</conversion>
-                    <conversion>com.myproject.types.avro.OrderIdConversion</conversion>
-                </customConversions>
-            </configuration>
-        </execution>
-    </executions>
-</plugin>
+## Version Compatibility
+
+| Essentials Version | Java | Spring Boot | Notes |
+|--------------------|------|-------------|-------|
+| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 17+ | 3.3.x | Under active development |
+
+### Migration Note
+
+> [Cloud Create](https://github.com/cloudcreate-dk) originally developed the [Essentials project](https://github.com/cloudcreate-dk/essentials-project).
+> As of May 8th 2025, [Trustworks](https://www.trustworks.dk) has assumed responsibility for further development.
+>
+> **Compatibility:** Trustworks' Essentials release version **0.40.24** remains API and functionally compatible with Cloud Create's version **0.40.24** (released May 5th 2025). Migration requires only updating module names and package references from `dk.cloudcreate` to `dk.trustworks`.
+
+---
+
+## Security
+
+Several components allow customization of:
+- Table names, column names, function names, index names (PostgreSQL)
+- Collection names (MongoDB)
+- Configuration values
+
+Essentials applies naming convention validation as an initial defense layer. **However, this is NOT exhaustive protection against SQL/NoSQL injection.**
+
+### ⚠️ Critical: SQL/NoSQL Injection Risk
+
+> **Your Responsibility:** Users MUST sanitize and validate all:
+> - API input parameters
+> - SQL table/column/index names
+> - MongoDB collection names
+> - Configuration values derived from external sources
+
+**Safe Pattern:**
+```java
+// ❌ DANGEROUS - user input enables injection
+var tableName = userInput + "_events";
+
+// ✅ SAFE - controlled, predefined names
+var tableName = "order_events";
+
+// ⚠️ VALIDATE if from config
+PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+MongoUtil.checkIsValidCollectionName(collectionName);
 ```
 
-This will generate an `Order` class that now includes the `OrderId` and which will look like this:
+**Insufficient attention to these practices may leave your application vulnerable to attacks.**
 
+### Module-Specific Security Guidance
+
+See individual module documentation for detailed security considerations:
+- [Components README](components/README.md#security)
+- [foundation-types](components/foundation-types/README.md)
+- [postgresql-event-store](components/postgresql-event-store/README.md)
+- [postgresql-distributed-fenced-lock](components/postgresql-distributed-fenced-lock/README.md)
+- [postgresql-queue](components/postgresql-queue/README.md)
+- [eventsourced-aggregates](components/eventsourced-aggregates/README.md)
+- [kotlin-eventsourcing](components/kotlin-eventsourcing/README.md)
+- [springdata-mongo-queue](components/springdata-mongo-queue/README.md)
+- [springdata-mongo-distributed-fenced-lock](components/springdata-mongo-distributed-fenced-lock/README.md)
+
+---
+
+## Testing
+
+### Run All Tests
+
+```bash
+# All unit tests
+mvn test
+
+# All unit + integration tests
+mvn verify
 ```
-@org.apache.avro.specific.AvroGenerated
-public class Order extends org.apache.avro.specific.SpecificRecordBase implements org.apache.avro.specific.SpecificRecord {
-  ...    
-  private com.myproject.types.OrderId                  id;
-  private dk.trustworks.essentials.types.Amount       totalAmountWithoutSalesTax;
-  private dk.trustworks.essentials.types.CurrencyCode currency;
-  private dk.trustworks.essentials.types.CountryCode  country;
-  private dk.trustworks.essentials.types.Percentage   salesTax;
-  private dk.trustworks.essentials.types.EmailAddress email;
-  ...
-}
+
+### Run Specific Module Tests
+
+```bash
+# Single module
+mvn test -pl <module-name> -am
+
+# Example: types module
+mvn test -pl types -am
+
+# Integration tests for a module
+mvn verify -pl <module-name> -am
 ```
+
+### Build Commands
+
+```bash
+# Full build
+mvn clean install
+
+# Fast build (skip dependency check)
+mvn clean install -DskipDependencyCheck=true
+
+# Build specific module with dependencies
+mvn clean install -pl components/postgresql-event-store -am
+
+# Simulated release build (test-release profile)
+mvn clean install -P test-release
+```
+
+### Test Requirements
+
+- **PostgreSQL modules**: Requires Docker for TestContainers
+- **MongoDB modules**: Requires Docker for TestContainers (replica set mode)
+
+---
+
+## Resources
+
+- **GitHub:** [https://github.com/trustworksdk/essentials-project](https://github.com/trustworksdk/essentials-project)
+- **Components Documentation:** [components/README.md](components/README.md)
+- **LLM Reference:** [LLM/LLM.md](LLM/LLM.md)
+- **Each module contains detailed README.md** with usage examples

@@ -1,81 +1,180 @@
-# Essentials Java building blocks
+# Types-SpringData-Mongo
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies
-on other libraries, unless explicitly mentioned.
+> Spring Data MongoDB persistence support for Essentials `types` module
 
+This module enables seamless MongoDB persistence of `SingleValueType` implementations, including automatic ID generation for entities with `SingleValueType` IDs.
 
+> **NOTE:** This library is WORK-IN-PROGRESS
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and
-strongly typed code, which doesn't depend on other libraries or frameworks, but instead allows easy integrations with
-many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+**LLM Context:** [LLM-types-springdata-mongo.md](../LLM/LLM-types-springdata-mongo.md)
 
-**NOTE:**
-**This library is WORK-IN-PROGRESS**
+## Table of Contents
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [SingleValueTypeConverter](#singlevaluetypeconverter)
+- [SingleValueTypeRandomIdGenerator](#singlevaluetyperandomidgenerator)
+- [ObjectId Map Keys](#objectid-map-keys)
+- [JSR-310 Temporal Types](#jsr-310-temporal-types)
+- [Gotchas](#gotchas)
 
-## Types-SpringData-Mongo
+## Installation
 
-This library focuses purely on providing [Spring Data MongoDB](https://spring.io/projects/spring-data-mongodb) persistence support for the **types** defined in the
-Essentials `types` library.
-
-To use `Types-SpringData-Mongo` just add the following Maven dependency:
-```
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-springdata-mongo</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Types-SpringData-Mongo` usually needs additional third party dependencies to work, such as:
-```
+**Required dependencies** (provided scope - add to your project):
+```xml
 <dependency>
     <groupId>org.springframework.data</groupId>
     <artifactId>spring-data-mongodb</artifactId>
 </dependency>
 ```
 
-### Configuration
+## Quick Start
 
-All you need to do is to register the following Spring Beans to your Spring configuration to support
-Types conversions and automatic Id generation.
+Base package: `dk.trustworks.essentials.types.springdata.mongo`
 
-Example:
+**1. Register Spring beans:**
 
-```
-@Bean
-public SingleValueTypeRandomIdGenerator registerIdGenerator() {
-    return new SingleValueTypeRandomIdGenerator();
+```java
+@Configuration
+public class MongoConfig {
+
+    @Bean
+    public SingleValueTypeRandomIdGenerator singleValueTypeIdGenerator() {
+        return new SingleValueTypeRandomIdGenerator();
+    }
+
+    @Bean
+    public MongoCustomConversions mongoCustomConversions() {
+        return new MongoCustomConversions(List.of(new SingleValueTypeConverter()));
+    }
 }
+```
 
+**2. Define entities with semantic types:**
+
+```java
+@Document
+public class Order {
+    @Id
+    public OrderId id;
+    public CustomerId customerId;
+    public Amount totalPrice;
+    public Created createdAt;
+}
+```
+
+**3. Use repositories as normal:**
+
+```java
+public interface OrderRepository extends MongoRepository<Order, OrderId> {
+    // Spring Data auto-implements query methods based on naming convention
+    List<Order> findByCustomerId(CustomerId customerId);
+}
+```
+
+**Learn more:** See [OrderRepositoryIT.java](src/test/java/dk/trustworks/essentials/types/springdata/mongo/OrderRepositoryIT.java)
+
+##SingleValueTypeConverter
+
+Converts `SingleValueType` instances to/from MongoDB-compatible types.
+
+### Supported Conversions
+
+| SingleValueType | MongoDB Type |
+|-----------------|--------------|
+| `CharSequenceType` | `String` |
+| `NumberType` | `Number` / `Decimal128` |
+| `InstantType` | `Date` |
+| `LocalDateTimeType` | `Date` |
+| `LocalDateType` | `Date` |
+| `LocalTimeType` | `Date` |
+
+### Basic Usage
+
+```java
 @Bean
 public MongoCustomConversions mongoCustomConversions() {
     return new MongoCustomConversions(List.of(new SingleValueTypeConverter()));
 }
 ```
 
-Additionally, to support this Entity that uses a strongly types Map key, that can contain an `ObjectId#toString` as value, such as the `ProductId` key type in the `orderLines` property defined in the 
-`Order`:
+## SingleValueTypeRandomIdGenerator
 
+Automatically generates IDs for entities with `@Id` fields of `SingleValueType` type.
+
+**How it works:**
+1. Checks if entity has an `@Id` field of `SingleValueType` type
+2. If the field is `null`, calls the static `random()` method on the type
+3. Sets the generated ID on the entity before it's saved
+
+**Requirements:**
+- The `SingleValueType` subclass must have a static `random()` method
+- Register the generator as a Spring bean
+
+```java
+@Bean
+public SingleValueTypeRandomIdGenerator singleValueTypeIdGenerator() {
+    return new SingleValueTypeRandomIdGenerator();
+}
 ```
+
+**Example ID type with `random()` method** (CharSequenceType-based, suitable for string IDs like ObjectId):
+
+```java
+public class OrderId extends CharSequenceType<OrderId> implements Identifier {
+    public OrderId(CharSequence value) {
+        super(value);
+    }
+
+    public OrderId(String value) {
+        super(value);
+    }
+    
+    public static OrderId of(CharSequence value) {
+        return new OrderId(value);
+    }
+
+    public static OrderId random() {
+        return new OrderId(ObjectId.get().toString());
+    }
+}
+```
+
+## ObjectId Map Keys
+
+When using a `CharSequenceType` as a Map `key` that contains `ObjectId` values, you must explicitly register it for `ObjectId` conversion.
+
+**Example entity with Map:**
+
+```java
 @Document
 public class Order {
     @Id
     public OrderId id;
     public CustomerId customerId;
-    public AccountId accountId;
     public Map<ProductId, Quantity> orderLines;
-    
-    ...
-}    
+}
 ```
 
-and where `ProductId` is defined as (note the `random` method uses `new ProductId(ObjectId.get().toString())`):
-```
+**ProductId that uses ObjectId:**
+
+```java
 public class ProductId extends CharSequenceType<ProductId> implements Identifier {
     public ProductId(CharSequence value) {
         super(value);
     }
 
+    public ProductId(String value) {
+        super(value);
+    }
+    
     public static ProductId of(CharSequence value) {
         return new ProductId(value);
     }
@@ -86,9 +185,9 @@ public class ProductId extends CharSequenceType<ProductId> implements Identifier
 }
 ```
 
-Then you additionally need to explicit define that `ProductId` must be convertable to and from `ObjectId` when configuring the `MongoCustomConversions`:
+**Register for ObjectId conversion:**
 
-```
+```java
 @Bean
 public MongoCustomConversions mongoCustomConversions() {
     return new MongoCustomConversions(List.of(
@@ -96,42 +195,48 @@ public MongoCustomConversions mongoCustomConversions() {
 }
 ```
 
-### JSR 310 Semantic Types
+**Multiple types:**
 
-This library also supports for the following `JSR310SingleValueType` which wraps existing JSR-310 types (java.time):
-
-| `JSR310SingleValueType` specialization | Value Type |
-|----------------------------------|-------------------------|
-| `InstantType`                    | `Instant`               |
-| `LocalDateTimeType`              | `LocalDateTime`         |
-| `LocalDateType`                  | `LocalDate`             |
-| `LocalTimeType`                  | `LocalTime`             |
-
-Note: `OffsetDateTimeType` and `ZonedDateTimeType` are not supported as the Spring Data Mongo doesn't support converting
-`OffsetDateTime` and `ZonedDateTime`  
-
-This implementation is compatible with both the NativeDriver JavaTime Codec and SpringData JavaTime Codes:
-```
-    @Bean
-    public MongoCustomConversions mongoCustomConversions() {
-        return MongoCustomConversions.create(mongoConverterConfigurationAdapter -> {
-            mongoConverterConfigurationAdapter.useNativeDriverJavaTimeCodecs();
-            // Default if nothing is specified ---> mongoConverterConfigurationAdapter.useSpringDataJavaTimeCodecs();
-            mongoConverterConfigurationAdapter.registerConverters(List.of(
-                    new SingleValueTypeConverter(ProductId.class)));
-        });
-    }
+```java
+@Bean
+public MongoCustomConversions mongoCustomConversions() {
+    return new MongoCustomConversions(List.of(
+            new SingleValueTypeConverter(ProductId.class, OrderItemId.class, VariantId.class)));
+}
 ```
 
+## JSR-310 Temporal Types
 
-Caveats: 
-- The `JSR310SingleValueType` converters provided by this library defaults to using ZoneId `UTC` (as MongoDB's `ISODate` is UTC based),
-hence it's recommended to use `ZoneId.of("UTC")` or `Clock.systemUTC()` when creating the underlying JSR-310 instances.
-- MongoDB's `ISODate` doesn't provide nano time precision, hence it's recommended to use `.with(ChronoField.NANO_OF_SECOND, 0)`
-or `.withNano(0)` (depending on what the underlying JSR-310 type supports)
+The converter supports the following `JSR310SingleValueType` subtypes:
 
-Example `InstantType`:
+| Your Type Extends | Wrapped Value | MongoDB Type |
+|-------------------|---------------|--------------|
+| `InstantType` | `Instant` | `Date` |
+| `LocalDateTimeType` | `LocalDateTime` | `Date` |
+| `LocalDateType` | `LocalDate` | `Date` |
+| `LocalTimeType` | `LocalTime` | `Date` |
+
+**Note:** `OffsetDateTimeType` and `ZonedDateTimeType` are **not supported** because Spring Data MongoDB doesn't support `OffsetDateTime` and `ZonedDateTime` conversion.
+
+### Codec Compatibility
+
+Works with both Native Driver and Spring Data Java Time Codecs:
+
+```java
+@Bean
+public MongoCustomConversions mongoCustomConversions() {
+    return MongoCustomConversions.create(config -> {
+        config.useNativeDriverJavaTimeCodecs();
+        // Or: config.useSpringDataJavaTimeCodecs(); (default)
+        config.registerConverters(List.of(
+                new SingleValueTypeConverter(ProductId.class)));
+    });
+}
 ```
+
+### Example: InstantType
+
+```java
 public class LastUpdated extends InstantType<LastUpdated> {
     public LastUpdated(Instant value) {
         super(value);
@@ -147,8 +252,9 @@ public class LastUpdated extends InstantType<LastUpdated> {
 }
 ```
 
-Example `LocalDateTimeType`:
-```
+### Example: LocalDateTimeType
+
+```java
 public class Created extends LocalDateTimeType<Created> {
     public Created(LocalDateTime value) {
         super(value);
@@ -163,3 +269,23 @@ public class Created extends LocalDateTimeType<Created> {
     }
 }
 ```
+
+## Gotchas
+
+- **UTC timezone** - JSR-310 converters use `ZoneId.of("UTC")` since MongoDB's `ISODate` is UTC-based. Use `Clock.systemUTC()` when creating instances.
+
+- **No nanosecond precision** - MongoDB's `ISODate` doesn't support nanoseconds. Use `.withNano(0)` or `.with(ChronoField.NANO_OF_SECOND, 0)`.
+
+- **OffsetDateTime/ZonedDateTime not supported** - Spring Data MongoDB doesn't support these types. Use `InstantType` or `LocalDateTimeType` instead.
+
+- **ObjectId Map keys** - If a `CharSequenceType` contains `ObjectId` values and is used as a Map key, you must explicitly register it with `new SingleValueTypeConverter(YourType.class)`.
+
+- **ID generation requires `random()` method** - The `SingleValueTypeRandomIdGenerator` requires a static `random()` method on your ID type.
+
+- **Decimal128 handling** - `BigDecimalType` values are automatically converted from MongoDB's `Decimal128` type.
+
+## See Also
+
+- [LLM-types-springdata-mongo.md](../LLM/LLM-types-springdata-mongo.md) - API reference for LLM assistance
+- [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
+- [types-jackson](../types-jackson) - Jackson serialization for types

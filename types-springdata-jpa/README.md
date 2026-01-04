@@ -1,36 +1,40 @@
-# Essentials Java building blocks
+# Types-SpringData-JPA
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies
-on other libraries, unless explicitly mentioned.
+> Spring Data JPA persistence support for Essentials `types` module
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and
-strongly typed code, which doesn't depend on other libraries or frameworks, but instead allows easy integrations with
-many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+This module provides JPA `AttributeConverter` base classes for persisting `SingleValueType` implementations to relational databases using Spring Data JPA.
 
->**NOTE:**
->**This WORK-IN-PROGRESS library is experimental and unstable, and currently it only supports simple `AttributeConverter`'s.     
-> It e.g. doesn't support Id _autogeneration_ for `@Id` annotated `SingleValueType` field/properties!!!**
+> **WARNING: EXPERIMENTAL & UNSTABLE**
+>
+> This module is experimental and may be discontinued in a future release. It has significant limitations:
+> - Does NOT support ID autogeneration for `@Id` annotated `SingleValueType` fields
+> - `@Id` fields require complex workarounds with `@EmbeddedId` and `@Embeddable`
+> - Each `SingleValueType` requires a custom `AttributeConverter` class
+>
+> **Consider using [types-jdbi](../types-jdbi) instead for SQL database persistence.**
 
-> **Warning: This module is very experimental & unstable - subject to be removed**
+**LLM Context:** [LLM-types-springdata-jpa.md](../LLM/LLM-types-springdata-jpa.md)
 
-## Types-SpringData-JPA
+## Table of Contents
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Base AttributeConverters](#base-attributeconverters)
+- [Primary Key Fields](#primary-key-fields)
+- [Built-in Converters](#built-in-converters)
+- [Gotchas](#gotchas)
 
-This library focuses purely on providing [Spring Data JPA](https://spring.io/projects/spring-data-jpa) persistence support for the **types** defined in the
-Essentials `types` library.
+## Installation
 
-
-
-To use `Types-SpringData-JPA` just add the following Maven dependency:
-```
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-springdata-jpa</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Types-SpringData-JPA` usually needs additional third party dependencies to work, such as:
-```
+**Required dependencies** (provided scope - add to your project):
+```xml
 <dependency>
     <groupId>org.springframework.data</groupId>
     <artifactId>spring-data-jpa</artifactId>
@@ -38,47 +42,16 @@ To use `Types-SpringData-JPA` just add the following Maven dependency:
 <dependency>
     <groupId>jakarta.persistence</groupId>
     <artifactId>jakarta.persistence-api</artifactId>
-    <version>3.1.0</version>
 </dependency>
 ```
 
-Example:
+## Quick Start
 
-```java 
-@Entity
-@Table(name = "orders")
-public class Order {
-    @EmbeddedId
-    public OrderId    id;
-    public CustomerId customerId;
-    public AccountId  accountId;
-    
-    ...
-}
-```
+Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 
-You need to create custom `AttributeConverter`'s.  
-All `SingleValueTypes` are support and provide convenience Base AttributeConverters in
-`dk.trustworks.essentials.types.springdata.jpa.converters` that you can extend:
+**1. Create AttributeConverters for your types:**
 
-- `BaseBigDecimalTypeAttributeConverter`
-- `BaseByteTypeAttributeConverter`
-- `BaseCharSequenceTypeAttributeConverter`
-- `BaseDoubleTypeAttributeConverter`
-- `BaseFloatTypeAttributeConverter`
-- `BaseInstantTypeAttributeConverter`
-- `BaseIntegerTypeAttributeConverter`
-- `BaseLocalDateTimeTypeAttributeConverter`
-- `BaseLocalDateTypeAttributeConverter`
-- `BaseLocalTimeTypeAttributeConverter`
-- `BaseLongTypeAttributeConverter`
-- `BaseOffsetDateTimeTypeAttributeConverter`
-- `BaseShortTypeAttributeConverter`
-- `BaseZonedDateTimeTypeAttributeConverter`
-
-Example:
-
-```java 
+```java
 @Converter(autoApply = true)
 public class CustomerIdAttributeConverter extends BaseCharSequenceTypeAttributeConverter<CustomerId> {
     @Override
@@ -86,11 +59,7 @@ public class CustomerIdAttributeConverter extends BaseCharSequenceTypeAttributeC
         return CustomerId.class;
     }
 }
-```
 
-or
-
-```java 
 @Converter(autoApply = true)
 public class AccountIdAttributeConverter extends BaseLongTypeAttributeConverter<AccountId> {
     @Override
@@ -100,28 +69,112 @@ public class AccountIdAttributeConverter extends BaseLongTypeAttributeConverter<
 }
 ```
 
-## @Id / Primary key fields 
+**2. Define entities with semantic types:**
 
-`@Id` or Primary key fields of type `SingleValueType` needs special mapping.
-Below is an example that uses `@EmbeddedId` instead of `@Id`:
-
-```java 
+```java
 @Entity
 @Table(name = "orders")
 public class Order {
     @EmbeddedId
-    public OrderId    id;
-    ...
+    public OrderId id;          // See "Primary Key Fields" section
+    public CustomerId customerId;
+    public AccountId accountId;
+    public Amount totalPrice;
 }
 ```
 
-The `OrderId` must:
-- Be annotated with `@Embeddable` 
-- Furthermore, it needs to be modified to include an additional **id** field (in the example below called `orderId`),  which is the actual id value that Hibernate/JPA persist.
-  - This **id** is required as otherwise JPA/Hibernate complains with "dk.trustworks.essentials.types.springdata.jpa.model.OrderId has no persistent id property".
-  - JPA/Hibernate has problems supporting `SingleValueType` immutable objects for **identifier** fields because `SingleValueType` doesn't contain the necessary JPA annotations.  
-- You also need to provide a default constructor, which due to `SingleValueType`'s design can NOT be **null**, so you need to provide a temporary value that indicates that the value is temporary.
-- Finally, the single argument constructor needs to call both `super(value);` and maintain the **id** field (in the example called `orderId`)
+**3. Use repositories as normal:**
+
+```java
+public interface OrderRepository extends JpaRepository<Order, OrderId> {
+    // Spring Data auto-implements query methods
+    List<Order> findByCustomerId(CustomerId customerId);
+}
+```
+
+**Learn more:** See [OrderRepositoryIT.java](src/test/java/dk/trustworks/essentials/types/springdata/jpa/OrderRepositoryIT.java)
+
+## Base AttributeConverters
+
+Extend these base classes to create converters for your types:
+
+| SingleValueType | Base Converter | Database Type | Abstract Method |
+|-----------------|----------------|---------------|-----------------|
+| `CharSequenceType` | `BaseCharSequenceTypeAttributeConverter` | `String` | `getConcreteCharSequenceType()` |
+| `BigDecimalType` | `BaseBigDecimalTypeAttributeConverter` | `Double` | `getConcreteBigDecimalType()` |
+| `IntegerType` | `BaseIntegerTypeAttributeConverter` | `Integer` | `getConcreteIntegerType()` |
+| `LongType` | `BaseLongTypeAttributeConverter` | `Long` | `getConcreteLongType()` |
+| `ShortType` | `BaseShortTypeAttributeConverter` | `Short` | `getConcreteShortType()` |
+| `ByteType` | `BaseByteTypeAttributeConverter` | `Byte` | `getConcreteByteType()` |
+| `DoubleType` | `BaseDoubleTypeAttributeConverter` | `Double` | `getConcreteDoubleType()` |
+| `FloatType` | `BaseFloatTypeAttributeConverter` | `Float` | `getConcreteFloatType()` |
+| `InstantType` | `BaseInstantTypeAttributeConverter` | `Instant` | `getConcreteInstantType()` |
+| `LocalDateTimeType` | `BaseLocalDateTimeTypeAttributeConverter` | `LocalDateTime` | `getConcreteLocalDateTimeType()` |
+| `LocalDateType` | `BaseLocalDateTypeAttributeConverter` | `LocalDate` | `getConcreteLocalDateType()` |
+| `LocalTimeType` | `BaseLocalTimeTypeAttributeConverter` | `LocalTime` | `getConcreteLocalTimeType()` |
+| `OffsetDateTimeType` | `BaseOffsetDateTimeTypeAttributeConverter` | `OffsetDateTime` | `getConcreteOffsetDateTimeType()` |
+| `ZonedDateTimeType` | `BaseZonedDateTimeTypeAttributeConverter` | `ZonedDateTime` | `getConcreteZonedDateTimeType()` |
+
+### Example: CharSequenceType Converter
+
+```java
+@Converter(autoApply = true)
+public class CustomerIdAttributeConverter extends BaseCharSequenceTypeAttributeConverter<CustomerId> {
+    @Override
+    protected Class<CustomerId> getConcreteCharSequenceType() {
+        return CustomerId.class;
+    }
+}
+```
+
+### Example: LongType Converter
+
+```java
+@Converter(autoApply = true)
+public class AccountIdAttributeConverter extends BaseLongTypeAttributeConverter<AccountId> {
+    @Override
+    protected Class<AccountId> getConcreteLongType() {
+        return AccountId.class;
+    }
+}
+```
+
+### Example: InstantType Converter
+
+```java
+@Converter(autoApply = true)
+public class LastUpdatedAttributeConverter extends BaseInstantTypeAttributeConverter<LastUpdated> {
+    @Override
+    protected Class<LastUpdated> getConcreteInstantType() {
+        return LastUpdated.class;
+    }
+}
+```
+
+## Primary Key Fields
+
+`@Id` fields of type `SingleValueType` require special handling due to JPA/Hibernate limitations. You must use `@EmbeddedId` instead of `@Id`.
+Issue: You cannot use same type as `@EmbeddedId` AND regular property as it causes dual-column mapping. Id types and property types must be different.
+
+### Entity Setup
+
+```java
+@Entity
+@Table(name = "orders")
+public class Order {
+    @EmbeddedId
+    public OrderId id;
+    // ... other fields
+}
+```
+
+### ID Type Requirements
+
+The ID type must:
+1. Be annotated with `@Embeddable`
+2. Include a separate persistent field for the ID value (JPA requires this)
+3. Provide a no-arg constructor (can be `protected`)
+4. Update both the `SingleValueType` value and the persistent field in the constructor
 
 ```java
 @Embeddable
@@ -129,13 +182,14 @@ public class OrderId extends LongType<OrderId> implements Identifier {
     private static Random RANDOM_ID_GENERATOR = new Random();
 
     /**
-     * Required as otherwise JPA/Hibernate complains with "dk.trustworks.essentials.types.springdata.jpa.model.OrderId has no persistent id property"
-     * as it has problems with supporting SingleValueType immutable objects for identifier fields (as SingleValueType doesn't contain the necessary JPA annotations)
+     * Required by JPA - the actual persisted value.
+     * JPA/Hibernate cannot use SingleValueType's immutable value directly.
      */
     private Long orderId;
 
     /**
-     * Is required by JPA
+     * Required by JPA - no-arg constructor.
+     * Uses -1L as temporary value (SingleValueType cannot be null).
      */
     protected OrderId() {
         super(-1L);
@@ -143,15 +197,11 @@ public class OrderId extends LongType<OrderId> implements Identifier {
 
     public OrderId(Long value) {
         super(value);
-        orderId = value;
+        orderId = value;  // Must update both!
     }
 
     public static OrderId of(long value) {
         return new OrderId(value);
-    }
-
-    public static OrderId ofNullable(Long value) {
-        return value != null ? new OrderId(value) : null;
     }
 
     public static OrderId random() {
@@ -159,3 +209,43 @@ public class OrderId extends LongType<OrderId> implements Identifier {
     }
 }
 ```
+
+## Built-in Converters
+
+Ready-to-use converters for common Essentials types:
+
+| Type | Converter |
+|------|-----------|
+| `Amount` | `AmountAttributeConverter` |
+| `Percentage` | `PercentageAttributeConverter` |
+| `CurrencyCode` | `CurrencyCodeAttributeConverter` |
+| `CountryCode` | `CountryCodeAttributeConverter` |
+| `EmailAddress` | `EmailAddressAttributeConverter` |
+
+These are already annotated with `@Converter(autoApply = true)`.
+
+## Gotchas
+
+- **No ID autogeneration** - Unlike standard JPA, this module does NOT support automatic ID generation for `SingleValueType` IDs. You must generate IDs manually (e.g., using a `random()` method).
+
+- **@EmbeddedId required for primary keys** - Cannot use `@Id` annotation directly on `SingleValueType` fields. Must use `@EmbeddedId` with `@Embeddable` ID types.
+
+- **Duplicate field in ID types** - ID types require both the `SingleValueType` value AND a separate persistent field for JPA compatibility.
+
+- **@Embeddable types cannot be reused as regular properties** - If you mark a `SingleValueType` as `@Embeddable` for use with `@EmbeddedId`, you cannot use that same type as a regular property in other entities. JPA would map it as an embedded component with multiple columns. Create separate types: one `@Embeddable` for IDs, and use `AttributeConverter` for regular properties.
+
+- **No-arg constructor required** - `@Embeddable` ID types need a no-arg constructor, but `SingleValueType` doesn't allow null values. Use a temporary value like `-1L`.
+
+- **One converter per type** - Each `SingleValueType` subclass requires its own `AttributeConverter` class (cannot use a generic converter like MongoDB).
+
+- **autoApply = true** - Use `@Converter(autoApply = true)` to automatically apply converters to all entity fields of that type.
+
+- **BigDecimal stored as Double** - `BigDecimalType` values are stored as `Double`, which may lose precision for monetary calculations requiring more than double precision.
+
+- **Consider alternatives** - Due to the complexity of ID handling, consider using [types-jdbi](../types-jdbi) for SQL database persistence instead.
+
+## See Also
+
+- [LLM-types-springdata-jpa.md](../LLM/LLM-types-springdata-jpa.md) - API reference for LLM assistance
+- [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
+- [types-jdbi](../types-jdbi) - JDBI persistence (recommended alternative for SQL databases)

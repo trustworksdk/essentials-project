@@ -1,56 +1,54 @@
-# Essentials Java building blocks
+# Essentials - Immutable
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies
-on other libraries, unless explicitly mentioned.
+> Zero-dependency utilities for creating simple immutable value objects without code generation.
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and
-strongly typed code, which doesn't depend on other libraries or frameworks, but instead allows easy integrations with
-many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+> **NOTE:** This library is WORK-IN-PROGRESS
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+**LLM Context:** [LLM-immutable.md](../LLM/LLM-immutable.md)
 
-## Immutable
+## Table of Contents
+- [Overview](#overview)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [When to Use](#when-to-use)
+- [Generated Methods](#generated-methods)
+- [Important Warnings](#important-warnings)
+- [Field Exclusions](#field-exclusions)
+- [See Also](#see-also)
 
-This library focuses purely on providing utility classes that make it easier to create **simple** immutable types/classes, that
-doesn't rely on code generators.
+## Overview
 
-To use `Immutable` just add the following Maven dependency:
+The `immutable` module provides `ImmutableValueObject` - a base class for creating immutable Value Objects with auto-generated `toString()`, `equals()`, and `hashCode()` methods based on your class fields.
 
-```
+**Value Object definition:** A Value Object is defined by its property values, not by an identifier. Two value objects of the same type with the same property values are considered equal.
+
+**Zero dependencies:** This module has no runtime dependencies (not even SLF4J).
+
+For advanced Jackson deserialization support, see [immutable-jackson](../immutable-jackson).
+
+## Installation
+
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>immutable</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Immutable` usually needs additional third party dependencies to work, such as:
+## Quick Start
 
-```
-<dependency>
-    <groupId>org.slf4j</groupId>
-    <artifactId>slf4j-api</artifactId>
-</dependency>
-```
+```java
+import dk.trustworks.essentials.immutable.ImmutableValueObject;
+import dk.trustworks.essentials.immutable.annotations.Exclude;
 
-**NOTE:**
-**This library is WORK-IN-PROGRESS**
-
-### Immutable Value Object
-
-The base type `ImmutableValueObject` supports creating immutable (i.e. an object where its values cannot change after object instantiation/creation) **Value Object**  
-The core feature set of `ImmutableValueObject` is that it provides default implementations for `toString`, `equals` and `hashCode`, but you're always free to override this and provide your own
-implementation.
-
-Example:
-
-```
 public class ImmutableOrder extends ImmutableValueObject {
     public final OrderId                  orderId;
     public final CustomerId               customerId;
-    @Exclude.EqualsAndHashCode
     public final Percentage               percentage;
+    public final EmailAddress             email;
+    @Exclude.EqualsAndHashCode
+    public final Map<ProductId, Quantity> orderLines;
     @Exclude.ToString
     public final Money                    totalPrice;
 
@@ -58,98 +56,109 @@ public class ImmutableOrder extends ImmutableValueObject {
                           CustomerId customerId,
                           Percentage percentage,
                           EmailAddress email,
+                          Map<ProductId, Quantity> orderLines,
                           Money totalPrice) {
         this.orderId = orderId;
         this.customerId = customerId;
         this.percentage = percentage;
-        this.totalPrice = totalPrice;
-    }
-}
-```
-
-#### Value Object definition
-
-> A **Value Object** is defined by its property values and not by an identifier.  
-> If two value objects, of the same type, have the **same property values** then they're considered to be **equal**.
-
-Example:
-
-```
-var thisOrder = new ImmutableOrder(OrderId.of(123456789),
-                                   CustomerId.of("CustomerId1"),
-                                   Percentage.from("50%"),
-                                   Money.of("1234.56", CurrencyCode.DKK));
-
-var thatOrder = new ImmutableOrder(OrderId.of(123456789),
-                                   CustomerId.of("CustomerId1"),
-                                   Percentage.from("50%"),
-                                   Money.of("1234.56", CurrencyCode.DKK));
-                                   
-assertThat(thisOrder).isEqualTo(thatOrder);
-```
-
-#### Immutability
-
-The default implementation of `toString` and `hashCode` relies upon the assumption that ALL *non-transient* instance fields are marked `final` to ensure that they cannot change after they have been
-assigned a value.  
-To ensure that `toString` and `hashCode` calculation only happens once, the `ImmutableValueObject` will **cache** the output of the first call to `toString` and `hashCode`.
-
-This also means that if a field isn't `final` or if the **field type** is a `mutable` type, such as `List`, `Map`, `Set`, etc. then you **cannot reliably rely** on the output of followup calls
-to `toString` or `hashCode` as the fields used for calculation may have changed value.
-
-#### `toString` logic
-
-All fields without the `@Exclude.ToString` annotation with be included in the output.  
-The fields are sorted alphabetically (ascending order) and then grouped into fields with and without value.  
-We will first output non-null fields (in alphabetically order) and finally null fields (in alphabetically order)
-
-Example:
-
-```
-public class ImmutableOrder extends ImmutableValueObject {
-    public final OrderId                  orderId;
-    public final CustomerId               customerId;
-    @Exclude.EqualsAndHashCode
-    public final Percentage               percentage;
-    @Exclude.ToString
-    public final Money                    totalPrice;
-
-    public ImmutableOrder(OrderId orderId,
-                          CustomerId customerId,
-                          Percentage percentage,
-                          EmailAddress email,
-                          Money totalPrice) {
-        this.orderId = orderId;
-        this.customerId = customerId;
-        this.percentage = percentage;
+        this.email = email;
+        this.orderLines = orderLines;
         this.totalPrice = totalPrice;
     }
 }
 
-new ImmutableOrder(OrderId.of(123456789),
-                   null,
-                   Percentage.of("50%),
-                   Money.of("1234.56", CurrencyCode.DKK)
-                  )
-                  .toString()
+// Two instances with identical values are equal
+var order1 = new ImmutableOrder(OrderId.of(123), CustomerId.of("C1"),
+                                Percentage.from("50%"), EmailAddress.of("test@example.com"),
+                                Map.of(ProductId.of("P1"), Quantity.of(10)),
+                                Money.of("100.00", CurrencyCode.USD));
+
+var order2 = new ImmutableOrder(OrderId.of(123), CustomerId.of("C1"),
+                                Percentage.from("50%"), EmailAddress.of("test@example.com"),
+                                Map.of(ProductId.of("P2"), Quantity.of(5)), // Different - but excluded!
+                                Money.of("100.00", CurrencyCode.USD));
+
+assertThat(order1).isEqualTo(order2); // true - orderLines excluded from equals
 ```
 
-will return:
+## When to Use
 
-`ImmutableOrder { orderId: 123456789, percentage: 50.00%, customerId: null }`
+**Choose `ImmutableValueObject` when:**
+- You need value objects with custom equality logic (field exclusions)
+- You're on Java 17+ but prefer traditional classes over Records
+- You need inheritance (Records don't support it)
 
-with `customerId` last (as it has a null value) and without the `totalPrice` as it is excluded from being included in the `toString`
-result due to `@Exclude.ToString`
+**Choose Java `Record` when:**
+- You want built-in immutability (Java 14+)
+- You don't need to exclude fields from `equals`/`hashCode`
+- You prefer concise syntax
 
-#### `equals` logic
+**Choose `SingleValueType` when:**
+- Wrapping a single value (e.g., `OrderId`, `CustomerId`)
+- See [types](../types) module
 
-The logic of `equals` follows the standard Java approach where we don't accept subclasses of a type, we only accept the exact same type.  
-All fields without the `@Exclude.EqualsAndHashCode` annotation with be included in the `equals` operation.  
-The fields are sorted alphabetically (ascending order) and values from the two objects being compared one by one.  
-As soon a difference in field values is identified the comparison is stopped (to avoid wasting CPU cycles) and the result is returned.
+## Generated Methods
 
-#### `hashCode` logic
+### `toString()`
+Fields sorted alphabetically, non-null values first, then null values. Excludes `@Exclude.ToString` fields.
 
-All fields without the `@Exclude.EqualsAndHashCode` annotation with be included the calculation of the `hash-code`.  
-The fields are sorted alphabetically (ascending order) and the `hashCode` will be calculated field by field in the order of the fields names.  
-The algorithm for calculating the hashcode follows the `Objects#hash(Object...)` method.
+```java
+// Returns: "ImmutableOrder { customerId: C1, email: test@example.com, orderId: 123, orderLines: {P1=10}, percentage: 50.00% }"
+order.toString();
+```
+
+### `equals(Object)`
+Compares all non-excluded fields alphabetically. Rejects subclasses (exact type match required). Excludes `@Exclude.EqualsAndHashCode` fields.
+
+### `hashCode()`
+Calculated from non-excluded fields (alphabetically sorted). Follows `Objects.hash()` algorithm. Excludes `@Exclude.EqualsAndHashCode` fields.
+
+**Performance:** Both `toString()` and `hashCode()` are cached after first invocation.
+
+See [Javadoc](src/main/java/dk/trustworks/essentials/immutable/ImmutableValueObject.java) for detailed algorithm descriptions.
+
+## Important Warnings
+
+### Fields Must Be Final
+**CRITICAL:** All non-transient instance fields MUST be `final` to ensure true immutability.
+
+### Mutable Field Types
+If a field's type is mutable (`List`, `Map`, `Set`, etc.), you **cannot reliably use** cached `toString()` or `hashCode()` results as the underlying data may change.
+
+**Recommendation:** Use immutable collections:
+```java
+public final List<Item> items = List.copyOf(mutableList); // Java 10+
+public final Map<K, V> map = Map.copyOf(mutableMap);
+```
+
+## Field Exclusions
+
+### `@Exclude.ToString`
+Excludes a field from `toString()` output. Useful for:
+- Sensitive data (passwords, tokens)
+- Large data structures (binary content)
+- Redundant computed values
+
+### `@Exclude.EqualsAndHashCode`
+Excludes a field from `equals()` and `hashCode()` calculations. Useful for:
+- Metadata fields (timestamps, version numbers)
+- Cache fields
+- Fields that don't define object identity
+
+**Example:**
+```java
+public class Order extends ImmutableValueObject {
+    public final OrderId orderId;
+    @Exclude.EqualsAndHashCode  // Metadata - not part of identity
+    public final Instant createdAt;
+    @Exclude.ToString           // Sensitive
+    public final String password;
+}
+```
+
+## See Also
+
+- [LLM-immutable.md](../LLM/LLM-immutable.md) - Quick reference for LLMs
+- [immutable-jackson](../immutable-jackson) - Jackson deserialization support
+- [types](../types) - Single-value type wrappers (`SingleValueType`)
+- [ImmutableValueObjectTest.java](src/test/java/dk/trustworks/essentials/immutable/ImmutableValueObjectTest.java) - Comprehensive test examples

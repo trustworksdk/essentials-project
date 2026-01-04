@@ -1,69 +1,128 @@
-# Essentials Components - SpringData Mongo Distributed Fenced Lock
+# Essentials Components - SpringData MongoDB Distributed Fenced Lock
 
-Provides a `FencedLockManager` implementation using MongoDB and the SpringData MongoDB library to coordinate intra-service distributed locks  
-See [foundation](../foundation/README.md) for more information about how to use the `FencedLockManager`
+> **NOTE:** **The library is WORK-IN-PROGRESS**
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+MongoDB implementation of the `FencedLockManager` using Spring Data MongoDB for distributed lock coordination.
 
-> Please see the **Security** notices below to familiarize yourself with the security risks related to Collection name configurations
+**LLM-context:** [LLM-springdata-mongo-distributed-fenced-lock.md](../../LLM/LLM-springdata-mongo-distributed-fenced-lock.md)
 
-# Security
-To support customization of storage collection name, the `fencedLocksCollectionName` will be directly used as Collection name, which exposes the component to the risk of malicious input.  
-It is the responsibility of the user of this component to sanitize the `fencedLocksCollectionName` to ensure the security of the resulting MongoDB configuration and associated Queries/Updates/etc. 
+## Overview
 
-The `MongoFencedLockStorage` component, used by `MongoFencedLockManager`, will call the `MongoUtil.checkIsValidCollectionName(String)` method to validate the collection name as a first line of defense.   
-The method provided is designed as an initial layer of defense against users providing unsafe collection names, by applying naming conventions intended to reduce the risk of malicious input.   
-**However, Essentials components as well as `MongoUtil.checkIsValidCollectionName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting MongoDB configuration and associated Queries/Updates/etc.**
-> The responsibility for implementing protective measures against malicious input lies exclusively with the users/developers using the Essentials components and its supporting classes. 
-Users must ensure thorough sanitization and validation of API input parameters,  collection names. Insufficient attention to these practices may leave the application vulnerable to attacks, potentially 
-endangering the security and integrity of the database.  It is highly recommended that the `fencedLocksCollectionName` value is only derived from a controlled and trusted source. 
+This module provides `MongoFencedLockManager`, a MongoDB-backed implementation of the [`FencedLockManager`](../foundation/README.md#fencedlock-distributed-locking) interface from the foundation module.
 
-To mitigate the risk of malicious input attacks, external or untrusted inputs should never directly provide the `fencedLocksCollectionName` value. 
-**Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.**
+For conceptual documentation on fenced locks (why, when, how), see:
+- [Foundation - FencedLock](../foundation/README.md#fencedlock-distributed-locking)
 
-# Configuration
+## Maven Dependency
 
-To use `Spring Data MongoDB Distributed Fenced Lock` just add the following Maven dependency:
-
-```
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>springdata-mongo-distributed-fenced-lock</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-Configuration example:
+## Security
 
-```
-@Bean
-public FencedLockManager fencedLockManager(MongoTemplate mongoTemplate,
-                                           MongoTransactionManager transactionManager,
-                                           MongoDatabaseFactory databaseFactory) {
-  return MongoFencedLockManager.builder()
-                               .setMongoTemplate(mongoTemplate)
-                               .setUnitOfWorkFactory(new SpringMongoTransactionAwareUnitOfWorkFactory(transactionManager,
-                                                                                                      databaseFactory))
-                               .setLockTimeOut(Duration.ofSeconds(3))
-                               .setLockConfirmationInterval(Duration.ofSeconds(1)))
-                               .buildAndStart();
-}
+### ⚠️ Critical: NoSQL Injection Risk
 
-@Bean
-public SingleValueTypeRandomIdGenerator registerIdGenerator() {
-    return new SingleValueTypeRandomIdGenerator();
-}
+The components allow customization of collection names that are used with **String concatenation** → NoSQL injection risk.
+While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against NoSQL injection.
 
-@Bean
-public MongoCustomConversions mongoCustomConversions() {
-    return new MongoCustomConversions(List.of(
+The `fencedLocksCollectionName` parameter is used directly as a MongoDB collection name, exposing the component to potential malicious input.
+
+> ⚠️ **WARNING:** It is your responsibility to sanitize the `fencedLocksCollectionName` value.
+
+**Mitigations:**
+- `MongoFencedLockStorage` calls `MongoUtil.checkIsValidCollectionName(String)` for basic validation
+- This provides initial defense but does **NOT** guarantee complete security
+
+**Developer Responsibility:**
+- Only use `fencedLocksCollectionName` values from controlled, trusted sources
+- Never derive collection names from external/untrusted input
+- Validate all configuration values during application startup
+
+## MongoDB-Specific Configuration
+
+### Requirements
+
+- **MongoDB 4.0+** with replica set (required for transactions)
+- Spring Data MongoDB with transaction support
+
+### Spring Configuration
+
+```java
+@Configuration
+@EnableMongoRepositories
+@EnableTransactionManagement
+public class MongoFencedLockConfiguration {
+
+    @Bean
+    public FencedLockManager fencedLockManager(
+            MongoTemplate mongoTemplate,
+            MongoTransactionManager transactionManager,
+            MongoDatabaseFactory databaseFactory) {
+        return MongoFencedLockManager.builder()
+            .setMongoTemplate(mongoTemplate)
+            .setUnitOfWorkFactory(null) // null for SingleOperationTransaction
+            .setLockTimeOut(Duration.ofSeconds(3))
+            .setLockConfirmationInterval(Duration.ofSeconds(1))
+            .buildAndStart();
+    }
+
+    @Bean
+    public MongoCustomConversions mongoCustomConversions() {
+        return new MongoCustomConversions(List.of(
             new SingleValueTypeConverter(LockName.class)));
-}
+    }
 
-@Bean
-public MongoTransactionManager transactionManager(MongoDatabaseFactory databaseFactory) {
-    return new MongoTransactionManager(databaseFactory);
+    @Bean
+    public MongoTransactionManager transactionManager(MongoDatabaseFactory databaseFactory) {
+        return new MongoTransactionManager(databaseFactory);
+    }
 }
 ```
-  
+
+### Builder Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `mongoTemplate` | Required | MongoTemplate instance |
+| `unitOfWorkFactory` | Required | Transaction factory |
+| `lockManagerInstanceId` | Hostname | Unique identifier for this manager instance |
+| `lockTimeOut` | 10 seconds | Duration before lock expires without confirmation |
+| `lockConfirmationInterval` | 3 seconds | Heartbeat interval for confirming lock ownership |
+| `fencedLocksCollectionName` | `fenced_locks` | MongoDB collection name for storing locks |
+| `eventBus` | None | Optional event bus for lock events |
+
+### Collection Schema
+
+Locks are stored in a MongoDB collection with automatic indexes:
+
+```javascript
+{
+  _id: "lock_name",                        // LockName (String)
+  lastIssuedFencedToken: Long,             // Monotonic counter
+  lockedByLockManagerInstanceId: String,   // Owner instance
+  lockAcquiredTimestamp: ISODate,          // When acquired
+  lockLastConfirmedTimestamp: ISODate      // Last heartbeat
+}
+```
+
+## Usage
+
+See [Foundation - FencedLock](../foundation/README.md#fencedlock-distributed-locking) for complete usage patterns including:
+- Synchronous lock acquisition
+- Asynchronous lock acquisition with callbacks
+- Try-with-resources pattern
+- Lock status monitoring
+
+## Comparison with PostgreSQL Implementation
+
+| Aspect | MongoDB | PostgreSQL |
+|--------|---------|-----------|
+| **Module** | `springdata-mongo-distributed-fenced-lock` | [`postgresql-distributed-fenced-lock`](../postgresql-distributed-fenced-lock/README.md) |
+| **Storage** | MongoDB collection | SQL table |
+| **Transactions** | Spring Data MongoDB | JDBI/JDBC |
+| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 9.5+ |

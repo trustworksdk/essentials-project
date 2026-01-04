@@ -1,69 +1,115 @@
-# Essentials Java building blocks
+# Types-Spring-Web
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies
-on other libraries, unless explicitly mentioned.
+> Spring WebMvc and WebFlux Converter support for Essentials `types` module
 
+This module enables seamless use of `SingleValueType` implementations as `@PathVariable` and `@RequestParam` parameters in Spring WebMvc and WebFlux controllers.
 
+> **NOTE:** This library is WORK-IN-PROGRESS
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and
-strongly typed code, which doesn't depend on other libraries or frameworks, but instead allows easy integrations with
-many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+**LLM Context:** [LLM-types-spring-web.md](../LLM/LLM-types-spring-web.md)
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+## Table of Contents
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [WebMvc Configuration](#webmvc-configuration)
+- [WebFlux Configuration](#webflux-configuration)
+- [JSR-310 Temporal Types](#jsr-310-temporal-types)
+- [Gotchas](#gotchas)
 
-## Types-Spring-Web
+## Installation
 
-This library focuses purely on providing [Spring](https://spring.io/projects/spring-framework) [WebMvc/MVC](https://docs.spring.io/spring-framework/docs/current/reference/html/web.html#spring-web)
-and [WebFlux](https://docs.spring.io/spring-framework/docs/current/reference/html/web-reactive.html#spring-webflux) `Converter` support for the **types** defined in the
-Essentials `types` library.
-
-To use `Types-Spring-Web` just add the following Maven dependency:
-```
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-spring-web</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Types-Spring-Web` usually needs additional third party dependencies to work, such as:
-```
+**Required dependencies** (provided scope - add to your project):
+```xml
 <dependency>
     <groupId>org.springframework</groupId>
     <artifactId>spring-web</artifactId>
 </dependency>
+```
+
+**For WebMvc:**
+```xml
 <dependency>
     <groupId>org.springframework</groupId>
     <artifactId>spring-webmvc</artifactId>
 </dependency>
 ```
 
-**NOTE:**
-**This library is WORK-IN-PROGRESS**
-
-### Configuration
-
-#### WebMvc configuration
-
-##### 1. If you want to be able to serialize/deserialize Objects and `SingleValueType`'s to JSON then you need to add a dependency `types-jackson`:
+**For WebFlux:**
+```xml
+<dependency>
+    <groupId>org.springframework</groupId>
+    <artifactId>spring-webflux</artifactId>
+</dependency>
 ```
+
+## Quick Start
+
+Base package: `dk.trustworks.essentials.types.spring.web`
+
+**1. Register the converter:**
+
+```java
+@Configuration
+public class WebConfig implements WebMvcConfigurer {
+    @Override
+    public void addFormatters(FormatterRegistry registry) {
+        registry.addConverter(new SingleValueTypeConverter());
+    }
+}
+```
+
+**2. Use semantic types in controllers:**
+
+```java
+@RestController
+public class OrderController {
+
+    @GetMapping("/orders/{orderId}")
+    public Order getOrder(@PathVariable OrderId orderId) {
+        return orderService.findById(orderId);
+    }
+
+    @PostMapping("/orders/for-customer/{customerId}")
+    public Order createOrder(@PathVariable CustomerId customerId,
+                             @RequestParam("price") Amount price,
+                             @RequestParam("quantity") Quantity quantity) {
+        return orderService.create(customerId, price, quantity);
+    }
+}
+```
+
+**Learn more:** See [WebMvcControllerTest.java](src/test/java/dk/trustworks/essentials/types/spring/web/WebMvcControllerTest.java)
+
+## WebMvc Configuration
+
+### Step 1: Add Jackson Support (for JSON request/response bodies)
+
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jackson</artifactId>
+    <version>${essentials.version}</version>
 </dependency>
 ```
-and define a `@Bean` the adds the `EssentialTypesJacksonModule`:
-```
+
+```java
 @Bean
-public com.fasterxml.jackson.databind.Module essentialJacksonModule() {
+public Module essentialTypesJacksonModule() {
     return new EssentialTypesJacksonModule();
 }
 ```
 
-##### 2. Setup a `WebMvcConfigurer` that adds the `SingleValueTypeConverter`
-This will allow you to deserialize `@PathVariable` `@RequestParam` method parameters of type `SingleValueType`:
-```
+### Step 2: Register SingleValueTypeConverter
+
+```java
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
     @Override
@@ -73,36 +119,63 @@ public class WebMvcConfig implements WebMvcConfigurer {
 }
 ```
 
-Example:
-```
-@PostMapping("/order/for-customer/{customerId}/update/total-price")
-public ResponseEntity<Order> updatePrice(@PathVariable CustomerId customerId,
-                                         @RequestParam("price") Amount price) {
-    ...
+### Complete WebMvc Example
+
+```java
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+
+    // CharSequenceType as @PathVariable
+    @GetMapping("/{orderId}")
+    public Order getOrder(@PathVariable OrderId orderId) {
+        return orderService.findById(orderId);
+    }
+
+    // Multiple semantic types as @PathVariable and @RequestParam
+    @PostMapping("/for-customer/{customerId}/update/total-price")
+    public Order updatePrice(@PathVariable CustomerId customerId,
+                             @RequestParam("price") Amount price) {
+        return orderService.updatePrice(customerId, price);
+    }
+
+    // NumberType as @RequestParam
+    @GetMapping("/by-quantity")
+    public List<Order> findByQuantity(@RequestParam("min") Quantity minQuantity,
+                                      @RequestParam("max") Quantity maxQuantity) {
+        return orderService.findByQuantityRange(minQuantity, maxQuantity);
+    }
+
+    // JSR-310 temporal type as @PathVariable
+    @GetMapping("/by-due-date/{dueDate}")
+    public List<Order> findByDueDate(@PathVariable DueDate dueDate) {
+        return orderService.findByDueDate(dueDate);
+    }
 }
 ```
 
-#### WebFlux configuration
+## WebFlux Configuration
 
-##### 1. If you want to be able to serialize/deserialize Objects and `SingleValueType`'s to JSON then you need to add a dependency `types-jackson`:
-```
+### Step 1: Add Jackson Support
+
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jackson</artifactId>
+    <version>${essentials.version}</version>
 </dependency>
 ```
-and define a `@Bean` the adds the `EssentialTypesJacksonModule`:
-```
+
+```java
 @Bean
-public com.fasterxml.jackson.databind.Module essentialJacksonModule() {
+public Module essentialTypesJacksonModule() {
     return new EssentialTypesJacksonModule();
 }
 ```
 
-##### 2. Setup a `WebFluxConfigurer` that adds the `SingleValueTypeConverter` and configures the `Jackson2JsonEncoder`/`Jackson2JsonDecoder`
+### Step 2: Register Converter and Configure Codecs
 
-This will allow you to deserialize `@PathVariable` `@RequestParam` method parameters of type `SingleValueType`:
-```
+```java
 @Configuration
 public class WebFluxConfig implements WebFluxConfigurer {
     @Autowired
@@ -110,12 +183,10 @@ public class WebFluxConfig implements WebFluxConfigurer {
 
     @Override
     public void configureHttpMessageCodecs(ServerCodecConfigurer configurer) {
-        configurer.defaultCodecs().jackson2JsonEncoder(
-                new Jackson2JsonEncoder(objectMapper));
-        configurer.defaultCodecs().jackson2JsonDecoder(
-                new Jackson2JsonDecoder(objectMapper));
+        configurer.defaultCodecs().jackson2JsonEncoder(new Jackson2JsonEncoder(objectMapper));
+        configurer.defaultCodecs().jackson2JsonDecoder(new Jackson2JsonDecoder(objectMapper));
     }
-    
+
     @Override
     public void addFormatters(FormatterRegistry registry) {
         registry.addConverter(new SingleValueTypeConverter());
@@ -123,33 +194,49 @@ public class WebFluxConfig implements WebFluxConfigurer {
 }
 ```
 
-Example:
-```
-@PostMapping("/reactive-order/for-customer/{customerId}/update/total-price")
-public Mono<Order> updatePrice(@PathVariable CustomerId customerId,
-                               @RequestParam("price") Amount price) {
-    ...
+### Complete WebFlux Example
+
+```java
+@RestController
+@RequestMapping("/api/reactive/orders")
+public class ReactiveOrderController {
+
+    @GetMapping("/{orderId}")
+    public Mono<Order> getOrder(@PathVariable OrderId orderId) {
+        return orderService.findById(orderId);
+    }
+
+    @PostMapping("/for-customer/{customerId}/update/total-price")
+    public Mono<Order> updatePrice(@PathVariable CustomerId customerId,
+                                   @RequestParam("price") Amount price) {
+        return orderService.updatePrice(customerId, price);
+    }
+
+    @GetMapping("/by-due-date/{dueDate}")
+    public Flux<Order> findByDueDate(@PathVariable DueDate dueDate) {
+        return orderService.findByDueDate(dueDate);
+    }
 }
 ```
 
-### JSR 310 Semantic Types
+## JSR-310 Temporal Types
 
-This library also supports `JSR310SingleValueType` which wraps existing JSR-310 types (java.time):
-| `JSR310SingleValueType` specialization | Value Type |
-|----------------------------------|-------------------------|
-| `InstantType`                    | `Instant`               |
-| `LocalDateTimeType`              | `LocalDateTime`         |
-| `LocalDateType`                  | `LocalDate`             |
-| `LocalTimeType`                  | `LocalTime`             |
-| `OffsetDateTimeType`             | `OffsetDateTime`        |
-| `ZonedDateTimeType`              | `ZonedDateTime`         |
+The converter supports all `JSR310SingleValueType` subtypes:
 
-#### JSR-310 Semantic Types - JSON payload 
-As described in [types-jackson](../types-jackson/README.md) then each JSON serializable concrete `JSR310SingleValueType` being transferred to/from the
-MVCController/WebFlux operations much  **MUST** specify a `@JsonCreator` constructor.  
+| Your Type Extends | Wrapped Value |
+|-------------------|---------------|
+| `InstantType` | `Instant` |
+| `LocalDateTimeType` | `LocalDateTime` |
+| `LocalDateType` | `LocalDate` |
+| `LocalTimeType` | `LocalTime` |
+| `OffsetDateTimeType` | `OffsetDateTime` |
+| `ZonedDateTimeType` | `ZonedDateTime` |
 
-Example: `TransactionTime` which is a concrete `ZonedDateTimeType`:
-```
+### JSON Request/Response Bodies
+
+For JSON payloads, add `@JsonCreator` to the constructor:
+
+```java
 public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
     @JsonCreator
     public TransactionTime(ZonedDateTime value) {
@@ -166,23 +253,38 @@ public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
 }
 ```
 
-#### JSR-310 Semantic Types - Path variables and Request Parameters
+### Path Variables and Request Parameters
 
-This library also supports using all concrete `JSR310SingleValueType` as `@PathVariable` or `@RequestParam`'s.
-Only limitation is that any `ZonedDateTimeType`'s values must be `URLEncoded` to properly work such as `mockMvc.perform(MockMvcRequestBuilders.get("/orders/by-transaction-time/{transactionTime}", URLEncoder.encode(transactionTime.toString(), StandardCharsets.UTF_8)))`
-
-Example using a JSR-310 Semantic Type `@PathVariable` parameter:
-```
-@GetMapping("/orders")
-public DueDate getOrdersWithParam(@RequestParam("dueDate") DueDate dueDate) {
-    return dueDate;
-}
-```
-
-Example using a JSR-310 Semantic Type `@@RequestParam` parameter
-```
+```java
 @GetMapping("/orders/by-due-date/{dueDate}")
-public DueDate getOrders(@PathVariable DueDate dueDate) {
-    return dueDate;
+public List<Order> findByDueDate(@PathVariable DueDate dueDate) {
+    return orderService.findByDueDate(dueDate);
+}
+
+@GetMapping("/orders")
+public List<Order> findByDueDateParam(@RequestParam("dueDate") DueDate dueDate) {
+    return orderService.findByDueDate(dueDate);
 }
 ```
+
+## Gotchas
+
+- **ZonedDateTime URL encoding** - `ZonedDateTimeType` values must be URL-encoded in path variables and query parameters:
+  ```java
+  mockMvc.perform(get("/orders/by-time/{time}",
+      URLEncoder.encode(transactionTime.toString(), StandardCharsets.UTF_8)))
+  ```
+
+- **JSON bodies require types-jackson** - The `SingleValueTypeConverter` only handles `@PathVariable` and `@RequestParam`. For JSON request/response bodies, add `types-jackson` dependency and register `EssentialTypesJacksonModule`.
+
+- **NumberType from String** - The converter automatically parses numeric strings to the appropriate `Number` subtype (Integer, Long, BigDecimal, etc.).
+
+- **Null handling** - The converter handles null values gracefully.
+
+- **Type resolution** - Uses `SingleValueType.fromObject()` which requires a constructor accepting the wrapped value type.
+
+## See Also
+
+- [LLM-types-spring-web.md](../LLM/LLM-types-spring-web.md) - API reference for LLM assistance
+- [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
+- [types-jackson](../types-jackson) - Jackson serialization for types (required for JSON bodies)
