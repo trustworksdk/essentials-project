@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              http://maven.apache.org/xsd/settings-1.0.0.xsd">
+    
+    <!-- Local repository is set via volume mount to /home/vscode/.m2/repository -->
+    
+    <!-- Profiles for common development needs -->
+    <profiles>
+        <!-- Profile for TestContainers optimization -->
+        <profile>
+            <id>testcontainers</id>
+            <properties>
+                <testcontainers.reuse.enable>true</testcontainers.reuse.enable>
+                <testcontainers.docker.client.strategy>org.testcontainers.dockerclient.UnixSocketClientProviderStrategy</testcontainers.docker.client.strategy>
+            </properties>
+        </profile>
+    </profiles>
+    
+    <!-- Active profiles -->
+    <activeProfiles>
+        <activeProfile>testcontainers</activeProfile>
+    </activeProfiles>
+    
+    <!-- Mirror configuration (uncomment and configure if using corporate Nexus/Artifactory) -->
+    <!--
+    <mirrors>
+        <mirror>
+            <id>corporate-repo</id>
+            <mirrorOf>*</mirrorOf>
+            <url>https://nexus.company.com/repository/maven-public/</url>
+        </mirror>
+    </mirrors>
+    -->
+    
+    <!-- Server authentication (if needed for private repositories) -->
+    <!--
+    <servers>
+        <server>
+            <id>corporate-repo</id>
+            <username>${env.NEXUS_USER}</username>
+            <password>${env.NEXUS_PASSWORD}</password>
+        </server>
+    </servers>
+    -->
+</settings>
