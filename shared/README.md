@@ -1,213 +1,697 @@
-# Essentials Java building blocks
+# Shared Module
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies on other libraries, unless explicitly mentioned.
+> Zero-dependency utilities and functional programming primitives for Java 17+
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and strongly typed code, which doesn't depend on other libraries or frameworks, but
-instead allows easy integrations with many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+This module provides the foundational building blocks for all Essentials libraries. All utilities are framework-independent with no third-party dependencies (except SLF4J API as `provided`).
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+> **NOTE:** This library is WORK-IN-PROGRESS
 
-## Shared
+**LLM Context:** [LLM-shared.md](../LLM/LLM-shared.md)
 
-This library contains the smallest set of supporting building blocks needed for other Essentials libraries.
+## Table of Contents
+- [Installation](#installation)
+- [Quick Reference](#quick-reference)
+- [Validation](#validation)
+- [Functional Programming](#functional-programming)
+- [Collections & Streams](#collections--streams)
+- [Exception Handling](#exception-handling)
+- [Message Formatting](#message-formatting)
+- [Reflection](#reflection)
+- [Time & Measurement](#time--measurement)
+- [Concurrency](#concurrency)
+- [Control Flow](#control-flow)
+- ⚠️ [Security](#security)
+- [Additional Utilities](#additional-utilities)
 
-To use `Shared` just add the following Maven dependency:
-```
+## Installation
+
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>shared</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Shared` usually needs additional third party dependencies to work, such as:
-```
+Optional dependency (already available in most projects):
+```xml
 <dependency>
     <groupId>org.slf4j</groupId>
     <artifactId>slf4j-api</artifactId>
 </dependency>
 ```
 
-### Tuples
+## Quick Reference
 
-Base Java is missing a simple Tuple library and while there are some excellent Functional libraries for Java, such as VAVR, adding a dependency on these goes against the Essentials philosophy, so
-instead we provide the minimum in terms of Tuples support.
+| Feature                        | Purpose                                                          |
+|--------------------------------|------------------------------------------------------------------|
+| **FailFast**                   | Enhanced argument validation (replaces `Objects.requireNonNull`) |
+| **Tuples**                     | Immutable tuples (Pair, Triple, Quad) with map operations        |
+| **Either**                     | Choice type representing one of two values                       |
+| **Result**                     | `Either` specialization with success/error semantics             |
+| **Checked***                   | Bridge checked exceptions to functional interfaces               |
+| **Reflector**                  | High-performance caching reflection API                          |
+| **StopWatch**                  | Time operations and methods                                      |
+| **MeasurementRecorder**        | Pluggable measurement recording (logging, Micrometer)            |
+| **Lists/Streams**              | Collection and stream utilities                                  |
+| **InterceptorChain**           | Chain-of-responsibility pattern                                  |
+| **MessageFormatter**           | SLF4J-style and named-parameter message formatting               |
+| **MessageTemplate**            | Structured messages with typed parameters                        |
+| **EssentialsSecurityProvider** | Role-based security abstraction                                  |
+| **Lifecycle**                  | Common start/stop interface                                      |
 
-We offer two different flavors of Tuples:
+## Validation
 
-- The normal `dk.trustworks.essentials.shared.functional.tuple.Tuple` that allows elements of any types
-- The `dk.trustworks.essentials.shared.functional.tuple.comparable.ComparableTuple` that only allows elements that implement the Comparable interface
+### FailFast
 
-Example of using Tuples:
-
-```
-Triple<String, Long, BigDecimal> tuple = Tuple.of("Hello", 100L, new BigDecimal("125.95"));
-var element1 = tuple._1;
-var element2 = tuple._2;
-var element3 = tuple._3;
-
-var elements = tuple.toList();
-
-Triple<String, String, String> stringTuple  = tuple.map((_1, _2, _3) -> Tuple.of(_1.toString(), _2.toString(), _3.toString));
-Triple<String, String, String> stringTuple2 = tuple.map(Object::toString, Object::toString, Object::toString);
-
-```
-
-### Collections
-
-Different utility functions for working with Collections, such as
+Replacement for `Objects.requireNonNull()` with better error messages and additional validation methods. All methods throw `IllegalArgumentException` on failure.
 
 ```java
-Stream<Pair<Integer, String>> indexedStream = Lists.toIndexedStream(List.of("A", "B", "C"));
-String first = Lists.first(List.of("A", "B", "C")); // first = "A"
-String last = Lists.last(List.of("A", "B", "C")); // first = "C"
-```
-### Streams
-
-Provides a zip function for streams of equal lengths
-
-```java
-var tStream = Stream.of("A", "B", "C", "D", "E");
-var uStream = Stream.of("1", "2", "3", "4", "5");
-
-List<String> result = Streams.zipOrderedAndEqualSizedStreams(tStream, uStream, (t, u) -> t + ":" + u)
-                        .collect(Collectors.toList());
-
-assertThat(result).isEqualTo(List.of("A:1", "B:2", "C:3", "D:4", "E:5"));
-```
-
-### Functional interfaces
-
-Apart from Tuples, then the `dk.trustworks.essentials.shared.functional` package also contain reusable functional interfaces, such as the `TripleFunction`, which is used in the definition of
-the `Triple` tuple's map function:
-
-```
-public <R1, R2, R3> Triple<R1, R2, R3> map(TripleFunction<? super T1, ? super T2, ? super T3, Triple<R1, R2, R3>> mappingFunction) {
-   return mappingFunction.apply(_1, _2, _3);
-}
-```
-
-or the Checked variant of the classic Functional-Interfaces (`Runnable`, `Consumer`, `Supplier`, `Function`, `BiFunction` and `TripleFunction`)
-that behaves like the normal Functional-Interface, but which allows checked `Exception`'s to be thrown from their method:
-
-- `CheckedRunnable`
-- `CheckedConsumer`
-- `CheckedSupplier`
-- `CheckedFunction`
-- `CheckedBiFunction`
-- `CheckedTripleFunction`
-
-#### Checked `CheckedRunnable` usage example:
-
-Let's say we have a method called `someOperation` that cannot change, but which accepts a `Runnable` with the purpose of the calling `Runnable.run()`.
-
-```
-public void someOperation(Runnable operation) {        
-    // ... Logic ...           
-    operation.run();           
-    // ... More logic ---   
-}
-```
-
-The problem with `Runnable.run()` occurs when a `Runnable` lambda/instance calls an API that throws a checked `Exception`, e.g. the `java.io.File` API.  
-Since `Runnable.run()` doesn't define that it throws any `Exception`'s we're forced to add a `try/catch` to handle the `java.io.IOException`
-for the code to compile:
-
-```
-someOperation(() -> {                       
-    try {                           
-        // Logic that uses the File API                       
-    } catch (IOException e) {                           
-        throw new RuntimeException(e);                       
-    }                 
-}));
-```
-
-This is where the `CheckedRunnable` comes to the aid as its `run()` method defines that it throws a Checked `Exception` and its `safe(CheckedRunnable)` method will return a new `Runnable` instance
-with a `Runnable.run()` method that ensures that the `run()` method is called and any checked `Exception`'s thrown will be caught and rethrown as a `CheckedExceptionRethrownException`:
-
-```
-someOperation(CheckedRunnable.safe(() -> {                       
-     // Logic that uses the File API that throws IOException                 
-}));
-```
-
-### FailFast argument validation (replacements for Objects.requireNonNull)
-
-The `Objects.requireNonNull()` function is nice to have, but it's only limited to checking for null arguments, and it throws a `NullPointerException` which can be misleading.
-
-This is where the `FailFast` class comes in as it supports many more assertion methods which all throw a `IllegalArgumentException` if the argument doesn't pass the assertion:
-
-- `requireMustBeInstanceOf`
-- `requireNonBlank`
-- `requireTrue`
-- `requireFalse`
-- `requireNonEmpty`
-
-``` 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
-public static Optional<Field> findField(Set<Field> fields,
-                                        String fieldName,
-                                        Class<?> fieldType) {
-    requireNonBlank(fieldName, "You must supply a fieldName");
-    requireNonNull(fieldType, "You must supply a fieldType");
-    
-    return requireNonNull(fields, "You must supply a fields set")
-                   .stream()
-                   .filter(field -> field.getName().equals(fieldName))
-                   .filter(field -> field.getType().equals(fieldType))
-                   .findFirst();
+public Order createOrder(OrderId id, List<LineItem> items, CustomerId customerId) {
+    requireNonNull(id, "Order ID is required");
+    requireNonEmpty(items, "Order must have at least one line item");
+    requireNonBlank(customerId, "Customer ID cannot be blank");
+    requireTrue(items.size() <= 100, "Orders cannot exceed 100 items");
+
+    return new Order(id, items, customerId);
 }
 ```
 
-### Message formatter that aligns with SLF4J logging messages
+**Available methods:**
+- `requireNonNull(T, String)` - null check with custom message
+- `requireNonBlank(CharSequence, String)` - non-empty string validation
+- `requireTrue/requireFalse(boolean, String)` - boolean assertions
+- `requireNonEmpty(Collection/Array/Map, String)` - collection validation
+- `requireMustBeInstanceOf(Object, Class<T>)` - type checking
 
-Java already provides the `String.format()` method, but switching between it and SLF4J log messages, such as `log.debug("Found {} customers", customers.size());`, doesn't create as coherent code as
-some want.
+**Why use FailFast?** Unlike `Objects.requireNonNull()` which throws `NullPointerException`, FailFast throws `IllegalArgumentException` with clear messages, making debugging easier.
 
-For these cases the `MessageFormatter` provides the simple static `msg()` method which supports the positional SLF4J placeholders `{}`.
+## Functional Programming
 
-`msg` is often used when constructing messages for Exceptions:
+### Tuples
 
+Immutable `Tuple`'s supporting 0-4 (`Empty`, `Single`, `Pair`/`Either`/`Result`, `Triple`, `Quad`) elements with type-safe operations.
+
+```java
+// Creating tuples
+Pair<String, Integer> pair = Tuple.of("count", 42);
+Triple<String, Long, BigDecimal> triple = Tuple.of("Product", 100L, new BigDecimal("19.99"));
+
+// Accessing elements
+String key = pair._1;     // or pair._1()
+Integer value = pair._2;  // or pair._2()
+
+// Mapping
+Pair<String, String> mapped = pair.map(String::toUpperCase, Object::toString);
+// Result: ("COUNT", "42")
+
+Triple<String, String, String> allStrings = triple.map(Object::toString,
+                                                       Object::toString,
+                                                       Object::toString);
+
+// Swapping pairs
+Pair<Integer, String> swapped = pair.swap(); // (42, "count")
+
+// Use in streams
+Map<String, Integer> map = items.stream()
+    .map(item -> Tuple.of(item.getName(), item.getQuantity()))
+    .collect(Collectors.toMap(Pair::_1, Pair::_2));
 ```
-throw new ReflectionException(msg("Failed to find static method '{}' on type '{}' taking arguments of {}", methodName, type.getName(), Arrays.toString(argumentTypes)));
+
+**Learn more:** See [TupleTest.java](src/test/java/dk/trustworks/essentials/shared/functional/tuple/TupleTest.java) for comprehensive examples.
+
+### Either
+An immutable **choice** type representing one of two mutually exclusive values.  
+*   Use its specialization `Result` for semantic success/error handling.
+*   By convention, `_1` is "Left" (Error) and `_2` is "Right" (Success/Value).
+
+#### `map` vs `flatMap`
+Regardless of whether you are targeting the first (`1`) or second (`2`) slot:
+
+*   **`map`**: Use for **simple transformations**. You provide a function that returns a plain value (e.g., `String` to `Integer`). The `Either` container handles the re-wrapping for you.
+*   **`flatMap`**: Use for **logic chaining**. You provide a function that returns another `Either`. This "flattens" the result, preventing nested types like `Either<T1, Either<T1, R2>>`.
+
+#### Slot Targeting (`1` vs `2`)
+*   **`map1` / `flatMap1`**: Operates on the **first** slot (`T1`).
+*   **`map2` / `flatMap2`**: Operates on the **second** slot (`T2`). Usually where the "Happy Path" logic lives.
+
+#### Method Summary
+| Method | Target | Logic | Short-circuits if... |
+| :--- | :--- | :--- | :--- |
+| **`map1`** | `_1` | Applies function to `_1`, stays in same "slot". | Never (applies to whatever is in `_1`). |
+| **`flatMap1`** | `_1` | Applies function to `_1`, function determines the new state. | **`is_2()`** is true. |
+| **`map2`** | `_2` | Applies function to `_2`, stays in same "slot". | Never (applies to whatever is in `_2`). |
+| **`flatMap2`** | `_2` | Applies function to `_2`, function determines the new state. | **`is_1()`** is true. |
+
+### Practical Example: `Either<Failure, User>`
+
+1.  **`map2(User::getName)`**: 
+    *   If it's a `User`, returns `Either<Failure, String>` (the user's name).
+    *   If it's a `Failure`, it stays the same `Failure`.
+2.  **`flatMap2(this::validateUser)`**: 
+    *   If it's a `User`, runs validation. Validation returns a *new* `Either`.
+    *   If validation fails, the whole object effectively "switches sides" to become a `Failure`.
+3.  **`fold(onFail, onSuccess)`**:
+    *   The "pattern match" exit point. Forces you to handle both cases to produce a final result (like a UI message).
+
+> **In short:** Use **`map`** to change the **value**; use **`flatMap`** to potentially change the **outcome**.
+
+### Practical Example
+Imagine an `Either<Failure, User>`:
+
+*   **`map2(User::getName)`**: Returns `Either<Failure, String>`. It just changes the user to their name if a user exists.
+*   **`flatMap2(this::validateUser)`**: Returns `Either<Failure, User>`. If the user exists, it runs a validation that might *also* return a `Failure`. If it fails, the whole `Either` switches from a "User state" to a "Failure state".
+*   **`flatMap1(...)`**: Would be used to handle or transform the error case while ignoring the success case.
+
+In short: Use **`map`** to change the *data* inside a side; use **`flatMap`** to perform an operation that might *change the side* itself.
+
+```java
+// Creating Either values
+Either<String, Integer> success = Either.of_2(42);
+Either<String, Integer> error = Either.of_1("Invalid input");
+
+// Checking which value is present
+if (result.is_1()) {
+    String errorMsg = result._1();
+    logger.error("Operation failed: {}", errorMsg);
+} else {
+    Integer value = result._2();
+    processValue(value);
+}
+
+// Conditional execution
+result.ifIs_1(err -> handleError(err));
+result.ifIs_2(value -> processValue(value));
+
+// Pattern matching with fold
+String message = result.fold(
+    err -> "Error: " + err,
+    value -> "Success: " + value
+);
+
+// Mapping individual elements
+Either<String, Double> doubled = result.map2(v -> v * 2.0);
+Either<String, Integer> mappedError = result.map1(String::toUpperCase);
+
+// Chaining operations with flatMap
+Either<String, ProcessedOrder> processed = validateOrder(data)
+    .flatMap2(order -> enrichOrder(order))
+    .flatMap2(enriched -> persistOrder(enriched));
+
+// Convert to Result for semantic naming
+Result<String, Integer> asResult = result.toResult();
 ```
 
-For situations, such as translation, where the arguments are known, but the order of them depends on the actual language text, `MessageFormatter` provides the static `bind()` method, which allows you
-to use named placeholders:
+**Learn more:** See [EitherTest.java](src/test/java/dk/trustworks/essentials/shared/functional/tuple/EitherTest.java) for examples.
 
-Example:
+### Result
 
+Specialized `Either` with semantic `success`/`error` naming - ideal for operation outcomes.
+
+#### `map` vs `flatMap`
+Regardless of whether you are targeting the first (`1`) or second (`2`) slot:
+
+*   **`map`**: Use for **simple transformations**. You provide a function that returns a plain value (e.g., `String` to `Integer`). The `Result` container handles the re-wrapping for you.
+*   **`flatMap`**: Use for **logic chaining**. You provide a function that returns another `Result`. This "flattens" the result, preventing nested types like `Result<ERROR, Result<ERROR, SUCCESS>>`.
+
+#### Slot Targeting (`1` vs `2`)
+*   **`map1` / `flatMap1`**: Operates on the **first** slot (`ERROR`).
+*   **`map2` / `flatMap2`**: Operates on the **second** slot (`SUCCESS`). Usually where the "Happy Path" logic lives.
+
+#### Method Summary
+| Method | Target | Logic | Short-circuits if... |
+| :--- | :--- | :--- | :--- |
+| **`map1`** | `_1` | Applies function to `_1`, stays in same "slot". | Never (applies to whatever is in `_1`). |
+| **`flatMap1`** | `_1` | Applies function to `_1`, function determines the new state. | **`is_2()`** is true. |
+| **`map2`** | `_2` | Applies function to `_2`, stays in same "slot". | Never (applies to whatever is in `_2`). |
+| **`flatMap2`** | `_2` | Applies function to `_2`, function determines the new state. | **`is_1()`** is true. |
+
+### Practical Example: `Result<Failure, User>`
+
+1.  **`map2(User::getName)`**:
+    *   If it's a `User`, returns `Result<Failure, String>` (the user's name).
+    *   If it's a `Failure`, it stays the same `Failure`.
+2.  **`flatMap2(this::validateUser)`**:
+    *   If it's a `User`, runs validation. Validation returns a *new* `Result`.
+    *   If validation fails, the whole object effectively "switches sides" to become a `Failure`.
+3.  **`fold(onFail, onSuccess)`**:
+    *   The "pattern match" exit point. Forces you to handle both cases to produce a final result (like a UI message).
+
+> **In short:** Use **`map`** to change the **value**; use **`flatMap`** to potentially change the **outcome**.
+
+### Practical Example
+Imagine an `Result<Failure, User>`:
+
+*   **`map2(User::getName)`**: Returns `Result<Failure, String>`. It just changes the user to their name if a user exists.
+*   **`flatMap2(this::validateUser)`**: Returns `Result<Failure, User>`. If the user exists, it runs a validation that might *also* return a `Failure`. If it fails, the whole `Result` switches from a "User state" to a "Failure state".
+*   **`flatMap1(...)`**: Would be used to handle or transform the error case while ignoring the success case.
+
+In short: Use **`map`** to change the *data* inside a side; use **`flatMap`** to perform an operation that might *change the side* itself.
+
+
+```java
+// Creating Result values
+Result<ValidationError, Order> success = Result.success(order);
+Result<ValidationError, Order> failure = Result.error(new ValidationError("Invalid"));
+
+// Semantic accessors
+if (result.isSuccess()) {
+    Order order = result.success();
+    processOrder(order);
+} else {
+    ValidationError error = result.error();
+    logError(error);
+}
+
+// Conditional execution
+result.ifSuccess(order -> processOrder(order));
+result.ifError(error -> logError(error));
+
+// Pattern matching
+String message = result.fold(
+    error -> "Failed: " + error.getMessage(),
+    order -> "Success: " + order.getId()
+);
+
+// Chaining operations that may fail
+Result<Error, ProcessedOrder> processed = validateOrder(data)
+    .flatMapSuccess(order -> enrichOrder(order))
+    .flatMapSuccess(enriched -> persistOrder(enriched));
+
+// Mapping
+Result<Error, String> orderId = result.mapSuccess(order -> order.getId());
+Result<String, Order> mappedError = result.mapError(e -> e.getMessage());
 ```
-var danishText  = "Kære {:firstName} {:lastName}";
-var mergedDanishText = MessageFormatter.bind(danishText,
-                                             arg("firstName", "John"),
-                                             arg("lastName", "Doe"));
 
-assertThat(mergedDanishText).isEqualTo("Kære John Doe");
+**Learn more:** See [ResultTest.java](src/test/java/dk/trustworks/essentials/shared/functional/tuple/ResultTest.java) for examples.
+
+### Checked Functional Interfaces
+
+Bridge checked exceptions to standard Java functional interfaces without verbose try-catch blocks.
+
+**Problem:** Standard functional interfaces don't support checked exceptions.
+
+```java
+// Verbose approach
+items.stream()
+     .map(item -> {
+         try {
+             return Files.readString(Path.of(item));
+         } catch (IOException e) {
+             throw new RuntimeException(e);
+         }
+     })
+     .toList();
 ```
 
-Example 2:
+**Solution:** Use `CheckedFunction.safe()` and similar helpers.
 
-```
-var englishText = "Dear {:lastName}, {:firstName}";
-var mergedEnglishText = MessageFormatter.bind(englishText,
-                                              Map.of("firstName", "John",
-                                                     "lastName", "Doe"));
-                                                     
-assertThat(mergedEnglishText).isEqualTo("Dear Doe, John");
+```java
+items.stream()
+     .map(CheckedFunction.safe(item -> Files.readString(Path.of(item))))
+     .toList();
 ```
 
-### If expression
-An **if expression** is an if and else combination, with multiple optional intermediate elseIf's, 
-which **returns a value of the evaluation of the if expression**, unlike the normal Java if statement.  
-In this way the **if expression** is similar to the Java ternary operation, except that the
-**if expression** supports multiple **elseIf**'s.
+**Available interfaces:**
+- `CheckedRunnable` - for `Runnable`
+- `CheckedSupplier<R>` - for `Supplier<R>`
+- `CheckedConsumer<T>` - for `Consumer<T>`
+- `CheckedFunction<T, R>` - for `Function<T, R>`
+- `CheckedBiFunction<T, U, R>` - for `BiFunction<T, U, R>`
+- `CheckedTripleFunction<T, U, V, R>` - for three-argument functions
 
-With the **if expression** you no longer need to write code like this:
+All support `.safe()` methods that wrap checked exceptions in `CheckedExceptionRethrownException`.  
+`RuntimeException`s are rethrown without wrapping.
+
+**Learn more:** See [CheckedFunctionTest.java](src/test/java/dk/trustworks/essentials/shared/functional/CheckedFunctionTest.java)
+
+## Collections & Streams
+
+### Lists
+
+```java
+// Indexed stream - pairs each element with its index
+Stream<Pair<Integer, String>> indexed = Lists.toIndexedStream(List.of("A", "B", "C"));
+indexed.forEach(pair -> System.out.println(pair._1 + ": " + pair._2));
+// Output: 0: A, 1: B, 2: C
+
+// First/last element access
+Optional<String> first = Lists.first(myList);
+Optional<String> last = Lists.last(myList);
+
+// Partition for batch processing
+List<List<Order>> batches = Lists.partition(allOrders, 100);
+batches.forEach(batch -> processBatch(batch));
 ```
+
+### Streams
+
+```java
+// Zip two streams of equal length
+var names = Stream.of("Alice", "Bob", "Charlie");
+var ages = Stream.of(30, 25, 35);
+
+List<String> result = Streams.zipOrderedAndEqualSizedStreams(names, ages,
+    (name, age) -> name + " is " + age
+).toList();
+// Result: ["Alice is 30", "Bob is 25", "Charlie is 35"]
+```
+
+## Exception Handling
+
+### Exceptions
+
+Utilities for exception analysis, root cause tracking, and rethrowing.
+
+```java
+try {
+    processOrder(order);
+} catch (Exception e) {
+    // Get root cause (handles circular references)
+    Throwable root = Exceptions.getRootCause(e);
+    logger.error("Root cause: {}", root.getMessage());
+
+    // Check if exception chain contains specific type
+    if (Exceptions.doesStackTraceContainExceptionOfType(e, SQLException.class)) {
+        // Handle database error
+    }
+
+    // Rethrow if critical (VirtualMachineError, ThreadDeath, LinkageError)
+    Exceptions.rethrowIfCriticalError(e);
+}
+```
+
+**Sneaky throw** (use with caution - rethrows checked exception without declaring it):
+
+```java
+public <T> T loadConfig(String path) {
+    try {
+        return parseJson(Files.readString(Path.of(path)));
+    } catch (IOException e) {
+        return Exceptions.sneakyThrow(e); // Throws IOException without declaring it
+    }
+}
+```
+
+## Message Formatting
+
+### MessageFormatter
+
+SLF4J-compatible message formatting for consistent code style.
+
+**Positional placeholders:**
+```java
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
+
+throw new OrderException(msg("Order {} for customer {} failed with {}",
+                             orderId, customerId, errorCode));
+```
+
+**Named parameters:**
+```java
+import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
+
+// Varargs syntax
+String greeting = MessageFormatter.bind(
+    "Hello {:firstName} {:lastName}",
+    arg("firstName", "John"),
+    arg("lastName", "Doe")
+);
+// Result: "Hello John Doe"
+
+// Map syntax
+String msg = MessageFormatter.bind(
+    "Account {:account} balance: {:balance}",
+    Map.of("account", "ACC-001", "balance", "$1,234.56")
+);
+```
+
+**Why use named parameters?** Perfect for translations where argument order varies by language.
+
+**Learn more:** [MessageFormatterTest.java](src/test/java/dk/trustworks/essentials/shared/MessageFormatterTest.java)
+
+### MessageTemplate
+
+Type-safe structured messages with hierarchical keys - useful for validation errors and internationalization.
+
+```java
+// Define message hierarchy
+MessageTemplate0 ROOT = MessageTemplates.root("ESSENTIALS");
+MessageTemplate0 VALIDATION = ROOT.subKey("VALIDATION");
+
+MessageTemplate2<BigDecimal, BigDecimal> AMOUNT_TOO_HIGH =
+    VALIDATION.key2("AMOUNT_TOO_HIGH", "Amount {0} is higher than {1}");
+
+MessageTemplate2<BigDecimal, BigDecimal> AMOUNT_TOO_LOW =
+    VALIDATION.key2("AMOUNT_TOO_LOW", "Amount {0} is lower than {1}");
+
+// Create messages with typed parameters
+Message msg = AMOUNT_TOO_HIGH.create(new BigDecimal("1000"), new BigDecimal("500"));
+// Key: "ESSENTIALS.VALIDATION.AMOUNT_TOO_HIGH"
+// Message: "Amount 1000 is higher than 500"
+
+// Use in exceptions
+throw new ValidationException(AMOUNT_TOO_LOW.create(amount, minAmount));
+```
+
+Available template types support 0-4 parameters: `MessageTemplate0` through `MessageTemplate4`.
+
+**Learn more:** [MessageTemplatesTest.java](src/test/java/dk/trustworks/essentials/shared/messages/MessageTemplatesTest.java)
+
+## Reflection
+
+### Reflector
+
+High-performance caching reflection API for constructors, methods, and fields.
+
+```java
+// Create cached reflector
+var reflector = Reflector.reflectOn(MyClass.class);
+
+// Create instances
+if (reflector.hasMatchingConstructorBasedOnArguments("arg1", 123)) {
+    var instance = reflector.newInstance("arg1", 123);
+} else {
+    var instance = reflector.invokeStatic("of", "arg1", 123);
+}
+
+// Invoke methods
+String result = reflector.invoke("processData", instance, data);
+
+// Get/set fields
+String name = reflector.get(instance, "name");
+reflector.set(instance, "name", "New Name");
+
+// Find fields by annotation
+Optional<Field> idField = reflector.findFieldByAnnotation(Id.class);
+
+// Static operations
+Integer constant = reflector.getStatic("MAX_SIZE");
+reflector.invokeStatic("initialize", config);
+```
+
+**Learn more:** [ReflectorTest.java](src/test/java/dk/trustworks/essentials/shared/reflection/ReflectorTest.java)
+
+### Reflection Utilities
+
+Low-level utilities used by `Reflector` - also available for direct use.
+
+#### Accessibles
+Make `AccessibleObject` instances (fields, methods, constructors) accessible for reflection.
+
+```java
+Field field = Accessibles.accessible(someField);  // Marks as accessible
+boolean isAccessible = Accessibles.isAccessible(someMethod);
+```
+
+#### BoxedTypes
+Primitive/boxed type conversion utilities.
+
+```java
+BoxedTypes.isPrimitiveType(int.class);     // true
+BoxedTypes.isBoxedType(Integer.class);     // true
+BoxedTypes.boxedType(int.class);           // Integer.class
+BoxedTypes.boxedType(String.class);        // String.class (unchanged)
+```
+
+#### Classes
+Class loading and type hierarchy utilities.
+
+```java
+// Load class by FQCN (Fully Qualified Class Name)
+Class<?> clazz = Classes.forName("com.example.MyClass");
+Class<?> clazz = Classes.forName("com.example.MyClass", customClassLoader);
+
+// Check classpath
+boolean exists = Classes.doesClassExistOnClasspath("com.example.MyClass");
+
+// Get superclasses (excluding Object)
+List<Class<?>> supers = Classes.superClasses(MyClass.class);
+
+// Compare type specificity (for sorting by inheritance)
+// Returns: -1 if left less specific, 0 if equal, 1 if left more specific
+int cmp = Classes.compareTypeSpecificity(String.class, CharSequence.class);  // 1 (String is more specific)
+```
+
+#### Constructors
+Get constructors from a type.
+
+```java
+List<Constructor<?>> ctors = Constructors.constructors(MyClass.class);  // All constructors (each marked as accessible) 
+```
+
+#### Fields
+Find and get fields from a type (including inherited fields).
+
+```java
+Set<Field> allFields = Fields.fields(MyClass.class);  // All fields (each marked as accessible) 
+Optional<Field> field = Fields.findField(allFields, "fieldName", String.class);
+```
+
+#### Interfaces
+Get all interfaces implemented by a type (recursively).
+
+```java
+Set<Class<?>> interfaces = Interfaces.interfaces(MyClass.class);
+```
+
+#### Methods
+Find and get methods from a type (including inherited and interface methods).
+
+```java
+Set<Method> allMethods = Methods.methods(MyClass.class);  // All methods (each marked as accessible) 
+Optional<Method> method = Methods.findMatchingMethod(allMethods, "methodName", String.class, int.class, String.class);
+```
+
+#### Parameters
+Parameter type matching for method/constructor resolution.
+
+```java
+// Convert arguments to types (null arguments are mapped to Parameters.NULL_ARGUMENT_TYPE)
+Class<?>[] types = Parameters.argumentTypes("hello", 42, null);
+
+// Check parameter type compatibility
+boolean matches = Parameters.parameterTypesMatches(actualTypes, declaredTypes, false);  // false = allow boxing/inheritance
+```
+
+### PatternMatchingMethodInvoker
+
+Reflective pattern matching for event handlers and command processors.
+
+```java
+public class OrderEventHandler {
+    private final PatternMatchingMethodInvoker<OrderEvent> invoker;
+
+    public OrderEventHandler() {
+        invoker = new PatternMatchingMethodInvoker<>(
+            this,
+            new SingleArgumentAnnotatedMethodPatternMatcher<>(EventHandler.class, OrderEvent.class),
+            InvocationStrategy.InvokeMostSpecificTypeMatched
+        );
+    }
+
+    public void handle(OrderEvent event) {
+        // Invokes the most specific matching @EventHandler method
+        invoker.invoke(event);
+    }
+
+    @EventHandler
+    private void onOrderEvent(OrderEvent event) {
+        // Fallback handler
+    }
+
+    @EventHandler
+    private void onOrderCreated(OrderCreated event) {
+        // Specific handler
+    }
+}
+```
+
+**Learn more:** [PatternMatchingMethodInvokerTest.java](src/test/java/dk/trustworks/essentials/shared/reflection/invocation/PatternMatchingMethodInvokerTest.java)
+
+## Time & Measurement
+
+### StopWatch
+
+Time operations and methods with minimal overhead.
+
+```java
+// Time a runnable
+Duration elapsed = StopWatch.time(() -> heavyComputation());
+logger.info("Computation took {}", elapsed);
+
+// Time an operation that returns a value
+TimingWithResult<List<Order>> result = StopWatch.time(() -> loadOrders());
+logger.info("Loaded {} orders in {}", result.result.size(), result.duration);
+
+// Instance API with description
+var watch = StopWatch.start("Database query");
+// ... operation ...
+Timing timing = watch.stop();
+logger.info("{} took {}", timing.description, timing.duration);
+```
+
+### MeasurementRecorder
+
+Pluggable interface for recording measurements - integrate with logging, Micrometer, or custom metrics systems.
+
+```java
+// Define measurement context
+var context = MeasurementContext.builder("order.processing.time")
+    .description("Time to process an order")
+    .tag("orderType", "STANDARD")
+    .tag("customerId", customerId.toString())
+    .build();
+
+// Record measurement
+measurementRecorder.record(context, duration);
+```
+
+**Built-in implementations:**
+- `LoggingMeasurementRecorder` - logs measurements via SLF4J
+- `MicrometerMeasurementRecorder` - sends measurements to Micrometer
+
+**Note:** See `LoggingMeasurementRecorder` and `MeasurementTaker` usage in component integration tests.
+
+## Concurrency
+
+### ThreadFactoryBuilder
+
+Create named, daemon-aware thread factories for executors.
+
+```java
+ExecutorService executor = Executors.newScheduledThreadPool(10,
+    ThreadFactoryBuilder.builder()
+                        .daemon(true)
+                        .nameFormat("Handler-Thread-%d")
+                        .priority(Thread.NORM_PRIORITY)
+                        .build()
+);
+```
+
+## Control Flow
+
+### If Expression
+
+Java lacks ternary expressions with multiple conditions. `If` expression fills this gap.
+
+**Before:**
+```java
+int value = getValue();
+String description;
+if (value < 0) {
+    description = "Negative number";
+} else if (value == 0) {
+    description = "Zero";
+} else {
+    description = "Positive number";
+}
+```
+
+**After:**
+```java
 import static dk.trustworks.essentials.shared.logic.IfExpression.If;
 
 int value = getValue();
@@ -215,236 +699,187 @@ String description = If(value < 0, "Negative number")
                     .ElseIf(value == 0, "Zero")
                     .Else("Positive number");
 ```
-instead of this
-```
-int value = getValue();
-String description;
-if (value < 0) {
-   description = "Negative number";
-} else if (value == 0) {
-   description = "Zero";
-} else {
-   description = "Positive number";
-} 
-```
 
-The **if expression** supports both simple boolean predicate/condition and fixed value return values 
-as well as lambda predicates and return value suppliers:
-```
-import static dk.trustworks.essentials.shared.logic.IfExpression.If;
-
-OrderId orderId = ...;
-Amount orderAmount = ...;
-
-var orderProcessingResult = If(() -> orderAmountExceedsAccountThreshold(orderAmount),
-                               () -> cancelOrder(orderId)).
-                            Else(() -> acceptOrder(orderId));
-```
-
-### `GenericType` for capturing a generic/parameterized argument type
-
-Using this class makes it possible to capture a generic/parameterized argument type ,such as `List<Money>`, instead of having to rely on the classical `.class` construct.   
-When you specify a type reference using `.class` you loose any Generic/Parameterized information, as you cannot write `List<Money>.class`, only `List.class`.
-
-With `GenericType` you can specify and capture parameterized type information:  
+**With lambda suppliers:**
 ```java
+var result = If(() -> orderAmountExceedsThreshold(orderAmount),
+                () -> cancelOrder(orderId))
+            .Else(() -> acceptOrder(orderId));
+```
+
+### InterceptorChain
+
+Generic chain-of-responsibility pattern implementation.
+This pattern is useful for decoupling the sender of a request from its receivers, allowing multiple objects to handle the request or add cross-cutting concerns (like logging, security, or transaction management) without the sender knowing about them.
+
+**Interceptor Interface and Ordering:**
+
+All interceptors must implement the `Interceptor` marker interface. Control execution order using the `@InterceptorOrder` annotation:
+
+```java
+import dk.trustworks.essentials.shared.interceptor.Interceptor;
+import dk.trustworks.essentials.shared.interceptor.InterceptorOrder;
+
+// Default order is 10 when @InterceptorOrder is not present
+public class DefaultOrderInterceptor implements CommandBusInterceptor {
+    // ...
+}
+
+// Lower number = higher priority (executes first)
+@InterceptorOrder(1)
+public class HighPriorityInterceptor implements CommandBusInterceptor {
+    // Executes BEFORE interceptors with higher order numbers
+}
+
+@InterceptorOrder(100)
+public class LowPriorityInterceptor implements CommandBusInterceptor {
+    // Executes AFTER interceptors with lower order numbers
+}
+```
+
+**Example: Unit of Work Interception**  
+A common use case in this library is ensuring that command handling occurs within a transactional boundary.  
+An interceptor can start a `UnitOfWork` before the command is processed and commit it afterwards:
+
+```java
+public class UnitOfWorkInterceptor implements CommandBusInterceptor {
+    @Override
+    public Object interceptSend(Object command, CommandBusInterceptorChain chain) {
+        // Start a unit of work, proceed with the chain, and ensure it closes
+        return unitOfWorkFactory.withUnitOfWork(uow -> chain.proceed());
+    }
+}
+```
+
+**Generic Usage:**
+```java
+// Define custom interceptor
+public interface QueryInterceptor extends Interceptor {
+    QueryResult intercept(Query query,
+                         InterceptorChain<Query, QueryResult, QueryInterceptor> chain);
+}
+
+// Execute with interceptor chain
+var result = InterceptorChain.newInterceptorChainForOperation(
+        query,                                                      // The operation to intercept
+        registeredInterceptors,                                     // List of configured interceptors, must be presorted by @InterceptorOrder - see DefaultInterceptorChain.sortInterceptorsByOrder
+        (interceptor, chain) -> interceptor.intercept(query, chain), // How to invoke the interceptor method
+        () -> executeQueryDirectly(query)                           // The default behavior if no interceptor stops the chain
+).proceed();
+```
+
+**Learn more:** [DefaultInterceptorChainTest.java](src/test/java/dk/trustworks/essentials/shared/interceptor/DefaultInterceptorChainTest.java)
+
+## Security
+
+### EssentialsSecurityProvider
+
+**Purpose:** Role-based access control for **Essentials Admin UI only** - not for business application code.
+
+This abstraction secures administrative APIs like `DurableQueuesApi`, `FencedLockApi`, and `SubscriptionApi`. Implement your own `EssentialsSecurityProvider` to integrate with Spring Security, JWT, or custom authentication.
+
+```java
+public interface EssentialsSecurityProvider {
+    // Check if principal has required role
+    boolean isAllowed(Object principal, String requiredRole);
+
+    // Extract user identification from principal
+    Optional<String> getPrincipalName(Object principal);
+}
+```
+
+**Built-in implementations:**
+- `AllAccessSecurityProvider` - allows all access (development/testing)
+- `NoAccessSecurityProvider` - denies all access
+
+**Admin API usage example** (from `DefaultDurableQueuesApi`):
+```java
+import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.*;
+import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
+
+public class DefaultDurableQueuesApi implements DurableQueuesApi {
+    private final EssentialsSecurityProvider securityProvider;
+
+    @Override
+    public Set<QueueName> getQueueNames(Object principal) {
+        // Validate principal has QUEUE_READER or ESSENTIALS_ADMIN role
+        validateHasAnyEssentialsSecurityRoles(securityProvider, principal,
+                                              QUEUE_READER, ESSENTIALS_ADMIN);
+        return durableQueues.getQueueNames();
+    }
+
+    @Override
+    public boolean deleteMessage(Object principal, QueueEntryId queueEntryId) {
+        // Write operations require QUEUE_WRITER or ESSENTIALS_ADMIN
+        validateHasAnyEssentialsSecurityRoles(securityProvider, principal,
+                                              QUEUE_WRITER, ESSENTIALS_ADMIN);
+        return durableQueues.deleteMessage(queueEntryId);
+    }
+}
+```
+
+**Available roles** (`EssentialsSecurityRoles`):
+| Role | Purpose |
+|------|---------|
+| `ESSENTIALS_ADMIN` | Full admin access to all Essentials APIs |
+| `LOCK_READER` / `LOCK_WRITER` | Fenced lock administration |
+| `QUEUE_READER` / `QUEUE_WRITER` | Queue administration |
+| `QUEUE_PAYLOAD_READER` | View message payloads (sensitive data) |
+| `SUBSCRIPTION_READER` / `SUBSCRIPTION_WRITER` | Event subscription administration |
+| `POSTGRESQL_STATS_READER` | PostgreSQL statistics access |
+| `SCHEDULER_READER` | Scheduler administration |
+
+**Note:** For business application security, use your framework's security model (Spring Security, etc.) directly.
+
+## Additional Utilities
+
+### GenericType
+
+Capture generic/parameterized type information at runtime.
+
+**Problem:** Cannot write `List<Money>.class` - generics are erased.
+
+**Solution:**
+```java
+// Capture parameterized type
 var genericType = new GenericType<List<Money>>(){};
+
+// genericType.getType() returns List.class
+// genericType.getGenericType() returns ParameterizedType with Money type argument
+
+// Resolve generic type from superclass
+Class<?> idType = GenericType.resolveGenericTypeOnSuperClass(Order.class, 0);
+// Given: class Order extends AggregateRoot<OrderId, Order>
+// Returns: OrderId.class
 ```
 
-where:
-- `genericType.getType()` will return `List.class`  
-- `genericType#getGenericType()` will return a `ParameterizedType`, which can be introspected further
+### Lifecycle
 
-### `StopWatch` for timing different methods/operations
-
-```
-Duration duration = StopWatch.time(CheckedRunnable.safe(() -> someMethodCall()));
-```
-
-or operations/method that return a value
-
-```
-TimingResult<String> result = StopWatch.time(CheckedSupplier.safe(() -> return someMethodCall()));
-Duration duration = result.getDuration();
-String result = result.getResult();
-```
-
-### `concurrent`
-
-Provides a `ThreadFactoryBuilder` for usage with e.g. `Executors`:
+Common interface for components with start/stop lifecycle.
 
 ```java
-Executors.newScheduledThreadPool(PARALLEL_CONSUMERS, 
-                                 ThreadFactoryBuilder.builder()
-                                                     .daemon(true)
-                                                     .nameFormat("Handler-Thread-%d")
-                                                     .build());
-```
-
-### `Exceptions`
-
-That support `sneakyThrow` (use with caution) as well as getting a stacktrace as a String.
-
-```
-try {
-    var duration = time(CheckedRunnable.safe(() -> methodPatternMatcher.invokeMethod(methodToInvoke, argument, invokeMethodsOn, resolvedInvokeMethodWithArgumentOfType)));
-} catch (CheckedExceptionRethrownException e) {
-    // Unwrap the real cause and rethrow this exception
-    sneakyThrow(e.getCause());
+public interface Lifecycle {
+    void start();      // Idempotent - duplicate calls ignored
+    void stop();       // Idempotent - duplicate calls ignored
+    boolean isStarted();
 }
 ```
 
-### High level `Reflection` package
+Implementations must be idempotent - calling `start()` on already-started component should be a no-op.
 
-Writing reflection can be cumbersome and there are many checked exception to handle. The `Reflector` class, and it's supporting classes
-(`Accessibles`, `BoxedTypes`, `Classes`, `Constructors`, `Fields`, `Interfaces`, `Methods`), makes working with Reflection easier.
+### Network
 
-Example:
-
-```
-Class<?> concreteType = ...;
-Object[] arguments = new Object[] { "Test", TestEnum.A };
-
-var reflector = Reflector.reflectOn(concreteType);
-if (reflector.hasMatchingConstructorBasedOnArguments(arguments)) {
-    return reflector.newInstance(arguments);
-} else {
-    return reflector.invokeStatic("of", arguments);
-}
-```
-
-### Reflective `PatternMatchingMethodInvoker`
-
-Which supports creating your own reflective pattern matching method invokers.
-
-Example using `PatternMatchingMethodInvoker` together with the provided `SingleArgumentAnnotatedMethodPatternMatcher`:
-
-```
-public class OrderEventHandler {
-    private final PatternMatchingMethodInvoker patternMatchingInvoker;
-    
-    public OrderEventHandler() {
-      patternMatchingInvoker = new PatternMatchingMethodInvoker<>(testSubject,
-                                                                  new SingleArgumentAnnotatedMethodPatternMatcher<>(EventHandler.class,
-                                                                                                                    OrderEvent.class),
-                                                                  InvocationStrategy.InvokeMostSpecificTypeMatched);
-    }
-    
-    public void handle(OrderEvent orderEvent) {
-      // Find the single best matching method annotated with @EventHandler and invoke it based on the orderEvent argument
-      patternMatchingInvoker.invoke(orderCreated);
-    }
-
-    @EventHandler
-    private void orderEvent(OrderEvent orderEvent) {
-      // Fallback event handler that will be called for e.g. OrderAccepted event as there isn't a method that explicitly handle this event
-    }
-
-    @EventHandler
-    private void orderCreated(OrderCreated orderCreated) {
-    }
-
-    @EventHandler
-    private void orderCancelled(OrderCancelled orderCancelled) {
-    }
-}
-```
-
-### MessageTemplate, MessageTemplates and Message
-
-#### MessageTemplate
-
-The `MessageTemplate` concept supports structured messages with typed parameters.
-Each `MessageTemplate` instance has a unique `key` that clearly identifies the `MessageTemplate`.  
-`MessageTemplate` keys can be nested, to support message hierarchies:
-```
-// Has key: "ESSENTIALS"
-MessageTemplate0 ROOT = MessageTemplates.root("ESSENTIALS");
-
-// Has key: "ESSENTIALS.VALIDATION"
-MessageTemplate0 VALIDATION = ROOT.subKey("VALIDATION");
-
-// Has key: "ESSENTIALS.VALIDATION.AMOUNT_TOO_HIGH"
-MessageTemplate2<BigDecimal, BigDecimal> AMOUNT_TOO_HIGH = VALIDATION.key2("AMOUNT_TOO_HIGH",
-                                                                         "Amount {0} is higher than {1}");
-
-// Has key: "ESSENTIALS.VALIDATION.AMOUNT_TOO_LOW"
-MessageTemplate2<BigDecimal, BigDecimal> AMOUNT_TOO_LOW = VALIDATION.key2("AMOUNT_TOO_LOW",
-                                                                        "Amount {0} is lower than {1}");
-```
-
-There are multiple `MessageTemplate` subclasses that support a different number of parameters:
-- `MessageTemplate0` which supports 0 parameters (mostly used for root or nested keys)
-- `MessageTemplate1` which supports 1 parameter
-- `MessageTemplate2` which supports 2 parameters
-- `MessageTemplate3` which supports 3 parameters
-- `MessageTemplate4` which supports 4 parameters
-
-Example defining a `MessageTemplate4`'s:
 ```java
-// Has key: "ESSENTIALS"
-MessageTemplate0 ROOT = MessageTemplates.root("ESSENTIALS");
-
-// Has key: "ESSENTIALS.ACCOUNT_OVERDRAWN"
-MessageTemplate4<String, BigDecimal, BigDecimal, LocalDate> ACCOUNT_OVERDRAWN = ROOT.key4("ACCOUNT_OVERDRAWN",
-                                                                                          "Account {0} is overdrawn by ${1}. A fee of ${2} will be debited on the {3}");
+String hostname = Network.hostName(); // Get local hostname
 ```
 
-#### Message
-From a `MessageTemplate` we can create `Message` instances, which are useful for e.g. error/validation reporting.  
-A `Message` is an instance of a `MessageTemplate` with parameters bound to it.
+## Thread Safety
 
-Example:
-```java
-// Has key: "ESSENTIALS"
-MessageTemplate0 ROOT = MessageTemplates.root("ESSENTIALS");
+- **Thread-safe:** `FailFast`, `Exceptions`, `MessageFormatter`, `Reflector` (uses concurrent caching), all Tuple types, `Message`, `Timing`, `MeasurementContext`
+- **Not thread-safe:** `StopWatch` instances (use separate instance per thread)
 
-// Has key: "ESSENTIALS.ACCOUNT_OVERDRAWN"
-MessageTemplate4<String, BigDecimal, BigDecimal, LocalDate> ACCOUNT_OVERDRAWN = ROOT.key4("ACCOUNT_OVERDRAWN",
-                                                                                          "Account {0} is overdrawn by ${1}. A fee of ${2} will be debited on the {3}");
+## See Also
 
-String accountId = "Account1";
-BigDecimal overdrawnAmount = new BigDecimal("125");
-BigDecimal feeAmount = new BigDecimal("10");
-LocalDate  feeDebitDate =  LocalDate.of(2023, 2, 25);
-Message msg = ACCOUNT_OVERDRAWN.create(accountId,
-                                       overdrawnAmount,
-                                       feeAmount,
-                                       feeDebitDate);
-
-}
-```
-
-This will create a `Message` with `Message#getMessage()`:
-`"Account Account1 is overdrawn by $125. A fee of $10 will be debited on the 2023-2-25"` (date formatting is dependent on the {@link java.util.Locale})
-
-#### MessageTemplates
-`MessageTemplates` is a marker interface for classes or interfaces to contain {@link MessageTemplate} fields, which can be queried using 
-`MessageTemplates.getMessageTemplates(Class, boolean)`
-
-Example:
-```java
-public interface MyMessageTemplates extends MessageTemplates {
-    // Has key: "ESSENTIALS"
-    MessageTemplate0 ROOT = MessageTemplates.root("ESSENTIALS");
-
-    // Has key: "ESSENTIALS.VALIDATION"
-    MessageTemplate0 VALIDATION = ROOT.subKey("VALIDATION");
-
-    // Has key: "ESSENTIALS.VALIDATION.AMOUNT_TOO_HIGH"
-    MessageTemplate2<BigDecimal, BigDecimal> AMOUNT_TOO_HIGH = VALIDATION.key2("AMOUNT_TOO_HIGH",
-                                                                             "Amount {0} is higher than {1}");
-
-    // Has key: "ESSENTIALS.VALIDATION.AMOUNT_TOO_LOW"
-    MessageTemplate2<BigDecimal, BigDecimal> AMOUNT_TOO_LOW = VALIDATION.key2("AMOUNT_TOO_LOW",
-                                                                            "Amount {0} is lower than {1}");
-
-    // Has key: "ESSENTIALS.BUSINESS_RULES"
-    MessageTemplate0 BUSINESS_RULES = ROOT.subKey("BUSINESS_RULES");
-
-    // Has key: "ESSENTIALS.BUSINESS_RULES.ACCOUNT_NOT_ACTIVATED"
-    MessageTemplate1<String> ACCOUNT_NOT_ACTIVATED = BUSINESS_RULES.key1("ACCOUNT_NOT_ACTIVATED",
-                                                                         "Account {0} is not activated");
-}
-``` 
-
+- [LLM-shared.md](../LLM/LLM-shared.md) - Detailed API documentation for LLM assistance
+- [types](../types) - Semantic types built on shared utilities
+- [immutable](../immutable) - Immutable value objects using reflection utilities

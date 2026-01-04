@@ -1,197 +1,240 @@
 # Essentials Components - PostgreSQL Document DB
 
-This library provides a **very experimental** Document DB storage approach using PostgreSQL and JSONB
+> **NOTE:** **The library is WORK-IN-PROGRESS**
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+A Kotlin-based Document Database built on PostgreSQL JSONB, providing flexible JSON storage with type-safe queries, optimistic locking, and automatic schema management.
 
-> Please see the **Security** notices below to familiarize yourself with the security risks
+**LLM Context:** [LLM-postgresql-document-db.md](../../LLM/LLM-postgresql-document-db.md)
 
-## DocumentDB Concept
+## Table of Contents
 
-The `DocumentDbRepository` is a flexible repository interface designed for persisting and managing entities as 
-JSON documents using PostgreSQL.   
-This concept allows you to leverage the flexibility of JSON for storing complex and dynamic data structures, 
-while still benefiting from the robustness and reliability of PostgreSQL.
+- [Maven Dependency](#maven-dependency)
+- [Security](#security)
+- [Overview](#overview)
+- [Defining Entities](#defining-entities)
+- [Repository Setup](#repository-setup)
+- [CRUD Operations](#crud-operations)
+- [Querying](#querying)
+- [Indexing](#indexing)
+- [Custom Repositories](#custom-repositories)
+- [Optimistic Locking](#optimistic-locking)
 
-### Security
-To support customization of in which PostgreSQL table each entity type is stored you can provide your own `tableName` in the `@DocumentEntity` annotation
+## Maven Dependency
 
-The `tableName` and `all the names of the properties in your entity classes` will be directly used in constructing SQL statements through string concatenation.  
-This can potentially expose components, such as `dk.trustworks.essentials.components.document_db.postgresql.PostgresqlDocumentDbRepository`, to SQL injection attacks.
-
-**It is the responsibility of the user of this component to sanitize both the `@DocumentEntity`  `tableName` and `all Entity property names` to ensure the security of all the SQL statements generated 
-by this component.**
-
-The `dk.trustworks.essentials.components.document_db.postgresql.PostgresqlDocumentDbRepository` instance, e.g. created by `dk.trustworks.essentials.components.document_db.DocumentDbRepositoryFactory.create`, 
-will through `EntityConfiguration#configureEntity` call the `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` method to validate the table name 
-and Entity property names as a first line of defense.
-
-The `PostgresqlUtil#checkIsValidTableOrColumnName` provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.    
-**However, Essentials components as well as `PostgresqlUtil#checkIsValidTableOrColumnName` does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.**
-> The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-> Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names
-
-**Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
-
-It is highly recommended that the `@DocumentEntity` `tableName` and `all the Entity property names` are only derived from controlled and trusted sources.
-
-To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `tableName` or property names.
-
-### Key `DocumentDBRepository` Features 
-
-1. **JSON Storage**: Entities are stored as JSON documents, allowing for flexible and dynamic data structures that can easily evolve over time without requiring schema migrations.
-2. **Versioning**: The repository uses a versioning scheme to manage entity versions, ensuring data consistency and enabling optimistic locking to prevent concurrent update conflicts.
-3. **Optimistic Locking**: Ensures data integrity by preventing conflicting updates, using version checks to detect and handle concurrent modifications.
-4. **Query Building**: Provides a fluent API for building complex queries, including support for nested properties, sorting, pagination, and more.
-5. **Indexing**: Indexes for top level properties (using the `@Indexed` annotation) or `DocumentDBRepository.addIndex(...)`
-
-### Basic Concepts
-
-#### Entity
-
-An entity is a data object that you want to persist in the database.  
-Each entity must implement the `VersionedEntity` interface, which includes a `version` property for tracking 
-the entity's version.
-
-```kotlin
-interface VersionedEntity<ID, SELF_TYPE : VersionedEntity<ID, SELF_TYPE>> {
-    /**
-     * Name of version property. Aligned with [VERSION_PROPERTY_NAME].
-     * Default value should be [Version.NOT_SAVED_YET]
-     */
-    var version: Version
-
-    /**
-     * When was the entity last updated - this value is automatically maintained by the [DocumentDBRepository]
-     */
-    var lastUpdated: OffsetDateTime
-}
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>postgresql-document-db</artifactId>
+    <version>${essentials.version}</version>
+</dependency>
 ```
 
-#### Version
-The `Version` class represents the version of an entity.  
-It is used to implement optimistic locking, ensuring that updates do not conflict with each other.
+**Required `provided` dependencies** (you must add these to your project):
+
+```xml
+<!-- Kotlin -->
+<dependency>
+    <groupId>org.jetbrains.kotlin</groupId>
+    <artifactId>kotlin-stdlib-jdk8</artifactId>
+    <version>${kotlin.version}</version>
+</dependency>
+<dependency>
+    <groupId>org.jetbrains.kotlin</groupId>
+    <artifactId>kotlin-reflect</artifactId>
+    <version>${kotlin.version}</version>
+</dependency>
+
+<!-- PostgreSQL & JDBI -->
+<dependency>
+    <groupId>org.postgresql</groupId>
+    <artifactId>postgresql</artifactId>
+    <version>${postgresql.version}</version>
+</dependency>
+<dependency>
+    <groupId>org.jdbi</groupId>
+    <artifactId>jdbi3-core</artifactId>
+    <version>${jdbi.version}</version>
+</dependency>
+
+<!-- Jackson -->
+<dependency>
+    <groupId>com.fasterxml.jackson.core</groupId>
+    <artifactId>jackson-databind</artifactId>
+    <version>${jackson.version}</version>
+</dependency>
+<dependency>
+    <groupId>com.fasterxml.jackson.module</groupId>
+    <artifactId>jackson-module-kotlin</artifactId>
+    <version>${jackson.version}</version>
+</dependency>
+<dependency>
+    <groupId>com.fasterxml.jackson.datatype</groupId>
+    <artifactId>jackson-datatype-jsr310</artifactId>
+    <version>${jackson.version}</version>
+</dependency>
+<dependency>
+    <groupId>com.fasterxml.jackson.datatype</groupId>
+    <artifactId>jackson-datatype-jdk8</artifactId>
+    <version>${jackson.version}</version>
+</dependency>
+
+<!-- Logging -->
+<dependency>
+    <groupId>org.slf4j</groupId>
+    <artifactId>slf4j-api</artifactId>
+    <version>${slf4j.version}</version>
+</dependency>
+```
+
+## Security
+
+### ⚠️ Critical: SQL Injection Risk
+
+The components allow customization of table/column/index/function names that are used with **String concatenation** → SQL injection risk.
+While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL injection.
+
+The `@DocumentEntity.tableName`, entity property names, and `Index.name` are used directly in SQL statements via string concatenation, exposing the component to **SQL injection attacks**.
+
+> ⚠️ **WARNING:** It is your responsibility to sanitize these values to prevent SQL injection.  
+> See the Components [Security](../README.md#security) section for more details.
+
+**Mitigations:**
+- `PostgresqlDocumentDbRepository` calls `PostgresqlUtil#checkIsValidTableOrColumnName(String)` for basic validation at startup
+- Entity property names are validated via `EntityConfiguration.checkPropertyNames()`
+- This provides initial defense but does **NOT** guarantee complete SQL injection protection
+
+**Developer Responsibility:**
+- Only use table, index, and property names from controlled, trusted sources
+- Never derive these values from external/untrusted input
+- Validate all entity class definitions during development
+
+## Overview
+
+### Why
+
+Traditional ORMs require rigid schemas and migrations. Document databases offer flexibility but often lack ACID guarantees.
+PostgreSQL Document DB combines the best of both worlds:
+
+| Feature | Benefit                                                                               |
+|---------|---------------------------------------------------------------------------------------|
+| **JSONB Storage** | Flexible, schema-less documents with PostgreSQL's ACID guarantees                     |
+| **Type-Safe Queries** | Kotlin property references prevent typos and enable IDE support                       |
+| **Optimistic Locking** | Built-in version checking prevents concurrent update conflicts                        |
+| **Automatic Schema** | Tables and indexes created automatically on startup                                   |
+| **Semantic Types** | First-class support for `SingleValueType` properties and `StringValueType` identifiers |
+
+### Quick Start
+
+A complete example showing entity definition, CRUD operations, and querying:
 
 ```kotlin
-data class Version(val value: Int) {
+// 1. Define a semantic ID type
+@JvmInline
+value class ProductId(override val value: String) : StringValueType<ProductId> {
     companion object {
-        val ZERO = Version(0)
-        val NOT_SAVED_YET = Version(-1)
+        fun random() = ProductId(RandomIdGenerator.generate())
     }
 }
+
+// 2. Define an entity
+@DocumentEntity("products")
+data class Product(
+    @Id val id: ProductId,
+    @Indexed var name: String,
+    var price: Amount,
+    var category: String,
+    override var version: Version = Version.NOT_SAVED_YET,
+    override var lastUpdated: OffsetDateTime = OffsetDateTime.now(UTC)
+) : VersionedEntity<ProductId, Product>
+
+// 3. Create a repository
+val productRepo = repositoryFactory.create(Product::class)
+
+// 4. Save a new entity
+val product = Product(
+    id = ProductId.random(),
+    name = "Laptop",
+    price = Amount("999.99"),
+    category = "Electronics"
+)
+val saved = productRepo.save(product)  // version = 0
+
+// 5. Load and update
+val loaded = productRepo.getById(saved.id)
+loaded.price = Amount("899.99")
+val updated = productRepo.update(loaded)  // version = 1
+
+// 6. Query with type-safe conditions
+val electronics = productRepo.queryBuilder()
+    .where(productRepo.condition().matching {
+        (Product::category eq "Electronics")
+            .and(Product::price lt Amount("1000.00"))
+    })
+    .orderBy(Product::name, QueryBuilder.Order.ASC)
+    .find()
 ```
 
-### Repository
+## Defining Entities
 
-The `DocumentDbRepository` interface provides methods for saving, updating, deleting, and querying entities.  
-It uses JSON for storing entities, allowing for flexible and schema-less data structures.
+**Package:** `dk.trustworks.essentials.components.document_db`
 
-```kotlin
-interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
-    fun save(entity: ENTITY, initialVersion: Version = Version.ZERO): ENTITY
-    fun update(entity: ENTITY): ENTITY
-    fun update(entity: ENTITY, nextVersion: Version): ENTITY
-    fun find(queryBuilder: QueryBuilder<ID, ENTITY>): List<ENTITY>
-    fun findById(id: ID): ENTITY?
-    fun getById(id: ID): ENTITY
-    fun existsById(id: ID): Boolean
-    fun saveAll(entities: Iterable<ENTITY>): List<ENTITY>
-    fun updateAll(entities: Iterable<ENTITY>): List<ENTITY>
-    fun deleteById(id: ID)
-    fun delete(entity: ENTITY)
-    fun deleteAll(entities: Iterable<ENTITY>)
-    fun findAll(): List<ENTITY>
-    fun findAllById(ids: Iterable<ID>): List<ENTITY>
-    fun count(): Long
-    fun deleteAllById(ids: Iterable<ID>)
-    fun deleteAll()
-    fun entityConfiguration(): EntityConfiguration<ID, ENTITY>
-    fun queryBuilder(): QueryBuilder<ID, ENTITY>
-    fun condition(): Condition<ENTITY>
-}
-```
+Entities are Kotlin data classes representing your domain objects.  
+The repository serializes the entire entity to JSON and stores it in PostgreSQL's JSONB column—no schema migrations required.
+You can add, remove, or rename properties at any time; the JSON structure simply evolves with your code.
 
-### `save` operation
-When saving a new entity using the `save` method, the entity is assigned an initial version.  
-By default, this version is set to `Version.ZERO`, but a different initial version can be specified if needed.   
-If the entity already exists in the database, an `OptimisticLockingException` is thrown to prevent data overwriting.
-```kotlin
-fun save(entity: ENTITY, initialVersion: Version = Version.ZERO): ENTITY
-```
+**Two usage patterns:**
 
-### `update` operation
-The `update` method is used to update an existing entity.  
-When an entity is updated, its `version` is automatically incremented to ensure that no concurrent updates have been made. 
-If the `version` of the entity in the database does not match the version of the entity being updated, 
-an `OptimisticLockingException` is thrown, indicating that the entity has been modified by another process.
-```kotlin
-fun update(entity: ENTITY): ENTITY
-```
+| Pattern | Description | Schema Evolution |
+|---------|-------------|------------------|
+| **Long-lived entities** | Traditional CRUD data that persists indefinitely | Requires backwards-compatible changes (see [Schema Evolution](#schema-evolution)) |
+| **Event Modeled Views** | Projections built from event streams that can be deleted and recreated (see [`ViewEventProcessor`](../postgresql-event-store/README.md#vieweventprocessor)) | Schema can change freely—just rebuild the view |
 
-### Custom Version Update during `update`
-In some cases, you may want to specify the next `version` explicitly.  
-The `update` method with the `nextVersion` parameter allows you to set the new `version` of the entity.  
-This method also checks for version consistency to prevent concurrent modifications.
-```kotlin
-fun update(entity: ENTITY, nextVersion: Version): ENTITY
-```
+All entities must implement `VersionedEntity<ID, SELF>`, which adds two repository-managed properties:
 
-### Optimistic Locking
-The versioning scheme implements optimistic locking, a concurrency control method used to prevent conflicting updates.  
-Each time an entity is updated, its `version` is checked against the `version` of the same entity in the database.  
-If the versions do not match, the operation is aborted, and an `OptimisticLockingException` is thrown.  
-This approach ensures that updates do not overwrite changes made by other processes.
+| Property | Type | Purpose |
+|----------|------|---------|
+| `version` | `Version` | Incremented on each update for optimistic locking |
+| `lastUpdated` | `OffsetDateTime` | Automatically set to the current timestamp on save/update |
 
+### Entity Requirements
 
-## Using the PostgreSQL DocumentDB
-First you need to ensure that the `DocumentDbRepositoryFactory` is fully configured.
+1. Implement `VersionedEntity<ID, SELF_TYPE>`
+2. Annotate with `@DocumentEntity("table_name")`
+3. Mark the ID property with `@Id`
+4. ID must be `String` or `StringValueType` (or use `createForCompositeId()`)
 
-Here's an example of configuring it standalone - if you're using the `spring-boot-starter-postgresql`/`spring-boot-starter-postgresql-event-store`
-both the `Jdbi`, `UnitOfWorkFactory` and `JSONSerializer` are available as Spring Beans that can be injected.
+### Basic Entity
 
-```kotlin
-val repositoryFactory = DocumentDbRepositoryFactory(
-            jdbi,
-            JdbiUnitOfWorkFactory(jdbi),
-            JacksonJSONSerializer(
-                EssentialsImmutableJacksonModule.createObjectMapper(
-                    Jdk8Module(),
-                    JavaTimeModule()
-                ).registerKotlinModule()
-            )
-        )
-```
-
-### Defining Entities that can be persisted
-Entities that are persistable using a `DocumentDBRepository` MUST implement the `VersionedEntity` interface
-and be annotated with the `@DocumentEntity` annotation, which defines that name of the table where the entities is stored
-
-Additionally, the entities `identifier` (or primary-key) must be annotated with the `@Id` annotation:
 ```kotlin
 @DocumentEntity("orders")
 data class Order(
     @Id
-    val orderId: OrderId,
+    val orderId: OrderId,            // Semantic StringValueType ID
     var description: String,
-    var amount: Amount,
-    var additionalProperty: Int,
-    var orderDate: LocalDateTime,
+    var amount: Amount,              // Semantic BigDecimal type
+    var orderDate: OrderDate,        // Semantic LocalDateTime type
     @Indexed
     var personName: String,
-    var invoiceAddress: Address,
-    var contactDetails: ContactDetails,
+    var invoiceAddress: Address,        // Nested object
+    var contactDetails: ContactDetails, // Nested object
+    
+    // VersionedEntity properties with applied default values
     override var version: Version = Version.NOT_SAVED_YET,
     override var lastUpdated: OffsetDateTime = OffsetDateTime.now(UTC)
-) : VersionedEntity<OrderId, Order> 
+) : VersionedEntity<OrderId, Order>
+
+// Nested types (no annotations needed)
+data class Address(val street: String, val zipCode: Int, val city: String)
+data class ContactDetails(val name: String, val address: Address, val phoneNumbers: List<String>)
 ```
 
-The `@Id` annotated property MUST be a `String` or a String value class (such as those implementing `StringValueType`) 
+### Semantic Value Types
 
-To strengthen the type safety and the ubiquitous language it's a good idea to base your type on one of the Semantic types defined
-in the `types` library.
+Use Kotlin value classes that extend appropriate `SingleValueType` interfaces from the [types](../../types/README.md) module.  
+This provides compile-time type safety—you can't accidentally pass a `ProductId` where an `OrderId` is expected, or mix up different date fields.
 
-Example of creating a semantic type called `OrderId` which is based on the `StringValueType` from the `types` library:
+**String-based ID type:**
+
 ```kotlin
 @JvmInline
 value class OrderId(override val value: String) : StringValueType<OrderId> {
@@ -201,236 +244,784 @@ value class OrderId(override val value: String) : StringValueType<OrderId> {
 }
 ```
 
-If you create your own semantic type you also need to create a corresponding Jdbi `ArgumentFactory` and `ColumnMapper`.
+**Date/time semantic type:**
 
-Example:
 ```kotlin
-class OrderIdArgumentFactory : StringValueTypeArgumentFactory<OrderId>()
-class OrderIdColumnMapper : StringValueTypeColumnMapper<OrderId>()
-```
-
-which MUST be registered with the `Jdbi` instance. E.g. using the Spring class callback `JdbiConfigurationCallback` which your configuration class can choose to implement:
-```kotlin
-@Configuration
-class MyConfig: JdbiConfigurationCallback {
-    override fun configure(jdbi: Jdbi) {
-        jdbi.registerArgument(OrderIdArgumentFactory())
-        jdbi.registerColumnMapper(OrderIdColumnMapper())
+@JvmInline
+value class OrderDate(override val value: LocalDateTime) : LocalDateTimeValueType<OrderDate> {
+    companion object {
+        fun now(): OrderDate = OrderDate(LocalDateTime.now())
     }
 }
 ```
 
-### Creating a `DocumentDbRepository` instance for persisting your Entity
-All you need to create a `DocumentDbRepository` for persisting your Entity is to use
-the configured `DocumentDbRepositoryFactory`'s `create` method:
+### JDBI Type Registration
+
+All `SingleValueType` properties used in your entities require JDBI `ArgumentFactory` and `ColumnMapper` registration. This includes:
+- **ID properties** (e.g., `OrderId`, `ProductId`)
+- **Value properties** (e.g., `Amount`, `Percentage`, `OrderDate`)
+
+For each semantic type, create the appropriate factories by extending the base classes:
 
 ```kotlin
-val repositoryFactory: DocumentDbRepositoryFactory = getDocumentDbRepositoryFactory()
+// String ID type
+class OrderIdArgumentFactory : StringValueTypeArgumentFactory<OrderId>()
+class OrderIdColumnMapper : StringValueTypeColumnMapper<OrderId>()
 
-val orderRepository: DocumentDbRepository<Order, OrderId> = repositoryFactory.create(Order::class)
+// LocalDateTime type
+class OrderDateArgumentFactory : LocalDateTimeValueTypeArgumentFactory<OrderDate>()
+class OrderDateColumnMapper : LocalDateTimeValueTypeColumnMapper<OrderDate>()
 ```
 
-### Persisting Entities using  a `DocumentDbRepository` instance 
-Example of **saving** a _new_ entity:
+Register all semantic types with JDBI during initialization:
+
 ```kotlin
-orderRepository.save(
-            Order(
-                orderId = OrderId("order1"),
-                description = "Test Order 1",
-                amount = Amount(100.0),
-                orderDate = LocalDateTime.now(),
-                personName = "John Doe",
-                invoiceAddress = Address("123 Some Street", "Some City"),
-                contactDetails = ContactDetails("John Doe", Address("123 Some Street", "Come City"), listOf("Some Phone Number")),
-                additionalProperty = 10
-            )
-        )
+jdbi.apply {
+    // Custom ID types
+    registerArgument(OrderIdArgumentFactory())
+    registerColumnMapper(OrderIdColumnMapper())
+
+    // Custom date types
+    registerArgument(OrderDateArgumentFactory())
+    registerColumnMapper(OrderDateColumnMapper())
+
+    // Built-in types from types-jdbi module
+    registerArgument(AmountArgumentFactory())
+    registerColumnMapper(AmountColumnMapper())
+}
 ```
 
-Example of **loading** an entity by id:
+> **Tip:** The [types-jdbi](../../types-jdbi/README.md) module provides pre-built factories for common types like `Amount` and `CountryCode`.    
+> You only need to create custom factories for your own domain-specific types.
+> See `dk.trustworks.essentials.components.boot.autoconfigure.postgresql.JdbiConfigurationCallback` for easy per component Jdbi configuration in Spring Boot.
+
+### Version
+
+Every entity must include a `version` property for optimistic locking.  
+The `Version` class is a value class wrapping a `Long` that the repository increments automatically on each update.
+
+When you create a new entity, initialize the `version` to `Version.NOT_SAVED_YET`.  
+After calling `save()`, the `version` becomes `Version.ZERO`.   
+Each subsequent `update()` increments the `version` by 1.
+
 ```kotlin
-val order = orderRepository.findById(OrderId("order1"))
+// Library provided Version type
+@JvmInline
+value class Version(override val value: Long) : LongValueType<Version> {
+    companion object {
+        val ZERO = Version(0)           // After first save
+        val NOT_SAVED_YET = Version(-1) // Before save (default)
+    }
+}
 ```
 
-Example of **loading** and **updating** an existing entity:
+> **Note:** The `DocumentDbRepositoryFactory` automatically registers `VersionArgumentFactory` and `VersionColumnMapper` with JDBI—you don't need to register these manually.
+
+**Test reference:** `PostgresqlDocumentDbRepositoryIT.kt`
+
+## Repository Setup
+
+The Repository pattern separates your domain logic from persistence concerns. Instead of writing SQL or managing JDBC connections directly, you interact with a clean interface that handles all database operations.
+
+**Two key components:**
+
+| Component | Role                                                                                                                                                    |
+|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `DocumentDbRepository<E, ID>` | The interface you use for all CRUD operations—save, update, find, delete, and query. One instance per entity type.                                      |
+| `DocumentDbRepositoryFactory` | Creates configured `DocumentDbRepository` instances as well as table creation, index setup, and serialization. Create once, reuse for all repositories. |
+
+This separation means your domain code depends only on the repository interface, making it easy to test (mock the repository) and keeping persistence details isolated.
+
+### DocumentDbRepositoryFactory
+
+The factory is the entry point for creating repositories. It requires three dependencies:
+
+| Dependency | Purpose |
+|------------|---------|
+| `Jdbi` | Database connection and query execution |
+| `UnitOfWorkFactory` | Transaction management (see [Foundation - UnitOfWork](../foundation/README.md#unitofwork-transactions)) |
+| `JSONSerializer` | Entity serialization to/from JSONB |
+
+The factory also handles automatic setup when creating repositories:
+- Creates the entity table if it doesn't exist
+- Creates indexes from `@Indexed` annotations
+- Registers `Version` type with JDBI
+
+Create a single factory instance and reuse it for all repositories:
+
 ```kotlin
+val repositoryFactory = DocumentDbRepositoryFactory(
+    jdbi,
+    JdbiUnitOfWorkFactory(jdbi),
+    JacksonJSONSerializer(
+        EssentialsImmutableJacksonModule.createObjectMapper(
+            Jdk8Module(),
+            JavaTimeModule()
+        ).registerKotlinModule()
+    )
+)
+```
+
+### Creating Repositories
+
+The factory provides three methods for creating repositories, depending on your ID type strategy. Each method returns a fully configured `DocumentDbRepository` ready for use.
+
+| Method | Use Case |
+|--------|----------|
+| `create(entityClass)` | Entities with `StringValueType` IDs (recommended) |
+| `createForStringId(entityClass)` | Entities with plain `String` IDs |
+| `createForCompositeId(entityClass, idSerializer)` | Entities with composite or custom ID types |
+
+**For `StringValueType` IDs (recommended):**
+
+```kotlin
+val orderRepository: DocumentDbRepository<Order, OrderId> =
+    repositoryFactory.create(Order::class)
+```
+
+**For `String` IDs:**
+
+```kotlin
+val productRepository: DocumentDbRepository<Product, String> =
+    repositoryFactory.createForStringId(Product::class)
+```
+
+**For composite/custom IDs:**
+
+```kotlin
+val compositeRepository = repositoryFactory.createForCompositeId(
+    CompositeOrder::class
+) { id -> "${id.orderId}_${id.addressId}" }  // IdSerializer function
+```
+
+> **Tip:** For production use, wrap `DocumentDbRepository` in a [Custom Repository](#custom-repositories) to encapsulate domain-specific queries and add indexes programmatically.
+
+### Spring Integration
+
+When using Spring Boot, you can leverage dependency injection to wire up the factory and repositories.  
+With [`spring-boot-starter-postgresql`](../spring-boot-starter-postgresql/README.md), the core dependencies (`Jdbi`, `UnitOfWorkFactory`, `JSONSerializer`) are auto-configured as beans.
+
+**Recommended KotlinModule configuration:**
+
+```kotlin
+@Bean
+fun kotlinJacksonModule(): KotlinModule {
+    return KotlinModule.Builder()
+        .withReflectionCacheSize(512)
+        .configure(KotlinFeature.NullToEmptyCollection, false)
+        .configure(KotlinFeature.NullToEmptyMap, false)
+        .configure(KotlinFeature.NullIsSameAsDefault, false)
+        .configure(KotlinFeature.SingletonSupport, false)
+        .configure(KotlinFeature.StrictNullChecks, false)
+        .build()
+}
+```
+
+**Factory and repository bean configuration:**
+
+```kotlin
+@Configuration
+class DocumentDbConfig {
+
+    @Bean
+    fun documentDbRepositoryFactory(
+        jdbi: Jdbi,
+        unitOfWorkFactory: HandleAwareUnitOfWorkFactory<*>,
+        jsonSerializer: JSONSerializer
+    ) = DocumentDbRepositoryFactory(jdbi, unitOfWorkFactory, jsonSerializer)
+
+    @Bean
+    fun orderRepository(factory: DocumentDbRepositoryFactory): OrderRepository {
+        return OrderRepository(factory.create(Order::class))
+    }
+}
+```
+
+### Database Schema
+
+Understanding the underlying table structure helps when debugging or writing custom queries.  
+When you create a repository, the factory automatically creates a table for that entity type (if it doesn't exist).
+
+The table name is determined by the `@DocumentEntity` annotation on your entity class:
+
+```kotlin
+@DocumentEntity("orders")  // Creates table named "orders"
+data class Order(...) : VersionedEntity<OrderId, Order>
+```
+
+> ⚠️ **Security:** The table name is used directly in SQL statements with String concatenation.  
+> See ⚠️[Security](#security) for sanitization requirements.
+
+**Generated table structure:**
+
+```sql
+CREATE TABLE IF NOT EXISTS orders (
+    id           TEXT PRIMARY KEY,
+    data         JSONB NOT NULL,
+    version      BIGINT,
+    last_updated TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+| Column | Purpose                                                                                                |
+|--------|--------------------------------------------------------------------------------------------------------|
+| `id` | Entity identifier (extracted from `@Id` property, or serialized via `IdSerializer` for composite IDs)  |
+| `data` | Complete entity serialized as JSON                                                                  |
+| `version` | Optimistic locking version number (maps to `VersionedEntity.version`)                            |
+| `last_updated` | Automatic timestamp for last modification  (maps to `VersionedEntity.lastUpdated`)          |
+
+The entire entity (including nested objects and collections) is stored in the `data` column.
+This means you can evolve your entity structure without database migrations—just add or remove properties as needed.
+
+### Schema Evolution
+
+Since entities are stored as JSON, schema changes don't require database migrations. However, you need to consider how existing data will deserialize after code changes.
+
+**For long-lived entities** (data that persists indefinitely), follow these backwards-compatible practices:
+
+| Change | Safe? | Notes |
+|--------|-------|-------|
+| Add property with default | ✅ Yes | Existing rows deserialize with the default value |
+| Add nullable property | ✅ Yes | Existing rows deserialize as `null` |
+| Remove unused property | ✅ Yes | JSON ignores unknown fields (configure Jackson accordingly) |
+| Rename property | ⚠️ Careful | Use `@JsonAlias("oldName")` to read both old and new names |
+| Change property type | ❌ No | Existing data won't deserialize correctly |
+
+**For Event Modeled Views** (projections from event streams), schema evolution is simpler:
+
+1. Change your entity structure as needed
+2. Delete all rows from the table (or drop and recreate)
+3. Replay events to rebuild the view with the new schema
+
+The [`ViewEventProcessor`](../postgresql-event-store/README.md#vieweventprocessor) from the Event Store module automates this pattern—it tracks replay state and handles view recreation when you change the processor's event handlers.
+
+## CRUD Operations
+
+The `DocumentDbRepository` provides a complete set of operations for managing entities.  
+All operations are transactional—they participate in the current `UnitOfWork` if one exists, or create a new transaction if not.
+
+### Save (Create New Entity)
+
+Use `save()` to persist a **new** entity to the database. The entity must not already exist (based on its ID).
+
+```kotlin
+val order = Order(
+    orderId = OrderId.random(),
+    description = "New Order",
+    amount = Amount("100.00"),
+    orderDate = OrderDate.now(),
+    personName = "John Doe",
+    invoiceAddress = Address("123 Main St", 12345, "Springfield"),
+    contactDetails = ContactDetails("John", Address("123 Main St", 12345, "Springfield"), listOf("555-1234"))
+)
+
+val savedOrder = orderRepository.save(order)
+// savedOrder.version == Version.ZERO (first save always sets version to 0)
+```
+
+**What happens:**
+- The entity is serialized to JSON and inserted into the database
+- The `version` is set to `Version.ZERO` (or your specified initial version)
+- The `lastUpdated` timestamp is set to the current time
+- Returns the saved entity with updated `version` and `lastUpdated`
+
+**Auto-generated IDs:** If your ID property is declared as `var` (mutable) and is `null`, the repository generates a random ID automatically.   
+However, we recommend explicitly generating IDs (as shown above with `OrderId.random()`) for clarity.
+
+**Error handling:**
+- Throws `OptimisticLockingException` if an entity with the same ID already exists
+- Use `update()` instead if you want to modify an existing entity
+
+**Variant:** `save(entity, initialVersion)` lets you specify a custom starting version instead of `Version.ZERO`.
+
+### Update (Modify Existing Entity)
+
+Use `update()` to persist changes to an **existing** entity. The entity must have been previously saved.
+
+```kotlin
+// 1. Load the entity
 val order = orderRepository.findById(OrderId("order1"))!!
-order.additionalProperty = 75
-orderRepository.update(order) 
+
+// 2. Modify properties
+order.description = "Updated description"
+order.amount = Amount("150.00")
+
+// 3. Save changes
+val updatedOrder = orderRepository.update(order)
+// updatedOrder.version == previous version + 1
 ```
 
-### Querying for entities
+**What happens:**
+- The repository checks that the entity's current `version` matches the database
+- If versions match: updates the row, increments `version`, updates `lastUpdated`
+- If versions don't match: throws `OptimisticLockingException` (another process modified the entity)
 
-The `DocumentDBRepository` provides a simple type safe SQL like query API using the `QueryBuilder` together with its `find()` method:
+**Optimistic locking in action:** This pattern prevents lost updates. If two processes load the same entity, modify it, and try to save, the second one will fail with `OptimisticLockingException`. See [Optimistic Locking](#optimistic-locking) for handling strategies.
+
+**Variant:** `update(entity, nextVersion)` lets you specify the exact next version instead of auto-incrementing.
+
+### Read (Query Entities)
+
+Multiple methods for retrieving entities, depending on your needs:
+
+| Method | Returns | When to Use |
+|--------|---------|-------------|
+| `findById(id)` | `Entity?` | When the entity might not exist (returns `null` if not found) |
+| `getById(id)` | `Entity` | When the entity must exist (throws exception if not found) |
+| `existsById(id)` | `Boolean` | When you only need to check existence without loading the entity |
+| `findAll()` | `List<Entity>` | Load all entities (use with caution on large tables) |
+| `findAllById(ids)` | `List<Entity>` | Load multiple entities by their IDs in a single query |
+| `count()` | `Long` | Get total number of entities without loading them |
 
 ```kotlin
-// Find orders with a specific customer name
+// Safe lookup - handle missing entity gracefully
+val order = orderRepository.findById(OrderId("order1"))
+if (order != null) {
+    // Process the order
+}
+
+// Assertive lookup - throws if not found (use when ID is known to be valid)
+val order = orderRepository.getById(OrderId("order1"))
+
+// Check before expensive operation
+if (orderRepository.existsById(orderId)) {
+    // Proceed with operation
+}
+
+// Batch loading - more efficient than multiple findById calls
+val orders = orderRepository.findAllById(listOf(
+    OrderId("order1"),
+    OrderId("order2"),
+    OrderId("order3")
+))
+```
+
+> **Tip:** For complex queries with filtering, sorting, and pagination, use the [Query API](#querying) instead.
+
+### Delete (Remove Entities)
+
+Multiple methods for removing entities:
+
+| Method | Description |
+|--------|-------------|
+| `deleteById(id)` | Delete by ID (no-op if entity doesn't exist) |
+| `delete(entity)` | Delete by entity reference |
+| `deleteAllById(ids)` | Delete multiple entities by their IDs |
+| `deleteAll(entities)` | Delete multiple entity references |
+| `deleteAll()` | Delete **all** entities in the table (use with caution!) |
+
+```kotlin
+// Delete single entity by ID
+orderRepository.deleteById(OrderId("order1"))
+
+// Delete entity you already have loaded
+orderRepository.delete(order)
+
+// Batch delete by IDs
+orderRepository.deleteAllById(listOf(
+    OrderId("order1"),
+    OrderId("order2")
+))
+
+// Delete all (typically used for Event Modeled Views during rebuild)
+orderRepository.deleteAll()
+```
+
+> **Note:** Delete operations don't check versions—they succeed regardless of the entity's current state.
+
+### Batch Operations
+
+For better performance when working with multiple entities, use batch operations instead of calling single-entity methods in a loop:
+
+| Method | Description |
+|--------|-------------|
+| `saveAll(entities)` | Save multiple new entities in a single operation |
+| `updateAll(entities)` | Update multiple existing entities in a single operation |
+
+```kotlin
+// Save multiple new entities
+val newOrders = listOf(order1, order2, order3)
+val savedOrders = orderRepository.saveAll(newOrders)
+// Each entity gets Version.ZERO
+
+// Update multiple entities
+val modifiedOrders = listOf(order1, order2)
+val updatedOrders = orderRepository.updateAll(modifiedOrders)
+// Each entity's version is incremented individually
+```
+
+> **Note:** Batch operations still perform individual version checks for each entity. If any entity fails (e.g., version mismatch), the entire batch operation may fail depending on transaction configuration.
+
+## Querying
+
+The query API provides type-safe SQL-like queries using Kotlin property references.  
+Instead of writing raw SQL strings with JSON path expressions, you use Kotlin's `::propertyName` syntax.  
+This catches errors at compile time and enables IDE autocomplete.
+
+Under the hood, the query builder generates PostgreSQL JSON operators like `data->>'propertyName'` and handles type casting automatically.  
+For nested objects, use the `then` operator to chain property references.
+
+### Basic Query
+
+```kotlin
 val orders = orderRepository.queryBuilder()
-                            .where(orderRepository.condition()
-                                .matching {
-                                    Order::customerName eq "Jane Doe"
-                                })
-                            .find()
+    .where(orderRepository.condition()
+        .matching {
+            Order::personName eq "John Doe"
+        })
+    .find()
 ```
 
-#### Query nested properties:
+### Comparison Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `eq` | Equals | `Order::amount eq Amount("100.00")` |
+| `lt` | Less than | `Order::amount lt Amount("100.00")` |
+| `lte` | Less than or equal | `Order::amount lte Amount("100.00")` |
+| `gt` | Greater than | `Order::amount gt Amount("100.00")` |
+| `gte` | Greater than or equal | `Order::amount gte Amount("100.00")` |
+| `like` | SQL LIKE pattern | `Order::personName like "%John%"` |
+
+### Logical Operators
+
+```kotlin
+val orders = orderRepository.queryBuilder()
+    .where(orderRepository.condition()
+        .matching {
+            (Order::personName like "%John%")
+                .or(Order::personName like "%Jane%")
+                .and(Order::description like "%urgent%")
+        })
+    .find()
+```
+
+### Nested Property Queries
+
+Use `then` to navigate into nested objects:
+
+```kotlin
+val orders = orderRepository.queryBuilder()
+    .where(orderRepository.condition()
+        .matching {
+            Order::contactDetails then ContactDetails::address then Address::city eq "Springfield"
+        })
+    .find()
+```
+
+### Sorting
+
+```kotlin
+// Single property
+val orders = orderRepository.queryBuilder()
+    .where(condition)
+    .orderBy(Order::orderDate, QueryBuilder.Order.DESC)
+    .find()
+
+// Nested property
+val orders = orderRepository.queryBuilder()
+    .where(condition)
+    .orderBy(Order::contactDetails then ContactDetails::address then Address::city, QueryBuilder.Order.ASC)
+    .find()
+```
+
+### Pagination
+
+```kotlin
+val page = orderRepository.queryBuilder()
+    .where(orderRepository.condition()
+        .matching { Order::amount gt Amount("0.00") })
+    .orderBy(Order::orderDate, QueryBuilder.Order.DESC)
+    .offset(50)   // Skip first 50
+    .limit(25)    // Return 25 results
+    .find()
+```
+
+### Complete Example
+
 ```kotlin
 val result = orderRepository.queryBuilder()
-                            .where(orderRepository.condition()
-                                .matching {
-                                    Order::contactDetails then ContactDetails::address then Address::city eq "Some City"
-                                })
-                            .find()
+    .where(orderRepository.condition()
+        .matching {
+            (Order::contactDetails then ContactDetails::address then Address::city like "Spring%")
+                .and(Order::amount gte Amount("100.00"))
+        })
+    .orderBy(Order::orderDate, QueryBuilder.Order.DESC)
+    .limit(100)
+    .offset(0)
+    .find()
 ```
 
-#### Query using `and`, `or`, `like`, etc.:
-```kotlin
-val result = orderRepository.queryBuilder()
-                            .where(orderRepository.condition()
-                                .matching {
-                                    (Order::personName like "%John%").or(Order::personName like "%Jane%")
-                                        .and(Order::description like "%unique%")
-                                })
-                            .find()
-```
+**Test reference:** `QueryIT.kt`
 
-#### Query using `orderBy` and pagination (`offset` + `limit`):
-```kotlin
-val result = orderRepository.queryBuilder()
-                            .where(orderRepository.condition()
-                                .matching {
-                                    Order::contactDetails then ContactDetails::address then Address::city like "Some Other%"
-                                })
-                            .orderBy(Order::contactDetails then ContactDetails::address then Address::city, QueryBuilder.Order.ASC)
-                            .offset(100)
-                            .limit(50)
-                            .find()
-```
+## Indexing
 
-> #### Security
-> 
-> The `DocumentEntity.tableName` and `all the names of the properties in your entity classes` will be directly used in constructing SQL statements through string concatenation. This can potentially expose components, such as `PostgresqlDocumentDbRepository`, to SQL injection attacks.
-> 
-> **It is the responsibility of the user of this component to sanitize both the `DocumentEntity.tableName` and `all Entity property names` to ensure the security of all the SQL statements generated by this component.**
-> 
-> The `PostgresqlDocumentDbRepository` instance, e.g., created by `DocumentDbRepositoryFactory.create`, will through `EntityConfiguration.configureEntity` call the `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` method to validate the table name and Entity property names as a first line of defense.
-> 
-> The `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.
-> 
-> **However, Essentials components as well as `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` do not offer exhaustive protection, nor do they assure the complete security of the resulting SQL against SQL injection threats.**
-> > The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-> > Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.
-> 
-> **Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
-> 
-> It is highly recommended that the `DocumentEntity.tableName` and `all the Entity property names` are only derived from controlled and trusted sources.
-> 
-> To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `tableName` or entity property names.
+Indexes dramatically improve query performance on JSONB data.  
+Without indexes, PostgreSQL must scan every row and parse the JSON to evaluate query conditions.  
+With proper indexes, PostgreSQL can quickly locate matching rows using B-tree lookups.
 
+The repository supports two indexing approaches:
+- **`@Indexed` annotation**: For top-level entity properties (created automatically on repository initialization)
+- **`addIndex()` method**: For nested properties, composite indexes, or indexes added after initialization
 
-### Indexing
-To ensure that queries are fast it's a good idea to add indexes.
+### Using @Indexed Annotation
 
-The `DocumentDbRepository` concept supports powerful indexing capabilities to improve the performance of queries on JSONB data stored in a PostgreSQL database. 
-These capabilities allow developers to create and manage indexes on specific JSON properties, including nested properties, to optimize query performance.
+For top-level properties, use the `@Indexed` annotation:
 
-#### Using the `Indexed` Annotation
-
-You can use the `@Indexed` annotation on individual top level `VersionedEntity` properties within your entity classes to indicate that these properties should be indexed.    
-If you want to add indexes for sub-properties, e.g. properties of the `Address` or `ContactDetails` objects, you have to use the `DocumentDbRepository` using the `addIndex` method.
-#### Example
 ```kotlin
 @DocumentEntity("orders")
 data class Order(
-    @Id
-    val orderId: OrderId,
-    var description: String,
-    var amount: Amount,
-    var additionalProperty: Int,
-    var orderDate: LocalDateTime,
-    @Indexed
-    var personName: String,
-    var invoiceAddress: Address,
-    var contactDetails: ContactDetails,
-    override var version: Version = Version.NOT_SAVED_YET,
-    override var lastUpdated: OffsetDateTime = OffsetDateTime.now(UTC)
-) : VersionedEntity<OrderId, Order>
+    @Id val orderId: OrderId,
+    @Indexed var personName: String,  // Creates idx_orders_personname
+    @Indexed var status: String,       // Creates idx_orders_status
+    var description: String,           // Not indexed
+    // ...
+)
 ```
 
-which, following the pattern: `idx_${tableName}_${fieldName}` as lower case, will add index `idx_orders_personname`  to the `orders` table
+Index name pattern: `idx_${tableName}_${propertyName}` (lowercase)
 
-> ##### Security note
-> 
-> The name of the property will be used in the index name (together with the table name specified in `DocumentEntity.tableName`) and further used in constructing SQL statements through string 
-> concatenation, which exposes the components (such as `dk.trustworks.essentials.components.document_db.postgresql.PostgresqlDocumentDbRepository`) to SQL injection attacks.
-> 
-> **It is the responsibility of the user of this component to sanitize the `DocumentEntity.tableName` and the indexed property name to ensure the security of all the SQL statements generated by 
-> this component.**
-> 
-> The `dk.trustworks.essentials.components.document_db.postgresql.PostgresqlDocumentDbRepository` instance created, e.g., by 
-> `dk.trustworks.essentials.components.document_db.DocumentDbRepositoryFactory.create`, will call the 
-> `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` method to validate the table name and index name as a first line of defense.
-> 
-> The `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` provides an initial layer of defense against SQL injection by applying naming 
-> conventions intended to reduce the risk of malicious input.
-> 
-> However, Essentials components as well as `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` do not offer exhaustive protection, 
-> nor do they assure the complete security of the resulting SQL against SQL injection threats.
-> 
-> >The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-> 
-> Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.
-> 
-> Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
-> 
-> It is highly recommended that the `DocumentEntity.tableName` value and indexed property name are only derived from a controlled and trusted source.
-> 
-> To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `DocumentEntity.tableName` value or the indexed property name.
+### Programmatic Index Creation
 
-#### Adding Indexes to the `DocumentDbRepository`
-
-Indexes can be added to the `DocumentDbRepository` using the `addIndex` method.  
-This method allows you to specify the properties to include in the index, including support for nested properties.
-
-###### Example
+For nested properties or composite indexes, use `addIndex()`:
 
 ```kotlin
-val orderRepository: DocumentDbRepository<Order, OrderId> = repositoryFactory.create(Order::class)
+val orderRepository = repositoryFactory.create(Order::class)
 
-// Add an index on a nested property
-orderRepository.addIndex(Index(name = "city", listOf(Order::contactDetails then ContactDetails::address then Address::city)))
+// Single nested property index
+orderRepository.addIndex(Index(
+    name = "city",
+    properties = listOf(Order::contactDetails then ContactDetails::address then Address::city)
+))
+// Creates: idx_orders_city
 
-// Add a composite index on multiple properties
-orderRepository.addIndex(Index(name = "orderdate_amount", listOf(Order::orderDate.asProperty(), Order::amount.asProperty())))
+// Composite index on multiple properties
+orderRepository.addIndex(Index(
+    name = "orderdate_amount",
+    properties = listOf(Order::orderDate.asProperty(), Order::amount.asProperty())
+))
+// Creates: idx_orders_orderdate_amount
 ```
 
-which, following the pattern: `idx_${tableName}_$indexName`  as lower case, will add two indexes to the `orders` table:
-- `idx_orders_city`
-- `idx_orders_orderdate_amount`
+### Removing Indexes
 
-    ##### Security note
-    The `Index.name` and `all the names of the properties in your entity classes` specified in `Index.properties` will be directly used in constructing SQL statements through string concatenation.    
-    This can potentially expose components, such as `PostgresqlDocumentDbRepository`, to SQL injection attacks.
-    
-    **It is the responsibility of the user of this component to sanitize both the `Index.name` and `all the names of the properties in your entity classes` specified in `Index.properties` to ensure 
-    the security of all the SQL statements generated by this component.**
-    
-    The `PostgresqlDocumentDbRepository.addIndex` will call the `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` method to validate the index
-    name as a first line of defense.
-    
-    The `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` provides an initial layer of defense against SQL injection by applying naming  
-    conventions intended to reduce the risk of malicious input.
-    
-    **However, Essentials components as well as `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName` do not offer exhaustive protection, 
-    nor do they assure the complete security of the resulting SQL against SQL injection threats.**
-    > The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-    > Users must ensure thorough sanitization and validation of API input parameters, column, table, and index names.
-    
-    **Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
-    
-    It is highly recommended that the `Index.name` and `all the names of the properties in your entity classes` specified in `Index.properties` are only derived from controlled and trusted sources.
-    
-    To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `Index.name` nor any of `the names of the properties in your entity classes` 
-     specified in `Index.properties`.
-    
-    **See also `VersionedEntity`'s security warning.**
+```kotlin
+orderRepository.removeIndex("city")
+// or
+orderRepository.removeIndex(index)
+```
+
+**Test reference:** `PostgresqlDocumentDbRepositoryIT.kt:88-89`
+
+## Custom Repositories
+
+While `DocumentDbRepository` provides all the basic operations, you'll often want to create domain-specific repositories that encapsulate common queries and business logic. This keeps your service layer clean and makes queries reusable.
+
+The `DelegatingDocumentDbRepository` base class delegates all standard operations to the underlying repository while letting you add custom query methods and configure indexes.
+
+### Basic Custom Repository
+
+```kotlin
+class OrderRepository(
+    delegateTo: DocumentDbRepository<Order, OrderId>
+) : DelegatingDocumentDbRepository<Order, OrderId>(delegateTo) {
+
+    fun findByPersonName(name: String): List<Order> {
+        return queryBuilder()
+            .where(condition().matching { Order::personName eq name })
+            .orderBy(Order::orderDate, QueryBuilder.Order.DESC)
+            .find()
+    }
+
+    fun findByCity(city: String): List<Order> {
+        return queryBuilder()
+            .where(condition().matching {
+                Order::contactDetails then ContactDetails::address then Address::city eq city
+            })
+            .find()
+    }
+
+    fun findLargeOrders(minimumAmount: Amount): List<Order> {
+        return queryBuilder()
+            .where(condition().matching { Order::amount gt minimumAmount })
+            .find()
+    }
+}
+
+// Usage
+val repository = OrderRepository(repositoryFactory.create(Order::class))
+val largeOrders = repository.findLargeOrders(Amount("1000.00"))
+```
+
+### Adding Indexes in Custom Repositories
+
+For complex entities, define indexes in the repository's `init` block using `delegateTo.addIndex()`. This is especially useful for:
+- **Composite indexes** spanning multiple properties
+- **Nested property indexes** for frequently queried nested fields
+- **Indexes on entities with composite IDs**
+
+**Example: Document with Multiple Revisions**
+
+This example demonstrates a common pattern where a logical document (`DocumentId`) can have multiple revisions (`DocumentRevision`).  
+Each revision is stored as a separate `DocumentView` entity, identified by a composite ID combining both values.
+
+> **Note:** `DocumentRevision` represents the business concept of document revisions, while `Version` tracks database-level updates to each entity.
+
+```kotlin
+// Semantic types for the composite ID
+@JvmInline
+value class DocumentId(override val value: String) : StringValueType<DocumentId>
+
+@JvmInline
+value class DocumentRevision(override val value: Long) : LongValueType<DocumentRevision>
+
+/**
+ * Composite ID combining DocumentId and DocumentRevision.
+ * A single document can have many revisions, each stored as a separate DocumentView.
+ */
+data class DocumentIdAndRevision(
+    val documentId: DocumentId,
+    val revision: DocumentRevision
+) {
+    companion object {
+        /** Serializes the composite ID to a string for database storage */
+        val IdSerializer: IdSerializer<DocumentIdAndRevision> = {
+            "${it.documentId.value}:${it.revision.value}"
+        }
+    }
+}
+
+/**
+ * Represents a single revision of a document.
+ * Multiple DocumentView entities can exist for the same DocumentId (one per revision).
+ */
+@DocumentEntity("documents_list")
+data class DocumentView(
+    @Id
+    val id: DocumentIdAndRevision,         // Composite ID: documentId + revision
+    @Indexed
+    val documentId: DocumentId,            // Indexed for querying all revisions
+    val revision: DocumentRevision,        // The revision number
+    val attributes: DocumentAttributes,
+    var registeredAt: OffsetDateTime,
+    var uploadedAt: OffsetDateTime? = null,
+    override var version: Version = Version.NOT_SAVED_YET,
+    override var lastUpdated: OffsetDateTime = OffsetDateTime.now(UTC)
+) : VersionedEntity<DocumentIdAndRevision, DocumentView>
+
+data class DocumentAttributes(
+    val category: String,
+    val type: String,
+    val metadata: Map<String, String>
+)
+
+@Repository
+class DocumentsListRepository(
+    documentDbRepositoryFactory: DocumentDbRepositoryFactory
+) : DelegatingDocumentDbRepository<DocumentView, DocumentIdAndRevision>(
+    documentDbRepositoryFactory.createForCompositeId(
+        DocumentView::class,
+        DocumentIdAndRevision.IdSerializer
+    )
+) {
+    init {
+        // Composite index for efficient lookup by documentId + revision
+        delegateTo.addIndex(Index(
+            "id_and_revision",
+            listOf(
+                DocumentView::documentId.asProperty(),
+                DocumentView::revision.asProperty()
+            )
+        ))
+
+        // Indexes on nested properties for filtering by category/type
+        delegateTo.addIndex(Index(
+            "attr_category",
+            listOf(DocumentView::attributes then DocumentAttributes::category)
+        ))
+        delegateTo.addIndex(Index(
+            "attr_type",
+            listOf(DocumentView::attributes then DocumentAttributes::type)
+        ))
+    }
+
+    /** Find all revisions of a document, sorted by revision number (newest first) */
+    fun findAllRevisions(documentId: DocumentId): List<DocumentView> {
+        return queryBuilder()
+            .where(condition().matching { DocumentView::documentId eq documentId })
+            .orderBy(DocumentView::revision, QueryBuilder.Order.DESC)
+            .find()
+    }
+
+    /** Find a specific revision of a document */
+    fun findByDocumentIdAndRevision(
+        documentId: DocumentId,
+        revision: DocumentRevision
+    ): DocumentView? {
+        return queryBuilder()
+            .where(condition().matching {
+                (DocumentView::documentId eq documentId)
+                    .and(DocumentView::revision eq revision)
+            })
+            .find()
+            .firstOrNull()
+    }
+
+    /** Find all documents with a category */
+    fun findByCategory(category: String): List<DocumentView> {
+        return queryBuilder()
+            .where(condition().matching {
+                DocumentView::attributes then DocumentAttributes::category eq category
+            })
+            .find()
+    }
+}
+```
+
+**Key points:**
+- Use `delegateTo.addIndex()` in the `init` block to ensure indexes are created when the repository is instantiated
+- Use `.asProperty()` for top-level properties in composite indexes
+- Use `then` operator for nested property paths
+- Combine `@Indexed` annotations for simple cases with programmatic indexes for complex cases
+- Index properties you frequently query by (e.g., `documentId` for finding all revisions)
+
+**Test reference:** `PostgresqlDocumentDbRepositoryIT.kt:83`
+
+## Optimistic Locking
+
+### Why
+
+Optimistic locking prevents lost updates when multiple processes modify the same entity concurrently.
+
+### How It Works
+
+1. Each entity has a `version` property (starts at `Version.ZERO` on save)
+2. On update, the repository checks: `WHERE id = :id AND version = :loadedVersion`
+3. If the version doesn't match, `OptimisticLockingException` is thrown
+4. On successful update, version is incremented
+
+### Handling Conflicts
+
+```kotlin
+val order = orderRepository.findById(orderId)!!
+
+try {
+    order.description = "Updated by process A"
+    orderRepository.update(order)
+} catch (e: OptimisticLockingException) {
+    // Another process updated the entity - reload and retry
+    val freshOrder = orderRepository.findById(orderId)!!
+    freshOrder.description = "Updated by process A (retry)"
+    orderRepository.update(freshOrder)
+}
+```
+
+### Version States
+
+| Value | Meaning |
+|-------|---------|
+| `Version.NOT_SAVED_YET` (-1) | Entity has never been saved |
+| `Version.ZERO` (0) | Entity was just saved |
+| `Version(n)` where n > 0 | Entity has been updated n times |
+
+**Test reference:** `PostgresqlDocumentDbRepositoryIT.kt:181-197`

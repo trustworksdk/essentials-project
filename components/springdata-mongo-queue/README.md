@@ -1,119 +1,80 @@
-# Essentials Components - SpringData Mongo Durable Queues
+# Essentials Components - SpringData MongoDB Queue
 
-The `DurableQueues` concept supports intra-service point-to-point messaging using durable Queues that guarantee At-Least-Once delivery of messages.  
-The only requirement is that message producers and message consumers can access the same underlying durable Queue storage.  
-See [foundation](../foundation/README.md) for more information about how to use the `DurableQueues`
+> **NOTE:** **The library is WORK-IN-PROGRESS**
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+MongoDB implementation of the `DurableQueues` interface using Spring Data MongoDB for durable message queuing.
 
-> Please see the **Security** notices below to familiarize yourself with the security risks related to Collection name configurations
+**LLM Context:** [LLM-springdata-mongo-queue.md](../../LLM/LLM-springdata-mongo-queue.md)
 
-# Security
-To support customization of storage collection name, the `sharedQueueCollectionName` will be directly used as Collection name, which exposes the component to the risk of malicious input.  
-It is the responsibility of the user of this component to sanitize the `sharedQueueCollectionName` to avoid the risk of malicious input and that can compromise the security and integrity of the database
+## Overview
 
-The `MongoDurableQueues` component,  will call the `MongoUtil.checkIsValidCollectionName(String)` method to validate the collection name as a first line of defense.   
-The method provided is designed as an initial layer of defense against users providing unsafe collection names, by applying naming conventions intended to reduce the risk of malicious input.   
-**However, Essentials components as well as `MongoUtil.checkIsValidCollectionName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting MongoDB configuration and associated Queries/Updates/etc.**
-> The responsibility for implementing protective measures against malicious input lies exclusively with the users/developers using the Essentials components and its supporting classes.
-Users must ensure thorough sanitization and validation of API input parameters,  collection names. Insufficient attention to these practices may leave the application vulnerable to attacks, potentially
-endangering the security and integrity of the database. It is highly recommended that the `sharedQueueCollectionName` value is only derived from a controlled and trusted source.
+This module provides `MongoDurableQueues`, a MongoDB-backed implementation of the [`DurableQueues`](../foundation/README.md#durablequeues-messaging) interface from the foundation module.
 
-To mitigate the risk of malicious input attacks, external or untrusted inputs should never directly provide the `sharedQueueCollectionName` value.
-**Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.**
+For conceptual documentation on durable queues (why, when, how), see:
+- [Foundation - DurableQueues](../foundation/README.md#durablequeues-messaging)
+- [Foundation - Inbox Pattern](../foundation/README.md#inbox-pattern)
+- [Foundation - Outbox Pattern](../foundation/README.md#outbox-pattern)
 
-See [foundation](../foundation/README.md) for more information about how to use `MongoDurableQueues` and `DurableQueues`
+## Maven Dependency
 
-# Configuration
-
-To use `MongoDB Durable Queue` just add the following Maven dependency:
-
-```
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>springdata-mongo-queue</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
-You need to decide on which `TransactionalMode` to run the `MongoDurableQueues` in.
 
-## SingleOperationTransaction
+## Security
 
-The recommended `TransactionalMode` is `SingleOperationTransaction`   
-Running this mode is also useful for Long-running message handling and to ensure a Transaction failure doesn't affect re-queueing the failed message.
-With `TransactionalMode` as `SingleOperationTransaction` where queueing and de-queueing are  performed using separate single document
-transactions and where acknowledging/retry are also performed as separate transactions.
+### ⚠️ Critical: NoSQL Injection Risk
 
-Depending on the type of errors that can occur this MAY leave a dequeued message
-in a state of being marked as "being delivered" forever. Hence `MongoDurableQueues` supports periodically
-discovering messages that have been under delivery for a long time (aka. stuck messages or timed-out messages) and will
-reset them in order for them to be redelivered.
+The components allow customization of collection names that are used with **String concatenation** → NoSQL injection risk.
+While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against NoSQL injection.
 
-Example `TransactionalMode#SingleOperationTransaction` Spring configuration:
+The `sharedQueueCollectionName` parameter is used directly as a MongoDB collection name, exposing the component to potential malicious input.
 
-```
+> ⚠️ **WARNING:** It is your responsibility to sanitize the `sharedQueueCollectionName` value.
+> See the [Security](../README.md#security) section for more details.
+
+**Mitigations:**
+- `MongoDurableQueues` calls `MongoUtil.checkIsValidCollectionName(String)` for basic validation
+- This provides initial defense but does **NOT** guarantee complete security
+
+**Developer Responsibility:**
+- Only use `sharedQueueCollectionName` values from controlled, trusted sources
+- Never derive collection names from external/untrusted input
+- Validate all configuration values during application startup
+
+## MongoDB-Specific Configuration
+
+### Requirements
+
+- **MongoDB 4.0+** with replica set (required for Change Streams and transactions)
+- Spring Data MongoDB
+
+### Basic Setup (SingleOperationTransaction - Recommended)
+
+```java
 @Bean
 public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
-    return new MongoDurableQueues(mongoTemplate,
-                                  Duration.ofSeconds(10));
+    return new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10));
 }
 ```
 
-Using TransactionalMode#SingleOperationTransaction (if consuming messages manually without using `DurableQueues.consumeFromQueue(ConsumeFromQueue)`):
+### Full Spring Configuration
 
-```
-durableQueues.queueMessage(queueName, message);
-var msgUnderDelivery = durableQueues.getNextMessageReadyForDelivery(queueName);
-if (msgUnderDelivery.isPresent()) {
-   try {
-      handleMessage(msgUnderDelivery.get());
-      durableQueues.acknowledgeMessageAsHandled(msgUnderDelivery.get().getId());
-   } catch (Exception e) {
-      durableQueues.retryMessage(msgUnderDelivery.get().getId(), 
-                                 e,
-                                 Duration.ofMillis(500));
-   }
-}
-```
+```java
+@Configuration
+@EnableMongoRepositories
+@EnableTransactionManagement
+public class MongoQueueConfiguration {
 
-## FullyTransactional
+    @Bean
+    public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
+        return new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10));
+    }
 
-Not recommended, since in this mode all the queueing, de-queueing methods requires an existing `UnitOfWork`
-started prior to being called.
-When changing an entity and queueing/de-queueing happens in ONE shared transaction *(NOTE this requires that the entity
-storage and the queue storage  to use the same MongoDB database) then the shared database transaction guarantees that
-all the data storage operations are committed or rollback as one, with the caveat that exceptions also affect the re-queueing the failed message
-
-Example `TransactionalMode#FullyTransactional` Spring configuration:
-
-```
-@Bean
-public DurableQueues durableQueues(MongoTemplate mongoTemplate, 
-                                   SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
-    return new MongoDurableQueues(mongoTemplate,
-                                      unitOfWorkFactory);
-}
-        
-@Bean
-public MongoTransactionManager transactionManager(MongoDatabaseFactory databaseFactory) {
-    TransactionOptions transactionOptions = TransactionOptions.builder()
-                                                              .readConcern(ReadConcern.SNAPSHOT)
-                                                              .writeConcern(WriteConcern.ACKNOWLEDGED)
-                                                              .build();
-    return new MongoTransactionManager(databaseFactory, transactionOptions);
-}
-
-@Bean
-public SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory(MongoTransactionManager transactionManager,
-                                                                      MongoDatabaseFactory databaseFactory) {
-    return new SpringMongoTransactionAwareUnitOfWorkFactory(transactionManager, databaseFactory);
-}
-```
-
-
-## Typical Spring Beans required for setting up `MongoDurableQueues`:
-```
     @Bean
     public SingleValueTypeRandomIdGenerator registerIdGenerator() {
         return new SingleValueTypeRandomIdGenerator();
@@ -122,8 +83,7 @@ public SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory(MongoTrans
     @Bean
     public MongoCustomConversions mongoCustomConversions() {
         return new MongoCustomConversions(List.of(
-                new SingleValueTypeConverter(QueueEntryId.class,
-                                             QueueName.class)));
+            new SingleValueTypeConverter(QueueEntryId.class, QueueName.class)));
     }
 
     @Bean
@@ -133,10 +93,184 @@ public SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory(MongoTrans
         mongoTemplate.setWriteResultChecking(WriteResultChecking.EXCEPTION);
         return mongoTemplate;
     }
-    
+
     @Bean
-    public com.fasterxml.jackson.databind.Module essentialJacksonModule() {
-        return new EssentialTypesJacksonModule();
+    public MongoTransactionManager transactionManager(MongoDatabaseFactory databaseFactory) {
+        return new MongoTransactionManager(databaseFactory);
     }
+}
 ```
 
+### Constructor Options
+
+| Option | Description |
+|--------|-------------|
+| `mongoTemplate` | Required - MongoTemplate instance |
+| `messageHandlingTimeout` | Timeout before unacknowledged messages are redelivered (default: 10s) |
+| `sharedQueueCollectionName` | Collection name for all queues (default: `durable_queues`) |
+| `unitOfWorkFactory` | For FullyTransactional mode only |
+| `queuePollingOptimizerFactory` | Custom polling optimizer factory |
+
+### Transaction Modes
+
+| Mode | Description | Recommended |
+|------|-------------|-------------|
+| `SingleOperationTransaction` | Each queue operation in own transaction | **Yes** |
+| `FullyTransactional` | Operations share parent transaction | No |
+
+> ⚠️ **Warning:** `FullyTransactional` mode causes issues with retries and dead letter handling because the transaction is marked for rollback and retry counts are never increased.
+
+### FullyTransactional Configuration (Not Recommended)
+
+```java
+@Bean
+public DurableQueues durableQueues(MongoTemplate mongoTemplate,
+        SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
+    return new MongoDurableQueues(mongoTemplate, unitOfWorkFactory);
+}
+
+@Bean
+public SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory(
+        MongoTransactionManager transactionManager, MongoDatabaseFactory databaseFactory) {
+    return new SpringMongoTransactionAwareUnitOfWorkFactory(transactionManager, databaseFactory);
+}
+```
+
+## Polling Optimization
+
+### Why
+
+Continuous polling at a fixed interval wastes database resources when queues are idle.
+Polling optimizers implement **adaptive backoff** — reducing poll frequency during quiet periods and resetting to aggressive polling when messages arrive.
+
+> Optimization controls backoff per queue-name, such that queues with high activity will be polled more frequently, whereas queues with low activity will be polled less frequently.
+
+### How It Works
+
+```
+Queue Activity Over Time:
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Messages       ▓▓▓▓▓                       ▓▓                               │
+│  Arriving       ▓▓▓▓▓▓▓                     ▓▓▓                              │
+│                                                                              │
+│  Poll           │││││││││                   │││││││││││                      │
+│  Frequency      │││││││││                   │││││││││││   ← short intervals  │
+│  (high)         │││││││││                   │││││││││││                      │
+│                                                                              │
+│  Poll                     │     │     │                 │     │     │     │  │
+│  Frequency                │     │     │                 │     │     │     │  │
+│  (backed off)             │     │     │                 │     │     │     │  │
+│                           ↑ long intervals ↑                                 │
+│                 ──────────────────────────────────────────────────── time    │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+1. **Message found** → Reset to initial (fast) polling interval
+2. **No message found** → Increase delay incrementally using backoff strategy
+3. **Message added to queue** → Immediately reset to fast polling (notification via Change Streams)
+
+### SimpleQueuePollingOptimizer
+
+MongoDB uses `SimpleQueuePollingOptimizer` with **linear backoff** — increases delay by a fixed increment each time no messages are found:
+
+```java
+@Bean
+public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
+    return new MongoDurableQueues(
+        mongoTemplate,
+        null,  // unitOfWorkFactory - null for SingleOperationTransaction
+        "durable_queues",
+        Duration.ofSeconds(10),
+        consumeFromQueue -> new SimpleQueuePollingOptimizer(
+            consumeFromQueue,
+            100,    // delayIncrementMs - add 100ms each empty poll
+            5000    // maxDelayMs - cap at 5 seconds
+        )
+    );
+}
+```
+
+**Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `delayIncrementMs` | Added to delay after each empty poll (e.g., 100ms) |
+| `maxDelayMs` | Maximum delay cap (e.g., 5000ms = 5 seconds) |
+
+**Behavior:** `delay = min(maxDelayMs, currentDelay + delayIncrementMs)`
+
+**Default Configuration:**
+If no optimizer factory is provided, `MongoDurableQueues` creates a default `SimpleQueuePollingOptimizer` with:
+- `delayIncrementMs` = 50% of polling interval
+- `maxDelayMs` = 20× polling interval
+
+### Automatic Wake-up via Change Streams (Built-in)
+
+`MongoDurableQueues` automatically configures MongoDB Change Streams for immediate wake-up when messages arrive. **No manual configuration is required.**
+
+When `MongoDurableQueues.start()` is called, it:
+1. Creates a `DefaultMessageListenerContainer` internally
+2. Registers a `ChangeStreamRequest` to watch for insert/update/replace operations
+3. Automatically calls `messageAdded()` on the appropriate consumer's polling optimizer
+
+```java
+// Change Streams are enabled automatically - just call start()
+@Bean
+public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
+    var queues = new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10));
+    queues.start();  // Starts the MessageListenerContainer and Change Stream listener
+    return queues;
+}
+```
+
+When a message is added to any queue, the Change Stream notification triggers `messageAdded()` on the polling optimizer, immediately resetting the delay to zero for that queue.
+
+> **Note:** Change Streams require MongoDB 4.0+ with replica set configuration.
+> If using AWS DocumentDB, see: https://docs.aws.amazon.com/documentdb/latest/developerguide/change_streams.html
+
+## Collection Schema
+
+Messages are stored in a MongoDB collection with automatic indexes:
+
+```javascript
+{
+  _id: QueueEntryId,
+  queueName: QueueName,
+  isBeingDelivered: Boolean,
+  messagePayload: Binary,           // Serialized payload
+  messagePayloadType: String,
+  addedTimestamp: ISODate,
+  nextDeliveryTimestamp: ISODate,
+  deliveryTimestamp: ISODate,
+  totalDeliveryAttempts: Int,
+  redeliveryAttempts: Int,
+  lastDeliveryError: String,
+  isDeadLetterMessage: Boolean,
+  metaData: Object,
+  deliveryMode: String,             // NORMAL or IN_ORDER
+  key: String,                      // Ordering key
+  keyOrder: Long                    // Order within key
+}
+```
+
+## Usage
+
+See [Foundation - DurableQueues](../foundation/README.md#durablequeues-messaging) for complete usage patterns including:
+- Queueing messages
+- Consumer registration
+- Pattern matching handlers
+- Redelivery policies
+- Dead letter handling
+- Ordered Message Delivery
+
+## Comparison with PostgreSQL Implementation
+
+| Aspect | MongoDB | PostgreSQL |
+|--------|---------|-----------|
+| **Module** | `springdata-mongo-queue` | [`postgresql-queue`](../postgresql-queue/README.md) |
+| **Storage** | MongoDB collection | SQL table with JSONB |
+| **Transactions** | Spring Data MongoDB | JDBI/JDBC |
+| **Notifications** | Change Streams | LISTEN/NOTIFY |
+| **Locking** | `findAndModify()` | `FOR UPDATE SKIP LOCKED` |
+| **Polling** | Per-consumer threads | Centralized or per-consumer |
+| **Requirements** | MongoDB 4.0+ (replica set) | PostgreSQL 9.5+ |

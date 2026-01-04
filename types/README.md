@@ -1,236 +1,452 @@
-# Essentials Java building blocks
+# Essentials Types
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies
-on other libraries, unless explicitly mentioned.
+Essentials is a set of Java 17+ building blocks built from the ground up to have minimal dependencies.
+The philosophy is to provide high-level, strongly-typed building blocks that integrate easily with popular frameworks (Jackson, Spring Boot, Spring Data, JPA, etc.).
 
+> **NOTE:** This library is WORK-IN-PROGRESS
+ 
+**LLM Context:** [LLM-types.md](../LLM/LLM-types.md)
 
+## Overview
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and
-strongly typed code, which doesn't depend on other libraries or frameworks, but instead allows easy integrations with
-many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+This module provides semantic types that eliminate primitive obsession and create self-documenting, type-safe code.
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
-
-## Types
-
-This library focuses purely on providing base semantic types and utility types that can be used to better documented and more
-strongly typed code.
-
-To use `Types` just add the following Maven dependency:
-
-```
+**Maven dependency:**
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Types` usually needs additional third party dependencies to work, such as:
-```
+**Required dependency** (provided scope):
+```xml
 <dependency>
     <groupId>org.slf4j</groupId>
     <artifactId>slf4j-api</artifactId>
 </dependency>
 ```
 
-**NOTE:**
-**This library is WORK-IN-PROGRESS**
+## The Problem: Primitive Obsession
 
-### Single Value Types
+Consider this typical command:
 
-It is not uncommon to see Java code like this:
-
-```
+```java
 public class CreateOrder {
-    public final String               id;
-    public final BigDecimal           totalAmountWithoutSalesTax;
-    public final String               currency;
-    public final BigDecimal           salesTax;
-    public final Map<String, Integer> orderLines;
-
-    ...
+    public final String               id;                        // What ID?
+    public final BigDecimal           totalAmountWithoutSalesTax;// Currency?
+    public final String               currency;                  // ISO format?
+    public final BigDecimal           salesTax;                  // Percentage or amount?
+    public final Map<String, Integer> orderLines;                // ProductId -> Quantity?
 }
 ```
 
 ![Ambiguous Command](media/strongly_typed_properties.png)
 
-This code might at the surface look okay, but returning to it after a few weeks is likely to introduce questions like:
+With semantic types, the code becomes self-documenting:
 
-- What is the `id` - is it the id of the Order?
-    - Most likely, but we cannot be sure unless we look at how this property is processed in the code dealing
-      with `CreateOrder`
-- What format does the `currency` property have?
-    - Is it ISO-4217 3 characters currency code (such as `USD` and `DKK`)?
-    - Is it ISO-4217 Currency numbers (such as `840` and `208`)?
-    - Is it the currency name (such as `US Dollar` and `Danish Krone`)?
-- What is the `salesTax`?
-    - Is it the sales tax as a `Percentage` ?
-    - Is it the calculated sales tax as an `Amount` ?
-- What does the `orderLines` property contain?
-    - Is the `key` the `ProductId` ?
-    - Is the `value` a `Quantity` ?
-
-### Java Creating your own custom type
-
-A `SingleValueType` encapsulates a **single** NON-NULL _value_ of a given supported **Value type**:
-
-| `SingleValueType` specialization | Value Type              | 
-|----------------------------------|-------------------------|
-| `BigDecimalType`                 | `BigDecimal`            |
-| `BigIntegerType`                 | `BigInteger`            |
-| `BooleanType`                    | `Boolean`               |
-| `ByteType`                       | `Byte`                  |
-| `CharSequenceType`               | `CharSequence`/`String` |
-| `DoubleType`                     | `Double`                |
-| `FloatType`                      | `Float`                 |
-| `IntegerType`                    | `Integer`               |
-| `LongType`                       | `Long`                  |
-| `ShortType`                      | `Short`                 |
-| `InstantType`                    | `Instant`               |
-| `LocalDateTimeType`              | `LocalDateTime`         |
-| `LocalDateType`                  | `LocalDate`             |
-| `LocalTimeType`                  | `LocalTime`             |
-| `OffsetDateTimeType`             | `OffsetDateTime`        |
-| `ZonedDateTimeType`              | `ZonedDateTime`         |
-
-With the `SingleValueType` and supporting classes we can define this alternative `CreateOrder` class definition, which
-clearly indicates the roles and types of information:
-
-```
+```java
 public class CreateOrder {
     public final OrderId                  id;
     public final Amount                   totalAmountWithoutSalesTax;
-    public final Currency                 currency;
+    public final CurrencyCode             currency;
     public final Percentage               salesTax;
     public final Map<ProductId, Quantity> orderLines;
-
-    private CurrencyCode currency;
-    private CountryCode  country;
-    private EmailAddress email;
-    ...
 }
 ```
 
-The advantage of using Semantic `Types` is that they are fully functional and can be used for calculations:
+## What Are Semantic Types?
 
-```
-Amount totalAmountWithoutSalesTax = Amount.of("100.00");
-Percentage salesTaxPct = Percentage.from("25");
-Amount salesTaxAmount = salesTaxPct.of(totalAmountWithoutSalesTax);
-Amount totalSales = totalAmountWithoutSalesTax.add(salesTaxAmount); // 125.00
-```
+A **Semantic Type** (also called a `SingleValueType`) is a strongly-typed wrapper around a primitive value that carries domain meaning.  
+Instead of using raw `String`, `Long`, or `BigDecimal`, you create purpose-built types like `OrderId`, `CustomerId`, `Amount`, or `Quantity`.
 
-`OrderId` is a custom String based `SingleValueType` that extends the provided `CharSequenceType`:
+### Why Use Semantic Types?
 
-*Note: To retain compatibility with Jackson version 2.18.* subclasses of `CharSequenceType` must provide
-two constructors, on that accepts a `String` and one that accepts a `CharSequence`* 
+| Benefit | Description |
+|---------|-------------|
+| **Type Safety** | The compiler prevents mixing incompatible values. You can't accidentally pass a `CustomerId` where an `OrderId` is expected. |
+| **Self-Documenting** | Method signatures like `findOrder(OrderId id)` are clearer than `findOrder(String id)`. |
+| **IDE Support** | Find all usages of `OrderId` across your codebase instantly. |
+| **Validation** | Enforce invariants in the constructor - an `EmailAddress` is always valid. |
+| **Encapsulated Logic** | Add domain methods like `Quantity.add()` or `Amount.multiply()`. |
+
+### How Easy Are They to Create?
+
+A minimal semantic type requires just **4 lines of code**:
 
 ```java
-public class OrderId extends CharSequenceType<OrderId> implements Identifier {
-    public OrderId(CharSequence value) {
-        super(value);
-    }
-    
+public class OrderId extends CharSequenceType<OrderId> {
+    public OrderId(CharSequence value) { super(value); }
+    // Required for Jackson 2.18+: String constructor
     public OrderId(String value) {
         super(value);
     }
+    public static OrderId of(CharSequence value) { return new OrderId(value); }
 }
 ```
 
-Depending on your taste, then this is all you need to do to create your own custom semantic type. We typically like to add
-additional convenience methods:
+That's it. You now have:
+- Null-safety (constructor rejects null)
+- Proper `equals()`, `hashCode()`, and `toString()`
+- `Comparable` implementation
+- Framework integration ready (Jackson, JPA, MongoDB, etc.)
 
-- `of` - to create an instance using a static method: `OrderId id = OrderId.of("abc789");`
-- `ofNullable` - to convert a potential `null` String value: `OrderId id = OrderId.of(someParameterThatMaybeNull);`
-- `random` - which creates a new `id` with a random value (e.g. using a `UUID` to generate the random value)
+Add validation or domain logic as needed:
 
-```
-public class OrderId extends CharSequenceType<OrderId> implements Identifier {
-    public OrderId(CharSequence value) {
+```java
+public class Quantity extends IntegerType<Quantity> {
+    public Quantity(Integer value) {
         super(value);
+        FailFast.requireTrue(value >= 0, "Quantity cannot be negative");
     }
 
-    public static OrderId of(CharSequence value) {
-        return new OrderId(value);
-    }
+    public static Quantity of(int value) { return new Quantity(value); }
 
-    public static OrderId ofNullable(CharSequence value) {
-        return value != null ? new CustomerId(value) : null;
-    }
-
-    public static OrderId random() {
-        return new CustomerId(UUID.randomUUID().toString());
+    public Quantity add(Quantity other) {
+        return new Quantity(this.value() + other.value());
     }
 }
 ```
 
-`SingleValueType` also has a static `from` method, which can be used to create a new identifier instance from e.g.
-deserializers or generic code:
+## Built-in Types
 
-`OrderId id = SingleValueType.from("abc789", OrderId.class);`
+Base package: `dk.trustworks.essentials.types`
 
-### Built in top level types
+### Money & Currency Types
 
-Here's a list of the currently supported top level types:
+| Type | Description |
+|------|-------------|
+| `Amount` | Currency-agnostic monetary amount (extends `BigDecimalType`) |
+| `CurrencyCode` | ISO-4217 3-character currency code with 140+ static constants |
+| `Money` | Amount + CurrencyCode combined - enforces same-currency operations |
+| `Percentage` | Percentage with calculations (`percentageValue.of(amount)`) |
 
-- `Amount` - which is a specialization of `BigDecimalType` that can be used to encapsulate (money) amounts.
-- `Percentage` - which is a specialization of `BigDecimalType` that can be used to encapsulate percentages and which can
-  be used percentage calculations
-- ISO-3166 2 character `CountryCode`'s
-- ISO-4217 3 character `CurrencyCode`
-- `EmailAddress` which is an immutable Email address value type that supports configurable validation
-- `Money` type that combines `Amount` and `CurrencyCode`
+**Amount - Currency-Agnostic Monetary Values:**
+```java
+// Create amounts
+Amount baseAmount = Amount.of("199.99");
+Amount discount = Amount.of(new BigDecimal("29.99"));
 
-## Framework support
+// Arithmetic operations
+Amount total = baseAmount.add(Amount.of("10.00"));     // 209.99
+Amount discounted = baseAmount.subtract(discount);      // 170.00
+Amount doubled = baseAmount.multiply(2);                // 399.98
 
-Currently, we support for serialization/deserialization/persistence of `Types` through the following Essentials
-libraries:
+// Comparisons (from NumberType)
+boolean isExpensive = baseAmount.isGreaterThan(Amount.of("100.00"));
+boolean isAffordable = baseAmount.isLessThanOrEqualTo(Amount.of("50.00"));
+```
 
-- **Jackson** JSON: using the `types-jackson` library
-- **Spring Data Mongo**: using the `types-springdata-mongo` library
-- **Spring Data JPA**: using the  `types-springdata-jpa` library
-- **Jdbi v3**: using the `types-jdbi` library
-- **Avro**: using the `types-avro` library
+**Percentage - Calculate Percentages:**
+```java
+Percentage taxRate = Percentage.from("25%");        // From string with %
+Percentage discount = Percentage.of("0.15");        // From decimal (15%)
 
-### Kotlin - Creating your own custom type
+Amount basePrice = Amount.of("100.00");
+Amount taxAmount = taxRate.of(basePrice);           // 25.00
+Amount finalPrice = basePrice.add(taxAmount);       // 125.00
+```
 
-Essentials support building Semantic Values types:
+**Money - Currency-Aware Operations:**
+```java
+Money usdAmount = Money.of("99.99", CurrencyCode.USD);
+Money eurAmount = Money.of("85.50", CurrencyCode.EUR);
 
-| `SemanticType` specialization | Value Type       | 
-|-------------------------------|------------------|
-| `BigDecimalValueType`         | `BigDecimal`     |
-| `BigIntegerValueType`         | `BigInteger`     |
-| `BooleanValueType`            | `Boolean`        |
-| `ByteValueType`               | `Byte`           |
-| `DoubleValueType`             | `Double`         |
-| `FloatValueType`              | `Float`          |
-| `InstantValueType`            | `Instant`        |
-| `IntValueType`                | `Int`            |
-| `LocalDateTimeValueType`      | `LocalDateTime`  |
-| `LocalDateValueType`          | `LocalDate`      |
-| `LocalTimeValueType`          | `LocalTime`      |
-| `LongValueType`               | `Long`           |
-| `OffsetDateTimeValueType`     | `OffsetDateTime` |
-| `ShortValueType`              | `Short`          |
-| `StringValueType`             | `String`         |
-| `ZonedDateTimeValueType`      | `ZonedDateTime`  |
+// Same currency - works
+Money total = usdAmount.add(Money.of("10.01", CurrencyCode.USD));  // 110.00 USD
 
-with concrete high level types `Amount` and `CountryCode` being provided
+// Different currencies - throws IllegalArgumentException
+Money invalid = usdAmount.add(eurAmount);  // Cannot add USD and EUR!
+```
 
-Example of creating a custom Semantic type:
+### Validation Types
+
+| Type | Description |
+|------|-------------|
+| `CountryCode` | Validated ISO-3166 2-character country codes |
+| `EmailAddress` | Email with pluggable validation (default: non-validating) |
+
+**Country and Currency Codes with Validation:**
+```java
+// ISO-3166-2 country codes with validation
+CountryCode usa = CountryCode.of("US");
+CountryCode denmark = CountryCode.of("DK");
+CountryCode germany = CountryCode.of("DE");
+
+// Invalid codes throw exceptions
+try {
+    CountryCode invalid = CountryCode.of("??");
+} catch (IllegalArgumentException e) {
+    // Invalid ISO-3166-2 country code
+}
+
+// ----------------------------------------------------------------
+
+// ISO-4217 currency codes with validation
+CurrencyCode usd = CurrencyCode.of("USD");
+CurrencyCode eur = CurrencyCode.of("EUR");
+CurrencyCode gbp = CurrencyCode.of("GBP");
+
+// Built-in common currencies
+CurrencyCode dollar = CurrencyCode.USD;
+CurrencyCode euro = CurrencyCode.EUR;
+
+// Validation prevents invalid codes
+try {
+    CurrencyCode invalid = CurrencyCode.of("XYZ");
+} catch (IllegalArgumentException e) {
+    // Invalid ISO-4217 currency code
+}
+```
+
+**Email Address with Validation:**
+```java
+// Create
+EmailAddress valid = EmailAddress.of("user@example.com");
+
+// Per default EmailAddress uses the NonValidatingEmailAddressValidator - but can override with your own EmailAddressValidator to have email address format validated
+EmailAddress.setValidator(new MyEmailAddressValidator());
+try {
+    EmailAddress invalid = EmailAddress.of("not-an-email");
+} catch (IllegalArgumentException e) {
+    // Invalid email format
+}
+```
+
+### Utility Types
+
+| Type | Description |
+|------|-------------|
+| `LongRange` | Range of Long values (closed or open), with stream support |
+| `TimeWindow` | Time period with Instant (inclusive start, exclusive end) |
+
+```java
+// LongRange - useful for pagination, batch processing
+LongRange closed = LongRange.between(1, 100);  // [1, 100]
+LongRange open = LongRange.from(1);            // [1, infinity)
+closed.covers(50);  // true
+closed.stream().forEach(n -> process(n));
+
+// TimeWindow - useful for time-based queries
+TimeWindow window = TimeWindow.between(startTime, endTime);
+TimeWindow openEnded = TimeWindow.from(startTime);  // [startTime, infinity)
+window.covers(Instant.now());  // true/false
+TimeWindow extended = openEnded.close(newEndTime);  // Close an open window
+```
+
+## SingleValueType Hierarchy
+
+A `SingleValueType` encapsulates a **single** non-null value:
+
+| Java Type                 | Base Class              | Purpose                              |
+|---------------------------|-------------------------|--------------------------------------|
+| `String`/`CharSequence`   | `CharSequenceType<T>`   | IDs, names, codes                    |
+| `BigDecimal`              | `BigDecimalType<T>`     | Monetary amounts, percentages        |
+| `BigInteger`              | `BigIntegerType<T>`     | Large integers, cryptographic values |
+| `Long`                    | `LongType<T>`           | Numeric identifiers, timestamps      |
+| `Integer`                 | `IntegerType<T>`        | Counters, quantities                 |
+| `Short`                   | `ShortType<T>`          | Small numeric values, flags          |
+| `Byte`                    | `ByteType<T>`           | Small integers, status codes         |
+| `Double`                  | `DoubleType<T>`         | Measurements, rates                  |
+| `Float`                   | `FloatType<T>`          | Single-precision measurements        |
+| `Boolean`                 | `BooleanType<T>`        | Flags, states                        |
+| `Instant`                 | `InstantType<T>`        | UTC timestamps                       |
+| `LocalDate`               | `LocalDateType<T>`      | Dates without time                   |
+| `LocalDateTime`           | `LocalDateTimeType<T>`  | Date-time without timezone           |
+| `LocalTime`               | `LocalTimeType<T>`      | Time without date or timezone        |
+| `OffsetDateTime`          | `OffsetDateTimeType<T>` | Date-time with UTC offset            |
+| `ZonedDateTime`           | `ZonedDateTimeType<T>`  | Date-time with timezone              |
+
+Base package: `dk.trustworks.essentials.types`
+
+## Creating Custom Types
+
+### String-Based Identifiers
+
+> **Note:** Implementing `Identifier` is optional - it's a marker interface to make searching for identifiers easier.
+
+```java
+public class OrderId extends CharSequenceType<OrderId> implements Identifier {
+    public OrderId(CharSequence value) { super(value); }
+    public OrderId(String value) { super(value); }  // Required for Jackson 2.18+
+
+    public static OrderId of(CharSequence value) { return new OrderId(value); }
+    public static OrderId random() { return new OrderId(RandomIdGenerator.generate()); }
+}
+
+// Usage
+OrderId orderId = OrderId.of("ORD-12345");
+OrderId randomId = OrderId.random();
+```
+
+### Numeric Identifiers
+
+```java
+public class ProductSequence extends LongType<ProductSequence> implements Identifier {
+    public ProductSequence(Long value) { super(value); }
+
+    public static ProductSequence of(long value) { return new ProductSequence(value); }
+
+    public ProductSequence next() { return new ProductSequence(value() + 1); }
+}
+
+// Usage
+ProductSequence seq = ProductSequence.of(1000);
+ProductSequence nextSeq = seq.next();  // 1001
+```
+
+### Validated Types with Business Logic
+
+```java
+public class Quantity extends IntegerType<Quantity> {
+    public Quantity(Integer value) {
+        super(value);
+        FailFast.requireTrue(value >= 0, msg("Quantity cannot be negative: '{}'", value));
+    }
+
+    public static Quantity of(int value) { return new Quantity(value); }
+    public static Quantity zero() { return new Quantity(0); }
+
+    public Quantity add(Quantity other) { return new Quantity(this.value() + other.value()); }
+    public Quantity multiply(int factor) { return new Quantity(this.value() * factor); }
+    public boolean isPositive() { return value() > 0; }
+}
+```
+
+### Temporal Types
+
+```java
+public class CreatedAt extends InstantType<CreatedAt> {
+    public CreatedAt(Instant value) { super(value); }
+
+    public static CreatedAt now() { return new CreatedAt(Instant.now()); }
+    public static CreatedAt of(Instant instant) { return new CreatedAt(instant); }
+
+    public boolean isBefore(CreatedAt other) { return value().isBefore(other.value()); }
+    public Duration timeSince() { return Duration.between(value(), Instant.now()); }
+}
+```
+
+### Date Types with Validation
+
+```java
+public class BirthDate extends LocalDateType<BirthDate> {
+    public BirthDate(LocalDate value) {
+        super(value);
+        var now = LocalDate.now();
+        FailFast.requireTrue(value.isBefore(now), "Birth date cannot be in the future");
+        FailFast.requireTrue(value.isAfter(now.minusYears(150)), "Birth date cannot be more than 150 years ago");
+    }
+
+    public static BirthDate of(int year, int month, int day) {
+        return new BirthDate(LocalDate.of(year, month, day));
+    }
+
+    public int getAge() { return Period.between(value(), LocalDate.now()).getYears(); }
+}
+```
+
+**Generic instantiation** (useful for frameworks):
+```java
+OrderId id = SingleValueType.from("abc789", OrderId.class);
+```
+
+### Kotlin Value Class Integration
+
+Base package: `dk.trustworks.essentials.types.kotlin`  
+Kotlin types use `@JvmInline` value classes for zero-runtime-overhead:
+
 ```kotlin
 @JvmInline
 value class DocumentId(override val value: String) : StringValueType<DocumentId> {
     companion object {
-        fun of(value: String): DocumentId {
-            return DocumentId(value)
-        }
-
-        fun random(): DocumentId {
-            return DocumentId(RandomIdGenerator.generate())
-        }
+        fun of(value: String) = DocumentId(value)
+        fun random() = DocumentId(RandomIdGenerator.generate())
     }
 }
 ```
+
+**Kotlin Implementation Interfaces:**
+
+| Kotlin Type               | Interface                       | Purpose                              |
+|---------------------------|---------------------------------|--------------------------------------|
+| `String`                  | `StringValueType<SELF>`         | IDs, names, codes                    |
+| `BigDecimal`              | `BigDecimalValueType<SELF>`     | Monetary amounts, percentages        |
+| `BigInteger`              | `BigIntegerValueType<SELF>`     | Large integers, cryptographic values |
+| `Long`                    | `LongValueType<SELF>`           | Numeric identifiers, timestamps      |
+| `Int`                     | `IntValueType<SELF>`            | Counters, quantities                 |
+| `Short`                   | `ShortValueType<SELF>`          | Small numeric values, flags          |
+| `Byte`                    | `ByteValueType<SELF>`           | Small integers, status codes         |
+| `Double`                  | `DoubleValueType<SELF>`         | Measurements, rates                  |
+| `Float`                   | `FloatValueType<SELF>`          | Single-precision measurements        |
+| `Boolean`                 | `BooleanValueType<SELF>`        | Flags, states                        |
+| `Instant`                 | `InstantValueType<SELF>`        | UTC timestamps                       |
+| `LocalDate`               | `LocalDateValueType<SELF>`      | Dates without time                   |
+| `LocalDateTime`           | `LocalDateTimeValueType<SELF>`  | Date-time without timezone           |
+| `LocalTime`               | `LocalTimeValueType<SELF>`      | Time without date or timezone        |
+| `OffsetDateTime`          | `OffsetDateTimeValueType<SELF>` | Date-time with UTC offset            |
+| `ZonedDateTime`           | `ZonedDateTimeValueType<SELF>`  | Date-time with timezone              |
+
+Built-in Kotlin types: `Amount`, `CountryCode`
+
+```kotlin
+// Kotlin semantic types using value classes
+@JvmInline
+value class OrderId(override val value: String) : StringValueType<OrderId> {
+    companion object {
+        fun of(value: String) = OrderId(value)
+        fun random() = OrderId("ORD-${RandomIdGenerator.generate()}")
+    }
+}
+
+@JvmInline
+value class ProductPrice(override val value: BigDecimal) : BigDecimalValueType<ProductPrice> {
+    init {
+        require(value >= BigDecimal.ZERO) { "Price cannot be negative" }
+    }
+    
+    companion object {
+        fun of(value: String) = ProductPrice(BigDecimal(value))
+        fun of(value: Double) = ProductPrice(BigDecimal.valueOf(value))
+    }
+    
+    fun withDiscount(percentage: Percentage): ProductPrice {
+        val discountAmount = percentage.of(Amount(value)).value
+        return ProductPrice(value - discountAmount)
+    }
+}
+
+@JvmInline  
+value class Quantity(override val value: Int) : IntValueType<Quantity> {
+    init {
+        require(value >= 0) { "Quantity cannot be negative" }
+    }
+    
+    companion object {
+        fun of(value: Int) = Quantity(value)
+        val ZERO = Quantity(0)
+        val ONE = Quantity(1)
+    }
+    
+    operator fun plus(other: Quantity) = Quantity(value + other.value)
+    operator fun times(factor: Int) = Quantity(value * factor)
+}
+```
+
+## Framework Integration
+
+| Framework                      | Module |
+|--------------------------------|--------|
+| Jackson JSON                   | `types-jackson` |
+| Spring Data MongoDB            | `types-springdata-mongo` |
+| Spring Data JPA (experimental) | `types-springdata-jpa` |
+| JDBI v3                        | `types-jdbi` |
+| Apache Avro                    | `types-avro` |
+| Spring WebMvc/WebFlux          | `types-spring-web` |
+
+## See Also
+
+- [LLM-types.md](../LLM/LLM-types.md) - Detailed API reference
+- [types-jackson](../types-jackson/README.md) - Jackson serialization
+- Tests: [src/test/java/dk/trustworks/essentials/types/](src/test/java/dk/trustworks/essentials/types/)

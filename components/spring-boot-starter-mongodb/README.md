@@ -1,260 +1,348 @@
-# Essentials Components - Essentials MongoDB: Spring Boot starter
+# Essentials Components - Spring Boot Starter: MongoDB
 
-This library provides Spring Boot auto-configuration for all MongoDB focused Essentials components.
+> **NOTE:** **The library is WORK-IN-PROGRESS**
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+Spring Boot auto-configuration for all MongoDB-focused Essentials components.
 
-All `@Beans` auto-configured by this library use `@ConditionalOnMissingBean` to allow for easy overriding.
+**LLM Context:** [LLM-spring-boot-starter-modules.md](../../LLM/LLM-spring-boot-starter-modules.md)
 
-> Please see the **Security** notices below, as well as **Security** notices for the individual components included, to familiarize yourself with the security risks related to Collection name configurations
-> Such as:
-> - [foundation-types](../foundation-types/README.md)
-> - [springdata-mongo-distributed-fenced-lock](../springdata-mongo-distributed-fenced-lock/README.md)
-> - [springdata-mongo-queue](../springdata-mongo-queue/README.md)
+## Table of Contents
 
-To use `spring-boot-starter-mongodb` to add the following dependency:
-```
+- [Maven Dependency](#maven-dependency)
+- ⚠️ [Security](#security)
+- [Auto-Configured Beans](#auto-configured-beans)
+- [Configuration Properties](#configuration-properties)
+  - [FencedLock Configuration](#fencedlock-configuration)
+  - [DurableQueues Configuration](#durablequeues-configuration)
+  - [EventBus Configuration](#eventbus-configuration)
+  - [Metrics Configuration](#metrics-configuration)
+  - [Lifecycle Configuration](#lifecycle-configuration)
+- [DurableLocalCommandBus Customization](#durablelocalcommandbus-customization)
+- [Spring Data MongoDB Converters](#spring-data-mongodb-converters)
+  - [When to Register Additional CharSequenceTypes](#when-to-register-additional-charsequencetypes)
+  - [Adding Custom Converters](#adding-custom-converters)
+- [Typical Dependencies](#typical-dependencies)
+
+## Maven Dependency
+
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
     <artifactId>spring-boot-starter-mongodb</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-## `EssentialsComponentsConfiguration` auto-configuration:
+## Security
 
->If you in your own Spring Boot application choose to override the Beans defined by this starter,
-then you need to check the component document to learn about the Security implications of each configuration, such as:
-> - dk.trustworks.essentials.components.queue.springdata.mongodb.MongoDurableQueues
-> - dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockManager
-> - dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockStorage
+### ⚠️ Critical: NoSQL Injection Risk
 
-### Beans provided by the `EssentialsComponentsConfiguration` auto-configuration:
-- Jackson/FasterXML JSON modules:
-    - `EssentialTypesJacksonModule`
-    - `EssentialsImmutableJacksonModule` (if `Objenesis` is on the classpath AND `essentials.immutable-jackson-module-enabled` has value `true`)
-- `JacksonJSONSerializer` which uses an internally configured `ObjectMapper`, which provides good defaults for JSON serialization, and includes all Jackson `Module`'s defined in the `ApplicationContext`
-- `SingleValueTypeRandomIdGenerator` to support server generated Id creations for SpringData Mongo classes with @Id fields of type `SingleValueType`
-- `MongoCustomConversions` with a `SingleValueTypeConverter` covering `LockName`, `QueueEntryId` and `QueueName`
-- `MongoTransactionManager` as it is needed by the `SpringMongoTransactionAwareUnitOfWorkFactory`
-- `SpringMongoTransactionAwareUnitOfWorkFactory` configured to use the `MongoTransactionManager`
-- `MongoFencedLockManager` using the `JSONSerializer` as JSON serializer
-  - Supports additional properties:
-  - ```
-    essentials.fenced-lock-manager.fenced-locks-collection-name=fenced_locks
-    essentials.fenced-lock-manager.lock-confirmation-interval=5s
-    essentials.fenced-lock-manager.lock-time-out=12s
-    essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation=false
-    ```
-  - **Security Notice regarding `essentials.fenced-lock-manager.fenced-locks-collection-name`:**
-    - This property, no matter if it's set using properties, System properties, env variables or yaml configuration, will be provided to the `MongoFencedLockStorage` component, used by `MongoFencedLockManager`,  as the `fencedLocksCollectionName` parameter.
-    - To support customization of storage table name, the `essentials.fenced-lock-manager.fenced-locks-collection-name` provided through the Spring configuration to the `MongoFencedLockStorage`, through the `MongoFencedLockManager`,
-      and will be directly used as Collection name, which exposes the component to the risk of malicious input.  
-    - **It is the responsibility of the user of this component to sanitize the `fencedLocksCollectionName` to avoid the risk of malicious input and that can compromise the security and integrity of the database**
-    - The `MongoFencedLockStorage` component,  will call the `MongoUtil.checkIsValidCollectionName(String)` method to validate the collection name as a first line of defense.
-      - The method provided is designed as an initial layer of defense against users providing unsafe collection names, by applying naming conventions intended to reduce the risk of malicious input.
-        - **However, Essentials components as well as `MongoUtil.checkIsValidCollectionName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting MongoDB configuration and associated Queries/Updates/etc.**
-    - **The responsibility for implementing protective measures against malicious input lies exclusively with the users/developers using the Essentials components and its supporting classes.**
-    - Users must ensure thorough sanitization and validation of API input parameters,  collection names.
-    - Insufficient attention to these practices may leave the application vulnerable to attacks, potentially
-      endangering the security and integrity of the database. It is highly recommended that the `fencedLocksCollectionName` value is only derived from a controlled and trusted source.
-    - To mitigate the risk of malicious input attacks, external or untrusted inputs should never directly provide the `fencedLocksCollectionName` value.
-    - **Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.**
-- `MongoDurableQueues` using the `JSONSerializer` as JSON serializer
-  - Supports additional properties:
-  - ```
-    essentials.durable-queues.shared-queue-collection-name=durable_queues
-    essentials.durable-queues.transactional-mode=fullytransactional or singleoperationtransaction (default)
-    essentials.durable-queues.polling-delay-interval-increment-factor=0.5
-    essentials.durable-queues.max-polling-interval=2s
-    essentials.durable-queues.verbose-tracing=false
-    # Only relevant if transactional-mode=singleoperationtransaction
-    essentials.durable-queues.message-handling-timeout=5s
-    ```
-  - **Security Notice regarding `essentials.durable-queues.shared-queue-collection-name`:**
-    - This property, no matter if it's set using properties, System properties, env variables or yaml configuration, will be provided to the `MongoDurableQueues` as the `sharedQueueCollectionName` parameter.
-    - To support customization of storage table name, the `essentials.durable-queues.shared-queue-collection-name` provided through the Spring configuration to the `MongoDurableQueues`,
-      will be directly used as Collection name, which exposes the component to the risk of malicious input.
-      To support customization of storage collection name, the `sharedQueueCollectionName` will be directly used as Collection name, which exposes the component to the risk of malicious input.  
-    - **It is the responsibility of the user of this component to sanitize the `sharedQueueCollectionName` to avoid the risk of malicious input and that can compromise the security and integrity of the database** 
-    - The `MongoDurableQueues` component,  will call the `MongoUtil.checkIsValidCollectionName(String)` method to validate the collection name as a first line of defense.
-      - The method provided is designed as an initial layer of defense against users providing unsafe collection names, by applying naming conventions intended to reduce the risk of malicious input.   
-        - **However, Essentials components as well as `MongoUtil.checkIsValidCollectionName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting MongoDB configuration and associated Queries/Updates/etc.**
-    - **The responsibility for implementing protective measures against malicious input lies exclusively with the users/developers using the Essentials components and its supporting classes.** 
-    - Users must ensure thorough sanitization and validation of API input parameters,  collection names. 
-    - Insufficient attention to these practices may leave the application vulnerable to attacks, potentially
-endangering the security and integrity of the database. It is highly recommended that the `sharedQueueCollectionName` value is only derived from a controlled and trusted source. 
-    - To mitigate the risk of malicious input attacks, external or untrusted inputs should never directly provide the `sharedQueueCollectionName` value.
-    - **Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.**
-- `Inboxes`, `Outboxes` and `DurableLocalCommandBus` configured to use `MongoDurableQueues`
-- `LocalEventBus` with bus-name `default` and Bean name `eventBus`
-  - Supports additional configuration properties:
-  - ```
-    essentials.reactive.event-bus-backpressure-buffer-size=1024
-    essentials.reactive.overflow-max-retries=20
-    essentials.reactive.queued-task-cap-factor=1.5
-    #essentials.reactive.event-bus-parallel-threads=4
-    #essentials.reactive.command-bus-parallel-send-and-dont-wait-consumers=4
-    ```
-- **Metrics:**
-  - **Overview:**  
-    This configuration controls the collection of performance metrics and determines the log level at which operations are reported.    
-    When metrics collection is enabled for a component (such as durable queues, command bus, or message handlers), the duration of each operation is measured.   
-    If the duration exceeds certain thresholds, the operation is logged at the corresponding level:
-    - **errorThreshold:** If the duration exceeds this value, the operation is logged at **ERROR** level.
-    - **warnThreshold:** If the duration exceeds this value (but is less than the error threshold), it is logged at **WARN** level.
-    - **infoThreshold:** If the duration exceeds this value (but is less than the warn threshold), it is logged at **INFO** level.
-    - **debugThreshold:** If the duration exceeds this value (but is less than the info threshold), it is logged at **DEBUG** level.
-    - If none of the thresholds are met and metrics collection is enabled, the operation is logged at **TRACE** level.
+The components allow customization of collection names that are used with **String concatenation** → NoSQL injection risk.
+While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against NoSQL injection.
 
-  - **How to Configure:**  
-    Each component can be configured individually. For each component, you can:
-    - Enable or disable metrics collection.
-    - Set the minimum duration (using a time unit such as `ms`) for each logging level.  
-      These settings allow you to fine-tune how sensitive the logging should be, based on the performance characteristics you expect.
+⚠️ **Collection Name Security:** All collection name properties are validated using `MongoUtil.checkIsValidCollectionName()` as a first-line defense, but this does NOT provide exhaustive protection.
 
-  - **YAML Example:**
-    ```yaml
-    essentials:
-      metrics:
-        durable-queues:
-          enabled: true
-          thresholds:
-            debug: 25ms    # Log at DEBUG if duration ≥ 25ms (and below the INFO threshold)
-            info: 200ms    # Log at INFO if duration ≥ 200ms (and below the WARN threshold)
-            warn: 500ms    # Log at WARN if duration ≥ 500ms (and below the ERROR threshold)
-            error: 5000ms  # Log at ERROR if duration ≥ 5000ms
-        command-bus:
-          enabled: true
-          thresholds:
-            debug: 25ms
-            info: 200ms
-            warn: 500ms
-            error: 5000ms
-        message-handler:
-          enabled: true
-          thresholds:
-            debug: 25ms
-            info: 200ms
-            warn: 500ms
-            error: 5000ms
-    ```
+> **Developer Responsibility:**
+> - Only derive collection names from controlled, trusted sources
+> - NEVER allow external/untrusted input to provide collection names
+> - Implement additional sanitization for all configuration values
+>
+> Failure to sanitize values could compromise database security and integrity.
 
-  - **Properties Example:**
-    ```properties
-    essentials.metrics.durable-queues.enabled=true
-    essentials.metrics.durable-queues.thresholds.debug=25ms
-    essentials.metrics.durable-queues.thresholds.info=200ms
-    essentials.metrics.durable-queues.thresholds.warn=500ms
-    essentials.metrics.durable-queues.thresholds.error=5000ms
+### Module-Specific Security Guidance
 
-    essentials.metrics.command-bus.enabled=true
-    essentials.metrics.command-bus.thresholds.debug=25ms
-    essentials.metrics.command-bus.thresholds.info=200ms
-    essentials.metrics.command-bus.thresholds.warn=500ms
-    essentials.metrics.command-bus.thresholds.error=5000ms
+See individual module documentation for detailed security considerations:
+- [foundation](foundation/README.md#security)
+- [foundation-types](foundation-types/README.md#security)
+- [postgresql-event-store](postgresql-event-store/README.md#security)
+- [postgresql-distributed-fenced-lock](postgresql-distributed-fenced-lock/README.md#security)
+- [postgresql-queue](postgresql-queue/README.md#security)
+- [eventsourced-aggregates](eventsourced-aggregates/README.md#security)
+- [kotlin-eventsourcing](kotlin-eventsourcing/README.md#security)
+- [springdata-mongo-queue](springdata-mongo-queue/README.md#security)
+- [springdata-mongo-distributed-fenced-lock](springdata-mongo-distributed-fenced-lock/README.md#security) 
 
-    essentials.metrics.message-handler.enabled=true
-    essentials.metrics.message-handler.thresholds.debug=25ms
-    essentials.metrics.message-handler.thresholds.info=200ms
-    essentials.metrics.message-handler.thresholds.warn=500ms
-    essentials.metrics.message-handler.thresholds.error=5000ms
-    ```
+---
 
-  - **Adjusting Log Levels:**  
-    In addition to these properties, you can control which metrics are actually written to your log files by configuring the log levels for the corresponding logger classes in your logging framework (e.g. Logback or Log4j). For example:
-    - For durable queues metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeDurableQueueInterceptor`
-    - For command bus metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeCommandBusInterceptor`
-    - For message handler metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeMessageHandlerInterceptor`
+## Auto-Configured Beans
 
-- `ReactiveHandlersBeanPostProcessor` (for auto-registering `EventHandler` and `CommandHandler` Beans with the `EventBus`'s and `CommandBus` beans found in the `ApplicationContext`)
-  - You can disable post-processing by setting: `essentials.reactive-bean-post-processor-enabled=false`
-- Automatically calling `Lifecycle.start()`/`Lifecycle.stop`, on any Beans implementing the `Lifecycle` interface, when the `ApplicationContext` is started/stopped through the `DefaultLifecycleManager`
-  - You can disable starting `Lifecycle` Beans by using setting this property to false:
-    - `essentials.life-cycles.start-life-cycles=false`
-- `DurableQueuesMicrometerTracingInterceptor` and `DurableQueuesMicrometerInterceptor` if property `management.tracing.enabled` has value `true`
-  - The default `DurableQueuesMicrometerTracingInterceptor` values can be overridden using Spring properties:
-  -  ```
-       essentials.durable-queues.verbose-tracing=true
-       ```
-- `DurableLocalCommandBus`
-  - The `DurableLocalCommandBus` supports two different error handling concepts for true **fire-and-forget asynchronous command processing** (i.e., when `CommandBus.sendAndDontWait` is used):
-    - `SendAndDontWaitErrorHandler` -  The `SendAndDontWaitErrorHandler` exception handler will handle errors that occur while processing Commands sent using `CommandBus.sendAndDontWait`.
-      - If this handler doesn't rethrow the exception, then the message will not be retried by the underlying `DurableQueues`,  nor will the message be marked as a dead-letter/poison message.
-      - Default it uses `SendAndDontWaitErrorHandler.RethrowingSendAndDontWaitErrorHandler`.
-      - To override this configuration, you need to register a Spring bean of type `SendAndDontWaitErrorHandler`
-    - `RedeliveryPolicy` which sets the `RedeliveryPolicy` used when handling queued commands sent using `CommandBus.sendAndDontWait`.
-      - Default it's using `DurableLocalCommandBus.DEFAULT_REDELIVERY_POLICY`.
-      - To override this, you need to register a Spring bean of type `RedeliveryPolicy`
-  - Example of custom Spring configuration:
-     ```
-     /**
-      * Custom {@link RedeliveryPolicy} used by the {@link DurableLocalCommandBus} that is autoconfigured by the springboot starter
-      * @return The {@link RedeliveryPolicy} used for {@link DurableLocalCommandBusBuilder#setCommandQueueRedeliveryPolicy(RedeliveryPolicy)}
-      */
-     @Bean
-     RedeliveryPolicy durableLocalCommandBusRedeliveryPolicy() {
-         return RedeliveryPolicy.exponentialBackoff()
-                                .setInitialRedeliveryDelay(Duration.ofMillis(200))
-                                .setFollowupRedeliveryDelay(Duration.ofMillis(200))
-                                .setFollowupRedeliveryDelayMultiplier(1.1d)
-                                .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
-                                .setMaximumNumberOfRedeliveries(20)
-                                .setDeliveryErrorHandler(
-                                        MessageDeliveryErrorHandler.stopRedeliveryOn(
-                                                ConstraintViolationException.class,
-                                                HttpClientErrorException.BadRequest.class))
-                                .build();
-     }
-     
-     
-     /**
-      * Custom {@link SendAndDontWaitErrorHandler} used by the {@link DurableLocalCommandBus} that is autoconfigured by the springboot starter
-      * @return The {@link SendAndDontWaitErrorHandler} used for {@link DurableLocalCommandBusBuilder#setSendAndDontWaitErrorHandler(SendAndDontWaitErrorHandler)}
-      */
-     @Bean
-     SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler() {
-         return (exception, commandMessage, commandHandler) -> {
-             // Example of not retrying HttpClientErrorException.Unauthorized at all -
-             // if this exception is encountered then the failure is logged, but the command is never retried
-             // nor marked as a dead-letter/poison message
-             if (exception instanceof HttpClientErrorException.Unauthorized) {
-                 log.error("Unauthorized exception", exception);
-             } else {
-                 Exceptions.sneakyThrow(exception);
-             }
-         };
-     }
-     ```
-## Spring Data Mongo converters
-**Converter**'s for core semantic types (`LockName`, `QueueEntryId` and `QueueName`) are automatically registered by the `EssentialsComponentsConfiguration` during its configuration of the
-`MongoCustomConversions` Bean (you can choose to provide your own Bean).
+All beans use `@ConditionalOnMissingBean` for easy overriding.
 
-You can add support for additional concrete `CharSequenceType`'s by providing a Bean of type `AdditionalCharSequenceTypesSupported`:
+### Transaction & UnitOfWork
+
+| Bean | Description |
+|------|-------------|
+| `MongoTransactionManager` | Spring transaction manager with `ReadConcern.SNAPSHOT` and `WriteConcern.ACKNOWLEDGED` |
+| `SpringMongoTransactionAwareUnitOfWorkFactory` | Joins `UnitOfWork`s with Spring-managed transactions. See [UnitOfWork documentation](../foundation/README.md#unitofwork-transactions) |
+
+### Distributed Locking
+
+| Bean | Description |
+|------|-------------|
+| `MongoFencedLockManager` | Distributed fenced locks via MongoDB. See [FencedLock documentation](../foundation/README.md#fencedlock-distributed-locking) |
+
+### Messaging & Queues
+
+| Bean | Description |
+|------|-------------|
+| `MongoDurableQueues` | Durable message queuing via MongoDB. See [DurableQueues documentation](../foundation/README.md#durablequeues-messaging) |
+| `Inboxes` | Store-and-forward for incoming messages. See [Inbox Pattern](../foundation/README.md#inbox-pattern) |
+| `Outboxes` | Store-and-forward for outgoing messages. See [Outbox Pattern](../foundation/README.md#outbox-pattern) |
+| `DurableLocalCommandBus` | Command bus with durable message delivery. See [DurableLocalCommandBus](../foundation/README.md#durablelocalcommandbus) |
+
+### Reactive & Event Processing
+
+| Bean | Description |
+|------|-------------|
+| `LocalEventBus` | Named "default", supports async event handling. See [LocalEventBus](../../reactive/README.md#localeventbus) |
+| `ReactiveHandlersBeanPostProcessor` | Auto-registers `EventHandler` and `CommandHandler` beans with their respective buses. See [Spring Integration](../../reactive/README.md#spring-integration) |
+
+### Serialization
+
+| Bean | Condition | Description |
+|------|-----------|-------------|
+| `EssentialTypesJacksonModule` | Always | Jackson support for Essentials semantic types |
+| `EssentialsImmutableJacksonModule` | Objenesis on classpath + `essentials.immutable-jackson-module-enabled=true` | Jackson support for immutable objects without default constructor |
+| `JacksonJSONSerializer` | Always | Pre-configured ObjectMapper with sensible defaults |
+
+### MongoDB Integration
+
+| Bean | Description |
+|------|-------------|
+| `SingleValueTypeRandomIdGenerator` | Server-generated IDs for `SingleValueType` @Id fields. See [types-springdata-mongo](../../types-springdata-mongo/README.md) |
+| `MongoCustomConversions` | Converters for `LockName`, `QueueEntryId`, `QueueName`. See [Adding Your Domain Types](#adding-your-domain-types) |
+
+### Observability
+
+| Bean | Condition | Description |
+|------|-----------|-------------|
+| `DurableQueuesMicrometerTracingInterceptor` | `management.tracing.enabled=true` | Distributed tracing |
+| `DurableQueuesMicrometerInterceptor` | `management.tracing.enabled=true` | Micrometer metrics |
+| `RecordExecutionTimeMessageHandlerInterceptor` | Always | Performance logging |
+| `RecordExecutionTimeCommandBusInterceptor` | Always | Performance logging |
+| `RecordExecutionTimeDurableQueueInterceptor` | Always | Performance logging |
+
+### Lifecycle
+
+| Bean | Description |
+|------|-------------|
+| `DefaultLifecycleManager` | Manages `Lifecycle.start()`/`stop()` for components |
+
+---
+
+## Configuration Properties
+
+### FencedLock Configuration
+
+```properties
+essentials.fenced-lock-manager.fenced-locks-collection-name=fenced_locks
+essentials.fenced-lock-manager.lock-time-out=12s
+essentials.fenced-lock-manager.lock-confirmation-interval=5s
+essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation=false
+```
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `fenced-locks-collection-name` | `fenced_locks` | MongoDB collection for locks. **See [Security](#security)** |
+| `lock-time-out` | `12s` | Duration before unconfirmed lock expires |
+| `lock-confirmation-interval` | `5s` | Heartbeat interval (must be < timeout) |
+| `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Release locks locally on IO exceptions during confirmation |
+
+### DurableQueues Configuration
+
+```properties
+essentials.durable-queues.shared-queue-collection-name=durable_queues
+essentials.durable-queues.transactional-mode=single-operation-transaction
+essentials.durable-queues.message-handling-timeout=5s
+essentials.durable-queues.polling-delay-interval-increment-factor=0.5
+essentials.durable-queues.max-polling-interval=2s
+essentials.durable-queues.verbose-tracing=false
+```
+
+| Property | Default | Description                                                                   |
+|----------|---------|-------------------------------------------------------------------------------|
+| `shared-queue-collection-name` | `durable_queues` | MongoDB collection for messages. **See [Security](#security)** |
+| `transactional-mode` | `singleoperationtransaction` | `fully-transactional` or `single-operation-transaction` (recommended)            |
+| `message-handling-timeout` | `30s` | Timeout before unacknowledged message is redelivered (single-op mode only)    |
+| `polling-delay-interval-increment-factor` | `0.5` | Backoff factor when no messages found                                         |
+| `max-polling-interval` | `2s` | Maximum polling delay                                                         |
+| `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                         |
+
+**Transactional Modes:**
+
+| Mode | Description | Recommended |
+|------|-------------|-------------|
+| `single-operation-transaction` | Queue operations execute without transactions; uses timeout-based message acknowledgment | **Yes** |
+| `fully-transactional` | Queue operations share the parent `UnitOfWork` transaction | No |
+
+> ⚠️ **Warning:** `fully-transactional` mode causes issues with retries and dead letter handling because when an exception occurs, the transaction is marked for rollback and retry counts are never increased. Use `single-operation-transaction` for reliable message processing.
+
+### EventBus Configuration
+
+```properties
+essentials.reactive.event-bus-backpressure-buffer-size=1024
+essentials.reactive.event-bus-parallel-threads=4
+essentials.reactive.overflow-max-retries=20
+essentials.reactive.queued-task-cap-factor=1.5
+essentials.reactive.command-bus-parallel-send-and-dont-wait-consumers=4
+```
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `event-bus-backpressure-buffer-size` | `1024` | Reactor backpressure buffer size |
+| `event-bus-parallel-threads` | min(available processors, 4) | Threads for async event processing |
+| `overflow-max-retries` | `20` | Max retries when buffer overflows |
+| `queued-task-cap-factor` | `1.5` | Factor for calculating queued task capacity |
+| `command-bus-parallel-send-and-dont-wait-consumers` | min(available processors, 4) | Parallel consumers for `sendAndDontWait` |
+
+### Metrics Configuration
+
+Threshold-based logging for performance monitoring:
+
+```yaml
+essentials:
+  metrics:
+    durable-queues:
+      enabled: true
+      thresholds:
+        debug: 25ms    # Log at DEBUG if duration >= 25ms
+        info: 200ms    # Log at INFO if duration >= 200ms
+        warn: 500ms    # Log at WARN if duration >= 500ms
+        error: 5000ms  # Log at ERROR if duration >= 5000ms
+    command-bus:
+      enabled: true
+      thresholds:
+        debug: 25ms
+        info: 200ms
+        warn: 500ms
+        error: 5000ms
+    message-handler:
+      enabled: true
+      thresholds:
+        debug: 25ms
+        info: 200ms
+        warn: 500ms
+        error: 5000ms
+```
+
+**Logger Classes** (for log level configuration):
+- Durable Queues: `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeDurableQueueInterceptor`
+- Command Bus: `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeCommandBusInterceptor`
+- Message Handler: `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeMessageHandlerInterceptor`
+
+### Lifecycle Configuration
+
+```properties
+essentials.life-cycles.start-life-cycles=true
+essentials.reactive-bean-post-processor-enabled=true
+essentials.immutable-jackson-module-enabled=true
+```
+
+| Property | Default | Description                                                                                                                                                                                                                       |
+|----------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `life-cycles.start-life-cycles` | `true` | **true**: Automatically call `start()` on all `Lifecycle` beans (FencedLockManager, DurableQueues, etc.) when ApplicationContext starts, and `stop()` on shutdown.  <br/>**false**: You must manually start/stop Lifecycle beans. |
+| `reactive-bean-post-processor-enabled` | `true` | **true**: Auto-register `EventHandler` beans with `EventBus` and `CommandHandler` beans with `CommandBus`.  <br/>**false**: You must manually register handlers with their buses.                                                 |
+| `immutable-jackson-module-enabled` | `true` | **true**: Enable `EssentialsImmutableJacksonModule` for deserializing immutable objects (requires Objenesis).  <br/>**false**: Disable even if Objenesis is available.                                                                 |
+
+---
+
+## DurableLocalCommandBus Customization
+
+Override default error handling and redelivery behavior by providing custom beans:
+
+```java
+@Bean
+RedeliveryPolicy durableLocalCommandBusRedeliveryPolicy() {
+    return RedeliveryPolicy.exponentialBackoff()
+            .setInitialRedeliveryDelay(Duration.ofMillis(200))
+            .setFollowupRedeliveryDelay(Duration.ofMillis(200))
+            .setFollowupRedeliveryDelayMultiplier(1.1d)
+            .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
+            .setMaximumNumberOfRedeliveries(20)
+            .setDeliveryErrorHandler(MessageDeliveryErrorHandler.stopRedeliveryOn(
+                    ConstraintViolationException.class,
+                    HttpClientErrorException.BadRequest.class))
+            .build();
+}
+
+@Bean
+SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler() {
+    return (exception, commandMessage, commandHandler) -> {
+        if (exception instanceof HttpClientErrorException.Unauthorized) {
+            log.error("Unauthorized - not retrying", exception);
+            // Don't rethrow = no retry, no dead letter
+        } else {
+            Exceptions.sneakyThrow(exception);  // Rethrow = retry/dead letter
+        }
+    };
+}
+```
+
+---
+
+## Spring Data MongoDB Converters
+
+### What's Auto-Configured
+
+The starter auto-registers a `SingleValueTypeConverter` that handles conversion between `SingleValueType` instances and MongoDB types. This converter is pre-configured with:
+- `LockName` - Used by FencedLockManager
+- `QueueEntryId` - Used by DurableQueues
+- `QueueName` - Used by DurableQueues
+
+The converter automatically supports all `SingleValueType` subtypes (`CharSequenceType`, `NumberType`, `InstantType`, etc.) for basic document field storage.
+
+### When to Register Additional CharSequenceTypes
+
+You must explicitly register `CharSequenceType` subtypes that:
+1. **Contain `ObjectId` values** - Types where `random()` returns `new YourType(ObjectId.get().toString())`
+2. **Are used as Map keys** - MongoDB stores Map keys as `ObjectId` internally when they contain valid ObjectId strings
+
+Without registration, MongoDB can't convert the `ObjectId` back to your `CharSequenceType` when reading.
+
+**Example type using ObjectId:**
+
+```java
+public class ProductId extends CharSequenceType<ProductId> implements Identifier {
+    public ProductId(CharSequence value) {
+        super(value);
+    }
+
+    public static ProductId random() {
+        return new ProductId(ObjectId.get().toString());  // Uses ObjectId
+    }
+}
+```
+
+**Register types that use ObjectId values:**
+
 ```java
 @Bean
 AdditionalCharSequenceTypesSupported additionalCharSequenceTypesSupported() {
-    return new AdditionalCharSequenceTypesSupported(OrderId.class);
+    return new AdditionalCharSequenceTypesSupported(ProductId.class, OrderId.class);
 }
 ```
 
-Similarly, you can add additional `Converter`/`GenericConverter`/etc by providing a Bean of type `AdditionalConverters`:
+### Adding Custom Converters
+
+For non-`SingleValueType` types or types requiring custom conversion logic:
 
 ```java
 @Bean
-AdditionalConverters additionalGenericConverters() {
-    return new AdditionalConverters(Jsr310Converters.StringToDurationConverter.INSTANCE,
-                                    Jsr310Converters.DurationToStringConverter.INSTANCE);
+AdditionalConverters additionalConverters() {
+    return new AdditionalConverters(
+            Jsr310Converters.StringToDurationConverter.INSTANCE,
+            Jsr310Converters.DurationToStringConverter.INSTANCE
+    );
 }
 ```
 
-## Dependencies
-Typical `pom.xml` dependencies required to use this starter
-```
+See [types-springdata-mongo](../../types-springdata-mongo/README.md) for complete details on `SingleValueTypeConverter`, supported type conversions, and JSR-310 temporal types.
+
+---
+
+## Typical Dependencies
+
+```xml
 <dependencies>
     <dependency>
         <groupId>dk.trustworks.essentials.components</groupId>
@@ -264,82 +352,38 @@ Typical `pom.xml` dependencies required to use this starter
     <dependency>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-data-mongodb</artifactId>
-        <version>${spring-boot.version}</version>
     </dependency>
     <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-        <version>${jackson.version}</version>
     </dependency>
     <dependency>
         <groupId>com.fasterxml.jackson.datatype</groupId>
         <artifactId>jackson-datatype-jdk8</artifactId>
-        <version>${jackson.version}</version>
     </dependency>
     <dependency>
         <groupId>com.fasterxml.jackson.datatype</groupId>
         <artifactId>jackson-datatype-jsr310</artifactId>
-        <version>${jackson.version}</version>
     </dependency>
     <dependency>
         <groupId>io.projectreactor</groupId>
         <artifactId>reactor-core</artifactId>
-        <version>${reactor.version}</version>
     </dependency>
 
     <!-- Test -->
-    dependency>
-        <groupId>org.junit.jupiter</groupId>
-        <artifactId>junit-jupiter</artifactId>
-        <version>${junit.version}</version>
-        <scope>test</scope>
-    </dependency>
-    <dependency>
-        <groupId>org.junit.jupiter</groupId>
-        <artifactId>junit-jupiter-engine</artifactId>
-        <version>${junit.version}</version>
-        <scope>test</scope>
-    </dependency>
-    <dependency>
-        <groupId>org.junit.vintage</groupId>
-        <artifactId>junit-vintage-engine</artifactId>
-        <version>${junit.version}</version>
-        <scope>test</scope>
-    </dependency>
-    <dependency>
-        <groupId>org.assertj</groupId>
-        <artifactId>assertj-core</artifactId>
-        <version>${assertj.version}</version>
-        <scope>test</scope>
-    </dependency>
-    <dependency>
-        <groupId>org.awaitility</groupId>
-        <artifactId>awaitility</artifactId>
-        <version>${awaitility.version}</version>
-        <scope>test</scope>
-    </dependency>
-    <dependency>
-        <groupId>ch.qos.logback</groupId>
-        <artifactId>logback-classic</artifactId>
-        <version>${logback.version}</version>
-        <scope>test</scope>
-    </dependency>
-    <dependency>
-        <groupId>org.testcontainers</groupId>
-        <artifactId>junit-jupiter</artifactId>
-        <version>${testcontainers.version}</version>
-        <scope>test</scope>
-    </dependency>
-    <dependency>
-        <groupId>org.testcontainers</groupId>
-        <artifactId>mongodb</artifactId>
-        <version>${testcontainers.version}</version>
-        <scope>test</scope>
-    </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-test</artifactId>
-        <version>${spring-boot.version}</version>
+        <scope>test</scope>
+    </dependency>
+    <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-junit-jupiter</artifactId>
+        <scope>test</scope>
+    </dependency>
+    <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-mongodb</artifactId>
         <scope>test</scope>
     </dependency>
 </dependencies>

@@ -1,137 +1,189 @@
-# Essentials Java building blocks
+# Types-JDBI
 
-Essentials is a set of Java version 17 (and later) building blocks built from the ground up to have no dependencies
-on other libraries, unless explicitly mentioned.
+> JDBI v3 ArgumentFactory and ColumnMapper support for Essentials `types` module
 
+This module enables seamless use of `SingleValueType` implementations as JDBI query parameters (`ArgumentFactory`) and result mappings (`ColumnMapper`).
 
+> **NOTE:** This library is WORK-IN-PROGRESS
 
-The Essentials philosophy is to provide high level building blocks and coding constructs that allows for concise and
-strongly typed code, which doesn't depend on other libraries or frameworks, but instead allows easy integrations with
-many of the most popular libraries and frameworks such as Jackson, Spring Boot, Spring Data, JPA, etc.
+**LLM Context:** [LLM-types-jdbi.md](../LLM/LLM-types-jdbi.md)
 
-> **NOTE:**  
-> **The library is WORK-IN-PROGRESS**
+## Table of Contents
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [ArgumentFactory](#argumentfactory)
+- [ColumnMapper](#columnmapper)
+- [Built-in Types](#built-in-types)
+- [JSR-310 Temporal Types](#jsr-310-temporal-types)
+- [Complete Example](#complete-example)
 
-## Types-JDBI
+## Installation
 
-This library focuses purely on providing [JDBI v3](https://jdbi.org) `ArgumentFactory` and `ColumnMapper` support for the **types** defined in the Essentials `types`
-library.
-
-To use `Types-JDBI` just add the following Maven dependency:
-```
+```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jdbi</artifactId>
-    <version>0.40.27</version>
+    <version>${essentials.version}</version>
 </dependency>
 ```
 
-`Types-JDBI` usually needs additional third party dependencies to work, such as:
-```
-<dependency>
-    <groupId>org.slf4j</groupId>
-    <artifactId>slf4j-api</artifactId>
-</dependency>
-
+**Required dependency** (provided scope - add to your project):
+```xml
 <dependency>
     <groupId>org.jdbi</groupId>
     <artifactId>jdbi3-core</artifactId>
 </dependency>
 ```
 
-**NOTE:**
-**This library is WORK-IN-PROGRESS**
+## Quick Start
 
-## ArgumentFactory
-To support a given Argument of type `SingleValueType` you need to extend the corresponding provided
-abstract `ArgumentFactory`.
+Base package: `dk.trustworks.essentials.types.jdbi`
 
-Example:
+**1. Create your type** (extends a base type from `types` module):
 
-```
+```java
 public class CustomerId extends CharSequenceType<CustomerId> implements Identifier {
     public CustomerId(CharSequence value) {
         super(value);
     }
-
+    // Required for Jackson 2.18+
+    public CustomerId(String value) {
+        super(value);
+    }
+    
     public static CustomerId of(CharSequence value) {
         return new CustomerId(value);
     }
-
-    public static CustomerId random() {
-        return new CustomerId(UUID.randomUUID().toString());
-    }
 }
 ```
 
-This concrete `SingleValueType` extends `CharSequenceType`, wherefore a JDBI `Argument`
-converter (aka `ArgumentFactory`) must extend `CharSequenceTypeArgumentFactory`:
+**2. Create ArgumentFactory and ColumnMapper** (empty classes - just extend the base):
 
-```
-public class CustomerIdArgumentFactory extends CharSequenceTypeArgumentFactory<CustomerId> {
-}
+```java
+// For query parameters (INSERT, UPDATE, WHERE clauses)
+public class CustomerIdArgumentFactory extends CharSequenceTypeArgumentFactory<CustomerId> {}
+
+// For result mapping (SELECT)
+public class CustomerIdColumnMapper extends CharSequenceTypeColumnMapper<CustomerId> {}
 ```
 
-After this you need to register the `ArgumentFactory` with the `Jdbi` or `Handle` instance:
+**3. Register with JDBI:**
 
-```
-Jdbi jdbi = Jdbi.create("jdbc:h2:mem:test");
-jdbi.registerArgument(new OrderIdArgumentFactory());
+```java
+Jdbi jdbi = Jdbi.create(dataSource);
 jdbi.registerArgument(new CustomerIdArgumentFactory());
-jdbi.registerArgument(new ProductIdArgumentFactory());
-jdbi.registerArgument(new AccountIdArgumentFactory());
-    
-var orderId    = OrderId.random();
-var customerId = CustomerId.random();
-var productId  = ProductId.random();
-var accountId  = AccountId.random();
-
-jdbi.useHandle(handle -> handle.createUpdate("INSERT INTO orders(id, customer_id, product_id, account_id) VALUES (:id, :customerId, :productId, :accountId)")
-                               .bind("id", orderId)
-                               .bind("customerId", customerId)
-                               .bind("productId", productId)
-                               .bind("accountId", accountId)
-                               .execute());
+jdbi.registerColumnMapper(new CustomerIdColumnMapper());
 ```
+
+**4. Use in queries:**
+
+```java
+// Insert with semantic type parameter
+jdbi.useHandle(handle ->
+    handle.createUpdate("INSERT INTO customers(id, name) VALUES (:id, :name)")
+          .bind("id", CustomerId.of("CUST-123"))
+          .bind("name", "John Doe")
+          .execute()
+);
+
+// Query returning semantic type
+Optional<CustomerId> customerId = jdbi.withHandle(handle ->
+    handle.createQuery("SELECT id FROM customers WHERE name = :name")
+          .bind("name", "John Doe")
+          .mapTo(CustomerId.class)
+          .findOne()
+);
+```
+
+**Learn more:** See [SingleValueTypeArgumentsTest.java](src/test/java/dk/trustworks/essentials/types/jdbi/SingleValueTypeArgumentsTest.java)
+
+## ArgumentFactory
+
+`ArgumentFactory` converts `SingleValueType` instances to JDBC parameters for `INSERT`, `UPDATE`, and `WHERE` clauses.
+
+### Base Classes
+
+| Your Type Extends | Your ArgumentFactory Extends |
+|-------------------|------------------------------|
+| `CharSequenceType` | `CharSequenceTypeArgumentFactory<T>` |
+| `BigDecimalType` | `BigDecimalTypeArgumentFactory<T>` |
+| `BigIntegerType` | `BigIntegerTypeArgumentFactory<T>` |
+| `IntegerType` | `IntegerTypeArgumentFactory<T>` |
+| `LongType` | `LongTypeArgumentFactory<T>` |
+| `ShortType` | `ShortTypeArgumentFactory<T>` |
+| `ByteType` | `ByteTypeArgumentFactory<T>` |
+| `DoubleType` | `DoubleTypeArgumentFactory<T>` |
+| `FloatType` | `FloatTypeArgumentFactory<T>` |
+| `BooleanType` | `BooleanTypeArgumentFactory<T>` |
+| `InstantType` | `InstantTypeArgumentFactory<T>` |
+| `LocalDateTimeType` | `LocalDateTimeTypeArgumentFactory<T>` |
+| `LocalDateType` | `LocalDateTypeArgumentFactory<T>` |
+| `LocalTimeType` | `LocalTimeTypeArgumentFactory<T>` |
+| `OffsetDateTimeType` | `OffsetDateTimeTypeArgumentFactory<T>` |
+| `ZonedDateTimeType` | `ZonedDateTimeTypeArgumentFactory<T>` |
 
 ## ColumnMapper
-To map a column for a concrete `SingleValueType` that e.g. for `Percentage` extends `BigDecimalType`, the
-`ColumnMapper` must extend the corresponding `SingleValueType` *base*-`ColumnMapper`, which in this case is `BigDecimalTypeColumnMapper`.
 
-```
-public class PercentageColumnMapper extends BigDecimalTypeColumnMapper<Percentage> {
-}
-```
+`ColumnMapper` converts database column values back to `SingleValueType` instances in `SELECT` results.
 
-After this you need to register the `ColumnMapper` with the `Jdbi` or `Handle` instance:
-```
-Jdbi jdbi = Jdbi.create("jdbc:h2:mem:test");
+### Base Classes
+
+| Your Type Extends | Your ColumnMapper Extends |
+|-------------------|---------------------------|
+| `CharSequenceType` | `CharSequenceTypeColumnMapper<T>` |
+| `BigDecimalType` | `BigDecimalTypeColumnMapper<T>` |
+| `BigIntegerType` | `BigIntegerTypeColumnMapper<T>` |
+| `IntegerType` | `IntegerTypeColumnMapper<T>` |
+| `LongType` | `LongTypeColumnMapper<T>` |
+| `ShortType` | `ShortTypeColumnMapper<T>` |
+| `ByteType` | `ByteTypeColumnMapper<T>` |
+| `DoubleType` | `DoubleTypeColumnMapper<T>` |
+| `FloatType` | `FloatTypeColumnMapper<T>` |
+| `BooleanType` | `BooleanTypeColumnMapper<T>` |
+| `InstantType` | `InstantTypeColumnMapper<T>` |
+| `LocalDateTimeType` | `LocalDateTimeColumnMapper<T>` |
+| `LocalDateType` | `LocalDateTypeColumnMapper<T>` |
+| `LocalTimeType` | `LocalTimeTypeColumnMapper<T>` |
+| `OffsetDateTimeType` | `OffsetDateTimeTypeColumnMapper<T>` |
+| `ZonedDateTimeType` | `ZonedDateTimeTypeColumnMapper<T>` |
+
+## Built-in Types
+
+The module provides ready-to-use ArgumentFactory and ColumnMapper for common Essentials types:
+
+| Type | ArgumentFactory | ColumnMapper |
+|------|-----------------|--------------|
+| `Amount` | `AmountArgumentFactory` | `AmountColumnMapper` |
+| `Percentage` | `PercentageArgumentFactory` | `PercentageColumnMapper` |
+| `CurrencyCode` | `CurrencyCodeArgumentFactory` | `CurrencyCodeColumnMapper` |
+| `CountryCode` | `CountryCodeArgumentFactory` | `CountryCodeColumnMapper` |
+| `EmailAddress` | `EmailAddressArgumentFactory` | `EmailAddressColumnMapper` |
+
+```java
+// Register built-in types
+jdbi.registerArgument(new AmountArgumentFactory());
+jdbi.registerColumnMapper(new AmountColumnMapper());
+jdbi.registerArgument(new PercentageArgumentFactory());
 jdbi.registerColumnMapper(new PercentageColumnMapper());
 ```
 
-An example of using it:
-```
-return jdbi.useHandle(handle -> handle.createQuery("SELECT MAX(discount) FROM ORDERS")
-                                      .setFetchSize(1)
-                                      .mapTo(Percentage.class)
-                                      .findOne();
-```
+## JSR-310 Temporal Types
 
-### JSR 310 Semantic Types
+For types extending `JSR310SingleValueType`:
 
-This library also supports `JSR310SingleValueType` which wraps existing JSR-310 types (java.time):
+| Base Type | ArgumentFactory | ColumnMapper |
+|-----------|-----------------|--------------|
+| `InstantType` | `InstantTypeArgumentFactory<T>` | `InstantTypeColumnMapper<T>` |
+| `LocalDateTimeType` | `LocalDateTimeTypeArgumentFactory<T>` | `LocalDateTimeColumnMapper<T>` |
+| `LocalDateType` | `LocalDateTypeArgumentFactory<T>` | `LocalDateTypeColumnMapper<T>` |
+| `LocalTimeType` | `LocalTimeTypeArgumentFactory<T>` | `LocalTimeTypeColumnMapper<T>` |
+| `OffsetDateTimeType` | `OffsetDateTimeTypeArgumentFactory<T>` | `OffsetDateTimeTypeColumnMapper<T>` |
+| `ZonedDateTimeType` | `ZonedDateTimeTypeArgumentFactory<T>` | `ZonedDateTimeTypeColumnMapper<T>` |
 
-| `JSR310SingleValueType` specialization | Value Type |
-|----------------------------------|-------------------------|
-| `InstantType`                    | `Instant`               |
-| `LocalDateTimeType`              | `LocalDateTime`         |
-| `LocalDateType`                  | `LocalDate`             |
-| `LocalTimeType`                  | `LocalTime`             |
-| `OffsetDateTimeType`             | `OffsetDateTime`        |
-| `ZonedDateTimeType`              | `ZonedDateTime`         |
+### Example: TransactionTime
 
-Example `TransactionTime`:
-```
+```java
+// Type definition
 public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
     public TransactionTime(ZonedDateTime value) {
         super(value);
@@ -145,16 +197,77 @@ public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
         return new TransactionTime(ZonedDateTime.now());
     }
 }
+
+// ArgumentFactory and ColumnMapper
+public class TransactionTimeArgumentFactory extends ZonedDateTimeTypeArgumentFactory<TransactionTime> {}
+public class TransactionTimeColumnMapper extends ZonedDateTimeTypeColumnMapper<TransactionTime> {}
 ```
 
-Example: `ArgumentFactory` for `TransactionTime`:
-```
-public class TransactionTimeArgumentFactory extends ZonedDateTimeTypeArgumentFactory<TransactionTime> {
+## Complete Example
+
+```java
+@Configuration
+public class JdbiConfig {
+
+    @Bean
+    public Jdbi jdbi(DataSource dataSource) {
+        Jdbi jdbi = Jdbi.create(dataSource);
+
+        // Register ArgumentFactories (for query parameters)
+        jdbi.registerArgument(new OrderIdArgumentFactory());
+        jdbi.registerArgument(new CustomerIdArgumentFactory());
+        jdbi.registerArgument(new AmountArgumentFactory());
+        jdbi.registerArgument(new TransactionTimeArgumentFactory());
+
+        // Register ColumnMappers (for result mapping)
+        jdbi.registerColumnMapper(new OrderIdColumnMapper());
+        jdbi.registerColumnMapper(new CustomerIdColumnMapper());
+        jdbi.registerColumnMapper(new AmountColumnMapper());
+        jdbi.registerColumnMapper(new TransactionTimeColumnMapper());
+
+        return jdbi;
+    }
+}
+
+@Repository
+public class OrderRepository {
+    private final Jdbi jdbi;
+
+    public void save(Order order) {
+        jdbi.useHandle(handle ->
+            handle.createUpdate("""
+                INSERT INTO orders (id, customer_id, total_amount, created_at)
+                VALUES (:id, :customerId, :totalAmount, :createdAt)
+                """)
+                .bind("id", order.id())
+                .bind("customerId", order.customerId())
+                .bind("totalAmount", order.totalAmount())
+                .bind("createdAt", order.createdAt())
+                .execute()
+        );
+    }
+
+    public Optional<Order> findById(OrderId orderId) {
+        return jdbi.withHandle(handle ->
+            handle.createQuery("""
+                SELECT id, customer_id, total_amount, created_at
+                FROM orders WHERE id = :id
+                """)
+                .bind("id", orderId)
+                .map((rs, ctx) -> new Order(
+                    OrderId.of(rs.getString("id")),
+                    CustomerId.of(rs.getString("customer_id")),
+                    Amount.of(rs.getBigDecimal("total_amount")),
+                    TransactionTime.of(rs.getObject("created_at", ZonedDateTime.class))
+                ))
+                .findOne()
+        );
+    }
 }
 ```
 
-Example: `ColumnMapper` for `TransactionTime`:
-```
-public class TransactionTimeColumnMapper extends ZonedDateTimeTypeColumnMapper<TransactionTime> {
-}
-```
+## See Also
+
+- [LLM-types-jdbi.md](../LLM/LLM-types-jdbi.md) - API reference for LLM assistance
+- [types](../types) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
+- [types-jackson](../types-jackson) - Jackson serialization for types
