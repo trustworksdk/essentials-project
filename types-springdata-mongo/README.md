@@ -81,7 +81,7 @@ public interface OrderRepository extends MongoRepository<Order, OrderId> {
 
 **Learn more:** See [OrderRepositoryIT.java](src/test/java/dk/trustworks/essentials/types/springdata/mongo/OrderRepositoryIT.java)
 
-##SingleValueTypeConverter
+## SingleValueTypeConverter
 
 Converts `SingleValueType` instances to/from MongoDB-compatible types.
 
