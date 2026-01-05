@@ -55,6 +55,7 @@
 		// Persist Gradle cache (write-on-download, read-heavy workload)
 		"source=devcontainer-gradle-cache,target=/home/vscode/.gradle,type=volume,consistency=cached",
 		// JetBrains specific caches (container-managed, host-consistent backups)
+		"source=devcontainer-jetbrains-remote,target=/home/vscode/.cache/JetBrains/RemoteDev,type=volume,consistency=cached",
 		"source=devcontainer-jetbrains-config,target=/home/vscode/.config/JetBrains,type=volume,consistency=cached",
 		"source=devcontainer-jetbrains-cache,target=/home/vscode/.cache/JetBrains,type=volume,consistency=cached",
 		"source=devcontainer-jetbrains-share,target=/home/vscode/.local/share/JetBrains,type=volume,consistency=cached",
