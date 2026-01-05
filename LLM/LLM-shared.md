@@ -62,50 +62,50 @@
 
 ## Feature Overview
 
-| Feature                                    | Package | Purpose |
-|--------------------------------------------|-------|---------|
-| **FailFast**                               |  | Enhanced null/validation checks (replaces `Objects.requireNonNull`) |
-| **Exceptions**                             |  | Root cause analysis, sneaky throw, critical error handling |
-| **Lifecycle**                              |  | Common start/stop interface for components |
-| **MessageFormatter**                       |  | SLF4J-style and named-parameter message formatting |
-| **Tuples**                                 | `functional.tuple` | Immutable tuples (`Empty`, `Single`, `Pair`, `Triple`, `Quad`) |
-| **Either**                                 | `functional.tuple` | Choice type - one of two values |
-| **Result**                                 | `functional.tuple` | `Either` specialization with success/error semantics |
-| **ComparableTuple**                        | `functional.tuple` | Comparable tuples for sorted collections |
-| **Checked***                               | `functional` | Bridge checked exceptions to functional interfaces |
-| **TripleFunction**                         | `functional` | Three-argument function interface |
-| **QuadFunction**                           | `functional` | Four-argument function interface |
-| **Lists**                                  | `collections` | Indexed stream, first/last, partition utilities |
-| **Streams**                                | `collections` | Zip streams utility |
-| **Reflector**                              | `reflection` | High-performance caching reflection API |
-| **Accessibles**                            | `reflection` | Make AccessibleObject instances accessible |
-| **BoxedTypes**                             | `reflection` | Primitive/boxed type conversion |
-| **Classes**                                | `reflection` | Class loading, type hierarchy utilities |
-| **Constructors**                           | `reflection` | Get constructors from a type |
-| **Fields**                                 | `reflection` | Find and get fields (including inherited) |
-| **Interfaces**                             | `reflection` | Get all interfaces implemented by type |
-| **Methods**                                | `reflection` | Find and get methods (including inherited) |
-| **Parameters**                             | `reflection` | Parameter type matching utilities |
+| Feature                                    | Package                 | Purpose |
+|--------------------------------------------|-------------------------|---------|
+| **FailFast**                               | (root)                  | Enhanced null/validation checks (replaces `Objects.requireNonNull`) |
+| **Exceptions**                             | (root)                  | Root cause analysis, sneaky throw, critical error handling |
+| **Lifecycle**                              | (root)                  | Common start/stop interface for components |
+| **MessageFormatter**                       | (root)                  | SLF4J-style and named-parameter message formatting |
+| **Tuples**                                 | `functional.tuple`      | Immutable tuples (`Empty`, `Single`, `Pair`, `Triple`, `Quad`) |
+| **Either**                                 | `functional.tuple`      | Choice type - one of two values |
+| **Result**                                 | `functional.tuple`      | `Either` specialization with success/error semantics |
+| **ComparableTuple**                        | `functional.tuple`      | Comparable tuples for sorted collections |
+| **Checked***                               | `functional`            | Bridge checked exceptions to functional interfaces |
+| **TripleFunction**                         | `functional`            | Three-argument function interface |
+| **QuadFunction**                           | `functional`            | Four-argument function interface |
+| **Lists**                                  | `collections`           | Indexed stream, first/last, partition utilities |
+| **Streams**                                | `collections`           | Zip streams utility |
+| **Reflector**                              | `reflection`            | High-performance caching reflection API |
+| **Accessibles**                            | `reflection`            | Make AccessibleObject instances accessible |
+| **BoxedTypes**                             | `reflection`            | Primitive/boxed type conversion |
+| **Classes**                                | `reflection`            | Class loading, type hierarchy utilities |
+| **Constructors**                           | `reflection`            | Get constructors from a type |
+| **Fields**                                 | `reflection`            | Find and get fields (including inherited) |
+| **Interfaces**                             | `reflection`            | Get all interfaces implemented by type |
+| **Methods**                                | `reflection`            | Find and get methods (including inherited) |
+| **Parameters**                             | `reflection`            | Parameter type matching utilities |
 | **PatternMatchingMethodInvoker**           | `reflection.invocation` | Reflective method dispatch by type |
-| **FunctionalInterfaceLoggingNameResolver** | `reflection` | Extract readable names from lambdas |
-| **StopWatch**                              | `time` | Time operations and methods |
-| **MeasurementRecorder**                    | `measurement` | Pluggable measurement recording interface |
-| **MeasurementContext**                     | `measurement` | Immutable measurement metadata |
-| **MeasurementTaker**                       | `measurement` | Facade for recording with multiple recorders |
-| **LoggingMeasurementRecorder**             | `measurement` | Log measurements via SLF4J with thresholds |
-| **MicrometerMeasurementRecorder**          | `measurement` | Send measurements to Micrometer |
-| **LogThresholds**                          | `measurement` | Configurable log level thresholds (ms) |
-| **If**                                     | `logic` | Expression-based if/else (replaces statement) |
-| **Interceptor**/**InterceptorChain**       | `interceptor` | Chain-of-responsibility pattern |
-| **MessageTemplate**                        | `messages` | Structured messages with typed parameters |
-| **EssentialsSecurityProvider**             | `security` | Role-based security for Admin UI APIs |
-| **EssentialsSecurityValidator**            | `security` | Security validation utilities |
-| **EssentialsSecurityRoles**                | `security` | Predefined security roles enum |
-| **EssentialsAuthenticatedUser**            | `security` | Authenticated user interface (for admin UI) |
-| **EssentialsSecurityException**            | `security` | Security violation exception |
-| **ThreadFactoryBuilder**                   | `concurrent` | Named, daemon-aware thread factories |
-| **GenericType**                            | `types` | Capture generic type information at runtime |
-| **Network**                                | `network` | Network utilities (hostname) |
+| **FunctionalInterfaceLoggingNameResolver** | `reflection`            | Extract readable names from lambdas |
+| **StopWatch**                              | `time`                  | Time operations and methods |
+| **MeasurementRecorder**                    | `measurement`           | Pluggable measurement recording interface |
+| **MeasurementContext**                     | `measurement`           | Immutable measurement metadata |
+| **MeasurementTaker**                       | `measurement`           | Facade for recording with multiple recorders |
+| **LoggingMeasurementRecorder**             | `measurement`           | Log measurements via SLF4J with thresholds |
+| **MicrometerMeasurementRecorder**          | `measurement`           | Send measurements to Micrometer |
+| **LogThresholds**                          | `measurement`           | Configurable log level thresholds (ms) |
+| **If**                                     | `logic`                 | Expression-based if/else (replaces statement) |
+| **Interceptor**/**InterceptorChain**       | `interceptor`           | Chain-of-responsibility pattern |
+| **MessageTemplate**                        | `messages`              | Structured messages with typed parameters |
+| **EssentialsSecurityProvider**             | `security`              | Role-based security for Admin UI APIs |
+| **EssentialsSecurityValidator**            | `security`              | Security validation utilities |
+| **EssentialsSecurityRoles**                | `security`              | Predefined security roles enum |
+| **EssentialsAuthenticatedUser**            | `security`              | Authenticated user interface (for admin UI) |
+| **EssentialsSecurityException**            | `security`              | Security violation exception |
+| **ThreadFactoryBuilder**                   | `concurrent`            | Named, daemon-aware thread factories |
+| **GenericType**                            | `types`                 | Capture generic type information at runtime |
+| **Network**                                | `network`               | Network utilities (hostname) |
 
 ---
 

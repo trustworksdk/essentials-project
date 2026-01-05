@@ -99,12 +99,12 @@ Write your domain logic once. Integrate with your preferred frameworks through d
 
 | Framework | Module | Purpose                                                      |
 |-----------|--------|--------------------------------------------------------------|
-| Jackson | `types-jackson` | JSON serialization for **Sematic Types**                     |
-| Spring Data MongoDB | `types-springdata-mongo` | MongoDB persistence for **Sematic Types**                    |
-| Spring Data JPA | `types-springdata-jpa` | JPA persistence for **Sematic Types**                        |
-| JDBI v3 | `types-jdbi` | `Jdbi` SQL argument and result mapping for **Sematic Types** |
-| Apache Avro | `types-avro` | Binary serialization for **Sematic Types**                                        |
-| Spring WebMvc/WebFlux | `types-spring-web` | Path/request parameter conversion for **Sematic Types**         |
+| Jackson | `types-jackson` | JSON serialization for **Semantic Types**                     |
+| Spring Data MongoDB | `types-springdata-mongo` | MongoDB persistence for **Semantic Types**                    |
+| Spring Data JPA | `types-springdata-jpa` | JPA persistence for **Semantic Types**                        |
+| JDBI v3 | `types-jdbi` | `Jdbi` SQL argument and result mapping for **Semantic Types** |
+| Apache Avro | `types-avro` | Binary serialization for **Semantic Types**                                        |
+| Spring WebMvc/WebFlux | `types-spring-web` | Path/request parameter conversion for **Semantic Types**         |
 
 ### ✅ Provided Scope for Third-Party Dependencies
 
