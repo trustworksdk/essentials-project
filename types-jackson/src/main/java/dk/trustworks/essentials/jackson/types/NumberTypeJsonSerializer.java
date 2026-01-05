@@ -19,12 +19,12 @@ package dk.trustworks.essentials.jackson.types;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.ser.std.NumberSerializer;
-import dk.trustworks.essentials.types.*;
+import dk.trustworks.essentials.types.NumberType;
 
 import java.io.IOException;
 
 /**
- * Jackson Serializer for {@link CharSequenceType}
+ * Jackson Serializer for {@link NumberType}
  */
 public final class NumberTypeJsonSerializer extends NumberSerializer {
     public NumberTypeJsonSerializer() {
