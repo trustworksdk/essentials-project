@@ -109,7 +109,7 @@ In distributed service-oriented (microservice) architectures, there are two type
   - **`EventProcessor`**: Async via `Inbox` queue with redelivery policies — for external integrations (Kafka, email, webhooks) and exclusive processing via `FencedLock`
   - **`InTransactionEventProcessor`**: Synchronous in-transaction — for atomically consistent projections (lowest latency) - optional exclusive processing via `FencedLock`
   - **`ViewEventProcessor`**: Async with direct processing and only with queue-on-failure — for low-latency view updates
-- **Features**: Pattern-matching `@MessageHandler` methods, ordered message processing, automatic retry with configurable backoff for async processcing, exclusive processing via `FencedLock`
+- **Features**: Pattern-matching `@MessageHandler` methods, ordered message processing, automatic retry with configurable backoff for async processing, exclusive processing via `FencedLock`
 - **Use cases**: Kafka event publishing, email notifications, read model updates, integration with external systems, todo-lists
 
 > Essentials Components focuses on **intra-service** coordination. For **cross-service communication** (OrderService → BillingService), use Kafka, RabbitMQ, or HTTP APIs. 
@@ -143,7 +143,7 @@ Components include various production-ready features:
 
 ### ✅ Spring Boot Auto-Configuration
 
-Use the Essentials `spring-boot-starter`'s, configure your database, and inject Essentals beans:
+Use the Essentials `spring-boot-starter`'s, configure your database, and inject Essentials beans:
 
 ```java
 @Service
