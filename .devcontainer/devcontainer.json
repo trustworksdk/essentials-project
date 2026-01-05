@@ -42,12 +42,13 @@
 		// Maven options for better performance
 		"MAVEN_OPTS": "-XX:MaxRAMPercentage=20 -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m -XX:InitialCodeCacheSize=64m",
 		// Node.js memory settings for Claude Code and other tools
-		"NODE_OPTIONS": "--max-old-space-size=8192"
+		"NODE_OPTIONS": "--max-old-space-size=8192",
+		"CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
 	},
 	// Docker volumes for persistence - no initialization needed!
 	"mounts": [
 		// Persist Claude Code settings and authentication
-		"source=devcontainer-claude-code-config,target=/home/vscode/.config/claude-code,type=volume,consistency=cached",
+		"source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
 		"source=devcontainer-claude-code-cache,target=/home/vscode/.cache/claude-code,type=volume,consistency=cached",
 		// Persist Maven repository cache (write-on-download, read-heavy workload)
 		"source=devcontainer-maven-repo,target=/home/vscode/.m2/repository,type=volume,consistency=cached",
@@ -173,7 +174,7 @@
 	},
 	// Lifecycle scripts
     "onCreateCommand": "echo 'DevContainer created successfully!'",
-	"postCreateCommand": "npm config set ignore-scripts true && npm install -g npm@latest && npm install -g @anthropic-ai/claude-code && if [ -f .devcontainer/maven-settings.xml ]; then cp .devcontainer/maven-settings.xml ~/.m2/settings.xml; fi && echo 'Post-create setup completed successfully!'",
+	"postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude && npm config set ignore-scripts true && npm install -g npm@latest && npm install -g @anthropic-ai/claude-code && if [ -f .devcontainer/maven-settings.xml ]; then cp .devcontainer/maven-settings.xml ~/.m2/settings.xml; fi && echo 'Post-create setup completed successfully!'",
     "postStartCommand": "git config --global --add safe.directory /workspace && git config --global pull.rebase true",
     "shutdownAction": "stopContainer"
 }
