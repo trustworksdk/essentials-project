@@ -509,8 +509,14 @@ spring:
     username: ${DB_USER}
     password: ${DB_PASSWORD}
 ```
+**3. Define events:**
+```java
+public interface OrderEvent { OrderId orderId(); }
+public record OrderPlaced(OrderId orderId, CustomerId customerId) implements OrderEvent {}
+public record OrderConfirmed(OrderId orderId) implements OrderEvent {}
+```
 
-**3. Define the Order aggregate (modern AggregateRoot):**
+**4. Define the Order aggregate (modern AggregateRoot):**
 ```java
 public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
     private boolean confirmed;
@@ -546,7 +552,7 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
 }
 ```
 
-**4. Configure the StatefulAggregateRepository (registers AggregateType with EventStore):**
+**5. Configure the StatefulAggregateRepository (registers AggregateType with EventStore):**
 ```java
 @Configuration
 public class OrderAggregateConfig {
@@ -565,7 +571,7 @@ public class OrderAggregateConfig {
 }
 ```
 
-**5. Send commands via CommandBus (from REST controller):**
+**6. Send commands via CommandBus (from REST controller):**
 ```java
 @RestController
 public class OrderController {
@@ -586,7 +592,7 @@ public class OrderController {
 }
 ```
 
-**6. Handle commands with AnnotatedCommandHandler:**
+**7. Handle commands with AnnotatedCommandHandler:**
 ```java
 @Service
 public class OrderCommandHandler extends AnnotatedCommandHandler {
@@ -619,7 +625,7 @@ public class OrderCommandHandler extends AnnotatedCommandHandler {
 }
 ```
 
-**7. React to events for external integration (EventProcessor):**
+**8. React to events for external integration (EventProcessor):**
 ```java
 @Service
 public class OrderFulfillmentProcessor extends EventProcessor {
@@ -660,7 +666,7 @@ public class OrderFulfillmentProcessor extends EventProcessor {
 }
 ```
 
-**8. Update projections with ViewEventProcessor (low-latency):**
+**9. Update projections with ViewEventProcessor (low-latency):**
 ```java
 @Service
 public class OrderDashboardProjection extends ViewEventProcessor {
