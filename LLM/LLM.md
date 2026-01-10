@@ -355,7 +355,7 @@ public class OrderProcessor {
     // Queue messages
     @Transactional
     public void scheduleProcessing(OrderId orderId) {
-        queues.queueMessage(QueueName.of("orders"), new ProcessOrder(orderId), unitOfWork);
+        queues.queueMessage(QueueName.of("orders"), new ProcessOrder(orderId));
     }
 
     // Consume messages
