@@ -161,7 +161,7 @@ public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
 ```java
 // Package: dk.trustworks.essentials.components.foundation.messaging.queue
 public interface DurableQueues {
-    QueueEntryId queueMessage(QueueName queueName, Message message, UnitOfWork uow);
+    QueueEntryId queueMessage(QueueName queueName, Message message);
     DurableQueueConsumer consumeFromQueue(ConsumeFromQueue consumeFromQueue);
 }
 ```
