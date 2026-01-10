@@ -1,5 +1,7 @@
 # Components - LLM Reference
 
+> Quick reference for LLMs. For detailed explanations, see [components/README.md](../components/README.md).
+
 ## TOC
 - [Quick Facts](#quick-facts)
 - [Component Matrix](#component-matrix)
@@ -13,19 +15,20 @@
 - [UI Components](#ui-components)
 - [Common Patterns](#common-patterns)
 - [Gotchas](#gotchas)
+- [See Also](#see-also)
 
 ## Quick Facts
 
-Advanced building blocks for distributed systems, event sourcing, and microservices.
-
 | Aspect | Details |
 |--------|---------|
-| **Base Package** | `dk.trustworks.essentials.components` |
+| **Package** | `dk.trustworks.essentials.components` |
 | **GroupId** | `dk.trustworks.essentials` |
-| **Scope** | All framework deps are `provided` |
-| **Philosophy** | Intra-service coordination (same service, shared database) |
+| **Purpose** | Distributed coordination, event sourcing, CQRS via existing database |
+| **Scope** | Intra-service coordination (same service instances, shared DB) |
+| **Framework Deps** | All `provided` (Spring, JDBI, MongoDB optional) |
+| **Status** | Work-in-progress |
 
-Status: Work-in-progress
+**Philosophy:** Use existing PostgreSQL/MongoDB for distributed patterns instead of adding Redis/Kafka/EventStoreDB for intra-service needs.
 
 ---
 
@@ -51,7 +54,7 @@ Status: Work-in-progress
 | | `kotlin-eventsourcing` | Kotlin DSL for event sourcing                                                 | Any | [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) |
 | **UI** | `vaadin-ui` | Vaadin UI components                                                          | N/A | [LLM-vaadin-ui.md](LLM-vaadin-ui.md) |
 
-**Scope Note**: Components designed for **intra-service** coordination (multiple instances of SAME service sharing a database). For cross-service messaging (Sales ↔ Billing ↔ Shipping), use Kafka/RabbitMQ/Zookeeper.
+**Scope:** Intra-service coordination (multiple instances of SAME service sharing DB). For cross-service messaging, use Kafka/RabbitMQ.
 
 ---
 
@@ -59,32 +62,31 @@ Status: Work-in-progress
 
 ### ⚠️ Critical: SQL/NoSQL Injection Risk
 
-Components allow customization of table/column/index/function/collection names that are used with **String concatenation** → SQL/NoSQL injection risk.
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL/NoSQL injection.
+Components use **String concatenation** for customizable table/column/index/function/collection names → SQL/NoSQL injection risk.
 
-**Responsibility:** Users MUST sanitize all:
-- API input parameters
+Essentials applies naming convention validation (initial layer), **NOT exhaustive protection**.
+
+**Your Responsibility:** NEVER use unsanitized user input for:
 - Table/column/index/function names (PostgreSQL)
 - Collection names (MongoDB)
-- Configuration values
-
-**Defense:** Essentials applies naming conventions (initial layer), but **NOT exhaustive protection**.
+- Configuration values from external sources
 
 ### Safe Patterns
 
 ```java
-// ✅ Safe - Controlled, predefined names
+// PostgreSQL queue example
+// Package: dk.trustworks.essentials.components.queue.postgresql
+
+// ✅ Safe - Hardcoded only
 PostgresqlDurableQueues.builder()
-    .setSharedQueueTableName("durable_queues");  // Fixed string
+    .setSharedQueueTableName("durable_queues");
 
+// ✅ Safe - Validate config values
+PostgresqlUtil.checkIsValidTableOrColumnName(tableName);  // Basic validation
+MongoUtil.checkIsValidCollectionName(collectionName);     // Basic validation
 
-// ✅ Safe - Validation
-PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-MongoUtil.checkIsValidCollectionName(collectionName);
-
-// ❌ Dangerous - Never use user input directly
-var tableName = userInput + "_events";  // SQL injection risk!
-var collectionName = userInput + "_queue"; // NoSQL injection risk!
+// ❌ DANGEROUS - Never use user input
+var tableName = userInput + "_events";  // SQL injection!
 ```
 
 ---
@@ -125,19 +127,19 @@ var collectionName = userInput + "_queue"; // NoSQL injection risk!
 ## Foundation
 
 **Modules:** `foundation-types`, `foundation`, `foundation-test`
-**Detailed Docs:** [LLM-foundation.md](LLM-foundation.md), [LLM-foundation-types.md](LLM-foundation-types.md), [LLM-foundation-test.md](LLM-foundation-test.md)
+**Docs:** [LLM-foundation.md](LLM-foundation.md), [LLM-foundation-types.md](LLM-foundation-types.md), [LLM-foundation-test.md](LLM-foundation-test.md)
 
 ### Core Abstractions
 
-Package: `dk.trustworks.essentials.components.foundation`
+Base package: `dk.trustworks.essentials.components.foundation`
 
-| Pattern | Package | Key Interface                         | Purpose |
-|---------|---------|---------------------------------------|---------|
-| **Transactions** | `transaction` | `UnitOfWorkFactory<UOW>`, `UnitOfWork` | Technology-agnostic transaction management |
-| **Messaging** | `messaging.queue` | `DurableQueues`                       | Point-to-point, At-Least-Once delivery |
-| **Locking** | `fencedlock` | `FencedLockManager`                   | Distributed locking with fence tokens |
-| **Inbox/Outbox** | `messaging.eip.store_and_forward` | `Inbox`, `Outbox`                     | Store-and-forward pattern |
-| **Command Bus** | `reactive.command` | `DurableLocalCommandBus`              | CommandBus with durable sendAndDontWait |
+| Pattern | Package Suffix | Key Interface | Purpose |
+|---------|----------------|---------------|---------|
+| **Transactions** | `.transaction` | `UnitOfWorkFactory<UOW>`, `UnitOfWork` | Tech-agnostic transaction mgmt |
+| **Messaging** | `.messaging.queue` | `DurableQueues` | Point-to-point, At-Least-Once |
+| **Locking** | `.fencedlock` | `FencedLockManager` | Distributed locks w/ fence tokens |
+| **Inbox/Outbox** | `.messaging.eip.store_and_forward` | `Inbox`, `Outbox` | Store-and-forward EIP |
+| **Command Bus** | `.reactive.command` | `DurableLocalCommandBus` | Durable sendAndDontWait |
 
 ### Pattern: UnitOfWork
 
@@ -152,9 +154,9 @@ public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
 ```
 
 **Implementations:**
-- `JdbiUnitOfWorkFactory` - Direct JDBI transactions
-- `SpringTransactionAwareJdbiUnitOfWorkFactory` - Spring-managed JDBI transactions
-- `SpringMongoTransactionAwareUnitOfWorkFactory` - Spring-managed MongoDB transactions
+- `JdbiUnitOfWorkFactory` - JDBI
+- `SpringTransactionAwareJdbiUnitOfWorkFactory` - Spring + JDBI
+- `SpringMongoTransactionAwareUnitOfWorkFactory` - Spring + MongoDB
 
 ### Pattern: DurableQueues
 
@@ -182,21 +184,22 @@ public interface FencedLockManager {
 }
 ```
 
-- **Based on**: Martin Kleppmann's fenced token pattern
-- **Scope**: Intra-service coordination only (same service instances)
-- **Token**: Monotonically increasing `Long` fence token
+- Based on Martin Kleppmann's fenced token pattern
+- Scope: Intra-service only (same service instances)
+- Token: Monotonic `Long` fence token
 
 ### Foundation Types
 
 Package: `dk.trustworks.essentials.components.foundation.types`
 
-**Common Types:**
-- `CorrelationId` - Cross-service correlation
-- `EventId` - Unique event identifier
-- `Tenant`, `TenantId` - Multitenancy support
-- `SubscriberId` - Subscription identifier
-- `GlobalEventOrder`, `EventOrder` - Event ordering
-- `AggregateType`, `EventName`, `EventTypeOrName` - Event Store types
+| Type | Purpose |
+|------|---------|
+| `CorrelationId` | Cross-service correlation |
+| `EventId` | Unique event ID |
+| `Tenant`, `TenantId` | Multitenancy |
+| `SubscriberId` | Subscription ID |
+| `GlobalEventOrder`, `EventOrder` | Event ordering |
+| `AggregateType`, `EventName`, `EventTypeOrName` | Event Store types |
 
 ---
 
@@ -205,67 +208,62 @@ Package: `dk.trustworks.essentials.components.foundation.types`
 ### Event Store
 
 **Module:** `postgresql-event-store`
-**Detailed Docs:** [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md)
+**Docs:** [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md)
 
-#### Core Classes
+#### Core API
 
 Package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`
 
 ```java
 public interface EventStore<CONFIG extends EventStoreEventStreamConfiguration> {
     AggregateEventStream<AGGREGATE_ID> fetchStream(
-        AggregateType aggregateType,
-        AGGREGATE_ID aggregateId);
+        AggregateType aggregateType, AGGREGATE_ID aggregateId);
 
     AggregateEventStream<AGGREGATE_ID> appendToStream(
-        AggregateType aggregateType,
-        AGGREGATE_ID aggregateId,
-        Optional<EventOrder> expectedEventOrder,
-        List<?> events);
+        AggregateType aggregateType, AGGREGATE_ID aggregateId,
+        Optional<EventOrder> expectedEventOrder, List<?> events);
 }
 
-// Main implementation
+// Implementation
 public class PostgresqlEventStore<CONFIG extends EventStoreEventStreamConfiguration>
-    implements EventStore<CONFIG> {
-    // ...
-}
+    implements EventStore<CONFIG>
 ```
 
 #### Key Features
 
-| Feature         | Type | Description                                                                   |
-|-----------------|------|-------------------------------------------------------------------------------|
-| **Event Streams** | Per-aggregate | Separate table per `AggregateType`                                            |
-| **Ordering**    | Dual | `EventOrder` (per-aggregate, strict) + `GlobalEventOrder` (per-type, may gap) |
-| **Subscriptions** | Durable | Exclusive/non-exclusive with `ResumePoint` tracking                           |
-| **Gap Handling** | Automatic | Detects transient (concurrent tx) vs permanent (rollback)                     |
-| **Interceptors** | Yes | Pre/post append, publish to `EventBus`                                        |
-| **Multitenancy** | Built-in | Per-tenant events in shared event tables                                      |
-| **Event-driven processing** | `EventProcessor` | Event-driven processing with guaranteed delivery and replay support |
+| Feature | Description |
+|---------|-------------|
+| **Event Streams** | Separate table per `AggregateType` |
+| **Ordering** | `EventOrder` (per-aggregate, strict) + `GlobalEventOrder` (per-type, may gap) |
+| **Subscriptions** | Exclusive/non-exclusive w/ `ResumePoint` tracking |
+| **Gap Handling** | Detects transient (concurrent tx) vs permanent (rollback) |
+| **Interceptors** | Pre/post append, publish to `EventBus` |
+| **Multitenancy** | Per-tenant events in shared tables |
+| **Event Processing** | `EventProcessor` w/ guaranteed delivery, replay |
 
 
 #### Setup
 
 ```java
+// Package: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql
 var eventStore = new PostgresqlEventStore<>(
-    unitOfWorkFactory,
-    new MyPersistableEventMapper(),
-    EventStoreEventStreamConfigurationFactory.standardConfiguration(
-        AggregateType.of("Orders"),
-        idColumnType,
-        jsonSerializer
-    )
-);
+    eventStoreManagedUnitOfWorkFactory,
+    separateTablePerAggregateTypePersistenceStrategy,
+    Optional.of(eventStoreEventBus),
+    eventStreamGapHandlerFactory,
+    eventStoreSubscriptionObserver);
+
+// Register aggregate type (required before persisting events)
+eventStore.addAggregateEventStreamConfiguration(
+    AggregateType.of("Orders"), OrderId.class);
 ```
 
 ### Queue
 
 **Module:** `postgresql-queue`
-**Detailed Docs:** [LLM-postgresql-queue.md](LLM-postgresql-queue.md)
+**Docs:** [LLM-postgresql-queue.md](LLM-postgresql-queue.md)
 
-#### Core Class
-
-Package: `dk.trustworks.essentials.components.foundation.postgresql`
+Package: `dk.trustworks.essentials.components.queue.postgresql`
 
 ```java
 public class PostgresqlDurableQueues implements DurableQueues {
@@ -275,19 +273,17 @@ public class PostgresqlDurableQueues implements DurableQueues {
 }
 ```
 
-- **Table**: Single shared table for all queues (customizable name)
-- **Delivery**: At-Least-Once, redelivery on timeout
-- **DLQ**: Automatic after max retries
-- **Ordering**: Via `OrderedMessage` wrapper
+- Table: Single shared table (customizable name)
+- Delivery: At-Least-Once w/ redelivery on timeout
+- DLQ: Automatic after max retries
+- Ordering: Via `OrderedMessage` wrapper
 
 ### Distributed Lock
 
 **Module:** `postgresql-distributed-fenced-lock`
-**Detailed Docs:** [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md)
+**Docs:** [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md)
 
-#### Core Class
-
-Package: `dk.trustworks.essentials.components.foundation.postgresql`
+Package: `dk.trustworks.essentials.components.distributed.fencedlock.postgresql`
 
 ```java
 public class PostgresqlFencedLockManager implements FencedLockManager {
@@ -298,24 +294,20 @@ public class PostgresqlFencedLockManager implements FencedLockManager {
 }
 ```
 
-- **Token**: Monotonically increasing via PostgreSQL sequence
-- **Timeout**: Automatic release after inactivity
-- **Scope**: Intra-service only
+- Token: Monotonic via PostgreSQL sequence
+- Timeout: Auto-release after inactivity
+- Scope: Intra-service only
 
 ### Document Database
 
 **Module:** `postgresql-document-db`
-**Detailed Docs:** [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md)
+**Docs:** [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md)
 
-#### Core Class
+Package: `dk.trustworks.essentials.components.document_db.postgresql`
 
-Package: `dk.trustworks.essentials.components.foundation.postgresql`
-
-```java
-public class PostgresqlDocumentDb implements DocumentDb {
-    // JSONB-based document storage in PostgreSQL
-    // Supports indexing, querying, versioning
-}
+```kotlin
+// JSONB-based document storage w/ indexing, querying, versioning (Kotlin)
+class PostgresqlDocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID : Any> : DocumentDbRepository<ENTITY, ID>
 ```
 
 ---
@@ -325,41 +317,35 @@ public class PostgresqlDocumentDb implements DocumentDb {
 ### Queue
 
 **Module:** `springdata-mongo-queue`
-**Detailed Docs:** [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md)
+**Docs:** [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md)
 
-#### Core Class
-
-Package: `dk.trustworks.essentials.components.foundation.mongodb`
+Package: `dk.trustworks.essentials.components.queue.springdata.mongodb`
 
 ```java
-public class MongoDBDurableQueues implements DurableQueues {
-    public MongoDBDurableQueues(
+public class MongoDurableQueues implements DurableQueues {
+    public MongoDurableQueues(
         UnitOfWorkFactory<? extends SpringMongoTransactionAwareUnitOfWork> unitOfWorkFactory,
-        MongoTemplate mongoTemplate,
-        MongoConverter mongoConverter,
+        MongoTemplate mongoTemplate, MongoConverter mongoConverter,
         Optional<String> sharedQueueCollectionName);
 }
 ```
 
-- **Collection**: Single collection for all queues
-- **Delivery**: At-Least-Once
-- **Ordering**: Via `OrderedMessage`
+- Collection: Single collection for all queues
+- Delivery: At-Least-Once
+- Ordering: Via `OrderedMessage`
 
 ### Distributed Lock
 
 **Module:** `springdata-mongo-distributed-fenced-lock`
-**Detailed Docs:** [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md)
+**Docs:** [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md)
 
-#### Core Class
-
-Package: `dk.trustworks.essentials.components.foundation.mongodb`
+Package: `dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo`
 
 ```java
 public class MongoFencedLockManager implements FencedLockManager {
     public MongoFencedLockManager(
         UnitOfWorkFactory<? extends SpringMongoTransactionAwareUnitOfWork> unitOfWorkFactory,
-        MongoTemplate mongoTemplate,
-        Optional<String> fencedLocksCollectionName,
+        MongoTemplate mongoTemplate, Optional<String> fencedLocksCollectionName,
         Duration lockTimeOut);
 }
 ```
@@ -368,32 +354,32 @@ public class MongoFencedLockManager implements FencedLockManager {
 
 ## Spring Boot Starters
 
-**Modules:** `spring-boot-starter-postgresql`, `spring-boot-starter-postgresql-event-store`, `spring-boot-starter-mongodb`, `spring-boot-starter-admin-ui`
-**Detailed Docs:** [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
+**Docs:** [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
 
 ### Starter Matrix
 
 | Starter | Auto-Configures | Configuration Prefix |
 |---------|----------------|---------------------|
-| `spring-boot-starter-postgresql` | Jdbi, FencedLock, Queues, Inbox/Outbox, CommandBus | `essentials.postgresql` |
-| `spring-boot-starter-postgresql-event-store` | Above + EventStore, Subscriptions | `essentials.event-store` |
-| `spring-boot-starter-mongodb` | MongoTemplate, FencedLock, Queues, Inbox/Outbox | `essentials.mongodb` |
+| `spring-boot-starter-postgresql` | Jdbi, FencedLock, Queues, Inbox/Outbox, CommandBus | `essentials.` |
+| `spring-boot-starter-postgresql-event-store` | Above + EventStore, Subscriptions | `essentials.eventstore` |
+| `spring-boot-starter-mongodb` | MongoTemplate, FencedLock, Queues, Inbox/Outbox | `essentials.` |
 | `spring-boot-starter-admin-ui` | Vaadin admin views for EventStore | `essentials.admin-ui` |
 
 ### Configuration Example (PostgreSQL Event Store)
 
 ```yaml
 essentials:
-  event-store:
-    subscriber-id: "order-service-1"
-    event-table-name-prefix: "events_"
-    tenant:
-      name: "default"
-  postgresql:
-    queue-table-name: "durable_queues"
-    fenced-lock-table-name: "fenced_locks"
-    inbox-table-name: "inbox"
-    outbox-table-name: "outbox"
+  eventstore:
+    identifier-column-type: "text"
+    json-column-type: "jsonb"
+    subscription-manager:
+      event-store-polling-batch-size: 10
+  fenced-lock-manager:
+    fenced-locks-table-name: "fenced_locks"
+    lock-time-out: "15s"
+  durable-queues:
+    shared-queue-table-name: "durable_queues"
+    transactional-mode: "single-operation-transaction"
 ```
 
 ### Override Pattern
@@ -415,80 +401,69 @@ public EventStore<EventStoreEventStreamConfiguration> myCustomEventStore() {
 ### Eventsourced Aggregates
 
 **Module:** `eventsourced-aggregates`
-**Detailed Docs:** [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md)
+**Docs:** [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md)
 
-#### Core Classes
-
-Package: `dk.trustworks.essentials.components.eventsourced.aggregates`
+Package: `dk.trustworks.essentials.components.eventsourced.aggregates.stateful`
 
 ```java
-// Stateful aggregate
-public interface StatefulAggregate<ID, EVENT_TYPE, AGGREGATE> {
-    ID aggregateId();
-    Optional<EventOrder> eventOrderOfLastRehydratedEvent();
-    AGGREGATE rehydrate(AggregateEventStream<ID> eventStream);
-}
-
-// Event-sourced aggregate (modern) + StatefulAggregateRepository
-public interface Aggregate<ID, EVENT_TYPE, AGGREGATE>
-    extends StatefulAggregate<ID, EVENT_TYPE, AGGREGATE> {
-    // Combines StatefulAggregate with event application
+// Stateful aggregate pattern
+public interface StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_TYPE>
+    extends Aggregate<ID, AGGREGATE_TYPE> {
+    EventsToPersist<ID, EVENT_TYPE> getUncommittedChanges();
+    void markChangesAsCommitted();
 }
 ```
 
-**Implementations:**
-- `StatefulAggregateInstanceFactory` - Creates aggregate instances
-- `AggregateRepository` / `StatefulAggregateRepository` - Load/save aggregates
-- `Decider` / `EventStreamDecider` + `EventStreamEvolver` - Functional style Decider / Evolver patterns
+Package: `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern`
+
+```java
+// Modern event-sourced aggregate w/ @EventHandler
+public class AggregateRoot<ID, EVENT_TYPE, AGGREGATE_TYPE>
+    implements StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_TYPE>
+```
+
+**Key Types:**
+- `StatefulAggregateInstanceFactory` - Create instances
+- `StatefulAggregateRepository` - Load/save
+- `Decider`, `EventStreamDecider`, `EventStreamEvolver` - Functional patterns
 
 ### Kotlin DSL
 
 **Module:** `kotlin-eventsourcing`
-**Detailed Docs:** [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md)
-
-#### Core DSL
+**Docs:** [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md)
 
 Package: `dk.trustworks.essentials.components.kotlin.eventsourcing`
 
-`Decider` + `Evolver` - Functional style Decider / Evolver patterns
-
 ```kotlin
+// Decider pattern - command → event
 class ConfirmOrderDecider : Decider<ConfirmOrder, OrderEvent> {
     private val evolver = OrderStateEvolver()
-
     override fun handle(cmd: ConfirmOrder, events: List<OrderEvent>): OrderEvent? {
         val state = Evolver.applyEvents(evolver, null, events)
-
         if (state == null) throw RuntimeException("Order does not exist")
         if (state.status == OrderStatus.CONFIRMED) return null // Idempotent
-        if (!state.canBeConfirmed())
-            throw RuntimeException("Cannot confirm order in ${state.status}")
-
+        if (!state.canBeConfirmed()) throw RuntimeException("Cannot confirm")
         return OrderConfirmed(cmd.id)
     }
-
     override fun canHandle(cmd: Any): Boolean = cmd is ConfirmOrder
 }
 
+// Evolver pattern - event → state
 class OrderStateEvolver : Evolver<OrderEvent, OrderState> {
-    override fun applyEvent(event: OrderEvent, state: OrderState?): OrderState? {
-        return when (event) {
+    override fun applyEvent(event: OrderEvent, state: OrderState?): OrderState? =
+        when (event) {
             is OrderCreated -> OrderState.created(event.id)
             is OrderConfirmed -> state?.copy(status = OrderStatus.CONFIRMED)
             is OrderShipped -> state?.copy(status = OrderStatus.SHIPPED)
-            is OrderCancelled -> state?.copy(
-                status = OrderStatus.CANCELLED,
-                cancelReason = event.reason
-            )
+            is OrderCancelled -> state?.copy(status = OrderStatus.CANCELLED, cancelReason = event.reason)
             else -> state
         }
-    }
 }
 ```
 
-- **Type-safe**: Compile-time event type checking
-- **Concise**: Reduces boilerplate vs Java
-- **Pattern Matching**: Uses Kotlin `when` semantics
+- Type-safe compile-time checking
+- Concise vs Java
+- Kotlin `when` pattern matching
 
 ---
 
@@ -497,18 +472,13 @@ class OrderStateEvolver : Evolver<OrderEvent, OrderState> {
 ### Vaadin UI
 
 **Module:** `vaadin-ui`
-**Detailed Docs:** [LLM-vaadin-ui.md](LLM-vaadin-ui.md)
-
-#### Core Components
+**Docs:** [LLM-vaadin-ui.md](LLM-vaadin-ui.md)
 
 Package: `dk.trustworks.essentials.components.vaadin`
 
-- **EventStoreView** - Browse event streams
-- **SubscriptionView** - Monitor subscriptions
-- **AggregateView** - View aggregate state
-- ...
+Key views: `EventStoreView`, `SubscriptionView`, `AggregateView`
 
-**Usage**: Include `spring-boot-starter-admin-ui` for auto-configured admin interface.
+**Usage:** Include `spring-boot-starter-admin-ui` for auto-configured admin interface.
 
 ---
 
@@ -562,40 +532,66 @@ Package: `dk.trustworks.essentials.components.vaadin`
 
 ---
 
+## Gotchas
+
+### Common Mistakes
+
+**1. Using User Input for Table/Collection Names**
+- ❌ `queueTableName = userInput + "_queue"` → SQL injection
+- ✅ Use hardcoded values or validate: `PostgresqlUtil.checkIsValidTableOrColumnName(name)`
+
+**2. Forgetting AggregateType Registration**
+- ❌ Appending events before calling `eventStore.addAggregateEventStreamConfiguration()`
+- ✅ Register aggregate types at startup before persisting events (or use a repository / adapter concept that auto registers the aggregate type)
+
+**3. Cross-Service Use of FencedLocks**
+- ❌ Using `FencedLockManager` across different services
+- ✅ Only use within same service instances sharing database
+
+**4. Non-Idempotent Event Handlers**
+- ❌ EventProcessor handlers with side effects that can't be repeated
+- ✅ Make handlers idempotent (At-Least-Once delivery = duplicates possible)
+
+**5. Missing UnitOfWork/Transaction**
+- ❌ Calling components outside transaction boundaries
+- ✅ Use `UnitOfWorkFactory.usingUnitOfWork()` or Spring `@Transactional`
+
+**6. Ignoring Gap Handling**
+- ❌ Assuming `GlobalEventOrder` is always sequential
+- ✅ Use gap handlers; expect transient gaps from concurrent transactions
+
+**7. MongoDB for Event Sourcing**
+- ❌ Expecting `EventStore` implementation for MongoDB
+- ✅ EventStore only supports PostgreSQL; use MongoDB for foundation only
+
+**8. Blocking Spring Boot Startup**
+- ❌ Long-running subscription handlers in `@PostConstruct`
+- ✅ Use async subscription modes or background threads
+
+---
+
 ## See Also
 
-### Component Documentation
-
-**Foundation:**
+### Module LLM Docs
 - [LLM-foundation.md](LLM-foundation.md) - UnitOfWork, DurableQueues, FencedLock, Inbox/Outbox
-- [LLM-foundation-types.md](LLM-foundation-types.md) - Common types (CorrelationId, EventId, etc.)
+- [LLM-foundation-types.md](LLM-foundation-types.md) - Common types
 - [LLM-foundation-test.md](LLM-foundation-test.md) - Test utilities
-
-**PostgreSQL:**
-- [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md) - Event Store details
-- [LLM-postgresql-queue.md](LLM-postgresql-queue.md) - Queue implementation
-- [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md) - Lock implementation
-- [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) - Document DB details
-
-**Spring:**
-- [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md) - Spring transaction integration
-- [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) - All Spring Boot starters
-
-**MongoDB:**
-- [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md) - MongoDB queue implementation
-- [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) - MongoDB lock implementation
-
-**Event Sourcing:**
-- [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) - Aggregate framework
-- [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) - Kotlin DSL
-
-**UI:**
-- [LLM-vaadin-ui.md](LLM-vaadin-ui.md) - Vaadin admin components
+- [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md) - Event Store
+- [LLM-postgresql-queue.md](LLM-postgresql-queue.md) - PostgreSQL queues
+- [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL locks
+- [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) - Document DB
+- [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md) - Spring integration
+- [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) - Spring Boot starters
+- [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md) - MongoDB queues
+- [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) - MongoDB locks
+- [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) - Aggregates
+- [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) - Kotlin DSL for event sourcing
+- [LLM-vaadin-ui.md](LLM-vaadin-ui.md) - Vaadin UI
 
 ### README Files
-- [components/README.md](../components/README.md) - Overview of all components
-- Individual module READMEs in `components/<module-name>/README.md`
+- [components/README.md](../components/README.md) - Complete overview
+- Module READMEs: `components/<module>/README.md`
 
-### Core Modules
+### Core
 - [LLM.md](LLM.md) - Full library overview
-- [LLM-types-integrations.md](LLM-types-integrations.md) - Types framework integrations
+- [LLM-types-integrations.md](LLM-types-integrations.md) - Types integrations
