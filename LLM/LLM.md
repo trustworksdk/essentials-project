@@ -255,26 +255,72 @@ Domain modeling with event sourcing:
 
 ```java
 // 1. Define types
-public class OrderId extends CharSequenceType<OrderId> { /* ... */ }
+public class OrderId extends CharSequenceType<OrderId> implements Identifier {
+    public OrderId(CharSequence value) { super(value); }
+    public OrderId(String value) { super(value); }  // Required for Jackson 2.18+
+
+    public static OrderId of(CharSequence value) { return new OrderId(value); }
+    public static OrderId random() { return new OrderId(RandomIdGenerator.generate()); }
+}
 
 // 2. Define events
 public interface OrderEvent { OrderId orderId(); }
 public record OrderPlaced(OrderId orderId, CustomerId customerId) implements OrderEvent {}
+public record OrderConfirmed(OrderId orderId) implements OrderEvent {}
 
 // 3. Define aggregate
 public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
+    private boolean confirmed;
+    
+    public Order() {} // For snapshot deserialization
+    // Rehydration constructor
+    public Order(OrderId orderId) {
+        super(orderId);
+    }
+    // Business constructor
     public Order(OrderId orderId, CustomerId customerId) {
         super(orderId);
         apply(new OrderPlaced(orderId, customerId));
     }
+    // Business method - idempotent
+    public void confirm() {
+        if (confirmed) return;  // Idempotent: no-op if already confirmed
+        apply(new OrderConfirmed(aggregateId()));
+    }
+
+    // Event handlers - update internal state
+    @EventHandler
+    private void on(OrderPlaced event) {
+        this.confirmed = false;
+        // Note: You only need to extract properties required for later validations
+    }
 
     @EventHandler
-    private void on(OrderPlaced event) { /* update state */ }
+    private void on(OrderConfirmed event) {
+        this.confirmed = true;
+    }
 }
 
-// 4. Use repository (auto-configured by Spring Boot starter)
+// 4. Configured StatefulAggregateRepository for Order aggregate
+@Configuration
+public class OrderAggregateConfig {
+    @Bean
+    public StatefulAggregateRepository<OrderId, OrderEvent, Order> orderRepository(
+            ConfigurableEventStore<?> eventStore) {
+        // Registers AggregateType "Orders" with the EventStore
+        return StatefulAggregateRepository.from(
+                eventStore,
+                AggregateType.of("Orders"),
+                StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
+                Order.class
+        );
+    }
+}
+
+// 5. Use repository (you can also use CommandBus to send commands and have them handled in a UnitOfWork)
 @Service
 public class OrderService {
+    @Autowired
     private final StatefulAggregateRepository<OrderId, OrderEvent, Order> repository;
 
     @Transactional
@@ -282,6 +328,14 @@ public class OrderService {
         var order = new Order(OrderId.random(), customerId);
         repository.save(order); // Events persisted automatically
         return order.aggregateId();
+    }
+
+    @Transactional
+    void confirmOrder(OrderId orderId) {
+        // Load aggregate, apply business logic (confirm() is idempotent)
+        var order = repository.load(orderId);
+        order.confirm();  // Idempotent: no-op if already confirmed
+        // Since we're using StatefulAggregate then, any aggregate changes (Events applied) will automatically be persisted when the transaction/UnitOfWork commits 
     }
 }
 ```
