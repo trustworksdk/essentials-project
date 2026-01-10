@@ -144,11 +144,13 @@ Strongly-typed wrappers around primitive values:
 // Use:
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
     public OrderId(CharSequence value) { super(value); }
+    public OrderId(String value) { super(value); }
     public static OrderId of(CharSequence value) { return new OrderId(value); }
 }
 
 public class CustomerId extends CharSequenceType<CustomerId> implements Identifier {
     public CustomerId(CharSequence value) { super(value); }
+    public CustomerId(String value) { super(value); }
     public static CustomerId of(CharSequence value) { return new CustomerId(value); }
 }
 

@@ -16,7 +16,7 @@ This library provides an **experimental** Kotlin-focused `Decider`/`Evolver` app
   - [Implementing a Decider](#implementing-a-decider)
   - [Why Single Event Return](#why-single-event-return)
 - [Evolver](#evolver)
-  - [Interface Definition](#interface-definition-1)
+  - [Interface Definition](#interface-definition)
   - [State Class Example](#state-class-example)
   - [Evolver Implementation](#evolver-implementation)
   - [Using Evolver in Deciders](#using-evolver-in-deciders)
