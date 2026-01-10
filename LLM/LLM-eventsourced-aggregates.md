@@ -1,11 +1,11 @@
 # EventSourced Aggregates - LLM Reference
 
-> See [README](../components/eventsourced-aggregates/README.md) for detailed explanations and motivation.
+> Quick reference for LLMs. For detailed explanations, see [README](../components/eventsourced-aggregates/README.md).
 
 ## Quick Facts
-- **Package**: `dk.trustworks.essentials.components.eventsourced.aggregates`
+- **Base package**: `dk.trustworks.essentials.components.eventsourced.aggregates`
 - **Purpose**: Event-sourced aggregate patterns for DDD
-- **Deps**: postgresql-event-store, foundation, immutable-jackson
+- **Deps**: postgresql-event-store (EventStore, AggregateType), foundation (UnitOfWork), immutable-jackson
 - **Status**: WORK-IN-PROGRESS
 
 ## Maven
@@ -18,50 +18,53 @@
 
 ## TOC
 - [Pattern Selection](#pattern-selection)
-- [1. EventStreamDecider (Functional)](#1-eventstreamdecider-functional)
-- [2. Decider Pattern (Typed Errors)](#2-decider-pattern-typed-errors)
-- [3. Modern AggregateRoot (OOP)](#3-modern-aggregateroot-oop)
-- [4. FlexAggregate (Explicit Control)](#4-flexaggregate-explicit-control)
+- [EventStreamDecider (Functional)](#eventstreamdecider-functional)
+- [Decider Pattern (Typed Errors)](#decider-pattern-typed-errors)
+- [Modern AggregateRoot (OOP)](#modern-aggregateroot-oop)
+- [FlexAggregate (Explicit Control)](#flexaggregate-explicit-control)
 - [StatefulAggregateRepository](#statefulaggregaterepository)
 - [Aggregate Snapshots](#aggregate-snapshots)
 - [In-Memory Projections](#in-memory-projections)
-- [Common Patterns & Gotchas](#common-patterns--gotchas)
-- ⚠️ [Security](#security)
+- [Common Patterns](#common-patterns)
+- [Security](#security)
 
 ## Pattern Selection
 
-| Pattern | State                                                        | Testing | Best For |
-|---------|--------------------------------------------------------------|---------|----------|
-| **EventStreamDecider** | Immutable, event stream                                      | Given-When-Then | Event Modeling, functional, slicing |
-| **Decider** | Immutable, external                                          | Result types | Typed errors, enterprise |
-| **Modern AggregateRoot** | Mutable `StatefulAggregate`, internal                        | Unit tests | OOP, Spring Boot |
-| **Modern + WithState** | Mutable `StatefulAggregate`, state separated                 | Unit tests | Complex state separation |
-| **FlexAggregate** | Immutable, internal                                          | Functional | Explicit event control |
-| **Classic AggregateRoot** | Mutable `StatefulAggregate`, requires Event base inheritance | Unit tests | Legacy (avoid for new) |
+| Pattern | State | Testing | Best For |
+|---------|-------|---------|----------|
+| **EventStreamDecider** | Immutable, event stream | Given-When-Then | Event Modeling, functional, slicing |
+| **Decider** | Immutable, external | Result types | Typed errors, enterprise |
+| **Modern AggregateRoot** | Mutable, internal | Unit tests | OOP, Spring Boot |
+| **Modern + WithState** | Mutable, separated | Unit tests | Complex state separation |
+| **FlexAggregate** | Immutable, internal | Functional | Explicit event control |
+| **Classic AggregateRoot** | Mutable, requires Event base | Unit tests | Legacy (avoid for new) |
 
 All `StatefulAggregate` patterns use `StatefulAggregateRepository`.
 
 ---
 
-## 1. EventStreamDecider (Functional)
+## EventStreamDecider (Functional)
 
 **Interface**: `dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDecider`
 
 Pure functional, slice-based, ideal for Event Modeling. Returns single event (or none).
-The `handle` method receives:
-- **`command`**: The command to process
-- **`events`**: The complete event history for this aggregate (loaded from the EventStore).
 
 ### API
 ```java
 interface EventStreamDecider<COMMAND, EVENT> {
-    // Return Optional.of(event) if success
-    // Return Optional.empty() if idempotent
-    // Throw exception if invalid / business validation failed
     Optional<EVENT> handle(COMMAND command, List<EVENT> events);
     boolean canHandle(Class<?> command);
 }
 ```
+
+**Parameters**:
+- `command`: Command to process
+- `events`: Complete event history (loaded from EventStore)
+
+**Returns**:
+- `Optional.of(event)` - Success
+- `Optional.empty()` - Idempotent/no-op
+- Throws exception - Invalid/business validation failed
 
 ### Basic Decider
 ```java
@@ -72,7 +75,7 @@ public class CreateOrderDecider implements EventStreamDecider<CreateOrder, Order
 
         // Check idempotency
         if (events.stream().anyMatch(e -> e instanceof OrderCreated)) {
-            return Optional.empty(); // Already exists
+            return Optional.empty();
         }
 
         return Optional.of(new OrderCreated(cmd.orderId(), cmd.customerId()));
@@ -86,6 +89,11 @@ public class CreateOrderDecider implements EventStreamDecider<CreateOrder, Order
 ```
 
 ### State Validation with EventStreamEvolver
+
+**Interface**: `dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamEvolver`
+
+Reconstructs state by folding over events (left-fold pattern).
+
 ```java
 public class ConfirmOrderDecider implements EventStreamDecider<ConfirmOrder, OrderEvent> {
     private final OrderEvolver evolver = new OrderEvolver();
@@ -95,7 +103,7 @@ public class ConfirmOrderDecider implements EventStreamDecider<ConfirmOrder, Ord
         Optional<OrderState> state = EventStreamEvolver.applyEvents(evolver, events);
 
         if (state.isEmpty()) throw new IllegalStateException("Order not found");
-        if (state.get().status() == CONFIRMED) return Optional.empty(); // Idempotent
+        if (state.get().status() == CONFIRMED) return Optional.empty();
         if (!state.get().canBeConfirmed()) throw new IllegalStateException("Invalid status");
 
         return Optional.of(new OrderConfirmed(cmd.orderId()));
@@ -107,7 +115,7 @@ public class ConfirmOrderDecider implements EventStreamDecider<ConfirmOrder, Ord
     }
 }
 
-// EventStreamEvolver - reconstructs state from events (left-fold pattern)
+// EventStreamEvolver - reconstructs state
 public class OrderEvolver implements EventStreamEvolver<OrderEvent, OrderState> {
     @Override
     public Optional<OrderState> applyEvent(OrderEvent event, Optional<OrderState> current) {
@@ -115,20 +123,16 @@ public class OrderEvolver implements EventStreamEvolver<OrderEvent, OrderState> 
             case OrderCreated e -> Optional.of(OrderState.created(e.orderId(), e.customerId()));
             case OrderConfirmed e -> current.map(s -> s.withStatus(CONFIRMED));
             case OrderShipped e -> current.map(s -> s.withStatus(SHIPPED));
-            default -> current; // Ignore unknown
+            default -> current;
         };
     }
 }
 ```
 
-### Immutable State Pattern
+**Immutable State Pattern**:
 ```java
 // State as record - inherently immutable
-public record OrderState(
-    OrderId orderId,
-    CustomerId customerId,
-    OrderStatus status
-) {
+public record OrderState(OrderId orderId, CustomerId customerId, OrderStatus status) {
     public static OrderState created(OrderId id, CustomerId customerId) {
         return new OrderState(id, customerId, PENDING);
     }
@@ -144,19 +148,19 @@ public record OrderState(
 
 ### Spring Boot Wiring
 
-Configure a `EventStreamAggregateTypeConfiguration` per `AggregateType`.
-And a `EventStreamDeciderAndAggregateTypeConfigurator` which auto-wires `EventStreamAggregateTypeConfiguration`s and their deciders together.
+Configure `EventStreamAggregateTypeConfiguration` per `AggregateType`.
+Auto-wiring via `EventStreamDeciderAndAggregateTypeConfigurator`.
 
 **Parameters**:
 
 | Parameter | Purpose | Example |
 |-----------|---------|---------|
 | `aggregateType` | Aggregate identifier | `AggregateType.of("Orders")` |
-| `aggregateIdType` | ID type | `OrderId.java` |
-| `aggregateIdSerializer` | Serializer | `AggregateIdSerializer.serializerFor(...)` |
-| `deciderSupportsAggregateTypeChecker` | Decider filter | Check if cmd inherits from `OrderCommand` |
+| `aggregateIdType` | ID type | `OrderId.class` |
+| `aggregateIdSerializer` | Serializer | `AggregateIdSerializer.serializerFor(OrderId.class)` |
+| `deciderSupportsAggregateTypeChecker` | Decider filter | `HandlesCommandsThatInheritFromCommandType(OrderCommand.class)` |
 | `commandAggregateIdResolver` | Extract ID from cmd | `cmd -> ((OrderCommand) cmd).orderId()` |
-| `eventAggregateIdResolver` | Extract ID from event | `event -> ((OrderEvent) event).orderId() ` |
+| `eventAggregateIdResolver` | Extract ID from event | `event -> ((OrderEvent) event).orderId()` |
 
 ```java
 @Configuration
@@ -179,8 +183,8 @@ public class EventSourcingConfig {
             OrderId.class,
             AggregateIdSerializer.serializerFor(OrderId.class),
             new HandlesCommandsThatInheritFromCommandType(OrderCommand.class),
-            cmd -> ((OrderCommand) cmd).orderId(),      // Extract ID from command
-            event -> ((OrderEvent) event).orderId()     // Extract ID from event
+            cmd -> ((OrderCommand) cmd).orderId(),
+            event -> ((OrderEvent) event).orderId()
         );
     }
 
@@ -188,17 +192,15 @@ public class EventSourcingConfig {
     @Bean public ConfirmOrderDecider confirmOrderDecider() { return new ConfirmOrderDecider(); }
 }
 ```
-> 💡 Deciders can use `@Component`/`@Service` instead of `@Bean` methods.
-> 
+
 ### Command Sending
 
-Note: Assumes the `CommandBus` is configured with the `UnitOfWorkControllingCommandBusInterceptor`.
+Assumes `CommandBus` configured with `UnitOfWorkControllingCommandBusInterceptor`.
 
 ```java
 @Service
 public class OrderService {
     private final CommandBus commandBus;
-    private final UnitOfWorkFactory unitOfWorkFactory;
 
     public boolean createOrder(OrderId orderId, CustomerId customerId) {
         OrderCreated event = (OrderCreated) commandBus.send(new CreateOrder(orderId, customerId));
@@ -208,6 +210,9 @@ public class OrderService {
 ```
 
 ### Testing with GivenWhenThenScenario
+
+**Class**: `dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.test.GivenWhenThenScenario`
+
 ```java
 @Test
 void shouldCreateOrder() {
@@ -234,7 +239,7 @@ void shouldRejectInvalidTransition() {
     var scenario = new GivenWhenThenScenario<>(new ShipOrderDecider());
 
     scenario
-        .given(new OrderCreated(orderId, customerId)) // Not confirmed
+        .given(new OrderCreated(orderId, customerId))
         .when(new ShipOrder(orderId))
         .thenThrows(IllegalStateException.class);
 }
@@ -247,37 +252,26 @@ void shouldCreateOrderWithCustomAssertions() {
         .given()
         .when(new CreateOrder(orderId, customerId))
         .thenAssert(actualEvent -> {
-            if (actualEvent == null) {
-                throw new AssertionException("Expected an event but got null");
-            }
-            if (!(actualEvent instanceof OrderCreated)) {
-                throw new AssertionException("Expected OrderCreated but got " + actualEvent.getClass());
-            }
-            var created = (OrderCreated) actualEvent;
-            if (!created.orderId().equals(orderId)) {
-                throw new AssertionException("Order ID mismatch");
-            }
+            if (actualEvent == null) throw new AssertionException("Expected event");
+            if (!(actualEvent instanceof OrderCreated)) throw new AssertionException("Wrong type");
         });
 }
 ```
-### Why Single Event?
 
-Forces explicit event modeling instead of implementation steps:
+**Why Single Event?**
+
+Forces explicit event modeling over implementation steps:
 
 | Anti-pattern | Correct Pattern |
 |--------------|-----------------|
 | `CreateOrder` → `OrderCreated` + `ProductsAdded` | `OrderWithProductsPlaced` |
 | `RegisterCustomer` → `CustomerCreated` + `AddressAdded` | `CustomerRegistered` |
 
-**Benefits**: Clear intent, no event reuse, simpler evolution, Event Storming alignment.
-
-> 💡 Multiple events needed? Consider modeling business outcomes, not implementation steps.
-
-**Test refs**: [`EventStreamDeciderTest`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/eventstream/EventStreamDeciderTest.java), [`EventStreamDeciderIT`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/eventstream/EventStreamDeciderIT.java)
+**Test refs**: `EventStreamDeciderTest`, `EventStreamDeciderIT`
 
 ---
 
-## 2. Decider Pattern (Typed Errors)
+## Decider Pattern (Typed Errors)
 
 **Interface**: `dk.trustworks.essentials.components.eventsourced.aggregates.decider.Decider`
 
@@ -300,13 +294,11 @@ interface StateEvolver<EVENT, STATE> {
 }
 
 interface InitialStateProvider<STATE> {
-    default STATE initialState() {
-        return null;
-    }
+    default STATE initialState() { return null; }
 }
 
 interface IsStateFinalResolver<STATE> {
-   boolean isFinal(STATE state);
+    boolean isFinal(STATE state);
 }
 ```
 
@@ -376,6 +368,9 @@ result.fold(error -> handleError(error), events -> persistEvents(events));
 ```
 
 ### Wiring with CommandHandler
+
+**Class**: `dk.trustworks.essentials.components.eventsourced.aggregates.decider.CommandHandler`
+
 ```java
 var commandHandler = CommandHandler.deciderBasedCommandHandler(
     eventStore,
@@ -395,15 +390,15 @@ unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
 });
 ```
 
-**Test refs**: [`DeciderTest`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/decider/DeciderTest.java), [`DeciderBasedCommandHandlerIT`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/decider/DeciderBasedCommandHandlerIT.java)
+**Test refs**: `DeciderTest`, `DeciderBasedCommandHandlerIT`
 
 ---
 
-## 3. Modern AggregateRoot (OOP)
+## Modern AggregateRoot (OOP)
 
 **Class**: `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot`
 
-Mutable, automatic change tracking. Works with any event type (records, POJOs) without requiring any inheritance.
+Mutable, automatic change tracking. Works with any event type (records, POJOs).
 
 ### Basic Pattern
 ```java
@@ -454,6 +449,9 @@ public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
 ```
 
 ### WithState Pattern (Separated State)
+
+**Interface**: `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.WithState`
+
 ```java
 public class Order extends AggregateRoot<OrderId, OrderEvent, Order>
         implements WithState<OrderId, OrderEvent, Order, OrderState> {
@@ -496,22 +494,15 @@ public class OrderState extends AggregateState<OrderId, OrderEvent, Order> {
 }
 ```
 
-**Test refs**: [`OrderAggregateRootRepositoryIT`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/modern/OrderAggregateRootRepositoryIT.java), [`OrderAggregateRootWithStateRepositoryIT`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/modern/with_state/OrderAggregateRootWithStateRepositoryIT.java)
+**Test refs**: `OrderAggregateRootRepositoryIT`, `OrderAggregateRootWithStateRepositoryIT`
 
 ---
 
-## 4. FlexAggregate (Explicit Control)
+## FlexAggregate (Explicit Control)
 
 **Class**: `dk.trustworks.essentials.components.eventsourced.aggregates.flex.FlexAggregate`
 
-Command methods return `EventsToPersist`. Must explicitly persist using the associated `FlexAggregateRepository`.
-```java
-FlexAggregateRepository.from(eventStore,
-                             AggregateType.of("Orders"),   
-                             unitOfWorkFactory,
-                             OrderId.class,
-                             Order.class);
-```
+Command methods return `EventsToPersist`. Must explicitly persist using `FlexAggregateRepository`.
 
 ```java
 public class Order extends FlexAggregate<OrderId, Order> {
@@ -545,6 +536,9 @@ public class Order extends FlexAggregate<OrderId, Order> {
 }
 
 // Usage - explicit persistence
+var repository = FlexAggregateRepository.from(eventStore, AggregateType.of("Orders"),
+                                              unitOfWorkFactory, OrderId.class, Order.class);
+
 unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
     var createEvents = Order.createOrder(orderId, customerId);
     repository.persist(createEvents);
@@ -555,7 +549,7 @@ unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
 });
 ```
 
-**Test ref**: [`FlexAggregateRepositoryIT`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/flex/FlexAggregateRepositoryIT.java)
+**Test ref**: `FlexAggregateRepositoryIT`
 
 ---
 
@@ -606,7 +600,7 @@ var maybeOrder = unitOfWorkFactory.withUnitOfWork(
 );
 ```
 
-**Test refs**: [`StatefulAggregateRepositoryIT`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/stateful/StatefulAggregateRepositoryIT.java), [`TransactionalBehaviorIT`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/stateful/TransactionalBehaviorIT.java)
+**Test refs**: `StatefulAggregateRepositoryIT`, `TransactionalBehaviorIT`
 
 ---
 
@@ -615,8 +609,6 @@ var maybeOrder = unitOfWorkFactory.withUnitOfWork(
 **Interface**: `dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotRepository`
 
 Optimize loading for aggregates with many events. Snapshots save state at EventOrder N, then only load events after N.
-
-Supported by `StatefulAggregateRepository` and the `Decider`'s associated `CommandHandler`. 
 
 ### When to Use
 | Scenario | Without | With |
@@ -646,7 +638,7 @@ var asyncSnapshot = DelayedAddAndDeleteAggregateSnapshotDelegate.delegateTo(snap
 
 **Consider first**: "Closing the Books" pattern to keep streams small.
 
-**Test refs**: [`PostgresqlAggregateSnapshotRepositoryTest`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/PostgresqlAggregateSnapshotRepositoryTest.java), [`PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshotsIT`](../components/eventsourced-aggregates/src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshotsIT.java)
+**Test refs**: `PostgresqlAggregateSnapshotRepositoryTest`, `PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshotsIT`
 
 ---
 
@@ -704,7 +696,7 @@ eventStore.addGenericInMemoryProjector(new AnnotationBasedInMemoryProjector());
 
 ---
 
-## Common Patterns & Gotchas
+## Common Patterns
 
 ### Event Design
 ```java
@@ -745,7 +737,7 @@ public Order(OrderId orderId, CustomerId customerId, int orderNumber) {
     apply(new OrderAdded(orderId, customerId, orderNumber));
 }
 
-// ✅ Use UnitOfWork explicitly,  unless running in a Spring managed transaction or sending commands via a `CommandBus` using the `UnitOfWorkControllingCommandBusInterceptor` 
+// ✅ Use UnitOfWork explicitly (unless in Spring managed transaction or CommandBus with UnitOfWorkControllingCommandBusInterceptor)
 unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
     var order = new Order(orderId, customerId, 1234);
     ordersRepository.save(order);
@@ -775,18 +767,16 @@ private void on(OrderCreated e) {
 
 ## Security
 
-### ⚠️ Critical: SQL Injection Risk
+### ⚠️ SQL Injection Risk
 
-The components allow customization of table/column/index/function-names that are used with **String concatenation** → SQL injection risk. 
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL injection.
+Components allow customization of table/column/index/function names via **String concatenation** → SQL injection risk.
 
-Configuration parameters used in SQL via string concatenation.
+**Parameters used in SQL**:
 
-### Sanitize These
 | Parameter | Where | Risk |
 |-----------|-------|------|
 | `AggregateType` | SQL queries | Injection |
-| `snapshotTableName` | PostgresqlAggregateSnapshotRepository | Injection |
+| `snapshotTableName` | `PostgresqlAggregateSnapshotRepository` | Injection |
 
 ### Mitigations
 - `PostgresqlUtil.checkIsValidTableOrColumnName()` provides basic validation
@@ -794,13 +784,15 @@ Configuration parameters used in SQL via string concatenation.
 
 ### Your Responsibility
 - Generate IDs with `RandomIdGenerator.generate()` or `UUID.randomUUID()`
-- Never use unsanitized user input for table names, columns names, `AggregateType`, or IDs
+- Never use unsanitized user input for table names, columns, `AggregateType`, or IDs
 - Validate all configuration at startup
+
+See [README Security](../components/eventsourced-aggregates/README.md#security) for details.
 
 ---
 
 ## See Also
-- [postgresql-event-store](./LLM-postgresql-event-store.md) - Event persistence
+- [postgresql-event-store](./LLM-postgresql-event-store.md) - Event persistence (EventStore, AggregateType)
 - [foundation](./LLM-foundation.md) - UnitOfWork, transactions
 - [shared](./LLM-shared.md) - Pattern matching, reflection
 - [types](./LLM-types.md) - ID types
