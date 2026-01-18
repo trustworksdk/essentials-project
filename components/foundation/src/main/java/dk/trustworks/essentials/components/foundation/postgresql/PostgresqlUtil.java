@@ -194,31 +194,40 @@ public final class PostgresqlUtil {
 
     /**
      * Validates whether the provided table or column name is valid according to PostgreSQL naming conventions
-     * and does not conflict with reserved keywords.<br>
-     * <br>
-     * The method provided is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
-     * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String, String)} does not offer exhaustive protection, nor does it assure
-     * the complete security of the resulting SQL against SQL injection threats.<br>
-     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
-     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
-     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
-     * <p>
-     * <p>The method enforces PostgreSQL SQL naming conventions for table/column/index names. A valid function/column/index name:
+     * and does not conflict with reserved keywords.
+     *
+     * <h3>Security Notice</h3>
+     * <p>This method provides an <b>initial layer of defense</b> against SQL injection by enforcing naming conventions.
+     * However, it does <b>NOT</b> offer exhaustive protection against SQL injection threats.</p>
+     *
+     * <p><b>Developer Responsibility:</b> Users must ensure thorough sanitization and validation of all
+     * API input parameters, column names, function names, table names, and index names.</p>
+     *
+     * <h4>What Validation Does NOT Protect Against:</h4>
      * <ul>
-     *     <li>Must not be null, empty, or consist only of whitespace.</li>
-     *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified names
-     *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified names
-     *         (e.g., <code>schema_name.table_name</code>).</li>
-     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} characters (for schema prefixed names) in total length.</li>
-     *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
+     *     <li>SQL injection via <b>values</b> (use parameterized queries)</li>
+     *     <li>Malicious input that passes naming conventions but exploits application logic</li>
+     *     <li>Configuration loaded from untrusted external sources without additional validation</li>
+     *     <li>Names that are technically valid but semantically dangerous</li>
+     *     <li>WHERE clauses and raw SQL strings</li>
      * </ul>
      *
-     * @param tableOrColumnName the table or column name to validate.
-     * @param context           optional context that will be included in any error message. null value means no context is provided
-     * @throws InvalidTableOrColumnNameException if the provided name is null, empty, matches a reserved keyword,
-     *                                           or contains invalid characters.
+     * <p><b>Bottom line:</b> Validation is a defense layer, not a security guarantee.
+     * Always use hardcoded names or thoroughly validated configuration.</p>
+     *
+     * <h3>Validation Rules</h3>
+     * <p>A valid table/column name:</p>
+     * <ul>
+     *     <li>Must not be null, empty, or consist only of whitespace</li>
+     *     <li>Must match {@link #isValidSqlIdentifier(String)} or {@link #isValidQualifiedSqlIdentifier(String)}</li>
+     *     <li>Must not exceed {@link #MAX_IDENTIFIER_LENGTH} (or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} for qualified names)</li>
+     *     <li>Must not be a reserved keyword from {@link #RESERVED_NAMES}</li>
+     * </ul>
+     *
+     * @param tableOrColumnName the table or column name to validate
+     * @param context           optional context included in error messages (null for no context)
+     * @throws InvalidTableOrColumnNameException if validation fails
      */
-
     public static void checkIsValidTableOrColumnName(String tableOrColumnName, String context) {
         if (tableOrColumnName == null || tableOrColumnName.trim().isEmpty()) {
             throw new InvalidTableOrColumnNameException("Table or column name cannot be null or empty.");
@@ -240,30 +249,41 @@ public final class PostgresqlUtil {
 
     /**
      * Validates whether the provided table or column name is valid according to PostgreSQL naming conventions
-     * and does not conflict with reserved keywords.<br>
-     * This method calls {@link #checkIsValidTableOrColumnName(String, String)} with a null context.<br>
-     * <br>
-     * The method provided is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
-     * However, Essentials components as well as {@link PostgresqlUtil#checkIsValidTableOrColumnName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
-     * SQL against SQL injection threats.<br>
-     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
-     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, and index names.<br>
-     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.<br>
-     * <p>
-     * The method checks if the {@code tableOrColumnName}:
-     * <p>The method enforces PostgreSQL SQL naming conventions for function/table/column/index names. A valid function/column/index name:
+     * and does not conflict with reserved keywords.
+     *
+     * <h3>Security Notice</h3>
+     * <p>This method provides an <b>initial layer of defense</b> against SQL injection by enforcing naming conventions.
+     * However, it does <b>NOT</b> offer exhaustive protection against SQL injection threats.</p>
+     *
+     * <p><b>Developer Responsibility:</b> Users must ensure thorough sanitization and validation of all
+     * API input parameters, column names, function names, table names, and index names.</p>
+     *
+     * <h4>What Validation Does NOT Protect Against:</h4>
      * <ul>
-     *     <li>Must not be null, empty, or consist only of whitespace.</li>
-     *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified names
-     *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified names
-     *         (e.g., <code>schema_name.table_name</code>).</li>
-     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} characters (for schema prefixed names) in total length.</li>
-     *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
+     *     <li>SQL injection via <b>values</b> (use parameterized queries)</li>
+     *     <li>Malicious input that passes naming conventions but exploits application logic</li>
+     *     <li>Configuration loaded from untrusted external sources without additional validation</li>
+     *     <li>Names that are technically valid but semantically dangerous</li>
+     *     <li>WHERE clauses and raw SQL strings</li>
      * </ul>
      *
-     * @param tableOrColumnName the table or column name to validate.
-     * @throws InvalidTableOrColumnNameException if the provided name is null, empty, matches a reserved keyword,
-     *                                           or contains invalid characters.
+     * <p><b>Bottom line:</b> Validation is a defense layer, not a security guarantee.
+     * Always use hardcoded names or thoroughly validated configuration.</p>
+     *
+     * <h3>Validation Rules</h3>
+     * <p>A valid table/column name:</p>
+     * <ul>
+     *     <li>Must not be null, empty, or consist only of whitespace</li>
+     *     <li>Must match {@link #isValidSqlIdentifier(String)} or {@link #isValidQualifiedSqlIdentifier(String)}</li>
+     *     <li>Must not exceed {@link #MAX_IDENTIFIER_LENGTH} (or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} for qualified names)</li>
+     *     <li>Must not be a reserved keyword from {@link #RESERVED_NAMES}</li>
+     * </ul>
+     *
+     * <p>This is a convenience method that calls {@link #checkIsValidTableOrColumnName(String, String)} with null context.</p>
+     *
+     * @param tableOrColumnName the table or column name to validate
+     * @throws InvalidTableOrColumnNameException if validation fails
+     * @see #checkIsValidTableOrColumnName(String, String) for full documentation including security notices
      */
     public static void checkIsValidTableOrColumnName(String tableOrColumnName) {
         checkIsValidTableOrColumnName(tableOrColumnName, null);
@@ -273,26 +293,34 @@ public final class PostgresqlUtil {
 
     /**
      * Validates whether the given string is a valid SQL identifier according to PostgreSQL naming conventions.
-     * This is a unified helper method that can be used for validating table names, column names, function names, etc.
-     * <p>
-     * This method is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
-     * However, Essentials components as well as {@link PostgresqlUtil#isValidSqlIdentifier(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
-     * SQL against SQL injection threats.<br>
-     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
-     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, index names, etc.<br>
-     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
+     * <p>Use this for validating table names, column names, function names, index names, etc.</p>
      *
-     * <p>The method enforces PostgreSQL SQL naming conventions for identifiers. A valid identifier:
+     * <h3>Security Notice</h3>
+     * <p>This method provides an <b>initial layer of defense</b> against SQL injection by enforcing naming conventions.
+     * However, it does <b>NOT</b> offer exhaustive protection against SQL injection threats.</p>
+     *
+     * <h4>What Validation Does NOT Protect Against:</h4>
      * <ul>
-     *     <li>Must not be null, empty, or consist only of whitespace.</li>
-     *     <li>Must match the pattern {@link PostgresqlUtil#VALID_SQL_IDENTIFIER_PATTERN}.</li>
-     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters in length.</li>
-     *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
+     *     <li>SQL injection via <b>values</b> (use parameterized queries)</li>
+     *     <li>Malicious input that passes naming conventions but exploits application logic</li>
+     *     <li>Configuration loaded from untrusted external sources without additional validation</li>
+     *     <li>Names that are technically valid but semantically dangerous</li>
+     *     <li>WHERE clauses and raw SQL strings</li>
      * </ul>
      *
-     * @param identifier The SQL identifier to validate.
-     * @return {@code true} if the provided {@code identifier} is valid according to PostgreSQL naming conventions
-     * and does not contain reserved keywords; {@code false} otherwise.
+     * <p><b>Bottom line:</b> Validation is a defense layer, not a security guarantee.
+     * Always use hardcoded names or thoroughly validated configuration.</p>
+     *
+     * <h3>Validation Rules</h3>
+     * <ul>
+     *     <li>Must not be null, empty, or whitespace only</li>
+     *     <li>Must match {@link #VALID_SQL_IDENTIFIER_PATTERN}</li>
+     *     <li>Must not exceed {@link #MAX_IDENTIFIER_LENGTH} characters</li>
+     *     <li>Must not be a reserved keyword from {@link #RESERVED_NAMES}</li>
+     * </ul>
+     *
+     * @param identifier the SQL identifier to validate
+     * @return {@code true} if valid, {@code false} otherwise
      */
     public static boolean isValidSqlIdentifier(String identifier) {
         if (identifier == null || identifier.trim().isEmpty()) {
@@ -315,28 +343,34 @@ public final class PostgresqlUtil {
 
     /**
      * Validates whether the given qualified identifier (e.g., "schema.table") is valid according to PostgreSQL naming conventions.
-     * This method checks both individual parts and the total length of the qualified identifier.
-     * <p>
-     * This method is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
-     * However, Essentials components as well as {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
-     * SQL against SQL injection threats.<br>
-     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
-     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, index names, etc.<br>
-     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
      *
-     * <p>The method enforces PostgreSQL SQL naming conventions for qualified identifiers. A valid qualified identifier:
+     * <h3>Security Notice</h3>
+     * <p>This method provides an <b>initial layer of defense</b> against SQL injection by enforcing naming conventions.
+     * However, it does <b>NOT</b> offer exhaustive protection against SQL injection threats.</p>
+     *
+     * <h4>What Validation Does NOT Protect Against:</h4>
      * <ul>
-     *     <li>Must not be null, empty, or consist only of whitespace.</li>
-     *     <li>Must contain exactly one dot separator.</li>
-     *     <li>Must not start or end with a dot.</li>
-     *     <li>Must not contain consecutive dots.</li>
-     *     <li>Each part must be a valid SQL identifier according to {@link #isValidSqlIdentifier(String)}.</li>
-     *     <li>The total length must not exceed {@link PostgresqlUtil#MAX_QUALIFIED_IDENTIFIER_LENGTH} characters.</li>
+     *     <li>SQL injection via <b>values</b> (use parameterized queries)</li>
+     *     <li>Malicious input that passes naming conventions but exploits application logic</li>
+     *     <li>Configuration loaded from untrusted external sources without additional validation</li>
+     *     <li>Names that are technically valid but semantically dangerous</li>
+     *     <li>WHERE clauses and raw SQL strings</li>
      * </ul>
      *
-     * @param qualifiedIdentifier The qualified SQL identifier to validate (e.g., "schema.table").
-     * @return {@code true} if the provided {@code qualifiedIdentifier} is valid according to PostgreSQL naming conventions;
-     * {@code false} otherwise.
+     * <p><b>Bottom line:</b> Validation is a defense layer, not a security guarantee.
+     * Always use hardcoded names or thoroughly validated configuration.</p>
+     *
+     * <h3>Validation Rules</h3>
+     * <ul>
+     *     <li>Must not be null, empty, or whitespace only</li>
+     *     <li>Must contain exactly one dot separator</li>
+     *     <li>Must not start or end with a dot, and no consecutive dots</li>
+     *     <li>Each part must pass {@link #isValidSqlIdentifier(String)}</li>
+     *     <li>Total length must not exceed {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH}</li>
+     * </ul>
+     *
+     * @param qualifiedIdentifier the qualified SQL identifier to validate (e.g., "schema.table")
+     * @return {@code true} if valid, {@code false} otherwise
      */
     public static boolean isValidQualifiedSqlIdentifier(String qualifiedIdentifier) {
         if (qualifiedIdentifier == null || qualifiedIdentifier.trim().isEmpty()) {
@@ -377,36 +411,40 @@ public final class PostgresqlUtil {
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
     /**
-     * Validates whether the given string is a valid SQL function name.
-     * <p>
-     * This method is designed as an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.<br>
-     * However, Essentials components as well as {@link PostgresqlUtil#isValidFunctionName(String)} does not offer exhaustive protection, nor does it assure the complete security of the resulting
-     * SQL against SQL injection threats.<br>
-     * <b>The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.<br>
-     * Users must ensure thorough sanitization and validation of API input parameters, values, column names, function names, table names, index names, etc.<br>
-     * Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.
+     * Validates whether the given string is a valid SQL function name according to PostgreSQL naming conventions.
      *
-     * <p>The method enforces PostgreSQL SQL naming conventions for function names. A valid function name:
+     * <h3>Security Notice</h3>
+     * <p>This method provides an <b>initial layer of defense</b> against SQL injection by enforcing naming conventions.
+     * However, it does <b>NOT</b> offer exhaustive protection against SQL injection threats.</p>
+     *
+     * <h4>What Validation Does NOT Protect Against:</h4>
      * <ul>
-     *     <li>Must not be null, empty, or consist only of whitespace.</li>
-     *     <li>Must be a valid SQL identifier according to {@link PostgresqlUtil#isValidSqlIdentifier(String)} for non-qualified function names
-     *         or {@link PostgresqlUtil#isValidQualifiedSqlIdentifier(String)} for fully qualified function names
-     *         (e.g., <code>schema_name.function_name</code>).</li>
-     *     <li>Must not exceed {@link PostgresqlUtil#MAX_IDENTIFIER_LENGTH} characters or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} characters (for schema prefixed names) in total length.</li>
-     *     <li>Must not contain any reserved keywords defined in {@link PostgresqlUtil#RESERVED_NAMES}.</li>
+     *     <li>SQL injection via <b>values</b> (use parameterized queries)</li>
+     *     <li>Malicious input that passes naming conventions but exploits application logic</li>
+     *     <li>Configuration loaded from untrusted external sources without additional validation</li>
+     *     <li>Names that are technically valid but semantically dangerous</li>
+     *     <li>WHERE clauses and raw SQL strings</li>
      * </ul>
      *
-     * @param functionName The name of the SQL function to validate, either fully qualified or unqualified.
-     * @return {@code true} if the provided {@code functionName} is valid according to PostgreSQL naming conventions
-     * and does not contain reserved keywords; {@code false} otherwise.
+     * <p><b>Bottom line:</b> Validation is a defense layer, not a security guarantee.
+     * Always use hardcoded names or thoroughly validated configuration.</p>
      *
-     * <p>Usage example:
-     * <pre>
-     * {@code
+     * <h3>Validation Rules</h3>
+     * <ul>
+     *     <li>Must not be null, empty, or whitespace only</li>
+     *     <li>Must pass {@link #isValidSqlIdentifier(String)} or {@link #isValidQualifiedSqlIdentifier(String)}</li>
+     *     <li>Must not exceed {@link #MAX_IDENTIFIER_LENGTH} (or {@link #MAX_QUALIFIED_IDENTIFIER_LENGTH} for qualified names)</li>
+     *     <li>Must not be a reserved keyword from {@link #RESERVED_NAMES}</li>
+     * </ul>
+     *
+     * <h3>Example</h3>
+     * <pre>{@code
      * boolean isValid = PostgresqlUtil.isValidFunctionName("my_schema.my_function");
-     * // Returns true if "my_schema.my_function" conforms to SQL conventions and contains no reserved keywords.
-     * }
-     * </pre>
+     * // Returns true if it conforms to SQL conventions and contains no reserved keywords
+     * }</pre>
+     *
+     * @param functionName the function name to validate (qualified or unqualified)
+     * @return {@code true} if valid, {@code false} otherwise
      */
     public static boolean isValidFunctionName(String functionName) {
         if (functionName == null || functionName.trim().isEmpty()) {
