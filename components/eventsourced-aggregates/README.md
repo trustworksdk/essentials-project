@@ -152,6 +152,16 @@ Aggregate IDs are used in SQL queries and must be generated securely:
 - Never use external/untrusted input for table names, `AggregateType`, or `Aggregate-Id` values
 - Validate all configuration values during application startup
 
+### What Validation Does NOT Protect Against
+
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ---
 
 ## Modern `AggregateRoot` 

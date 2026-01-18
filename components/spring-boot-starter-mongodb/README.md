@@ -60,7 +60,17 @@ See individual module documentation for detailed security considerations:
 - [eventsourced-aggregates](eventsourced-aggregates/README.md#security)
 - [kotlin-eventsourcing](kotlin-eventsourcing/README.md#security)
 - [springdata-mongo-queue](springdata-mongo-queue/README.md#security)
-- [springdata-mongo-distributed-fenced-lock](springdata-mongo-distributed-fenced-lock/README.md#security) 
+- [springdata-mongo-distributed-fenced-lock](springdata-mongo-distributed-fenced-lock/README.md#security)
+
+### What Validation Does NOT Protect Against
+
+- NoSQL injection via **values** (use Spring Data MongoDB's type-safe query methods)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- Query operator injection (e.g., `$where`, `$regex`, `$ne`)
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
 ---
 

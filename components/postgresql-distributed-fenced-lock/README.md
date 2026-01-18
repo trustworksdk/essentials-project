@@ -43,6 +43,16 @@ The `fencedLocksTableName` parameter is used directly in SQL statements via stri
 - Never derive table/column/index names from external/untrusted input
 - Validate all configuration values during application startup
 
+### What Validation Does NOT Protect Against
+
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ## PostgreSQL-Specific Configuration
 
 ### Standalone Usage

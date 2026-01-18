@@ -46,6 +46,16 @@ The `sharedQueueCollectionName` parameter is used directly as a MongoDB collecti
 - Never derive collection names from external/untrusted input
 - Validate all configuration values during application startup
 
+### What Validation Does NOT Protect Against
+
+- NoSQL injection via **values** (use Spring Data MongoDB's type-safe query methods)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- Query operator injection (e.g., `$where`, `$regex`, `$ne`)
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ## MongoDB-Specific Configuration
 
 ### Requirements
