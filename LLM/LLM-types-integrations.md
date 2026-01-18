@@ -1,30 +1,34 @@
 # Types Integrations - LLM Reference
 
+> Quick reference for integrating `SingleValueType` across frameworks. For detailed explanations, see individual module README files.
+
 ## TOC
 - [Quick Facts](#quick-facts)
 - [Integration Matrix](#integration-matrix)
-- [Module Selection Guide](#module-selection-guide)
-- [Jackson (JSON)](#jackson-json)
-- [JDBI (SQL)](#jdbi-sql)
-- [Avro (Schema Evolution)](#avro-schema-evolution)
-- [Spring Web (HTTP)](#spring-web-http)
+- [Module Selection](#module-selection)
+- [Jackson JSON](#jackson-json)
+- [JDBI SQL](#jdbi-sql)
+- [Avro Schema Evolution](#avro-schema-evolution)
+- [Spring Web HTTP](#spring-web-http)
 - [Spring Data MongoDB](#spring-data-mongodb)
 - [Spring Data JPA](#spring-data-jpa)
 - [Common Patterns](#common-patterns)
 - [Gotchas](#gotchas)
 
-## Quick Facts
+---
 
-Integration modules enable `SingleValueType` usage across frameworks with minimal setup.
+## Quick Facts
 
 | Aspect | Details |
 |--------|---------|
 | **Base Module** | `types` - See [LLM-types.md](LLM-types.md) |
 | **GroupId** | `dk.trustworks.essentials` |
-| **Scope** | All framework deps are `provided` |
-| **Philosophy** | Zero-config where possible, explicit registration otherwise |
+| **Scope** | Framework deps are `provided` (not transitive) |
+| **Philosophy** | Zero-config where possible |
 
-**Status**: WORK-IN-PROGRESS
+**Note**: This is an **index document** for types integration modules. All integration modules depend on [types](./LLM-types.md).
+
+**Status**: Work-in-progress (all modules). JPA is experimental and may be removed.
 
 ---
 
@@ -32,50 +36,46 @@ Integration modules enable `SingleValueType` usage across frameworks with minima
 
 | Framework | Module | Use Case | Registration | Auto-Apply |
 |-----------|--------|----------|--------------|------------|
-| **Jackson** | `types-jackson` | JSON serialization | `ObjectMapper.registerModule()` | ✅ All types |
+| **Jackson** | `types-jackson` | JSON ser/deser | `ObjectMapper.registerModule()` | ✅ All types |
 | **JDBI** | `types-jdbi` | SQL persistence | `Jdbi.registerArgument/Mapper()` | Per-type |
-| **Avro** | `types-avro` | Binary serialization | Maven plugin config | Per-type |
+| **Avro** | `types-avro` | Binary ser/deser | Maven plugin config | Per-type |
 | **Spring Web** | `types-spring-web` | `@PathVariable`/`@RequestParam` | `FormatterRegistry.addConverter()` | ✅ All types |
 | **Spring Data Mongo** | `types-springdata-mongo` | MongoDB persistence | `MongoCustomConversions` | ✅ Most types |
 | **Spring Data JPA** | `types-springdata-jpa` | JPA entities | `@Converter(autoApply=true)` | Per-type |
 
-**Status:**
-- **Work-in-progress**: Avro, Jackson, JDBI, Spring Web, Spring Data Mongo
-- **Experimental (may be removed)**: Spring Data JPA
-
 ---
 
-## Module Selection Guide
+## Module Selection
 
 ### By Persistence Technology
 
-| Technology | Recommended Module | Alternative |
-|------------|-------------------|-------------|
-| PostgreSQL | `types-jdbi` | `types-springdata-jpa` (experimental) |
-| MySQL | `types-jdbi` | `types-springdata-jpa` (experimental) |
+| Technology | Primary Module | Alternative |
+|------------|----------------|-------------|
+| PostgreSQL/MySQL | `types-jdbi` | `types-springdata-jpa` (experimental) |
 | MongoDB | `types-springdata-mongo` | N/A |
 | NoSQL (general) | `types-jackson` + custom | N/A |
 
-### By Framework
+### By Framework Stack
 
-| Framework | Required Modules | Optional |
-|-----------|-----------------|----------|
+| Stack | Required | Optional |
+|-------|----------|----------|
 | **Spring Boot + PostgreSQL** | `types-jdbi` | `types-jackson`, `types-spring-web` |
 | **Spring Boot + MongoDB** | `types-springdata-mongo` | `types-jackson`, `types-spring-web` |
 | **Spring WebMVC/WebFlux** | `types-spring-web` | `types-jackson` (for `@RequestBody`) |
-| **Event Sourcing** | `types-avro` OR `types-jackson` | Depends on serialization format |
+| **Event Sourcing** | `types-avro` OR `types-jackson` | Depends on format |
 | **Microservices** | `types-jackson` | Framework-specific modules |
 
 ---
 
-## Jackson (JSON)
+## Jackson JSON
 
 **Module:** `types-jackson`
+**Package:** `dk.trustworks.essentials.jackson.types`
 **Detailed Docs:** [LLM-types-jackson.md](LLM-types-jackson.md)
 
 ### Core Class
+
 ```java
-// Package: dk.trustworks.essentials.jackson.types
 public class EssentialTypesJacksonModule extends SimpleModule {
     public EssentialTypesJacksonModule();
     public static ObjectMapper createObjectMapper(Module... additionalModules);
@@ -85,7 +85,7 @@ public class EssentialTypesJacksonModule extends SimpleModule {
 ### Setup
 
 ```java
-// Option 1: Manual registration
+// Option 1: Manual
 ObjectMapper mapper = new ObjectMapper();
 mapper.registerModule(new EssentialTypesJacksonModule());
 
@@ -93,16 +93,18 @@ mapper.registerModule(new EssentialTypesJacksonModule());
 ObjectMapper mapper = EssentialTypesJacksonModule.createObjectMapper();
 ```
 
-### Serialization Behavior
+### Serialization Format
 
-| Type Category (`dk.trustworks.essentials.types`)          | JSON Format | Example |
-|-------------------------|-------------|---------|
-| `CharSequenceType`      | String | `"ORD-123"` |
-| `NumberType`            | Number | `99.99` |
-| `Money`                 | Object | `{"amount":"99.99","currency":"USD"}` |
+Base package: `dk.trustworks.essentials.types`
+
+| Type Category | JSON Format | Example |
+|---------------|-------------|---------|
+| `CharSequenceType` | String | `"ORD-123"` |
+| `NumberType` | Number | `99.99` |
+| `Money` | Object | `{"amount":"99.99","currency":"USD"}` |
 | `JSR310SingleValueType` | ISO-8601 | `"2024-01-15T10:30:00Z"` |
 
-### Requirements
+### Type Requirements
 
 **CharSequenceType (Jackson 2.18+):**
 ```java
@@ -130,22 +132,22 @@ public class ProductIdKeyDeserializer extends KeyDeserializer {
     }
 }
 
-// Usage
 @JsonDeserialize(keyUsing = ProductIdKeyDeserializer.class)
 Map<ProductId, Quantity> items;
 ```
 
 ---
 
-## JDBI (SQL)
+## JDBI SQL
 
 **Module:** `types-jdbi`
+**Package:** `dk.trustworks.essentials.types.jdbi`
 **Detailed Docs:** [LLM-types-jdbi.md](LLM-types-jdbi.md)
 
 ### Architecture
 
 Two components per type:
-1. **ArgumentFactory** - Query parameters (INSERT/UPDATE/WHERE)
+1. **ArgumentFactory** - Query params (INSERT/UPDATE/WHERE)
 2. **ColumnMapper** - Result mapping (SELECT)
 
 ### Pattern
@@ -162,15 +164,18 @@ jdbi.registerColumnMapper(new OrderIdColumnMapper());
 
 ### Type Mapping
 
-| SingleValueType (`dk.trustworks.essentials.types`) | Base Factory/Mapper (`dk.trustworks.essentials.types.jdbi`) | SQL Type |
-|-------------|-----------------|----------|
+Base package (types): `dk.trustworks.essentials.types`
+Base package (jdbi): `dk.trustworks.essentials.types.jdbi`
+
+| SingleValueType | Base Factory/Mapper | SQL Type |
+|-----------------|---------------------|----------|
 | `CharSequenceType<T>` | `CharSequenceType{ArgumentFactory\|ColumnMapper}<T>` | VARCHAR |
 | `BigDecimalType<T>` | `BigDecimalType{ArgumentFactory\|ColumnMapper}<T>` | NUMERIC |
 | `LongType<T>` | `LongType{ArgumentFactory\|ColumnMapper}<T>` | BIGINT |
 | `IntegerType<T>` | `IntegerType{ArgumentFactory\|ColumnMapper}<T>` | INTEGER |
 | `InstantType<T>` | `InstantType{ArgumentFactory\|ColumnMapper}<T>` | TIMESTAMP |
 | `LocalDateType<T>` | `LocalDateType{ArgumentFactory\|ColumnMapper}<T>` | DATE |
-| `ZonedDateTimeType<T>` | `ZonedDateTimeType{ArgumentFactory\|ColumnMapper}<T>` | TIMESTAMP_WITH_TIMEZONE |
+| `ZonedDateTimeType<T>` | `ZonedDateTimeType{ArgumentFactory\|ColumnMapper}<T>` | TIMESTAMP WITH TIME ZONE |
 
 ### Usage
 
@@ -195,9 +200,9 @@ Optional<OrderId> orderId = jdbi.withHandle(h ->
 
 ### Built-in Types
 
-Package: `dk.trustworks.essentials.types.jdbi`
+Base package: `dk.trustworks.essentials.types.jdbi`
 
-| Type (`dk.trustworks.essentials.types`)| ArgumentFactory | ColumnMapper |
+| Type | ArgumentFactory | ColumnMapper |
 |------|----------------|--------------|
 | `Amount` | `AmountArgumentFactory` | `AmountColumnMapper` |
 | `Percentage` | `PercentageArgumentFactory` | `PercentageColumnMapper` |
@@ -207,16 +212,17 @@ Package: `dk.trustworks.essentials.types.jdbi`
 
 ---
 
-## Avro (Schema Evolution)
+## Avro Schema Evolution
 
 **Module:** `types-avro`
+**Package:** `dk.trustworks.essentials.types.avro`
 **Detailed Docs:** [LLM-types-avro.md](LLM-types-avro.md)
 
 ### Architecture
 
 3-class system per type:
-1. **LogicalType** - Schema validation
-2. **`org.apache.avro.LogicalTypes.LogicalTypeFactory`** - Creates LogicalType from schema
+1. **LogicalTypeFactory** - Creates LogicalType from schema
+2. **LogicalType** - Schema validation
 3. **Conversion** - Runtime ser/deser
 
 ### Pattern
@@ -273,39 +279,28 @@ record Order {
 
 ### Base Conversions
 
-Package: `dk.trustworks.essentials.types.avro`
+Base package: `dk.trustworks.essentials.types.avro`
 
-| SingleValueType (`dk.trustworks.essentials.types`) | Base Conversion | Avro Type |
+| SingleValueType | Base Conversion | Avro Type |
 |-----------------|-----------------|-----------|
 | `CharSequenceType<T>` | `BaseCharSequenceConversion<T>` | `string` |
 | `LongType<T>` | `BaseLongTypeConversion<T>` | `long` |
 | `IntegerType<T>` | `BaseIntegerTypeConversion<T>` | `int` |
 | `InstantType<T>` | `BaseInstantTypeConversion<T>` | `long` (millis) |
-| `LocalDateType<T>` | `BaseLocalDateTypeConversion<T>` | `int` (days) |
+| `LocalDateType<T>` | `BaseLocalDateTypeConversion<T>` | `int` (days since epoch) |
 | `LocalTimeType<T>` | `BaseLocalTimeTypeConversion<T>` | `long` (millis) |
-
-### Built-in Types
-
-Package: `dk.trustworks.essentials.types.avro`
-
-| Type (`dk.trustworks.essentials.types`) | LogicalType Name | Factory | Conversion |
-|------|------------------|---------|------------|
-| `Amount` | `Amount` | `AmountLogicalTypeFactory` | `AmountConversion` |
-| `Percentage` | `Percentage` | `PercentageLogicalTypeFactory` | `PercentageConversion` |
-| `CurrencyCode` | `CurrencyCode` | `CurrencyCodeLogicalTypeFactory` | `CurrencyCodeConversion` |
-| `CountryCode` | `CountryCode` | `CountryCodeLogicalTypeFactory` | `CountryCodeConversion` |
-| `EmailAddress` | `EmailAddress` | `EmailAddressLogicalTypeFactory` | `EmailAddressConversion` |
 
 ---
 
-## Spring Web (HTTP)
+## Spring Web HTTP
 
 **Module:** `types-spring-web`
+**Package:** `dk.trustworks.essentials.types.spring.web`
 **Detailed Docs:** [LLM-types-spring-web.md](LLM-types-spring-web.md)
 
 ### Core Class
+
 ```java
-// Package: dk.trustworks.essentials.types.spring.web
 public class SingleValueTypeConverter implements GenericConverter {
     // Converts String <-> SingleValueType for @PathVariable/@RequestParam
 }
@@ -358,13 +353,15 @@ public class OrderController {
 
 ### Supported Conversions
 
-| Source | Target (`dk.trustworks.essentials.types`)             | Logic |
-|--------|---------------------|-------|
-| `String` | `CharSequenceType`  | `SingleValueType.fromObject()` |
-| `String` | `NumberType`        | `NumberUtils.parseNumber()` + `fromObject()` |
-| `Number` | `NumberType`        | `fromObject()` |
-| `String` | `InstantType`       | `Instant.parse()` |
-| `String` | `LocalDateType`     | `LocalDate.parse()` |
+Base package: `dk.trustworks.essentials.types`
+
+| Source | Target | Logic |
+|--------|--------|-------|
+| `String` | `CharSequenceType` | `SingleValueType.fromObject()` |
+| `String` | `NumberType` | `NumberUtils.parseNumber()` + `fromObject()` |
+| `Number` | `NumberType` | `fromObject()` |
+| `String` | `InstantType` | `Instant.parse()` |
+| `String` | `LocalDateType` | `LocalDate.parse()` |
 | `String` | `ZonedDateTimeType` | `ZonedDateTime.parse(URLDecoder.decode())` |
 
 ---
@@ -372,11 +369,10 @@ public class OrderController {
 ## Spring Data MongoDB
 
 **Module:** `types-springdata-mongo`
+**Package:** `dk.trustworks.essentials.types.springdata.mongo`
 **Detailed Docs:** [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md)
 
 ### Core Classes
-
-Package: `dk.trustworks.essentials.types.springdata.mongo`
 
 | Class | Interface | Purpose |
 |-------|-----------|---------|
@@ -396,7 +392,7 @@ public class MongoConfig {
 
     @Bean
     public MongoCustomConversions mongoCustomConversions() {
-        // Register CharSequenceTypes that wrap ObjectId
+        // Register CharSequenceTypes wrapping ObjectId
         return new MongoCustomConversions(List.of(
             new SingleValueTypeConverter(ProductId.class, OrderId.class)
         ));
@@ -406,14 +402,16 @@ public class MongoConfig {
 
 ### Type Mapping
 
-| SingleValueType (`dk.trustworks.essentials.types`) | MongoDB Type | Notes |
-|-------------|--------------|-------|
-| `CharSequenceType` | `String` | Basic |
-| `CharSequenceType` (ObjectId) | `ObjectId` | Requires explicit registration |
+Base package: `dk.trustworks.essentials.types`
+
+| SingleValueType | MongoDB Type | Notes |
+|-----------------|--------------|-------|
+| `CharSequenceType` | `String` | Default |
+| `CharSequenceType` (ObjectId) | `ObjectId` | Requires registration |
 | `NumberType` | `Number`/`Decimal128` | Auto-handles Decimal128 |
-| `InstantType` | `Date` | UTC timezone |
-| `LocalDateTimeType` | `Date` | UTC timezone |
-| `LocalDateType` | `Date` | UTC timezone |
+| `InstantType` | `Date` | UTC |
+| `LocalDateTimeType` | `Date` | UTC |
+| `LocalDateType` | `Date` | UTC |
 
 **Not Supported:** `OffsetDateTimeType`, `ZonedDateTimeType`
 
@@ -434,9 +432,8 @@ public interface OrderRepository extends MongoRepository<Order, OrderId> {
 }
 ```
 
-### ID Generation
+### ID Generation Requirements
 
-**Requires `random()` method:**
 ```java
 public class OrderId extends CharSequenceType<OrderId> {
     public OrderId(CharSequence value) { super(value); }
@@ -453,17 +450,18 @@ public class OrderId extends CharSequenceType<OrderId> {
 ## Spring Data JPA
 
 **Module:** `types-springdata-jpa`
+**Package:** `dk.trustworks.essentials.types.springdata.jpa.converters`
 **Detailed Docs:** [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md)
 
 **⚠️ Status:** EXPERIMENTAL - May be discontinued. Prefer `types-jdbi`.
 
 ### Limitations
 
-| Limitation | Impact                                                                                                      |
-|------------|-------------------------------------------------------------------------------------------------------------|
-| No ID autogeneration | Must generate IDs manually                                                                                  |
-| `@Id` not supported | Must use `@EmbeddedId` + `@Embeddable`                                                                      |
-| Duplicate ID field | ID types need both `SingleValueType` value and persistent field - requires Id type and normal property type |
+| Limitation | Impact |
+|------------|--------|
+| No ID autogeneration | Must generate IDs manually |
+| `@Id` not supported | Use Java primitives for `@Id` fields |
+| Duplicate field needed | ID types need both `SingleValueType` value and persistent field |
 
 ### Pattern
 
@@ -480,7 +478,7 @@ public class CustomerIdAttributeConverter
 }
 ```
 
-**2. Use in Entity (Non-ID Fields):**
+**2. Use in Entity:**
 ```java
 @Entity
 @Table(name = "orders")
@@ -495,10 +493,10 @@ public class Order {
 
 ### Base Converters
 
-Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
+Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 
-| SingleValueType (`dk.trustworks.essentials.types`) | Base Converter | DB Type |
-|-------------|----------------|---------|
+| SingleValueType | Base Converter | DB Type |
+|-----------------|----------------|---------|
 | `CharSequenceType<T>` | `BaseCharSequenceTypeAttributeConverter<T>` | `String` |
 | `BigDecimalType<T>` | `BaseBigDecimalTypeAttributeConverter<T>` | `Double` |
 | `LongType<T>` | `BaseLongTypeAttributeConverter<T>` | `Long` |
@@ -514,25 +512,18 @@ Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 **Spring Boot + PostgreSQL + REST API:**
 ```xml
 <dependencies>
-    <!-- Core -->
     <dependency>
         <groupId>dk.trustworks.essentials</groupId>
         <artifactId>types</artifactId>
     </dependency>
-
-    <!-- Persistence -->
     <dependency>
         <groupId>dk.trustworks.essentials</groupId>
         <artifactId>types-jdbi</artifactId>
     </dependency>
-
-    <!-- JSON API -->
     <dependency>
         <groupId>dk.trustworks.essentials</groupId>
         <artifactId>types-jackson</artifactId>
     </dependency>
-
-    <!-- HTTP Params -->
     <dependency>
         <groupId>dk.trustworks.essentials</groupId>
         <artifactId>types-spring-web</artifactId>
@@ -565,7 +556,7 @@ Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 ### Full-Stack Type Example
 
 ```java
-// 1. Define type (in your codebase)
+// 1. Define type
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
     public OrderId(CharSequence value) { super(value); }
     public OrderId(String value) { super(value); }
@@ -588,7 +579,7 @@ public class OrderIdAttributeConverter extends BaseCharSequenceTypeAttributeConv
     protected Class<OrderId> getConcreteCharSequenceType() { return OrderId.class; }
 }
 
-// Usage: Works everywhere automatically!
+// Usage: Works everywhere automatically
 @RestController
 public class OrderController {
 
@@ -611,36 +602,35 @@ public class OrderController {
 ### Jackson
 - ⚠️ `CharSequenceType` needs **both** `CharSequence` and `String` constructors (Jackson 2.18+)
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
-- ⚠️ Map key deserialization requires explicit `@JsonDeserialize(keyUsing = ...)`
+- ⚠️ Map key deserialization requires `@JsonDeserialize(keyUsing = ...)`
 - ⚠️ `Money` serializes as object `{"amount":"...","currency":"..."}`, not single value
 
 ### JDBI
-- ⚠️ Must register **both** ArgumentFactory (params) and ColumnMapper (results)
+- ⚠️ Register **both** ArgumentFactory (params) and ColumnMapper (results)
 - ⚠️ Registration is one-time at `Jdbi` creation, not per-query
 - ⚠️ ColumnMappers return `null` for SQL NULL (no Optional wrapping)
 
 ### Avro
-- ⚠️ Must create 3 classes per type: LogicalType, LogicalTypeFactory, Conversion
+- ⚠️ Must create 3 classes: LogicalTypeFactory, LogicalType, Conversion
 - ⚠️ Avro primitive must match LogicalType expectation (`string`/`long`/`int`)
-- ⚠️ Register **both** `customLogicalTypeFactories` and `customConversions` in plugin
-- ⚠️ JSR-310 converters use UTC timezone; temporal types truncate nanoseconds
+- ⚠️ Register **both** `customLogicalTypeFactories` and `customConversions` in Maven plugin
 - ⚠️ Millisecond precision only for temporal types
+- ⚠️ JSR-310 converters use UTC; nanoseconds truncated
 
 ### Spring Web
 - ⚠️ Only handles `@PathVariable`/`@RequestParam`; JSON bodies require `types-jackson`
-- ⚠️ `ZonedDateTimeType` must be URL-encoded in URLs (converter auto-decodes)
+- ⚠️ `ZonedDateTimeType` must be URL-encoded (converter auto-decodes)
 
 ### Spring Data MongoDB
-- ⚠️ `CharSequenceType` containing ObjectId as Map key requires explicit registration
+- ⚠️ `CharSequenceType` wrapping ObjectId requires explicit registration
 - ⚠️ `random()` method required for ID generation
 - ⚠️ JSR-310 converters use UTC; MongoDB ISODate doesn't support nanoseconds
-- ⚠️ `OffsetDateTimeType`/`ZonedDateTimeType` unsupported (Spring Data limitation)
+- ⚠️ `OffsetDateTimeType`/`ZonedDateTimeType` unsupported
 
 ### Spring Data JPA
 - ⚠️ **EXPERIMENTAL** - prefer `types-jdbi` for SQL databases
-- ⚠️ No ID autogeneration - must generate IDs manually
+- ⚠️ No ID autogeneration - generate IDs manually
 - ⚠️ Cannot use `@Id` on `SingleValueType` fields (use Java primitives)
-- ⚠️ `@EmbeddedId` requires separate persistent field + no-arg constructor
 - ⚠️ One converter per type with `@Converter(autoApply = true)`
 
 ---
@@ -649,12 +639,12 @@ public class OrderController {
 
 ### Module Documentation
 - [LLM-types.md](LLM-types.md) - Core types module
-- [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson integration details
-- [LLM-types-jdbi.md](LLM-types-jdbi.md) - JDBI integration details
-- [LLM-types-avro.md](LLM-types-avro.md) - Avro integration details
-- [LLM-types-spring-web.md](LLM-types-spring-web.md) - Spring Web integration details
-- [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md) - MongoDB integration details
-- [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md) - JPA integration details
+- [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson integration
+- [LLM-types-jdbi.md](LLM-types-jdbi.md) - JDBI integration
+- [LLM-types-avro.md](LLM-types-avro.md) - Avro integration
+- [LLM-types-spring-web.md](LLM-types-spring-web.md) - Spring Web integration
+- [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md) - MongoDB integration
+- [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md) - JPA integration
 
 ### README Files
 - [types-jackson README](../types-jackson/README.md)

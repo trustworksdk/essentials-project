@@ -5,10 +5,9 @@
 ## Quick Facts
 - **Base package**: `dk.trustworks.essentials.components.eventsourced.aggregates`
 - **Purpose**: Event-sourced aggregate patterns for DDD
-- **Deps**: postgresql-event-store (EventStore, AggregateType), foundation (UnitOfWork), immutable-jackson
+- **Deps**: postgresql-event-store (EventStore), foundation (UnitOfWork), foundation-types (AggregateType, EventOrder, GlobalEventOrder, ...), immutable-jackson
 - **Status**: WORK-IN-PROGRESS
 
-## Maven
 ```xml
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
@@ -26,7 +25,7 @@
 - [Aggregate Snapshots](#aggregate-snapshots)
 - [In-Memory Projections](#in-memory-projections)
 - [Common Patterns](#common-patterns)
-- [Security](#security)
+- ⚠️ [Security](#security)
 
 ## Pattern Selection
 
@@ -148,7 +147,11 @@ public record OrderState(OrderId orderId, CustomerId customerId, OrderStatus sta
 
 ### Spring Boot Wiring
 
-Configure `EventStreamAggregateTypeConfiguration` per `AggregateType`.
+**Dependencies from other modules**:
+- `AggregateType`, `AggregateIdSerializer` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `CommandBus` from [reactive](./LLM-reactive.md)
+
+Configure `EventStreamAggregateTypeConfiguration` per `AggregateType`.  
 Auto-wiring via `EventStreamDeciderAndAggregateTypeConfigurator`.
 
 **Parameters**:
@@ -163,6 +166,13 @@ Auto-wiring via `EventStreamDeciderAndAggregateTypeConfigurator`.
 | `eventAggregateIdResolver` | Extract ID from event | `event -> ((OrderEvent) event).orderId()` |
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
+import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamAggregateTypeConfiguration;
+import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDecider;
+import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamDeciderSupportsAggregateTypeChecker.HandlesCommandsThatInheritFromCommandType;
+import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.adapters.EventStreamDeciderAndAggregateTypeConfigurator;
+
 @Configuration
 public class EventSourcingConfig {
     @Bean
@@ -195,7 +205,11 @@ public class EventSourcingConfig {
 
 ### Command Sending
 
-Assumes `CommandBus` configured with `UnitOfWorkControllingCommandBusInterceptor`.
+**Dependencies from other modules**:
+- `CommandBus` from [reactive](./LLM-reactive.md) - `dk.trustworks.essentials.reactive.command.CommandBus`
+- `UnitOfWorkControllingCommandBusInterceptor` from [foundation](./LLM-foundation.md) - `dk.trustworks.essentials.components.foundation.reactive.command.UnitOfWorkControllingCommandBusInterceptor`
+
+The `CommandBus` should be configured with `UnitOfWorkControllingCommandBusInterceptor` to manage transactions.
 
 ```java
 @Service
@@ -371,6 +385,10 @@ result.fold(error -> handleError(error), events -> persistEvents(events));
 
 **Class**: `dk.trustworks.essentials.components.eventsourced.aggregates.decider.CommandHandler`
 
+**Dependencies from other modules**:
+- `AggregateType` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+
 ```java
 var commandHandler = CommandHandler.deciderBasedCommandHandler(
     eventStore,
@@ -502,7 +520,11 @@ public class OrderState extends AggregateState<OrderId, OrderEvent, Order> {
 
 **Class**: `dk.trustworks.essentials.components.eventsourced.aggregates.flex.FlexAggregate`
 
-Command methods return `EventsToPersist`. Must explicitly persist using `FlexAggregateRepository`.
+**Dependencies from other modules**:
+- `AggregateType` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+
+Command methods return `dk.trustworks.essentials.components.eventsourced.aggregates.EventsToPersist`. Must explicitly persist using `dk.trustworks.essentials.components.eventsourced.aggregates.flex.FlexAggregateRepository`.
 
 ```java
 public class Order extends FlexAggregate<OrderId, Order> {
@@ -557,10 +579,16 @@ unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
 
 **Interface**: `dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository`
 
-Works with Modern/Classic `StatefulAggregateRoot` (with or without `WithState`).
+**Dependencies from other modules**:
+- `AggregateType` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+
+Works with Modern/Classic `AggregateRoot` (with or without `WithState`).
 
 ### Setup
 ```java
+import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory;
+
 var ordersRepository = StatefulAggregateRepository.from(
     eventStore,
     AggregateType.of("Orders"),
@@ -608,6 +636,10 @@ var maybeOrder = unitOfWorkFactory.withUnitOfWork(
 
 **Interface**: `dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotRepository`
 
+**Dependencies from other modules**:
+- `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+- `JSONSerializer` from [immutable-jackson](./LLM-immutable-jackson.md)
+
 Optimize loading for aggregates with many events. Snapshots save state at EventOrder N, then only load events after N.
 
 ### When to Use
@@ -618,6 +650,8 @@ Optimize loading for aggregates with many events. Snapshots save state at EventO
 
 ### Configuration
 ```java
+import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
+
 var snapshotRepository = new PostgresqlAggregateSnapshotRepository(
     eventStore,
     unitOfWorkFactory,
@@ -646,7 +680,12 @@ var asyncSnapshot = DelayedAddAndDeleteAggregateSnapshotDelegate.delegateTo(snap
 
 **Class**: `dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector`
 
-Reconstruct state without full aggregate load.
+**Dependencies from other modules**:
+- `AggregateType` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.InMemoryProjector` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+
+A generic `InMemoryProjector` that uses internal `EventHandler` annotation-based methods to project events
+onto any plain Java object (POJO) projection class.
 
 ### Implementation
 ```java
@@ -756,7 +795,7 @@ private void on(ProductAddedToOrder e) {
     productAndQuantity.merge(e.productId, e.quantity, Integer::sum);
 }
 
-// ❌ No I/O in handlers
+// ❌ No I/O in handlers (use EventProcessor instead)
 @EventHandler
 private void on(OrderCreated e) {
     emailService.sendConfirmation(e.customerId); // Don't
@@ -788,6 +827,16 @@ Components allow customization of table/column/index/function names via **String
 - Validate all configuration at startup
 
 See [README Security](../components/eventsourced-aggregates/README.md#security) for details.
+
+### What Validation Does NOT Protect Against
+
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
 ---
 

@@ -1,51 +1,45 @@
 # Foundation Test - LLM Reference
 
-> See [README](../components/foundation-test/README.md) for detailed developer documentation.
+> Token-efficient reference for LLMs. See [README](../components/foundation-test/README.md) for detailed documentation.
 
 ## Quick Facts
-- **Package**: `dk.trustworks.essentials.components.foundation.test`
-- **Purpose**: Reusable abstract integration test templates for `FencedLockManager` and `DurableQueues` implementations
-- **Scope**: Test only (`<scope>test</scope>`)
-- **Key Dependencies**: JUnit Jupiter, AssertJ, Awaitility, Mockito, Testcontainers
-- **Artifact**: `dk.trustworks.essentials.components:foundation-test:${essentials.version}`
+- **Base package**: `dk.trustworks.essentials.components.foundation.test`
+- **Purpose**: Abstract integration test templates for `FencedLockManager` and `DurableQueues` implementations
+- **Scope**: Test only
 - **Status**: WORK-IN-PROGRESS
 
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>foundation-test</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `FencedLockManager`, `DBFencedLockManager`, `LockName`, `FencedLock` from [foundation](./LLM-foundation.md)
+- `DurableQueues`, `QueueName`, `ConsumeFromQueue`, `QueuedMessage` from [foundation](./LLM-foundation.md)
+- `DurableLocalCommandBus`, `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+
 ## TOC
-- [Why This Module Exists](#why-this-module-exists)
+- [Purpose](#purpose)
 - [Maven Dependency](#maven-dependency)
 - [FencedLock Test Templates](#fencedlock-test-templates)
-  - [DBFencedLockManagerIT](#dbfencedlockmanagerit)
-  - [DBFencedLockManager_MultiNode_ReleaseLockIT](#dbfencedlockmanager_multinode_releaselockit)
 - [DurableQueues Test Templates](#durablequeues-test-templates)
-  - [DurableQueuesIT](#durablequeuesit)
-  - [LocalCompetingConsumersDurableQueueIT](#localcompetingconsumersdurablequeueit)
-  - [LocalOrderedMessagesDurableQueueIT](#localorderedmessagesdurablequeueit)
-  - [LocalOrderedMessagesRedeliveryDurableQueueIT](#localorderedmessagesredeliverydurablequeueit)
-  - [DistributedCompetingConsumersDurableQueuesIT](#distributedcompetingconsumersdurablequeuesit)
-  - [DuplicateConsumptionDurableQueuesIT](#duplicateconsumptiondurablequeuesit)
-  - [DurableQueuesLoadIT](#durablequeuesloadit)
 - [DurableLocalCommandBus Test Template](#durablelocalcommandbus-test-template)
 - [Test Utilities](#test-utilities)
 - [Test Data Classes](#test-data-classes)
 - [Implementation Pattern](#implementation-pattern)
 - [Common Pitfalls](#common-pitfalls)
-- [Cross-References](#cross-references)
 
-## Why This Module Exists
+## Purpose
 
-Multiple implementations of `FencedLockManager` and `DurableQueues` exist:
-
-| Interface | PostgreSQL | MongoDB |
-|-----------|-----------|---------|
-| `FencedLockManager` | `PostgresqlFencedLockManager` | `MongoFencedLockManager` |
-| `DurableQueues` | `PostgresqlDurableQueues` | `MongoDurableQueues` |
-
-All implementations MUST pass identical behavioral tests. This module provides those tests as abstract classes.
+Multiple implementations of `FencedLockManager` and `DurableQueues` exist (PostgreSQL, MongoDB). All MUST pass identical behavioral tests. This module provides those tests as abstract classes.
 
 **Pattern:**
 1. Extend abstract test template
-2. Implement factory methods for your implementation
-3. Inherit all behavioral test assertions
+2. Implement factory methods
+3. Inherit all behavioral assertions
 
 ## Maven Dependency
 
@@ -60,11 +54,14 @@ All implementations MUST pass identical behavioral tests. This module provides t
 
 ## FencedLock Test Templates
 
-**Package**: `dk.trustworks.essentials.components.foundation.test.fencedlock`
+**Base package**: `dk.trustworks.essentials.components.foundation.test.fencedlock`
 
 ### DBFencedLockManagerIT
 
-`public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockManager<?, ?>>`
+**Signature:**
+```java
+public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockManager<?, ?>>
+```
 
 Core integration tests for `FencedLockManager` implementations.
 
@@ -80,8 +77,8 @@ protected abstract boolean isConnectionRestored();
 
 #### Test Coverage
 
-| Test Method | Behavior Verified |
-|-------------|-------------------|
+| Test Method | Behavior |
+|-------------|----------|
 | `verify_that_we_can_perform_tryAcquire_on_a_lock_and_release_it_again` | Non-blocking `tryAcquireLock()` + release |
 | `verify_that_we_can_acquire_a_lock_and_release_it_again` | Blocking `acquireLock()` + release |
 | `stopping_a_lockManager_releases_all_acquired_locks` | Graceful shutdown releases locks |
@@ -91,19 +88,19 @@ protected abstract boolean isConnectionRestored();
 
 #### Key Assertions
 
-- Lock exclusivity: Node 2 cannot acquire lock held by Node 1
-- Fence token increments on each acquisition
-- Lock callbacks receive `onLockAcquired()` / `onLockReleased()` notifications
-- Heartbeat confirmation updates `lockLastConfirmedTimestamp`
+- Lock exclusivity (Node 2 cannot acquire lock held by Node 1)
+- Fence token increments per acquisition
+- Callbacks receive `onLockAcquired()` / `onLockReleased()`
+- Heartbeat updates `lockLastConfirmedTimestamp`
 
-#### Lifecycle Hooks
+#### Lifecycle
 
 ```java
-@BeforeEach void setup()    // Creates and starts both lock managers
-@AfterEach  void cleanup()  // Stops both lock managers
+@BeforeEach void setup()    // Creates and starts both managers
+@AfterEach  void cleanup()  // Stops both managers
 ```
 
-#### Helper Methods
+#### Helpers
 
 ```java
 public static void deleteAllLocksInDBWithRetry(DBFencedLockManager<?, ?> lockManager);
@@ -115,37 +112,41 @@ protected LOCK_MANAGER getLockManagerNode2();
 
 ### DBFencedLockManager_MultiNode_ReleaseLockIT
 
-`public abstract class DBFencedLockManager_MultiNode_ReleaseLockIT<LOCK_MANAGER extends DBFencedLockManager<?, ?>>`
+**Signature:**
+```java
+public abstract class DBFencedLockManager_MultiNode_ReleaseLockIT<LOCK_MANAGER extends DBFencedLockManager<?, ?>>
+```
 
-Tests lock release behavior during DB connectivity issues.
-
-#### Abstract Methods
-
-Same as `DBFencedLockManagerIT`.
+Tests lock release during DB connectivity issues.
 
 #### Test Coverage
 
-| Test Method | Behavior Verified |
-|-------------|-------------------|
+| Test Method | Behavior |
+|-------------|----------|
 | `verify_loosing_db_connection_all_locally_acquired_locks_are_released` | Locks released locally when DB connection fails |
 
 #### Test Flow
 
 1. Node 1 acquires lock, Node 2 waits
-2. DB connection disrupted for both nodes
-3. Node 1 releases lock locally (cannot confirm, assumes lost)
+2. DB connection disrupted
+3. Node 1 releases lock locally (cannot confirm)
 4. Connection restored
-5. Either Node 1 or Node 2 acquires lock (race condition acceptable)
+5. Either Node 1 or Node 2 acquires lock (race acceptable)
 
 ---
 
 ## DurableQueues Test Templates
 
-**Package**: `dk.trustworks.essentials.components.foundation.test.messaging.queue`
+**Base package**: `dk.trustworks.essentials.components.foundation.test.messaging.queue`
 
 ### DurableQueuesIT
 
-`public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>>`
+**Signature:**
+```java
+public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues,
+                                       UOW extends UnitOfWork,
+                                       UOW_FACTORY extends UnitOfWorkFactory<UOW>>
+```
 
 Comprehensive integration tests for `DurableQueues` implementations.
 
@@ -159,233 +160,213 @@ protected abstract void resetQueueStorage(UOW_FACTORY unitOfWorkFactory);
 protected abstract JSONSerializer createJSONSerializer();
 ```
 
-#### Helper Methods
+#### Helpers
 
 ```java
-// Transaction-aware helpers
+// Auto-wraps in UnitOfWork if TransactionalMode.FullyTransactional
 protected <R> R withDurableQueue(Supplier<R> supplier);
 protected void usingDurableQueue(Runnable action);
-```
 
-Automatically wraps operations in `UnitOfWork` if `TransactionalMode.FullyTransactional`, otherwise executes directly.
-
-#### Test Coverage
-
-| Test Method | Behavior |
-|-------------|----------|
-| `test_simple_enqueueing_and_afterwards_querying_queued_messages` | Queue messages, verify metadata |
-| `verify_queued_messages_are_dequeued_in_order` | FIFO delivery order |
-| `verify_a_message_queues_as_a_dead_letter_message_is_marked_as_such_and_will_not_be_delivered` | DLQ messages excluded from delivery |
-| `verify_a_that_as_long_as_an_ordered_message_with_same_key_and_a_lower_key_order_exists_as_a_dead_letter_message_then_no_further_messages_with_the_same_key_will_be_delivered` | Ordered message DLQ blocking |
-| `verify_hasOrderedMessageQueuedForKey` | Check for pending ordered messages by key |
-| `verify_failed_messages_are_redelivered` | Automatic redelivery on failure |
-| `verify_a_message_that_failed_too_many_times_is_marked_as_dead_letter_message_AND_the_message_can_be_resurrected` | DLQ after max retries + resurrection |
-| `test_two_stage_redelivery_where_a_message_about_to_be_marked_as_a_deadletter_message_is_queued_with_a_redelivery_delay` | Interceptor-based DLQ override |
-| `verify_a_message_can_manually_be_marked_as_dead_letter_message_AND_the_message_can_afterwards_be_resurrected` | Manual DLQ + resurrection |
-| `test_messagehandler_with_call_to_markForRedeliveryIn` | Manual redelivery scheduling |
-| `verify_json_deserialization_problem_causes_message_to_be_marked_as_dead_letter_message` | Deserialization failure → DLQ |
-
-#### RecordingQueuedMessageHandler
-
-Utility class for test verification:
-
-```java
+// Recording handler for assertions
 protected static class RecordingQueuedMessageHandler implements QueuedMessageHandler {
     public ConcurrentLinkedQueue<Message> messages;
     public RecordingQueuedMessageHandler(Consumer<Message> functionLogic);
 }
 ```
 
-Captures all consumed messages for assertions.
+#### Test Coverage
+
+| Test Method | Behavior |
+|-------------|----------|
+| `test_simple_enqueueing_and_afterwards_querying_queued_messages` | Queue messages, verify metadata |
+| `verify_queued_messages_are_dequeued_in_order` | FIFO delivery |
+| `verify_a_message_queues_as_a_dead_letter_message_is_marked_as_such_and_will_not_be_delivered` | DLQ exclusion |
+| `verify_a_that_as_long_as_an_ordered_message_with_same_key_and_a_lower_key_order_exists_as_a_dead_letter_message_then_no_further_messages_with_the_same_key_will_be_delivered` | Ordered DLQ blocking |
+| `verify_hasOrderedMessageQueuedForKey` | Check for pending ordered messages |
+| `verify_failed_messages_are_redelivered` | Automatic redelivery |
+| `verify_a_message_that_failed_too_many_times_is_marked_as_dead_letter_message_AND_the_message_can_be_resurrected` | DLQ after max retries + resurrection |
+| `test_two_stage_redelivery_where_a_message_about_to_be_marked_as_a_deadletter_message_is_queued_with_a_redelivery_delay` | Interceptor DLQ override |
+| `verify_a_message_can_manually_be_marked_as_dead_letter_message_AND_the_message_can_afterwards_be_resurrected` | Manual DLQ + resurrection |
+| `test_messagehandler_with_call_to_markForRedeliveryIn` | Manual redelivery scheduling |
+| `verify_json_deserialization_problem_causes_message_to_be_marked_as_dead_letter_message` | Deserialization failure → DLQ |
 
 ---
 
 ### LocalCompetingConsumersDurableQueueIT
 
-`public abstract class LocalCompetingConsumersDurableQueueIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>>`
+**Signature:**
+```java
+public abstract class LocalCompetingConsumersDurableQueueIT<DURABLE_QUEUES extends DurableQueues,
+                                                              UOW extends UnitOfWork,
+                                                              UOW_FACTORY extends UnitOfWorkFactory<UOW>>
+```
 
 High-throughput parallel consumption test.
 
-#### Configuration
+**Config:**
+- `NUMBER_OF_MESSAGES = 2000`
+- `PARALLEL_CONSUMERS = 20`
 
-| Parameter | Value |
-|-----------|-------|
-| `NUMBER_OF_MESSAGES` | 2000 |
-| `PARALLEL_CONSUMERS` | 20 |
+**Test:**
+- `verify_queued_messages_are_dequeued_in_order` - All messages delivered exactly once, no duplicates
 
-#### Test Coverage
-
-| Test Method | Behavior |
-|-------------|----------|
-| `verify_queued_messages_are_dequeued_in_order` | All messages delivered exactly once, no duplicates |
-
-#### Key Assertions
-
-- All 2000 messages consumed
-- No duplicates (distinct count = total count)
+**Assertions:**
+- 2000 messages consumed
+- Distinct count = total count (no duplicates)
 - Messages distributed across consumers
-- Performance timing logged
 
 ---
 
 ### LocalOrderedMessagesDurableQueueIT
 
-`public abstract class LocalOrderedMessagesDurableQueueIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>>`
+**Signature:**
+```java
+public abstract class LocalOrderedMessagesDurableQueueIT<DURABLE_QUEUES extends DurableQueues,
+                                                           UOW extends UnitOfWork,
+                                                           UOW_FACTORY extends UnitOfWorkFactory<UOW>>
+```
 
 Ordered message delivery per key with parallel consumers.
 
-#### Configuration
+**Config:**
+- `NUMBER_OF_MESSAGES = 2000`
+- `PARALLEL_CONSUMERS = 20`
+- 45 distinct keys
 
-| Parameter | Value |
-|-----------|-------|
-| `NUMBER_OF_MESSAGES` | 2000 |
-| `PARALLEL_CONSUMERS` | 20 |
-| Message keys | 45 distinct keys |
+**Test:**
+- `verify_queued_ordered_messages_are_dequeued_in_order_per_key` - Messages with same key delivered in order
 
-#### Test Coverage
-
-| Test Method | Behavior |
-|-------------|----------|
-| `verify_queued_ordered_messages_are_dequeued_in_order_per_key` | Messages with same key delivered in order |
-
-#### Key Assertions
-
+**Assertions:**
 - All messages delivered exactly once
-- Per key: messages received in order (`order=0`, `order=1`, `order=2`, ...)
+- Per key: received in order (`order=0`, `order=1`, `order=2`, ...)
 - Different keys processed concurrently
 
 ---
 
 ### LocalOrderedMessagesRedeliveryDurableQueueIT
 
-`public abstract class LocalOrderedMessagesRedeliveryDurableQueueIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>>`
+**Signature:**
+```java
+public abstract class LocalOrderedMessagesRedeliveryDurableQueueIT<DURABLE_QUEUES extends DurableQueues,
+                                                                     UOW extends UnitOfWork,
+                                                                     UOW_FACTORY extends UnitOfWorkFactory<UOW>>
+```
 
-Ordered message delivery with redelivery - ensures ordering maintained through failures.
+Ordered delivery with redelivery - ordering maintained through failures.
 
-#### Configuration
+**Config:**
+- `NUMBER_OF_MESSAGES = 2000`
+- `PARALLEL_CONSUMERS = 20`
+- `MAXIMUM_NUMBER_OF_REDELIVERIES = 5`
 
-| Parameter | Value |
-|-----------|-------|
-| `NUMBER_OF_MESSAGES` | 2000 |
-| `PARALLEL_CONSUMERS` | 20 |
-| `MAXIMUM_NUMBER_OF_REDELIVERIES` | 5 |
-
-#### Test Coverage
-
-| Test Method | Behavior |
-|-------------|----------|
-| `verify_queued_ordered_messages_are_dequeued_in_order_per_key_even_if_some_messages_are_redelivered` | Ordering preserved through redelivery cycles |
+**Test:**
+- `verify_queued_ordered_messages_are_dequeued_in_order_per_key_even_if_some_messages_are_redelivered` - Ordering preserved through redelivery
 
 ---
 
 ### DistributedCompetingConsumersDurableQueuesIT
 
-`public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>>`
+**Signature:**
+```java
+public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUES extends DurableQueues,
+                                                                     UOW extends UnitOfWork,
+                                                                     UOW_FACTORY extends UnitOfWorkFactory<UOW>>
+```
 
-Multi-node consumption (simulates multiple pods/instances).
+Multi-node consumption (simulates pods/instances).
 
-#### Configuration
+**Config:**
+- `NUMBER_OF_MESSAGES = 1000`
+- `PARALLEL_CONSUMERS = 20` (10 per node)
 
-| Parameter | Value |
-|-----------|-------|
-| `NUMBER_OF_MESSAGES` | 1000 |
-| `PARALLEL_CONSUMERS` | 20 total (10 per node) |
-
-#### Abstract Methods (Additional)
-
+**Additional abstract methods:**
 ```java
 protected abstract void disruptDatabaseConnection();
 protected abstract void restoreDatabaseConnection();
 ```
 
-#### Test Coverage
+**Tests:**
+- `verify_queued_messages_are_dequeued_in_order` - Distributed consumption without duplicates
+- `verify_queued_messages_are_dequeued_in_order_with_db_connectivity_issues` - Resilience during DB disruption
 
-| Test Method | Behavior |
-|-------------|----------|
-| `verify_queued_messages_are_dequeued_in_order` | Distributed consumption without duplicates |
-| `verify_queued_messages_are_dequeued_in_order_with_db_connectivity_issues` | Resilience during DB disruption |
-
-#### Key Assertions
-
+**Assertions:**
 - Both nodes consume messages (load distributed)
 - No duplicates across nodes
 - All messages consumed exactly once
-- Resilient to temporary DB connectivity loss
 
 ---
 
 ### DuplicateConsumptionDurableQueuesIT
 
-`public abstract class DuplicateConsumptionDurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>>`
+**Signature:**
+```java
+public abstract class DuplicateConsumptionDurableQueuesIT<DURABLE_QUEUES extends DurableQueues,
+                                                           UOW extends UnitOfWork,
+                                                           UOW_FACTORY extends UnitOfWorkFactory<UOW>>
+```
 
 Tests for duplicate consumption bugs (Bug #19).
 
-#### Configuration
+**Config:**
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| `NUMBER_OF_MESSAGES` | 40 | Small set for focused testing |
+| `NUMBER_OF_MESSAGES` | 40 | Small focused set |
 | `PARALLEL_CONSUMERS` | 1 | Single consumer |
-| `PROCESSING_DELAY_MS` | 3000 | Artificially slow processing |
-| `DEFAULT_MESSAGE_HANDLING_TIMEOUT_MS` | 50 | Short timeout to trigger reset |
-| `CONSUMER_START_DELAY_MS` | 200 | Staggered consumer start |
+| `PROCESSING_DELAY_MS` | 3000 | Slow processing |
+| `DEFAULT_MESSAGE_HANDLING_TIMEOUT_MS` | 50 | Short timeout → reset trigger |
+| `CONSUMER_START_DELAY_MS` | 200 | Staggered start |
 
-#### Why These Values
+**Why these values:**
+Processing (3000ms) >> timeout (50ms) creates conditions where message appears "stuck", triggering reset while still processing. Instance 2 could fetch reset message.
 
-Creates conditions that could cause duplicates:
-- Processing (3000ms) >> timeout (50ms) → message appears "stuck"
-- Message reset triggers while still processing
-- Instance 2 starts 200ms later, could fetch reset message
+**Tests:**
+- `verify_no_duplicate_message_consumption` - No message consumed > 1 time
+- `verify_no_duplicate_message_consumption_with_db_connectivity_issues` - No duplicates during DB disruption
 
-#### Test Coverage
-
-| Test Method | Behavior |
-|-------------|----------|
-| `verify_no_duplicate_message_consumption` | No message consumed more than once |
-| `verify_no_duplicate_message_consumption_with_db_connectivity_issues` | No duplicates during DB disruption |
-
-#### Key Assertions
-
+**Assertions:**
 - Tracks consumption count per `QueueEntryId`
 - Fails if any message consumed > 1 time
-- Both instances must consume some messages (no starvation)
+- Both instances must consume (no starvation)
 
 ---
 
 ### DurableQueuesLoadIT
 
-`public abstract class DurableQueuesLoadIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>>`
+**Signature:**
+```java
+public abstract class DurableQueuesLoadIT<DURABLE_QUEUES extends DurableQueues,
+                                           UOW extends UnitOfWork,
+                                           UOW_FACTORY extends UnitOfWorkFactory<UOW>>
+```
 
-Load testing for index optimization.
+Load test for index optimization.
 
-#### Configuration
+**Config:**
+- 20,000 messages queued in single transaction
 
-| Parameter | Value |
-|-----------|-------|
-| Messages queued | 20,000 |
-| Transaction | Single transaction |
+**Test:**
+- `queue_a_large_number_of_messages` - Consumption starts within 5 seconds despite large queue
 
-#### Test Coverage
-
-| Test Method | Behavior |
-|-------------|----------|
-| `queue_a_large_number_of_messages` | Consumption starts within 5 seconds despite large queue |
-
-#### Purpose
-
-Validates database indexes properly utilized - consumption shouldn't be delayed significantly when many messages queued.
+**Purpose:**
+Validates database indexes utilized - consumption shouldn't delay significantly with many queued messages.
 
 ---
 
 ## DurableLocalCommandBus Test Template
 
-**Package**: `dk.trustworks.essentials.components.foundation.test.reactive.command`
+**Base package**: `dk.trustworks.essentials.components.foundation.test.reactive.command`
 
 ### AbstractDurableLocalCommandBusIT
 
-`public abstract class AbstractDurableLocalCommandBusIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>>`
+**Signature:**
+```java
+public abstract class AbstractDurableLocalCommandBusIT<DURABLE_QUEUES extends DurableQueues,
+                                                        UOW extends UnitOfWork,
+                                                        UOW_FACTORY extends UnitOfWorkFactory<UOW>>
+```
 
-Tests for `DurableLocalCommandBus` - synchronous, asynchronous, and fire-and-forget command handling.
+Tests for `DurableLocalCommandBus` - sync, async, fire-and-forget.
 
 #### Abstract Methods
 
@@ -398,7 +379,7 @@ protected abstract UOW_FACTORY createUnitOfWorkFactory();
 
 | Test Method | Behavior |
 |-------------|----------|
-| `test_sync_send` | Synchronous command execution with result |
+| `test_sync_send` | Sync command execution with result |
 | `test_sync_send_with_command_processing_exception` | Exception propagation on sync send |
 | `test_async_send` | Async command with `Mono.block()` |
 | `test_sendAndDontWait` | Fire-and-forget without transaction |
@@ -416,34 +397,30 @@ protected abstract UOW_FACTORY createUnitOfWorkFactory();
 
 **Package**: `dk.trustworks.essentials.components.foundation.test.messaging.queue`
 
-Proxy `JSONSerializer` that simulates deserialization failures.
+Proxy `JSONSerializer` simulating deserialization failures.
 
-#### API
-
+**API:**
 ```java
 ProxyJSONSerializer proxy = new ProxyJSONSerializer(actualSerializer);
 
-// Enable corruption for specific type
+// Enable corruption for type
 proxy.enableJSONCorruptionDuringDeserialization(OrderEvent.OrderAdded.class);
 
-// Subsequent deserialization of OrderAdded will fail
-// Corruption auto-disables after one failure
+// Subsequent deserialization of OrderAdded fails
+// Auto-disables after one failure
 
 // Manual disable
 proxy.disableJSONCorruptionDuringDeserialization();
 ```
 
-#### Use Case
-
+**Use case:**
 Used in `DurableQueuesIT.verify_json_deserialization_problem_causes_message_to_be_marked_as_dead_letter_message` to verify deserialization failures → DLQ.
 
 ---
 
 ## Test Data Classes
 
-**Package**: `dk.trustworks.essentials.components.foundation.test.messaging.queue.test_data`
-
-Realistic test data for queue message testing:
+**Base package**: `dk.trustworks.essentials.components.foundation.test.messaging.queue.test_data`
 
 | Class | Type | Purpose |
 |-------|------|---------|
@@ -452,9 +429,9 @@ Realistic test data for queue message testing:
 | `ProductId` | `CharSequenceType` | Product identifiers |
 | `AccountId` | `IntegerType` | Account identifiers (ordered message tests) |
 | `OrderEvent` | Base event | Subclasses: `OrderAdded`, `ProductAddedToOrder`, `ProductOrderQuantityAdjusted`, `ProductRemovedFromOrder`, `OrderAccepted` |
-| `ProductEvent` | Event | Product-related events |
+| `ProductEvent` | Event | Product events |
 
-All classes are immutable, properly implement `equals()`/`hashCode()`, and support JSON serialization.
+All immutable, proper `equals()`/`hashCode()`, JSON serialization support.
 
 ---
 
@@ -463,6 +440,16 @@ All classes are immutable, properly implement `equals()`/`hashCode()`, and suppo
 ### FencedLock Implementation Test
 
 ```java
+package dk.trustworks.essentials.components.postgresql.fencedlock;
+
+import dk.trustworks.essentials.components.foundation.test.fencedlock.DBFencedLockManagerIT;
+import org.jdbi.v3.core.Jdbi;
+import org.junit.jupiter.api.*;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.*;
+import java.time.Duration;
+
+@Testcontainers
 public class PostgresqlFencedLockManagerIT
     extends DBFencedLockManagerIT<PostgresqlFencedLockManager> {
 
@@ -473,7 +460,9 @@ public class PostgresqlFencedLockManagerIT
 
     @BeforeEach
     void setupDb() {
-        jdbi = Jdbi.create(postgres.getJdbcUrl(), /* ... */);
+        jdbi = Jdbi.create(postgres.getJdbcUrl(),
+                          postgres.getUsername(),
+                          postgres.getPassword());
     }
 
     @Override
@@ -516,6 +505,20 @@ public class PostgresqlFencedLockManagerIT
 ### DurableQueues Implementation Test
 
 ```java
+package dk.trustworks.essentials.components.postgresql.queue;
+
+import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesIT;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.jackson.immutable.JacksonJSONSerializer;
+import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import org.jdbi.v3.core.Jdbi;
+import org.junit.jupiter.api.*;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.*;
+
+@Testcontainers
 public class PostgresqlDurableQueuesIT
     extends DurableQueuesIT<PostgresqlDurableQueues, JdbiUnitOfWork, JdbiUnitOfWorkFactory> {
 
@@ -526,7 +529,9 @@ public class PostgresqlDurableQueuesIT
 
     @Override
     protected JdbiUnitOfWorkFactory createUnitOfWorkFactory() {
-        jdbi = Jdbi.create(postgres.getJdbcUrl(), /* ... */);
+        jdbi = Jdbi.create(postgres.getJdbcUrl(),
+                          postgres.getUsername(),
+                          postgres.getPassword());
         return new JdbiUnitOfWorkFactory(jdbi);
     }
 
@@ -561,19 +566,19 @@ public class PostgresqlDurableQueuesIT
 
 ## Common Pitfalls
 
-### ⚠️ Forgetting to Start Managers/Queues
+### ⚠️ Forgetting to Start
 
 ```java
-// ❌ Wrong - not started
+// ❌ Wrong
 durableQueues = createDurableQueues(...);
-// Tests will fail
+// Tests fail
 
-// ✅ Correct - started
+// ✅ Correct
 durableQueues = createDurableQueues(...);
 durableQueues.start();
 ```
 
-### ⚠️ Incorrect Transaction Wrapping
+### ⚠️ Missing Transaction Wrapper
 
 ```java
 // ❌ Wrong - FullyTransactional mode needs wrapping
@@ -586,7 +591,7 @@ withDurableQueue(() -> durableQueues.queueMessage(queueName, message));
 ### ⚠️ Reusing Instances Between Tests
 
 ```java
-// ❌ Wrong - instance reused
+// ❌ Wrong - static instance reused
 private static DurableQueues durableQueues;
 
 @BeforeAll
@@ -603,13 +608,13 @@ void setup() {
 }
 ```
 
-### ⚠️ Not Cleaning Up Resources
+### ⚠️ Not Cleaning Up
 
 ```java
-// ❌ Wrong - containers/connections leak
+// ❌ Wrong
 @AfterEach
 void cleanup() {
-    // Nothing
+    // Nothing - resources leak
 }
 
 // ✅ Correct
@@ -623,21 +628,11 @@ void cleanup() {
 
 ---
 
-## Cross-References
+## See Also
 
-### Implementations Tested
-
-| Implementation | Module | Test Location |
-|----------------|--------|---------------|
-| `PostgresqlFencedLockManager` | `postgresql-distributed-fenced-lock` | [src/test/java](../components/postgresql-distributed-fenced-lock/src/test/java) |
-| `MongoFencedLockManager` | `springdata-mongo-distributed-fenced-lock` | [src/test/java](../components/springdata-mongo-distributed-fenced-lock/src/test/java) |
-| `PostgresqlDurableQueues` | `postgresql-queue` | [src/test/java](../components/postgresql-queue/src/test/java) |
-| `MongoDurableQueues` | `springdata-mongo-queue` | [src/test/java](../components/springdata-mongo-queue/src/test/java) |
-
-### Related Documentation
-
-- [LLM-foundation.md](./LLM-foundation.md) - `FencedLockManager`, `DurableQueues` interface details
-- [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL FencedLock implementation
-- [LLM-postgresql-queue.md](./LLM-postgresql-queue.md) - PostgreSQL DurableQueues implementation
-- [LLM-springdata-mongo-distributed-fenced-lock.md](./LLM-springdata-mongo-distributed-fenced-lock.md) - MongoDB FencedLock implementation
-- [LLM-springdata-mongo-queue.md](./LLM-springdata-mongo-queue.md) - MongoDB DurableQueues implementation
+- [README.md](../components/foundation-test/README.md) - Full documentation
+- [LLM-foundation.md](./LLM-foundation.md) - `FencedLockManager`, `DurableQueues` interfaces
+- [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL FencedLock
+- [LLM-postgresql-queue.md](./LLM-postgresql-queue.md) - PostgreSQL DurableQueues
+- [LLM-springdata-mongo-distributed-fenced-lock.md](./LLM-springdata-mongo-distributed-fenced-lock.md) - MongoDB FencedLock
+- [LLM-springdata-mongo-queue.md](./LLM-springdata-mongo-queue.md) - MongoDB DurableQueues

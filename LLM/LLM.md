@@ -1,105 +1,92 @@
 # Essentials - LLM Reference
 
-> **Entry Point**: Navigate to specific modules via links below for implementation details.
+> **Navigation Index**: Entry point to module-specific documentation. For implementation details, see linked module docs.
 
-Status: Work-in-progress
- 
 ## TOC
 - [Quick Facts](#quick-facts)
-- [Module Categories](#module-categories)
-- [Philosophy](#philosophy)
+- [Module Index](#module-index)
 - [Module Selection Guide](#module-selection-guide)
-- [Key Concepts](#key-concepts)
-- [Common Use Cases](#common-use-cases)
-- [Architecture Principles](#architecture-principles)
+- [Core Concepts](#core-concepts)
+- [Common Patterns](#common-patterns)
+- [Architecture](#architecture)
 - ⚠️ [Security](#security)
 - [Navigation](#navigation)
 
 ## Quick Facts
 
-| Aspect | Details |
-|--------|---------|
+| Aspect | Details                                                                                |
+|--------|----------------------------------------------------------------------------------------|
 | **What** | Java 17+ building blocks for strongly-typed, framework-independent distributed systems |
-| **GroupId** | `dk.trustworks.essentials` (core), `dk.trustworks.essentials.components` (components) |
-| **License** | Apache 2.0 |
-| **Spring Boot** | 3.3.x |
-| **Philosophy** | Zero-dependency core, `provided` scope for integrations |
-| **Scope** | Intra-service coordination (same service, shared database) |
+| **GroupId** | `dk.trustworks.essentials` (core), `dk.trustworks.essentials.components` (components)  |
+| **License** | Apache 2.0                                                                             |
+| **Spring Boot** | 3.3.x+                                                                                 |
+| **Philosophy** | Zero-dependency core, `provided` scope integrations                                    |
+| **Scope** | Intra-service coordination (same service, shared DB)                                   |
 
-## Module Categories
+## Module Index
+
+### Quick Reference
+
+| Index | Purpose | Docs |
+|-------|---------|------|
+| **Types & Components Index** | Alphabetical lookup of all types/interfaces by use case | [LLM-types-index.md](LLM-types-index.md) |
+| **Components Overview** | Consolidated view of all component modules | [LLM-components.md](LLM-components.md) |
 
 ### Core Modules (Zero Dependencies)
 
-| Module | Purpose | Detailed Docs |
-|--------|---------|---------------|
-| **shared** | Base utilities (Tuples, Collections, Reflection, Exceptions) | [LLM-shared.md](LLM-shared.md) |
-| **types** | Strongly-typed semantic types (`SingleValueType` pattern) | [LLM-types.md](LLM-types.md) |
-| **immutable** | Immutable value objects | [LLM-immutable.md](LLM-immutable.md) |
-| **reactive** | Command/Event bus, reactive primitives | [LLM-reactive.md](LLM-reactive.md) |
+| Module | Package | Purpose                                                                           | Docs |
+|--------|---------|-----------------------------------------------------------------------------------|------|
+| **shared** | `dk.trustworks.essentials.shared` | Tuples, Collections, Reflection, Exceptions, FailFast | [LLM-shared.md](LLM-shared.md) |
+| **types** | `dk.trustworks.essentials.types` | `SingleValueType` pattern for semantic types | [LLM-types.md](LLM-types.md) |
+| **immutable** | `dk.trustworks.essentials.immutable` | Immutable value objects | [LLM-immutable.md](LLM-immutable.md) |
+| **reactive** | `dk.trustworks.essentials.reactive` | `EventBus`, `CommandBus` | [LLM-reactive.md](LLM-reactive.md) |
 
 ### Type Integrations (`provided` scope)
 
 **Overview:** [LLM-types-integrations.md](LLM-types-integrations.md)
 
-| Module | Framework | Purpose |
-|--------|-----------|---------|
-| **types-jackson** | Jackson | JSON serialization |
-| **types-jdbi** | JDBI v3 | SQL argument/column mapping |
-| **types-avro** | Avro | Binary serialization, schema evolution |
-| **types-spring-web** | Spring WebMVC/WebFlux | `@PathVariable`/`@RequestParam` conversion |
-| **types-springdata-mongo** | Spring Data MongoDB | MongoDB persistence |
-| **types-springdata-jpa** | Spring Data JPA | JPA persistence (experimental, may be removed) |
-| **immutable-jackson** | Jackson | Immutable object deserialization |
+| Module | Framework | Purpose | Docs |
+|--------|-----------|---------|------|
+| **types-jackson** | Jackson | JSON serialization | [LLM-types-jackson.md](LLM-types-jackson.md) |
+| **types-jdbi** | JDBI v3 | SQL argument/column mapping | [LLM-types-jdbi.md](LLM-types-jdbi.md) |
+| **types-avro** | Avro | Binary serialization, schema evolution | [LLM-types-avro.md](LLM-types-avro.md) |
+| **types-spring-web** | Spring WebMVC/WebFlux | `@PathVariable`/`@RequestParam` conversion | [LLM-types-spring-web.md](LLM-types-spring-web.md) |
+| **types-springdata-mongo** | Spring Data MongoDB | MongoDB persistence | [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md) |
+| **types-springdata-jpa** | Spring Data JPA | JPA persistence (experimental) | [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md) |
+| **immutable-jackson** | Jackson | Immutable object deserialization | [LLM-immutable-jackson.md](LLM-immutable-jackson.md) |
 
 ### Components (Advanced Features)
 
-**Overview:** [LLM-components.md](LLM-components.md)
+**Package Base:** `dk.trustworks.essentials.components`
 
-| Category | Modules | Detailed Docs |
-|----------|---------|---------------|
-| **Foundation** | `foundation-types`, `foundation`, `foundation-test` | [LLM-foundation.md](LLM-foundation.md), [LLM-foundation-types.md](LLM-foundation-types.md), [LLM-foundation-test.md](LLM-foundation-test.md) |
-| **PostgreSQL** | `postgresql-event-store`, `postgresql-queue`, `postgresql-distributed-fenced-lock`, `postgresql-document-db` | [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md), [LLM-postgresql-queue.md](LLM-postgresql-queue.md), [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md), [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) |
-| **Spring** | `spring-postgresql-event-store`, `spring-boot-starter-*` | [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md), [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
-| **MongoDB** | `springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock` | [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md), [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) |
-| **Event Sourcing** | `eventsourced-aggregates`, `kotlin-eventsourcing` | [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md), [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) |
-| **UI** | `vaadin-ui` | [LLM-vaadin-ui.md](LLM-vaadin-ui.md) |
+Consolidated view of all component modules [LLM-components.md](LLM-components.md)
 
-### Spring Boot Starters (Auto-Configuration)
+| Component | Purpose                                                                               | Docs |
+|-----------|---------------------------------------------------------------------------------------|------|
+| **foundation-types** | Common types (`CorrelationId`, `EventId`, `AggregateType`, etc.) | [LLM-foundation-types.md](LLM-foundation-types.md) |
+| **foundation** | `FencedLock`, `DurableQueues`, `UnitOfWork`, `Inbox`/`Outbox`, `DurableLocalCommandBus` | [LLM-foundation.md](LLM-foundation.md) |
+| **foundation-test** | Internal Test utilities and abstractions  | [LLM-foundation-test.md](LLM-foundation-test.md) |
+| **postgresql-event-store** | `EventStore` with subscriptions, `EventProcessor`| [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md) |
+| **eventsourced-aggregates** | `StatefulAggregate`, `Aggregate`, `Decider`, Repository patterns | [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) |
+| **spring-postgresql-event-store** | Spring transaction integration for `EventStore` | [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md) |
+| **postgresql-distributed-fenced-lock** | Distributed locking via PostgreSQL | [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md) |
+| **postgresql-queue** | Durable queues with PostgreSQL | [LLM-postgresql-queue.md](LLM-postgresql-queue.md) |
+| **postgresql-document-db** | Document database using PostgreSQL | [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) |
+| **springdata-mongo-distributed-fenced-lock** | Distributed locking via Spring Data MongoDB | [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) |
+| **springdata-mongo-queue** | Durable queues with Spring Data MongoDB | [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md) |
+| **kotlin-eventsourcing** | Kotlin DSL for event sourcing | [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) |
+| **vaadin-ui** | Vaadin UI components | [LLM-vaadin-ui.md](LLM-vaadin-ui.md) |
 
-**Detailed Docs:** [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
+### Spring Boot Starters
+
+**Docs:** [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
 
 | Starter | Includes | Use Case |
 |---------|----------|----------|
-| `spring-boot-starter-postgresql` | Jdbi, FencedLock, Queues, Inbox/Outbox, CommandBus | Microservices + PostgreSQL (not event-sourced) |
-| `spring-boot-starter-postgresql-event-store` | Above + EventStore, Subscriptions, EventProcessors | Event-sourced applications + PostgreSQL |
+| `spring-boot-starter-postgresql` | Jdbi, FencedLock, Queues, Inbox/Outbox, CommandBus | Microservices + PostgreSQL |
+| `spring-boot-starter-postgresql-event-store` | Above + EventStore, Subscriptions, EventProcessors | Event-sourced apps + PostgreSQL |
 | `spring-boot-starter-mongodb` | MongoTemplate, FencedLock, Queues, Inbox/Outbox | Microservices + MongoDB |
 | `spring-boot-starter-admin-ui` | Vaadin admin views for EventStore | Monitoring/management UI |
-
----
-
-## Philosophy
-
-### Zero-Dependency Core
-
-Core modules (`shared`, `types`, `immutable`, `reactive`) have **zero dependencies** (except SLF4J as `provided`).
-
-### Provided Scope for Integrations
-
-Integration modules (Jackson, JDBI, Spring, etc.) use Maven `provided` scope:
-- Third-party dependencies available at **compile time only**
-- **NOT transitive** - users must add dependencies themselves
-- Reduces dependency conflicts, allows version control
-
-### Intra-Service Coordination
-
-Components designed for **intra-service** coordination:
-- Multiple instances of **SAME service** sharing a database
-- NOT for cross-service messaging (Sales ↔ Billing ↔ Shipping)
-- For cross-service: use Kafka/RabbitMQ/Zookeeper
-
-**Example:**
-- ✅ Intra-service: 3 instances of "OrderService" sharing `orders_db`
-- ❌ Cross-service: "OrderService" ↔ "PaymentService" (different databases)
 
 ---
 
@@ -107,99 +94,81 @@ Components designed for **intra-service** coordination:
 
 ### By Use Case
 
-| Use Case | Recommended Modules | Entry Point |
-|----------|---------------------|-------------|
-| **Type-safe domain modeling** | `types` + framework integration | [LLM-types.md](LLM-types.md), [LLM-types-integrations.md](LLM-types-integrations.md) |
+| Use Case | Modules | Entry Point |
+|----------|---------|-------------|
+| **Type-safe domain modeling** | `types` + framework integrations | [LLM-types.md](LLM-types.md) |
 | **Event Sourcing (Spring Boot)** | `spring-boot-starter-postgresql-event-store` | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
-| **Event Sourcing (Plain Java)** | `postgresql-event-store` + `eventsourced-aggregates` | [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md), [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) |
-| **Microservices (PostgreSQL)** | `spring-boot-starter-postgresql` OR `foundation` + PostgreSQL modules | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md), [LLM-foundation.md](LLM-foundation.md) |
-| **Microservices (MongoDB)** | `spring-boot-starter-mongodb` OR `foundation` + MongoDB modules | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md), [LLM-foundation.md](LLM-foundation.md) |
-| **Distributed locking** | `foundation` + (`postgresql-distributed-fenced-lock` OR `springdata-mongo-distributed-fenced-lock`) | [LLM-foundation.md](LLM-foundation.md) |
-| **Message queues** | `foundation` + (`postgresql-queue` OR `springdata-mongo-queue`) | [LLM-foundation.md](LLM-foundation.md) |
-| **Inbox/Outbox pattern** | `foundation` + database-specific modules | [LLM-foundation.md](LLM-foundation.md) |
+| **Event Sourcing (Plain Java)** | `postgresql-event-store` + `eventsourced-aggregates` | [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md) |
+| **Microservices (PostgreSQL)** | `spring-boot-starter-postgresql` OR `foundation` + PostgreSQL modules | [LLM-foundation.md](LLM-foundation.md) |
+| **Microservices (MongoDB)** | `spring-boot-starter-mongodb` OR `foundation` + MongoDB modules | [LLM-foundation.md](LLM-foundation.md) |
+| **Distributed locking** | `foundation` + DB-specific lock module | [LLM-foundation.md](LLM-foundation.md) |
+| **Message queues** | `foundation` + DB-specific queue module | [LLM-foundation.md](LLM-foundation.md) |
+| **Inbox/Outbox** | `foundation` + DB modules | [LLM-foundation.md](LLM-foundation.md) |
 
 ### By Framework
 
-| Framework | Modules                                                    | Docs                                                                                                                         |
-|-----------|------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|
-| **Spring Boot + PostgreSQL (event-sourced)** | `spring-boot-starter-postgresql-event-store`               | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)                                                     |
-| **Spring Boot + PostgreSQL (not event-sourced)** | `spring-boot-starter-postgresql`                           | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)                                                     |
-| **Spring Boot + MongoDB** | `spring-boot-starter-mongodb`                              | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)                                                     |
-| **Plain Java/JDBI** | Core + components + PostgreSQL modules                     | [LLM-foundation.md](LLM-foundation.md)                                                                                       |
-| **Kotlin** | Core + `kotlin-eventsourcing` + `postgresql-event-store` + `postgresql-document-db` | [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md), [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md), [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md) |
+| Framework | Modules | Docs |
+|-----------|---------|------|
+| **Spring Boot + PostgreSQL (event-sourced)** | `spring-boot-starter-postgresql-event-store` | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
+| **Spring Boot + PostgreSQL (CRUD)** | `spring-boot-starter-postgresql` | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
+| **Spring Boot + MongoDB** | `spring-boot-starter-mongodb` | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
+| **Plain Java/JDBI** | Core + components + PostgreSQL modules | [LLM-foundation.md](LLM-foundation.md) |
+| **Kotlin** | Core + `kotlin-eventsourcing` + `postgresql-event-store` | [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) |
 
 ---
 
-## Key Concepts
+## Core Concepts
 
 ### SingleValueType Pattern
 
 **Package:** `dk.trustworks.essentials.types`
 **Docs:** [LLM-types.md](LLM-types.md)
 
-Strongly-typed wrappers around primitive values:
+Strongly-typed wrappers eliminating primitive obsession:
 
 ```java
-// Instead of: String orderId, String customerId
-// Use:
+// Define types
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
     public OrderId(CharSequence value) { super(value); }
     public OrderId(String value) { super(value); }
     public static OrderId of(CharSequence value) { return new OrderId(value); }
 }
 
-public class CustomerId extends CharSequenceType<CustomerId> implements Identifier {
-    public CustomerId(CharSequence value) { super(value); }
-    public CustomerId(String value) { super(value); }
-    public static CustomerId of(CharSequence value) { return new CustomerId(value); }
-}
-
-// Prevents: void placeOrder(String orderId, String customerId)
-//           placeOrder(customerId, orderId); // Wrong order, compiles!
-
-// Type-safe:
-void placeOrder(OrderId orderId, CustomerId customerId)
-// placeOrder(customerId, orderId); // Compile error!
+// Type-safe APIs prevent argument swapping
+void placeOrder(OrderId orderId, CustomerId customerId)  // Compile-time safe
+// placeOrder(customerId, orderId);  // Compile error!
 ```
 
-**Base Types:**
-- `CharSequenceType` - String wrappers
-- `NumberType` (BigDecimal, Long, Integer) - Numeric wrappers
-- `JSR310SingleValueType` (Instant, LocalDate, etc.) - Temporal wrappers
+**Base Types:** `CharSequenceType`, `NumberType`, `JSR310SingleValueType`
 
 ### UnitOfWork Pattern
 
 **Package:** `dk.trustworks.essentials.components.foundation.transaction`
 **Docs:** [LLM-foundation.md](LLM-foundation.md)
 
-Technology-agnostic transaction management:
+Technology-agnostic transactions:
 
 ```java
-unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-    // All operations here are transactional
-    orderRepository.save(order);
-    eventStore.appendToStream(aggregateType, aggregateId, events);
-    durableQueues.queueMessage(queueName, message, unitOfWork);
-    // Commits automatically on success, rolls back on exception
+unitOfWorkFactory.usingUnitOfWork(uow -> {
+    repository.save(order);
+    eventStore.appendToStream(type, id, events);
+    durableQueues.queueMessage(queueName, msg, uow);
+    // Auto-commit on success, rollback on exception
 });
 ```
 
-**Implementations:**
-- `JdbiUnitOfWorkFactory` - Direct JDBI
-- `SpringTransactionAwareJdbiUnitOfWorkFactory` - Spring + JDBI
-- `SpringMongoTransactionAwareUnitOfWorkFactory` - Spring + MongoDB
+**Implementations:** `JdbiUnitOfWorkFactory`, `SpringTransactionAwareJdbiUnitOfWorkFactory`, `SpringMongoTransactionAwareUnitOfWorkFactory`
 
 ### Event Store
 
 **Package:** `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`
 **Docs:** [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md)
 
-Full-featured event sourcing:
-- Event streams (separate table per `AggregateType`)
+Event sourcing infrastructure:
+- Event streams (table per `AggregateType`)
 - Durable subscriptions with gap handling
-- `EventOrder` (per-aggregate, strict) + `GlobalEventOrder` (per-type, may gap)
-- Interceptors, multitenancy, reactive streaming
-- `EventProcessor` - Event-driven processing with guaranteed delivery and replay support
+- `EventOrder` (per-aggregate) + `GlobalEventOrder` (per-type)
+- `EventProcessor` - Event-driven processing with replay support
 
 ### DurableQueues
 
@@ -209,17 +178,16 @@ Full-featured event sourcing:
 Point-to-point messaging:
 - At-Least-Once delivery
 - Competing consumers
-- Ordered message delivery via `OrderedMessage`
+- Ordered delivery via `OrderedMessage`
 - Dead Letter Queue (DLQ)
-- Redelivery policies
 
 ### FencedLock
 
 **Package:** `dk.trustworks.essentials.components.foundation.fencedlock`
 **Docs:** [LLM-foundation.md](LLM-foundation.md)
 
-Distributed locking with fence tokens (Martin Kleppmann's pattern):
-- Monotonically increasing fence tokens
+Distributed locking (Martin Kleppmann's fencing pattern):
+- Monotonic fence tokens
 - Stale lock prevention
 - Timeout-based release
 - Intra-service only
@@ -230,35 +198,34 @@ Distributed locking with fence tokens (Martin Kleppmann's pattern):
 **Docs:** [LLM-foundation.md](LLM-foundation.md)
 
 Store-and-forward pattern:
-- **Inbox**: Incoming messages (e.g., from Kafka) → internal processing
-- **Outbox**: Internal events → external systems (e.g., to Kafka)
-- Deduplication, guaranteed delivery, transactional integration
+- **Inbox**: External → internal (e.g., Kafka → app)
+- **Outbox**: Internal → external (e.g., app → Kafka)
+- Deduplication, guaranteed delivery
 
 ### Event-Sourced Aggregates
 
 **Package:** `dk.trustworks.essentials.components.eventsourced.aggregates`
 **Docs:** [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md)
 
-Domain modeling with event sourcing:
+Domain modeling:
 - `StatefulAggregate` - State from events
 - `Aggregate` - Modern aggregate pattern
-- `Decider` / `EventStreamDecider` + `EventStreamEvolver` - Functional style 
-- `AggregateRepository` / `StatefulAggregateRepository` - Load/save aggregates
+- `Decider` / `EventStreamDecider` + `EventStreamEvolver` - Functional style
+- `AggregateRepository` / `StatefulAggregateRepository` - Load/save
 
 ---
 
-## Common Use Cases
+## Common Patterns
 
 ### Event Sourcing Application
 
 **Stack:** `spring-boot-starter-postgresql-event-store` + `eventsourced-aggregates`
 
 ```java
-// 1. Define types
+// 1. Define semantic type
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
     public OrderId(CharSequence value) { super(value); }
-    public OrderId(String value) { super(value); }  // Required for Jackson 2.18+
-
+    public OrderId(String value) { super(value); }
     public static OrderId of(CharSequence value) { return new OrderId(value); }
     public static OrderId random() { return new OrderId(RandomIdGenerator.generate()); }
 }
@@ -268,74 +235,58 @@ public interface OrderEvent { OrderId orderId(); }
 public record OrderPlaced(OrderId orderId, CustomerId customerId) implements OrderEvent {}
 public record OrderConfirmed(OrderId orderId) implements OrderEvent {}
 
-// 3. Define aggregate
+// 3. Define stateful aggregate
 public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
     private boolean confirmed;
-    
-    public Order() {} // For snapshot deserialization
-    // Rehydration constructor
-    public Order(OrderId orderId) {
-        super(orderId);
+
+    public Order() {}  // Deserialization
+    public Order(OrderId id) { super(id); }  // Rehydration
+    public Order(OrderId id, CustomerId customerId) {
+        super(id);
+        apply(new OrderPlaced(id, customerId));
     }
-    // Business constructor
-    public Order(OrderId orderId, CustomerId customerId) {
-        super(orderId);
-        apply(new OrderPlaced(orderId, customerId));
-    }
-    // Business method - idempotent
+
     public void confirm() {
-        if (confirmed) return;  // Idempotent: no-op if already confirmed
+        if (confirmed) return;  // Idempotent
         apply(new OrderConfirmed(aggregateId()));
     }
 
-    // Event handlers - update internal state
     @EventHandler
-    private void on(OrderPlaced event) {
-        this.confirmed = false;
-        // Note: You only need to extract properties required for later validations
-    }
+    private void on(OrderPlaced e) { this.confirmed = false; }
 
     @EventHandler
-    private void on(OrderConfirmed event) {
-        this.confirmed = true;
-    }
+    private void on(OrderConfirmed e) { this.confirmed = true; }
 }
 
-// 4. Configured StatefulAggregateRepository for Order aggregate
-@Configuration
-public class OrderAggregateConfig {
-    @Bean
-    public StatefulAggregateRepository<OrderId, OrderEvent, Order> orderRepository(
-            ConfigurableEventStore<?> eventStore) {
-        // Registers AggregateType "Orders" with the EventStore
-        return StatefulAggregateRepository.from(
-                eventStore,
-                AggregateType.of("Orders"),
-                StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                Order.class
-        );
-    }
+// 4. Configure repository
+@Bean
+public StatefulAggregateRepository<OrderId, OrderEvent, Order> orderRepository(
+        ConfigurableEventStore<?> eventStore) {
+    return StatefulAggregateRepository.from(
+        eventStore,
+        AggregateType.of("Orders"),
+        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
+        Order.class
+    );
 }
 
-// 5. Use repository (you can also use CommandBus to send commands and have them handled in a UnitOfWork)
+// 5. Use in service
 @Service
 public class OrderService {
     @Autowired
-    private final StatefulAggregateRepository<OrderId, OrderEvent, Order> repository;
+    private StatefulAggregateRepository<OrderId, OrderEvent, Order> repository;
 
     @Transactional
     public OrderId placeOrder(CustomerId customerId) {
         var order = new Order(OrderId.random(), customerId);
-        repository.save(order); // Events persisted automatically
+        repository.save(order);
         return order.aggregateId();
     }
 
     @Transactional
-    void confirmOrder(OrderId orderId) {
-        // Load aggregate, apply business logic (confirm() is idempotent)
+    public void confirmOrder(OrderId orderId) {
         var order = repository.load(orderId);
-        order.confirm();  // Idempotent: no-op if already confirmed
-        // Since we're using StatefulAggregate then, any aggregate changes (Events applied) will automatically be persisted when the transaction/UnitOfWork commits 
+        order.confirm();  // Auto-persisted on tx commit
     }
 }
 ```
@@ -344,21 +295,19 @@ public class OrderService {
 
 ### Microservices with Queues + Locks
 
-**Stack:** `spring-boot-starter-postgresql` OR `foundation` + PostgreSQL modules
+**Stack:** `spring-boot-starter-postgresql`/`spring-boot-starter-mongodb` OR `foundation` + PostgreSQL/MongoDB modules
 
 ```java
 @Service
 public class OrderProcessor {
-    private final DurableQueues queues;        // Auto-configured
-    private final FencedLockManager locks;     // Auto-configured
+    private final DurableQueues queues;
+    private final FencedLockManager locks;
 
-    // Queue messages
     @Transactional
     public void scheduleProcessing(OrderId orderId) {
         queues.queueMessage(QueueName.of("orders"), new ProcessOrder(orderId));
     }
 
-    // Consume messages
     @PostConstruct
     public void startConsumer() {
         queues.consumeFromQueue(ConsumeFromQueue.builder()
@@ -369,12 +318,10 @@ public class OrderProcessor {
             .build());
     }
 
-    // Distributed coordination
     @Scheduled(fixedDelay = 60000)
     public void cleanupExpiredOrders() {
         locks.tryAcquireLock(LockName.of("cleanup")).ifPresent(lock -> {
             try {
-                // Only one instance executes this
                 performCleanup(lock.getCurrentToken());
             } finally {
                 locks.releaseLock(lock);
@@ -388,32 +335,31 @@ public class OrderProcessor {
 
 ### Inbox/Outbox Integration
 
-**Stack:** `foundation` + database modules
+**Stack:** `foundation` + DB modules
 
 ```java
+// Configure inbox
 Inbox orderEventsInbox = inboxes.getOrCreateInbox(
-        InboxConfig.builder()
-                   .setInboxName(InboxName.of("OrderService:KafkaEvents"))
-                   .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff()
-                                                        .setRedeliveryDelay(Duration.ofMillis(100))
-                                                        .setMaximumNumberOfRedeliveries(10)
-                                                        .build())
-                   .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
-                   .setNumberOfParallelMessageConsumers(5)
-                   .build(),
-        new PatternMatchingMessageHandler() {
-            @MessageHandler
-            void handle(ProcessOrderCommand cmd) {
-                processOrder(cmd);
-            }
+    InboxConfig.builder()
+        .setInboxName(InboxName.of("OrderService:KafkaEvents"))
+        .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff()
+            .setRedeliveryDelay(Duration.ofMillis(100))
+            .setMaximumNumberOfRedeliveries(10)
+            .build())
+        .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
+        .setNumberOfParallelMessageConsumers(5)
+        .build(),
+    new PatternMatchingMessageHandler() {
+        @MessageHandler
+        void handle(ProcessOrderCommand cmd) { processOrder(cmd); }
 
-            @Override
-            protected void handleUnmatchedMessage(Message msg) {
-                log.warn("Unknown message type");
-            }
-        });
+        @Override
+        protected void handleUnmatchedMessage(Message msg) {
+            log.warn("Unknown message type");
+        }
+    });
 
-// Kafka listener
+// Kafka listener feeds inbox
 @KafkaListener(topics = ORDER_EVENTS_TOPIC, groupId = "order-processing")
 public void handle(OrderEvent event) {
     orderEventsInbox.addMessageReceived(new ProcessOrderCommand(event.getId()));
@@ -424,83 +370,106 @@ public void handle(OrderEvent event) {
 
 ---
 
-## Architecture Principles
+## Architecture
 
-### Layered Architecture
+### Dependency Philosophy
+
+| Principle | Description |
+|-----------|-------------|
+| **Zero-dependency core** | Core modules have no dependencies (except SLF4J `provided`) |
+| **Provided scope integrations** | Third-party libs as `provided` - NOT transitive |
+| **Intra-service coordination** | Same service, shared DB - NOT cross-service messaging |
+| **Transaction boundaries** | `UnitOfWork` pattern ensures consistency |
+| **Type safety** | Strong typing prevents errors, enables refactoring |
+
+### Layered Structure
 
 ```
-┌────────────────────────────────────────┐
-│      Application Layer                 │
-│  (Your business logic, services)       │
-└────────────────────────────────────────┘
-                 ↓
-┌────────────────────────────────────────┐
-│      Components Layer                  │
-│  (EventStore, Queues, Locks, etc.)     │
-└────────────────────────────────────────┘
-                 ↓
-┌────────────────────────────────────────┐
-│      Foundation Layer                  │
-│  (UnitOfWork, DurableQueues, etc.)     │
-└────────────────────────────────────────┘
-                 ↓
-┌────────────────────────────────────────┐
-│      Core Layer                        │
-│  (Types, Reactive, Shared, Immutable)  │
-└────────────────────────────────────────┘
+┌─────────────────────────────────┐
+│    Application Layer            │
+│  (Business logic, services)     │
+└─────────────────────────────────┘
+             ↓
+┌─────────────────────────────────┐
+│    Components Layer             │
+│  (EventStore, EventProcessors)  │
+└─────────────────────────────────┘
+             ↓
+┌─────────────────────────────────┐
+│    Foundation Layer             │
+│  (UnitOfWork, Queues, Locks)    │
+└─────────────────────────────────┘
+             ↓
+┌─────────────────────────────────┐
+│    Core Layer                   │
+│  (Types, Reactive, Shared)      │
+└─────────────────────────────────┘
 ```
 
-### Key Principles
+### Intra-Service Scope
 
-| Principle | Description                                                                        |
-|-----------|------------------------------------------------------------------------------------|
-| **Dependency Inversion** | Depend on abstractions, not implementations                                        |
-| **Database Agnostic** | PostgreSQL primary, MongoDB alternative via interfaces                             |
-| **Transaction Boundaries** | `UnitOfWork` pattern ensures consistency                                           |
-| **Event-Driven** | Components communicate via events/commands `EventBus`/`CommandBus`/`EventProcessor` |
-| **Type Safety** | Strong typing prevents errors, enables refactoring                                 |
+✅ **Designed for:** Multiple instances of SAME service sharing a database
+❌ **NOT for:** Cross-service messaging (Sales ↔ Billing ↔ Shipping)
+
+**Example:**
+- ✅ 3 instances of "OrderService" sharing `orders_db`
+- ❌ "OrderService" ↔ "PaymentService" (use Kafka/RabbitMQ/API)
 
 ---
 
 ## Security
 
-### ⚠️ Critical: SQL/NoSQL Injection Risk
+### ⚠️ SQL/NoSQL Injection Risk
 
-Components allow customization of table/column/index/function/collection names that are used with **String concatenation** → SQL/NoSQL injection risk.
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL/NoSQL injection.
+Components allow customization of table/column/index/function/collection names with are used with **String concatenation** → SQL/NoSQL injection risk.
 
-**Responsibility:** Users MUST sanitize all:
+**User Responsibility:** Sanitize ALL:
 - API input parameters
 - Table/column/index/function names (PostgreSQL)
 - Collection names (MongoDB)
 - Configuration values
 
-**Defense:** Essentials applies naming conventions (initial layer), but **NOT exhaustive protection**.
+**Defense:** Essentials applies naming convention validation (initial layer), **NOT exhaustive protection**.
 
 ### Safe Patterns
 
 ```java
-// ✅ Safe - Controlled, predefined names
+// ✅ Safe - Fixed string
 PostgresqlDurableQueues.builder()
-    .setSharedQueueTableName("durable_queues");  // Fixed string
+    .setSharedQueueTableName("durable_queues");
 
+// ✅ Safe - Initial Layer Validation
+dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil.checkIsValidTableOrColumnName(tableName);  // Basic validation
+dk.trustworks.essentials.components.foundation.mongo.MongoUtil.checkIsValidCollectionName(collectionName);     // Basic validation
 
-// ✅ Safe - Validation
-PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-MongoUtil.checkIsValidCollectionName(collectionName);
-
-// ❌ Dangerous - Never use user input directly
-var tableName = userInput + "_events";  // SQL injection risk!
-var collectionName = userInput + "_queue"; // NoSQL injection risk!
+// ❌ Dangerous - User input
+var tableName = userInput + "_events";  // SQL injection!
 ```
+
+### What Validation Does NOT Protect Against
+
+#### PostgreSQL
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+#### MongoDB
+- NoSQL injection via **values** (use Spring Data MongoDB's type-safe query methods)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- Query operator injection (e.g., `$where`, `$regex`, `$ne`)
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
 ### Fence Token Usage
 
-Use fence tokens to prevent stale operations:
+Include fence tokens in operations to prevent stale writes:
 
 ```java
 public void processOrder(OrderId orderId, long fenceToken) {
-    // Include token in operations to prevent stale writes
     repository.updateWithToken(orderId, newStatus, fenceToken);
 }
 ```
@@ -511,35 +480,44 @@ public void processOrder(OrderId orderId, long fenceToken) {
 
 ## Navigation
 
+### Quick Reference
+
+- [LLM-types-index.md](LLM-types-index.md) - **Types & Components Index** (alphabetical lookup by use case)
+- [LLM-components.md](LLM-components.md) - **Components Overview** (consolidated component documentation)
+
 ### By Module Type
 
-**Core Modules:**
-- [LLM-shared.md](LLM-shared.md) - Utilities, collections, tuples
-- [LLM-types.md](LLM-types.md) - Semantic types
-- [LLM-immutable.md](LLM-immutable.md) - Immutable value objects
-- [LLM-reactive.md](LLM-reactive.md) - Command/Event bus
+**Core:**
+- [LLM-shared.md](LLM-shared.md)
+- [LLM-types.md](LLM-types.md)
+- [LLM-immutable.md](LLM-immutable.md)
+- [LLM-reactive.md](LLM-reactive.md)
 
 **Type Integrations:**
-- [LLM-types-integrations.md](LLM-types-integrations.md) - Overview + all framework integrations
-- Individual: [LLM-types-jackson.md](LLM-types-jackson.md), [LLM-types-jdbi.md](LLM-types-jdbi.md), [LLM-types-avro.md](LLM-types-avro.md), etc.
+- [LLM-types-integrations.md](LLM-types-integrations.md) - Overview + all integrations
+- Individual: [LLM-types-jackson.md](LLM-types-jackson.md), [LLM-types-jdbi.md](LLM-types-jdbi.md), [LLM-types-avro.md](LLM-types-avro.md), [LLM-types-spring-web.md](LLM-types-spring-web.md), [LLM-types-springdata-mongo.md](LLM-types-springdata-mongo.md), [LLM-types-springdata-jpa.md](LLM-types-springdata-jpa.md)
 
 **Components:**
-- [LLM-components.md](LLM-components.md) - Overview + all components
-- Foundation: [LLM-foundation.md](LLM-foundation.md), [LLM-foundation-types.md](LLM-foundation-types.md)
-- PostgreSQL: [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md), [LLM-postgresql-queue.md](LLM-postgresql-queue.md), etc.
-- Spring: [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
-- Event Sourcing: [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md), [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md)
+- [LLM-foundation.md](LLM-foundation.md), [LLM-foundation-types.md](LLM-foundation-types.md), [LLM-foundation-test.md](LLM-foundation-test.md)
+- [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md), [LLM-postgresql-queue.md](LLM-postgresql-queue.md), [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md), [LLM-postgresql-document-db.md](LLM-postgresql-document-db.md)
+- [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md)
+- [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md), [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md)
+- [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md), [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md)
+- [LLM-vaadin-ui.md](LLM-vaadin-ui.md)
+
+**Spring Boot:**
+- [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
 
 ### By Use Case
 
 - **Event Sourcing:** [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md) → [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md)
-- **Microservices:** [LLM-foundation.md](LLM-foundation.md) → [LLM-components.md](LLM-components.md)
+- **Microservices:** [LLM-foundation.md](LLM-foundation.md)
 - **Type Safety:** [LLM-types.md](LLM-types.md) → [LLM-types-integrations.md](LLM-types-integrations.md)
 - **Spring Boot:** [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
 
 ### README Files
 
-For detailed explanations, motivation, and design rationale:
+For detailed explanations and design rationale:
 - [README.md](../README.md) - Project overview
 - [components/README.md](../components/README.md) - Components overview
 - Individual module READMEs in respective directories

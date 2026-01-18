@@ -1,45 +1,38 @@
 # Kotlin EventSourcing - LLM Reference
 
-> See [README](../components/kotlin-eventsourcing/README.md) for detailed developer documentation.
+> LLM-optimized reference. For detailed explanations, see [README](../components/kotlin-eventsourcing/README.md).
 
 ## Quick Facts
 
-- **Package**: `dk.trustworks.essentials.components.kotlin.eventsourcing`
+- **Base package**: `dk.trustworks.essentials.components.kotlin.eventsourcing`
 - **Purpose**: Kotlin-native functional event sourcing (Decider/Evolver patterns)
 - **Status**: WORK-IN-PROGRESS (experimental API)
-- **Key deps**: `kotlin-stdlib`, `kotlin-reflect` (all `provided`scope), `EventStore`, `CommandBus`
+- **Key deps**: `kotlin-stdlib`, `kotlin-reflect` (all `provided` scope), EventStore, CommandBus
 - **Java equiv**: [eventsourced-aggregates](./LLM-eventsourced-aggregates.md) `EventStreamDecider`
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>kotlin-eventsourcing</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `AggregateType`, `AggregateIdSerializer`, `ConfigurableEventStore`, `AggregateEventStream` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `CommandBus` from [reactive](./LLM-reactive.md)
+- `UnitOfWork`, `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
 
 ## TOC
 
 - [Core Patterns](#core-patterns)
 - [Decider Pattern](#decider-pattern)
-  - [Return Values](#return-values)
-  - [Implementation](#implementation)
-  - [Why Single Event?](#why-single-event)
 - [Evolver Pattern](#evolver-pattern)
-  - [State Class (Immutable)](#state-class-immutable)
-  - [Evolver Implementation](#evolver-implementation)
-  - [Using Evolver in Decider](#using-evolver-in-decider)
 - [CommandBus Integration](#commandbus-integration)
-  - [Infrastructure Responsibilities](#infrastructure-responsibilities)
-  - [AggregateTypeConfiguration](#aggregatetypeconfiguration)
-  - [Spring Boot Wiring](#spring-boot-wiring)
-  - [Sending Commands](#sending-commands)
 - [GivenWhenThenScenario Testing](#givenwhenthenscenario-testing)
-  - [Benefits](#benefits)
-  - [Test Patterns](#test-patterns)
-  - [Assertion Exceptions](#assertion-exceptions)
 - [Query State from EventStore](#query-state-from-eventstore)
-- [Command/Event Design](#commandevent-design)
-- [Kotlin vs Java Patterns](#kotlin-vs-java-patterns)
 - [Common Patterns](#common-patterns)
-  - [Idempotency](#idempotency)
-  - [State Validation](#state-validation)
-  - [Immutable State](#immutable-state)
 - ⚠️ [Security](#security)
 - [Key Classes](#key-classes)
-- [Dependencies](#dependencies)
 - [Maven Dependency](#maven-dependency)
 
 ## Core Patterns
@@ -54,9 +47,6 @@
 **Interface**: `dk.trustworks.essentials.components.kotlin.eventsourcing.Decider<COMMAND, EVENT>`
 
 Pure functional, slice-based, ideal for Event Modeling. Returns single event (or none).
-The `handle` method receives:
-- **`command`**: The command to process
-- **`events`**: The complete event history for this aggregate (loaded from the EventStore).
 
 ```kotlin
 interface Decider<COMMAND, EVENT> {
@@ -65,7 +55,11 @@ interface Decider<COMMAND, EVENT> {
 }
 ```
 
-### Return Values
+**Parameters**:
+- `cmd` - Command to process
+- `events` - Complete event history for aggregate (from EventStore)
+
+**Returns**:
 
 | Return | Meaning | Use Case |
 |--------|---------|----------|
@@ -73,17 +67,17 @@ interface Decider<COMMAND, EVENT> {
 | `null` | No-op | Idempotent handling |
 | Throw | Rejection | Invalid state/business rule |
 
-### Implementation
+**Implementation**:
 
 ```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Decider
+
 class CreateOrderDecider : Decider<CreateOrder, OrderEvent> {
     override fun handle(cmd: CreateOrder, events: List<OrderEvent>): OrderEvent? {
         // Idempotency check
         if (events.any { it is OrderCreated }) return null
-
         return OrderCreated(cmd.id)
     }
-
     override fun canHandle(cmd: Any): Boolean = cmd is CreateOrder
 }
 
@@ -91,21 +85,17 @@ class ShipOrderDecider : Decider<ShipOrder, OrderEvent> {
     override fun handle(cmd: ShipOrder, events: List<OrderEvent>): OrderEvent? {
         if (events.isEmpty())
             throw RuntimeException("Order not created")
-
         if (events.any { it is OrderShipped })
             return null // Already shipped
-
         if (!events.any { it is OrderAccepted })
             throw RuntimeException("Order not accepted")
-
         return OrderShipped(cmd.id)
     }
-
     override fun canHandle(cmd: Any): Boolean = cmd is ShipOrder
 }
 ```
 
-### Why Single Event?
+**Why Single Event?**
 
 Forces explicit event modeling instead of implementation steps:
 
@@ -114,11 +104,9 @@ Forces explicit event modeling instead of implementation steps:
 | `CreateOrder` → `OrderCreated` + `ProductsAdded` | `OrderWithProductsPlaced` |
 | `RegisterCustomer` → `CustomerCreated` + `AddressAdded` | `CustomerRegistered` |
 
-**Benefits**: Clear intent, no event reuse, simpler evolution, Event Storming alignment.
+Benefits: Clear intent, no event reuse, simpler evolution, Event Storming alignment.
 
-> 💡 Multiple events needed? Consider modeling business outcomes, not implementation steps.
-
-For Java patterns supporting multiple events, see [eventsourced-aggregates](./LLM-eventsourced-aggregates.md).
+> For Java patterns supporting multiple events, see [eventsourced-aggregates](./LLM-eventsourced-aggregates.md).
 
 ## Evolver Pattern
 
@@ -134,27 +122,17 @@ fun interface Evolver<EVENT, STATE> {
             initialState: STATE?,
             eventStream: List<EVENT>
         ): STATE
+
+        // Helper methods
+        inline fun <reified E> extractEvents(stream: AggregateEventStream<*>): Sequence<E>
+        inline fun <reified E> extractEventsAsList(stream: AggregateEventStream<*>): List<E>
     }
 }
 ```
 
 **Left-fold pattern**: `null → Event[0] → STATE? → Event[1] → STATE? → ... → Final STATE`
 
-### Helper Methods
-
-Extract and deserialize events from `AggregateEventStream`:
-
-```kotlin
-// Lazy evaluation (Sequence)
-val events: Sequence<OrderEvent> = Evolver.extractEvents<OrderEvent>(stream)
-
-// Eager evaluation (List)
-val events: List<OrderEvent> = Evolver.extractEventsAsList<OrderEvent>(stream)
-```
-
-Benefits: Auto-deserialization, type filtering, cleaner than manual `aggregateEventStream.events().map { it.event().deserialize<T>() }`.
-
-### State Class (Immutable)
+**State Class (Immutable)**:
 
 ```kotlin
 data class OrderState(
@@ -166,15 +144,16 @@ data class OrderState(
     companion object {
         fun created(orderId: OrderId) = OrderState(orderId, OrderStatus.CREATED)
     }
-
     fun canBeConfirmed() = status == OrderStatus.CREATED
     fun canBeShipped() = status == OrderStatus.CONFIRMED
 }
 ```
 
-### Evolver Implementation
+**Evolver Implementation**:
 
 ```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver
+
 class OrderStateEvolver : Evolver<OrderEvent, OrderState> {
     override fun applyEvent(event: OrderEvent, state: OrderState?): OrderState? {
         return when (event) {
@@ -191,9 +170,12 @@ class OrderStateEvolver : Evolver<OrderEvent, OrderState> {
 }
 ```
 
-### Using Evolver in Decider
+**Using Evolver in Decider**:
 
 ```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Decider
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver
+
 class ConfirmOrderDecider : Decider<ConfirmOrder, OrderEvent> {
     private val evolver = OrderStateEvolver()
 
@@ -207,14 +189,28 @@ class ConfirmOrderDecider : Decider<ConfirmOrder, OrderEvent> {
 
         return OrderConfirmed(cmd.id)
     }
-
     override fun canHandle(cmd: Any): Boolean = cmd is ConfirmOrder
 }
 ```
 
+**Helper Methods**:
+
+```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream
+
+// Lazy evaluation (Sequence)
+val events: Sequence<OrderEvent> = Evolver.extractEvents<OrderEvent>(stream)
+
+// Eager evaluation (List) - recommended
+val events: List<OrderEvent> = Evolver.extractEventsAsList<OrderEvent>(stream)
+```
+
+Benefits: Auto-deserialization, type filtering, cleaner than manual `stream.events().map { it.event().deserialize<T>() }`.
+
 ## CommandBus Integration
 
-### Infrastructure Responsibilities
+**Infrastructure Responsibilities**:
 
 | Concern | Handled By |
 |---------|-----------|
@@ -231,6 +227,11 @@ class ConfirmOrderDecider : Decider<ConfirmOrder, OrderEvent> {
 **Class**: `dk.trustworks.essentials.components.kotlin.eventsourcing.AggregateTypeConfiguration`
 
 ```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.AggregateTypeConfiguration
+import dk.trustworks.essentials.components.kotlin.eventsourcing.DeciderSupportsAggregateTypeChecker
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer
+
 AggregateTypeConfiguration(
     aggregateType = AggregateType.of("Orders"),
     aggregateIdType = OrderId::class.java,
@@ -261,9 +262,24 @@ AggregateTypeConfiguration(
 
 ### Spring Boot Wiring
 
-Register a `DeciderAndAggregateTypeConfigurator` which auto-wires `AggregateTypeConfiguration`s and their deciders together.
+**Class**: `dk.trustworks.essentials.components.kotlin.eventsourcing.adapters.DeciderAndAggregateTypeConfigurator`
+
+**Dependencies from other modules**:
+- `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `dk.trustworks.essentials.reactive.command.CommandBus` from [reactive](./LLM-reactive.md)
 
 ```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.AggregateTypeConfiguration
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Decider
+import dk.trustworks.essentials.components.kotlin.eventsourcing.DeciderSupportsAggregateTypeChecker
+import dk.trustworks.essentials.components.kotlin.eventsourcing.adapters.DeciderAndAggregateTypeConfigurator
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer
+import dk.trustworks.essentials.reactive.command.CommandBus
+
 @Configuration
 class OrdersConfiguration {
     companion object {
@@ -302,13 +318,16 @@ class OrdersConfiguration {
 }
 ```
 
-> 💡 Deciders can use `@Component`/`@Service` instead of `@Bean` methods.
+> Deciders can use `@Component`/`@Service` instead of `@Bean` methods.
 
 ### Sending Commands
 
-Note: Assumes the `CommandBus` is configured with the `UnitOfWorkControllingCommandBusInterceptor`.
+Assumes `dk.trustworks.essentials.reactive.command.CommandBus` configured with `dk.trustworks.essentials.components.foundation.reactive.command.UnitOfWorkControllingCommandBusInterceptor`.
 
 ```kotlin
+import dk.trustworks.essentials.reactive.command.CommandBus
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory
+
 @Service
 class OrderService(
     private val commandBus: CommandBus,
@@ -316,13 +335,11 @@ class OrderService(
 ) {
     fun createOrder(orderId: OrderId, customerId: CustomerId): Boolean {
         val event = commandBus.send(CreateOrder(orderId, customerId)) as OrderEvent?
-        event != null // false if already exists
+        return event != null // false if already exists
     }
 
     fun confirmOrder(orderId: OrderId) {
-        unitOfWorkFactory.usingUnitOfWork {
-            commandBus.send(ConfirmOrder(orderId))
-        }
+        commandBus.send(ConfirmOrder(orderId))
     }
 }
 ```
@@ -331,7 +348,7 @@ class OrderService(
 
 **Class**: `dk.trustworks.essentials.components.kotlin.eventsourcing.test.GivenWhenThenScenario`
 
-### Benefits
+**Benefits**:
 
 | Benefit | Why |
 |---------|-----|
@@ -341,9 +358,11 @@ class OrderService(
 | Deterministic | Same input = same output |
 | Readable | Business language |
 
-### Test Patterns
+**Test Patterns**:
 
 ```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.test.GivenWhenThenScenario
+
 @Test
 fun `Create an Order`() {
     val scenario = GivenWhenThenScenario(CreateOrderDecider())
@@ -393,7 +412,7 @@ fun `Custom assertions`() {
 }
 ```
 
-### Assertion Exceptions
+**Assertion Exceptions**:
 
 | Exception | Trigger |
 |-----------|---------|
@@ -409,8 +428,12 @@ fun `Custom assertions`() {
 ## Query State from EventStore
 
 ```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType
+
 // Recommended: Using Evolver.extractEventsAsList helper
-fun getOrderState(orderId: OrderId): OrderState? {
+fun getOrderState(orderId: OrderId, eventStore: EventStore<*>): OrderState? {
     val eventStream = eventStore.fetchStream(AGGREGATE_TYPE, orderId)
     if (!eventStream.isPresent) return null
 
@@ -419,7 +442,7 @@ fun getOrderState(orderId: OrderId): OrderState? {
 }
 
 // Alternative: Manual deserialization (more verbose)
-fun getOrderStateManual(orderId: OrderId): OrderState? {
+fun getOrderStateManual(orderId: OrderId, eventStore: EventStore<*>): OrderState? {
     val eventStream = eventStore.fetchStream(AGGREGATE_TYPE, orderId)
     if (!eventStream.isPresent) return null
 
@@ -432,7 +455,9 @@ fun getOrderStateManual(orderId: OrderId): OrderState? {
 }
 ```
 
-## Command/Event Design
+## Common Patterns
+
+### Command/Event Design
 
 ```kotlin
 // Commands (sealed for exhaustiveness)
@@ -466,21 +491,6 @@ data class OrderAccepted(
 ) : OrderEvent
 ```
 
-## Kotlin vs Java Patterns
-
-| Aspect | Kotlin `Decider` | Java `EventStreamDecider` |
-|--------|------------------|---------------------------|
-| Language | Kotlin data classes, null safety | Java records, Optional |
-| Return | `EVENT?` | `Optional<EVENT>` |
-| Event stream | `List<EVENT>` | `List<EVENT>` |
-| Testing | `GivenWhenThenScenario` (Kotlin) | `GivenWhenThenScenario` (Java) |
-| Config | `AggregateTypeConfiguration` | `EventStreamAggregateTypeConfiguration` |
-| Adapter | `DeciderCommandHandlerAdapter` | `EventStreamDeciderCommandHandlerAdapter` |
-
-For Java patterns or OOP aggregates, see [eventsourced-aggregates](./LLM-eventsourced-aggregates.md).
-
-## Common Patterns
-
 ### Idempotency
 
 ```kotlin
@@ -495,6 +505,8 @@ if (events.any { it is OrderAccepted })
 ### State Validation
 
 ```kotlin
+import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver
+
 // ✅ Use Evolver for complex validation
 val state = Evolver.applyEvents(evolver, null, events)
 if (!state.canBeShipped()) throw RuntimeException("Invalid state")
@@ -516,12 +528,24 @@ is OrderConfirmed -> {
 }
 ```
 
+### Kotlin vs Java Patterns
+
+| Aspect | Kotlin `Decider` | Java `EventStreamDecider` |
+|--------|------------------|---------------------------|
+| Language | Kotlin data classes, null safety | Java records, Optional |
+| Return | `EVENT?` | `Optional<EVENT>` |
+| Event stream | `List<EVENT>` | `List<EVENT>` |
+| Testing | `GivenWhenThenScenario` (Kotlin) | `GivenWhenThenScenario` (Java) |
+| Config | `AggregateTypeConfiguration` | `EventStreamAggregateTypeConfiguration` |
+| Adapter | `DeciderCommandHandlerAdapter` | `EventStreamDeciderCommandHandlerAdapter` |
+
+For Java patterns or OOP aggregates, see [eventsourced-aggregates](./LLM-eventsourced-aggregates.md).
+
 ## Security
 
 ### ⚠️ Critical: SQL Injection Risk
 
-The components allow customization of table/column/index/function-names that are used with **String concatenation** → SQL injection risk. 
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL injection.
+Components allow customization of table/column/index/function names used with **String concatenation** → SQL injection risk.
 
 ⚠️ **Sanitize input**: `AggregateType` used in SQL string concatenation.
 
@@ -531,24 +555,49 @@ See [README Security](../components/kotlin-eventsourcing/README.md#security) for
 - Generate aggregate IDs with `RandomIdGenerator.generate()` or `UUID.randomUUID()`
 - Never use unsanitized user input for aggregate IDs or types
 
+### What Validation Does NOT Protect Against
+
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ## Key Classes
 
-| Class | Package | Purpose |
-|-------|---------|---------|
-| `Decider<COMMAND, EVENT>` | `kotlin.eventsourcing` | Command → event decision |
-| `Evolver<EVENT, STATE>` | `kotlin.eventsourcing` | Event → state evolution |
-| `AggregateTypeConfiguration` | `kotlin.eventsourcing` | Aggregate metadata config |
-| `DeciderCommandHandlerAdapter` | `kotlin.eventsourcing` | CommandBus bridge |
-| `DeciderAndAggregateTypeConfigurator` | `kotlin.eventsourcing` | Auto-wiring |
-| `GivenWhenThenScenario` | `kotlin.eventsourcing.test` | Pure function testing |
+**Base package**: `dk.trustworks.essentials.components.kotlin.eventsourcing`
+
+| Class | Package Suffix | Purpose |
+|-------|----------------|---------|
+| `Decider<COMMAND, EVENT>` | — | Command → event decision |
+| `Evolver<EVENT, STATE>` | — | Event → state evolution |
+| `AggregateTypeConfiguration` | — | Aggregate metadata config |
+| `DeciderSupportsAggregateTypeChecker` | — | Decider-to-aggregate mapping |
+| `DeciderCommandHandlerAdapter` | `.adapters` | CommandBus bridge |
+| `DeciderAndAggregateTypeConfigurator` | `.adapters` | Auto-wiring |
+| `GivenWhenThenScenario` | `.test` | Pure function testing |
+
+**Exception classes** (all in `.test` suffix):
+
+| Exception | Purpose |
+|-----------|---------|
+| `AssertionException` | Base class for all assertion failures |
+| `NoCommandProvidedException` | No command in `when_()` |
+| `DidNotExpectAnEventException` | Got event when expecting null |
+| `ExpectedAnEventButDidGetAnyEventException` | Got null when expecting event |
+| `ActualAndExpectedEventsAreNotEqualExcepted` | Event mismatch |
+| `ExpectToFailWithAnExceptionButNoneWasThrown` | No exception thrown |
+| `ActualExceptionIsNotEqualToExpectedException` | Wrong exception thrown |
 
 ## Dependencies
 
-| Module | Why |
-|--------|-----|
-| [postgresql-event-store](./LLM-postgresql-event-store.md) | Event persistence |
-| [reactive](./LLM-reactive.md) | CommandBus |
-| [foundation](./LLM-foundation.md) | UnitOfWork |
+| Module | Key Types Used |
+|--------|----------------|
+| [postgresql-event-store](./LLM-postgresql-event-store.md) | `EventStore`, `ConfigurableEventStore`, `AggregateType`, `AggregateIdSerializer`, `AggregateEventStream` |
+| [reactive](./LLM-reactive.md) | `CommandBus` |
+| [foundation](./LLM-foundation.md) | `UnitOfWork`, `UnitOfWorkFactory` |
 
 ## Maven Dependency
 

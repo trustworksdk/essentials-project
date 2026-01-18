@@ -1,6 +1,6 @@
 # MongoDB Queue - LLM Reference
 
-> **Foundation**: [LLM-foundation.md](./LLM-foundation.md#durablequeues-api) | **Developer docs**: [README](../components/springdata-mongo-queue/README.md)
+> **Foundation**: [LLM-foundation.md](./LLM-foundation.md#durablequeues-messaging) | **Developer docs**: [README](../components/springdata-mongo-queue/README.md)
 
 ## TOC
 - [Quick Facts](#quick-facts)
@@ -8,16 +8,14 @@
 - [Transaction Modes](#transaction-modes)
 - [Document Schema](#document-schema)
 - [Polling Optimization](#polling-optimization)
-- ⚠️ [Security](#security)
 - [Common Pitfalls](#common-pitfalls)
-- [Performance Tuning](#performance-tuning)
 - [Monitoring](#monitoring)
 - [Integration](#integration)
 - [PostgreSQL vs MongoDB](#postgresql-vs-mongodb)
-- [Test Utilities](#test-utilities)
+- ⚠️ [Security](#security)
 
 ## Quick Facts
-- **Package**: `dk.trustworks.essentials.components.springdata.mongodb.queue`
+- **Package**: `dk.trustworks.essentials.components.queue.springdata.mongodb`
 - **Implementation**: `MongoDurableQueues`
 - **Storage**: MongoDB collection with BSON
 - **Locking**: `findAndModify()` atomicity
@@ -25,10 +23,23 @@
 - **Dependencies**: Spring Data MongoDB (`provided`), foundation module
 - **Status**: WORK-IN-PROGRESS
 
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>springdata-mongo-queue</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `DurableQueues`, `QueueName`, `ConsumeFromQueue`, `RedeliveryPolicy` from [foundation](./LLM-foundation.md)
+- `SpringMongoTransactionAwareUnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+
 ## Configuration
 
 ### Constructor Options
 ```java
+// Base package: dk.trustworks.essentials.components.queue.springdata.mongodb
+
 // SingleOperationTransaction (Recommended)
 MongoDurableQueues(MongoTemplate mongoTemplate, Duration messageHandlingTimeout)
 
@@ -38,7 +49,8 @@ MongoDurableQueues(MongoTemplate mongoTemplate, Duration messageHandlingTimeout,
 
 // Custom polling optimizer
 MongoDurableQueues(MongoTemplate mongoTemplate, String sharedQueueCollectionName,
-                   Duration messageHandlingTimeout, QueuePollingOptimizerFactory factory)
+                   Duration messageHandlingTimeout,
+                   Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory)
 
 // FullyTransactional (NOT RECOMMENDED)
 MongoDurableQueues(MongoTemplate mongoTemplate,
@@ -49,22 +61,32 @@ MongoDurableQueues(MongoTemplate mongoTemplate,
 |-------|------|---------|
 | `mongoTemplate` | `MongoTemplate` | Spring Data MongoDB template |
 | `messageHandlingTimeout` | `Duration` | Stuck message timeout |
-| `sharedQueueCollectionName` | `String` | Collection name (⚠️ injection risk) |
-| `queuePollingOptimizerFactory` | `Function` | Custom optimizer |
+| `sharedQueueCollectionName` | `String` | Collection name (⚠️ [injection risk](#security)) |
+| `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue, QueuePollingOptimizer>` | Custom optimizer |
 | `unitOfWorkFactory` | `SpringMongoTransactionAwareUnitOfWorkFactory` | For FullyTransactional mode |
 
 ### Basic Setup
 ```java
+// Base package: dk.trustworks.essentials.components.queue.springdata.mongodb
+import dk.trustworks.essentials.components.queue.springdata.mongodb.MongoDurableQueues;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
+
 @Bean
 public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
-    var queues = new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10));
-    queues.start();  // ⚠️ Required - enables Change Streams
+    var queues = new MongoDurableQueues(mongoTemplate, 
+                                        Duration.ofSeconds(10) // Message handling timeout
+                                        );
+    queues.start();  // ⚠️ Required - enables Change Streams (or register dk.trustworks.essentials.components.foundation.lifecycle.DefaultLifecycleManager as bean)
     return queues;
 }
 ```
 
 ### Spring Integration
 ```java
+// Base packages:
+// - dk.trustworks.essentials.types.springdata.mongo.converters (SingleValueTypeConverter)
+// - dk.trustworks.essentials.components.foundation.types.* (QueueEntryId, QueueName)
+
 @Bean
 public MongoTemplate mongoTemplate(MongoDatabaseFactory factory, MongoConverter converter) {
     MongoTemplate template = new MongoTemplate(factory, converter);
@@ -83,7 +105,7 @@ public MongoCustomConversions mongoCustomConversions() {
 @Bean
 public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
     var queues = new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10));
-    queues.start();
+    queues.start(); // - enables Change Streams (or register dk.trustworks.essentials.components.foundation.lifecycle.DefaultLifecycleManager as bean)
     return queues;
 }
 ```
@@ -123,7 +145,7 @@ public DurableQueues durableQueues(MongoTemplate mongoTemplate) {
 ```
 
 ### Indexes
-Auto-created on start:
+Auto-created on `start()`:
 ```javascript
 { queueName: 1, nextDeliveryTimestamp: 1, isDeadLetterMessage: 1,
   isBeingDelivered: 1, key: 1, keyOrder: 1 }  // Primary delivery
@@ -136,16 +158,20 @@ Auto-created on start:
 ## Polling Optimization
 
 ### SimpleQueuePollingOptimizer
-Linear backoff (only option for MongoDB).
+Linear backoff - only option for MongoDB.
 
 **Algorithm**: `delay += increment` on empty poll, reset on message/notification.
 
 ```java
+// Base package: dk.trustworks.essentials.components.foundation.messaging.queue
+import dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer;
+import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
+
 new MongoDurableQueues(
     mongoTemplate,
-    null,
+    null,  // unitOfWorkFactory
     "durable_queues",
-    Duration.ofSeconds(10),
+    Duration.ofSeconds(10), // Message handling timeout
     consumeFromQueue -> new SimpleQueuePollingOptimizer(
         consumeFromQueue,
         100,    // delayIncrementMs
@@ -176,28 +202,6 @@ durableQueues.start();  // Creates MessageListenerContainer
 - MongoDB 4.0+ with replica set
 - AWS DocumentDB: See [Change Streams docs](https://docs.aws.amazon.com/documentdb/latest/developerguide/change_streams.html)
 
-## Security
-
-### ⚠️ Critical: NoSQL Injection Risk
-
-The components allow customization of collection-names that are used with **String concatenation** → NoSQL injection risk.  
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against NoSQL injection.
-
-### NoSQL Injection Risk
-`sharedQueueCollectionName` used directly in MongoDB operations.
-
-```java
-// ❌ DANGEROUS
-String collectionName = userInput + "_queue";
-new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10), collectionName);
-
-// ✅ SAFE
-new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10), "durable_queues");
-
-// ⚠️ Validate if from config
-MongoUtil.checkIsValidCollectionName(collectionName);  // Basic validation (not exhaustive)
-```
-
 ## Common Pitfalls
 
 **1. Standalone MongoDB (no replica set)**
@@ -225,48 +229,15 @@ MongoUtil.checkIsValidCollectionName(collectionName);  // Basic validation (not 
 //       new SingleValueTypeConverter(QueueEntryId.class, QueueName.class)))
 ```
 
-## Performance Tuning
-
-### Connection Pool
-```java
-@Bean
-public MongoClientSettings mongoClientSettings() {
-    return MongoClientSettings.builder()
-        .applyToConnectionPoolSettings(builder ->
-            builder.maxSize(20).minSize(5)
-                   .maxConnectionIdleTime(30, TimeUnit.SECONDS))
-        .applyToSocketSettings(builder ->
-            builder.connectTimeout(5, TimeUnit.SECONDS)
-                   .readTimeout(10, TimeUnit.SECONDS))
-        .build();
-}
-```
-
-### Parallel Consumers
-```java
-int cpus = Runtime.getRuntime().availableProcessors();
-int optimal = Math.min(cpus, expectedVolume * processingTime / 1000);
-
-ConsumeFromQueue.builder()
-    .setParallelConsumers(optimal)
-    .build()
-```
-
-### Polling Tuning
-```java
-// High-volume: aggressive
-new SimpleQueuePollingOptimizer(consumeFromQueue, 50, 1000)
-
-// Low-volume: conservative
-new SimpleQueuePollingOptimizer(consumeFromQueue, 500, 30000)
-```
-
 ## Monitoring
 
 ### DurableQueues API
 Standard monitoring via `DurableQueues` interface:
 
 ```java
+// Base package: dk.trustworks.essentials.components.foundation.messaging.queue
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+
 // Queue depth and dead letter counts
 QueuedMessageCounts counts = durableQueues.getQueuedMessageCountsFor(queueName);
 long queuedMessages = counts.getTotalQueuedMessages();
@@ -284,23 +255,30 @@ Set<QueueName> queueNames = durableQueues.getQueueNames();
 Add metrics/tracing via interceptors:
 
 ```java
-var durableQueues = new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10)) {
-    @Override
-    public void start() {
-        addInterceptor(new DurableQueuesMicrometerInterceptor(meterRegistry, "MyService"));
-        addInterceptor(new DurableQueuesMicrometerTracingInterceptor(tracer, propagator, registry));
-        addInterceptor(new RecordExecutionTimeDurableQueueInterceptor(meterRegistry, "MyService"));
-        super.start();
-    }
-};
+// Base packages:
+// - dk.trustworks.essentials.components.foundation.messaging.queue.micrometer
+// - dk.trustworks.essentials.components.foundation.interceptor.micrometer
+
+import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
+import dk.trustworks.essentials.components.foundation.interceptor.micrometer.*;
+
+var durableQueues = new MongoDurableQueues(mongoTemplate, 
+                                           Duration.ofSeconds(10) // Message handling timeout
+                                           );
+durableQueues.addInterceptors(new DurableQueuesMicrometerInterceptor(meterRegistry, "MyService"), 
+                              new DurableQueuesMicrometerTracingInterceptor(tracer, propagator, registry),
+                              new RecordExecutionTimeDurableQueueInterceptor(meterRegistry, "MyService"));
 ```
 
-**Package**: `dk.trustworks.essentials.components.foundation.messaging.queue.micrometer`
-- `DurableQueuesMicrometerInterceptor` - Queue size gauges, counters (processed, handled, retries, DLQ)
-- `DurableQueuesMicrometerTracingInterceptor` - Distributed tracing via Micrometer Observation
+**Interceptor Classes**:
 
-**Package**: `dk.trustworks.essentials.components.foundation.interceptor.micrometer`
-- `RecordExecutionTimeDurableQueueInterceptor` - Operation execution time
+| Class | Package | Purpose |
+|-------|---------|---------|
+| `DurableQueuesMicrometerInterceptor` | `.messaging.queue.micrometer` | Queue size gauges, counters (processed, handled, retries, DLQ) |
+| `DurableQueuesMicrometerTracingInterceptor` | `.messaging.queue.micrometer` | Distributed tracing via Micrometer Observation |
+| `RecordExecutionTimeDurableQueueInterceptor` | `.interceptor.micrometer` | Operation execution time |
+
+Base package: `dk.trustworks.essentials.components.foundation`
 
 ### Logging
 Configure loggers for queue operations:
@@ -387,9 +365,49 @@ See [LLM-spring-boot-starter-modules.md](./LLM-spring-boot-starter-modules.md#mo
 | **Polling** | Centralized + Linear/Exponential | Linear only |
 | **Config** | Builder pattern | Constructor |
 
+## Security
+
+### ⚠️ NoSQL Injection Risk
+
+`sharedQueueCollectionName` used directly in MongoDB operations.
+
+See [README Security](../components/springdata-mongo-queue/README.md#security) for full details.
+
+**Quick rules**:
+```java
+// ❌ DANGEROUS
+String collectionName = userInput + "_queue";
+new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10), collectionName);
+
+// ✅ SAFE - hardcoded value
+new MongoDurableQueues(mongoTemplate, Duration.ofSeconds(10), "durable_queues");
+
+// ⚠️ Validate if from config
+MongoUtil.checkIsValidCollectionName(collectionName);  // Basic validation (not exhaustive)
+```
+
+**Mitigations**:
+- `MongoUtil.checkIsValidCollectionName()` provides initial defense (NOT exhaustive)
+- Only use collection names from controlled, trusted sources
+- Never derive from external/untrusted input
+
+### What Validation Does NOT Protect Against
+
+- NoSQL injection via **values** (use Spring Data MongoDB's type-safe query methods)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- Query operator injection (e.g., `$where`, `$regex`, `$ne`)
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ## Test Utilities
 
 ```java
+// Base package: dk.trustworks.essentials.components.queue.springdata.mongodb
+import dk.trustworks.essentials.components.queue.springdata.mongodb.MongoDurableQueues;
+import org.testcontainers.containers.MongoDBContainer;
+
 @Container
 static MongoDBContainer mongo = new MongoDBContainer("mongo:6.0");
 
@@ -397,10 +415,17 @@ static MongoDBContainer mongo = new MongoDBContainer("mongo:6.0");
 public DurableQueues testDurableQueues(MongoTemplate mongoTemplate) {
     var queues = new MongoDurableQueues(
         mongoTemplate,
-        Duration.ofSeconds(10),
+        Duration.ofSeconds(10), // Message handling timeout
         "test_queue"
     );
     queues.start();
     return queues;
 }
 ```
+
+## Performance Tuning
+
+See [README](../components/springdata-mongo-queue/README.md) for:
+- Connection pool configuration
+- Parallel consumer tuning
+- Polling optimization strategies

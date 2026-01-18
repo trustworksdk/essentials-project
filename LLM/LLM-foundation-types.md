@@ -1,212 +1,226 @@
 # Foundation Types - LLM Reference
 
+> Quick reference for LLMs. For detailed explanations, see [README](../components/foundation-types/README.md).
+
 ## Quick Facts
-- **Package**: `dk.trustworks.essentials.components.foundation.types`
+- **Package**: `dk.trustworks.essentials.components.foundation.types` + `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types`
 - **Purpose**: Common strongly-typed identifiers and value objects for event-sourcing and multi-tenancy
 - **Dependencies**: `types`, `shared`
-- **Used by**: `foundation`, `postgresql-event-store`, `eventsourced-aggregates`, all event-sourcing components
-- **Status**: WORK-IN-PROGRESS
-  
+- **Used by**: `foundation`, `postgresql-event-store`, `eventsourced-aggregates`
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>foundation-types</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `CharSequenceType`, `LongType`, `IntegerType` base types from [types](./LLM-types.md)
+
 ## TOC
 - [Type Overview](#type-overview)
 - [General Identifiers](#general-identifiers)
 - [Multi-Tenancy](#multi-tenancy)
 - [Event Store Types](#event-store-types)
+- [Event Ordering](#event-ordering)
+- [Versioning](#versioning)
 - [Utilities](#utilities)
 - ⚠️ [Security](#security)
-- [Usage Patterns](#usage-patterns)
+- [See Also](#see-also)
 
 ## Type Overview
 
-| Category | Types | Base Class | Purpose |
-|----------|-------|------------|---------|
-| **General IDs** | `CorrelationId`, `EventId`, `MessageId`, `SubscriberId` | `CharSequenceType` | Track operations, events, messages, subscribers |
-| **Multi-Tenancy** | `TenantId` (implements `Tenant`) | `CharSequenceType` | Tenant isolation |
-| **Event Store** | `AggregateType`, `EventName`, `EventType`, `EventTypeOrName` | `CharSequenceType` | Event stream identification |
-| **Event Ordering** | `EventOrder`, `GlobalEventOrder` | `LongType` | Sequential positioning |
-| **Versioning** | `EventRevision`, `@Revision` | `IntegerType`, Annotation | Event schema versioning |
-| **Utilities** | `RandomIdGenerator` | Static utility | Random ID generation |
+Base package: `dk.trustworks.essentials.components`
+
+| Category | Types | Base Class | Package Suffix |
+|----------|-------|------------|----------------|
+| **General IDs** | `CorrelationId`, `EventId`, `MessageId`, `SubscriberId` | `CharSequenceType` | `.foundation.types` |
+| **Multi-Tenancy** | `TenantId`, `Tenant` | `CharSequenceType`, Interface | `.foundation.types` |
+| **Event Identification** | `EventName`, `EventType`, `EventTypeOrName` | `CharSequenceType`, Union | `.eventsourced.eventstore.postgresql.types` |
+| **Stream Identification** | `AggregateType` | `CharSequenceType` | `.eventsourced.eventstore.postgresql.eventstream` |
+| **Event Ordering** | `EventOrder`, `GlobalEventOrder` | `LongType` | `.eventsourced.eventstore.postgresql.types` |
+| **Versioning** | `EventRevision`, `@Revision` | `IntegerType`, Annotation | `.eventsourced.eventstore.postgresql.types` |
+| **Utilities** | `RandomIdGenerator` | Static utility | `.foundation.types` |
 
 ---
 
 ## General Identifiers
 
-**Package**: `dk.trustworks.essentials.components.foundation.types`
+Base package: `dk.trustworks.essentials.components.foundation.types`
 
 ### CorrelationId
 
 Tracks related operations across service boundaries.
 
 ```java
-// Construction
+// API
 CorrelationId.of(CharSequence value)
 CorrelationId.random()
 
 // Usage
 CorrelationId correlationId = CorrelationId.random();
-logger.info("Processing with correlation: {}", correlationId);
+MDC.put("correlationId", correlationId.toString());
 ```
+
+**Pattern**: Generate at service entry, propagate through call chain, include in events.
 
 ### EventId
 
 Unique event identifier within event streams.
 
 ```java
-// Construction
+// API
 EventId.of(CharSequence value)
 EventId.random()
 
 // Usage
 EventId eventId = EventId.random();
-PersistedEvent event = PersistedEvent.of(eventId, aggregateId, payload);
 ```
+
+**Used by**: Event Store to uniquely identify each persisted event.
 
 ### MessageId
 
-Unique message identifier that a user can associate a message with.
-
-Note: `MessageId` is a user value object, internally `DurableQueues` uses `QueueEntryId` as the unique technical identifier for each queued message.
+User-facing message identifier (distinct from internal queue IDs).
 
 ```java
-// Construction
+// API
 MessageId.of(CharSequence value)
 MessageId.random()
 
 // Usage
 MessageId messageId = MessageId.random();
-Message msg = Message.of(messageId, payload);
 ```
+
+**Note**: DurableQueues uses `QueueEntryId` internally - `MessageId` is for user correlation only.
 
 ### SubscriberId
 
 Identifies event stream subscribers.
 
 ```java
-// Construction
+// API
 SubscriberId.of(CharSequence value)
 
 // Usage
 SubscriberId subscriberId = SubscriberId.of("OrderEventProcessor");
-eventStore.subscribeToAggregateEventsInTransaction(
-    subscriberId,
-    aggregateType,
-    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
-    handler
-);
 ```
+
+**Pattern**: One `SubscriberId` per consumer to track resume points independently.
 
 ---
 
 ## Multi-Tenancy
 
-**Package**: `dk.trustworks.essentials.components.foundation.types`
+Base package: `dk.trustworks.essentials.components.foundation.types`
 
 ### Tenant Interface
 
 Marker interface for tenant representation (no methods).
 
 ```java
+package dk.trustworks.essentials.components.foundation.types;
+
 public interface Tenant {
-    // Marker interface - implementers represent a tenant
+    // Marker interface
 }
 ```
 
 ### TenantId
 
-Default `Tenant` implementation for tenant isolation.
+Default `Tenant` implementation.
 
 ```java
-// Construction
+// API
 TenantId.of(CharSequence value)
 
 // Usage
 TenantId tenantId = TenantId.of("acme-corp");
 String value = tenantId.toString();  // "acme-corp"
-
-// Use in multi-tenant queries
-List<Order> orders = repository.findByTenantId(tenantId);
 ```
 
-**Pattern**: Pass `TenantId` to queries/commands for tenant-scoped operations.
+**Pattern**: Pass to queries/commands for tenant-scoped operations.
 
 ---
 
 ## Event Store Types
 
-**Package**: `dk.trustworks.essentials.components.foundation.types`
-
 ### AggregateType
 
-Identifies the aggregate type (e.g., "Orders", "Customers").
+Package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream`
+
+Identifies aggregate type (e.g., "Orders", "Customers").
 
 ```java
-// Construction
+// API
 AggregateType.of(CharSequence value)
 
 // Usage
 AggregateType orderType = AggregateType.of("Orders");
-eventStore.appendToStream(orderType, orderId, events);
-
-// Stream naming convention
-// Stream name = AggregateType:AggregateId
-// Example: "Orders:ORD-12345"
 ```
 
-#### AggregateType Naming Convention
+**Stream naming**: `{AggregateType}:{AggregateId}` → `"Orders:ORD-12345"`
 
-**Important**: `AggregateType` is a logical name, **not** a Java class name. Use **plural names** to distinguish from implementation classes:
+#### Naming Convention
 
-| AggregateType | Implementation Class | Purpose |
-|---------------|---------------------|---------|
-| `Orders` | `Order` | Order events stream |
-| `Accounts` | `Account` | Account events stream |
-| `Customers` | `Customer` | Customer events stream |
+`AggregateType` is a **logical name**, not Java class name. Use **plural** to distinguish from implementation:
 
-**⚠️ CRITICAL SECURITY WARNING**: See [Security](#security) section below.
+| AggregateType | Implementation Class | Stream Example |
+|---------------|---------------------|----------------|
+| `Orders` | `Order` | `Orders:ORD-123` |
+| `Accounts` | `Account` | `Accounts:ACC-456` |
+| `Customers` | `Customer` | `Customers:CUST-789` |
+
+**⚠️ CRITICAL**: See [Security](#security) below - SQL injection risk.
 
 ### EventName
 
-Human-readable event name used for **Named Events** (logical string identifier).
+Package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types`
+
+Human-readable event name for **Named Events** (schema-less, raw JSON).
 
 ```java
-// Construction
+// API
 EventName.of(CharSequence value)
 
 // Usage
 EventName eventName = EventName.of("OrderCreated");
 ```
 
-**Use Case**: Named Events - external events, legacy systems, schema-less events where you work with raw JSON.
+**Use Case**: External events, legacy systems, schema-free events.
 
 ### EventType
 
-Event class fully-qualified name (FQCN) used for **Typed Events**.
+Package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types`
+
+Event class fully-qualified name (FQCN) for **Typed Events**.
 
 ```java
-// Construction
+// API
 EventType.of(CharSequence value)
 EventType.of(Class<?> eventClass)
 
 // Usage
 EventType eventType = EventType.of(OrderCreatedEvent.class);
 // Value: "com.example.events.OrderCreatedEvent"
-
-EventType eventType = EventType.of("com.example.events.OrderCreatedEvent");
 ```
 
-**Use Case**: Typed Events (default) - standard domain events with Java classes, automatic deserialization.
+**Use Case**: Standard domain events with Java classes, automatic deserialization.
 
 ### EventTypeOrName
+
+Package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types`
 
 Union type - either `EventType` or `EventName`.
 
 ```java
-// Construction - uses overloaded with() method
+// API - Construction
 EventTypeOrName.with(EventType eventType)
 EventTypeOrName.with(Class<?> eventClass)
 EventTypeOrName.with(EventName eventName)
 
-// Query methods
+// API - Query
 boolean hasEventName()
 boolean hasEventType()
 Optional<EventName> getEventName()
@@ -217,222 +231,97 @@ EventTypeOrName typeOrName = EventTypeOrName.with(OrderCreatedEvent.class);
 
 if (typeOrName.hasEventType()) {
     EventType type = typeOrName.getEventType().get();
-    // Use EventType
 } else {
     EventName name = typeOrName.getEventName().get();
-    // Use EventName
 }
-
-// Used when creating PersistableEvent in PersistableEventMapper
-
-// Typed Events - use EventType
-PersistableEvent.from(
-    EventId.random(),
-    aggregateType,
-    aggregateId,
-    EventTypeOrName.with(OrderCreatedEvent.class),  // Typed Event
-    event,
-    eventOrder,
-    EventRevision.of(1),
-    metadata,
-    timestamp,
-    causedBy,
-    correlationId,
-    tenant
-);
-
-// Named Events - use EventName
-PersistableEvent.from(
-    EventId.random(),
-    aggregateType,
-    aggregateId,
-    EventTypeOrName.with(EventName.of("OrderCreated")),  // Named Event
-    eventPayload,
-    eventOrder,
-    EventRevision.of(1),
-    metadata,
-    timestamp,
-    causedBy,
-    correlationId,
-    tenant
-);
 ```
 
-### Typed Events vs Named Events
+**Pattern**: Check `hasEventType()` or `hasEventName()` before extracting.
 
-The Event Store supports two approaches for identifying events:
+### Typed vs Named Events
 
 | Approach | Identifier | Payload | Deserialization | Use Case |
 |----------|------------|---------|-----------------|----------|
-| **Typed Events** | `EventType` (Java FQCN) | Java object | Automatic via `deserialize()` | Standard domain events with Java classes |
-| **Named Events** | `EventName` (logical string) | Raw JSON string | Manual via `getJson()` | External events, legacy systems, schema-less |
+| **Typed** | `EventType` (FQCN) | Java object | Automatic | Domain events with Java classes |
+| **Named** | `EventName` (string) | Raw JSON | Manual | External/legacy/schema-free |
 
-#### Typed Events (Default)
-
-Uses the Java class's Fully Qualified Class Name (FQCN) to identify the event type. Events are stored with a `FQCN:` prefix and can be automatically deserialized.
-
-```java
-// Define event class
-public record OrderCreated(OrderId orderId, CustomerId customerId) {}
-
-// Append typed event
-eventStore.appendToStream(orders, orderId, new OrderCreated(orderId, customerId));
-
-// Fetch and deserialize automatically
-stream.eventList().forEach(pe -> {
-    Object event = pe.event().deserialize();  // Automatic deserialization
-    if (event instanceof OrderCreated orderCreated) {
-        // Type-safe access to event data
-    }
-});
-
-// Subscribe using EventType
-eventStore.subscribeToAggregateEventsInTransaction(
-    subscriberId,
-    aggregateType,
-    EventTypeOrName.with(OrderCreated.class),  // Type-safe
-    resumePoint,
-    handler
-);
-```
-
-#### Named Events
-
-Uses a logical name string without requiring a corresponding Java class. Event payload is stored and retrieved as raw JSON.
-
-```java
-// Append named event using Map
-Map<String, Object> externalEvent = Map.of(
-    "type", "ExternalOrderReceived",
-    "externalOrderId", "EXT-12345",
-    "items", List.of("SKU-001", "SKU-002")
-);
-eventStore.appendToStream(orders, orderId, externalEvent);
-
-// Fetch and work with raw JSON
-stream.eventList().forEach(pe -> {
-    if (pe.event().getEventName().isPresent()) {
-        String eventName = pe.event().getEventName().get().toString();
-        String rawJson = pe.event().getJson();
-        // Manual deserialization if needed
-    }
-});
-
-// Subscribe using EventName
-eventStore.subscribeToAggregateEventsInTransaction(
-    subscriberId,
-    aggregateType,
-    EventTypeOrName.with(EventName.of("ExternalOrderReceived")),
-    resumePoint,
-    handler
-);
-```
-
-#### When to Use Each Approach
-
-| Scenario | Recommended Approach |
-|----------|---------------------|
-| Domain events in your application | **Typed Events** |
-| Events from external systems (Kafka, webhooks) | **Named Events** |
-| Schema evolution where Java classes change | **Named Events** |
-| Schema-free events | **Named Events** |
-| Full type safety and IDE support | **Typed Events** |
+**Typed Events**: Use Java FQCN, automatic deserialization via `deserialize()`
+**Named Events**: Use logical string, manual processing via `getJson()`
 
 ---
 
 ## Event Ordering
 
-**Package**: `dk.trustworks.essentials.components.foundation.types`
+Package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types`
 
-Two types of ordering track event positions at different scopes:
-
-| Order Type | Scope | Starting Value | Purpose |
-|------------|-------|----------------|---------|
-| `EventOrder` | Per aggregate instance | 0 | Sequence within a specific aggregate |
-| `GlobalEventOrder` | Per aggregate type | 1 | Sequence across all aggregates of same type |
+| Type | Scope | Starting Value | Purpose |
+|------|-------|----------------|---------|
+| `EventOrder` | Per aggregate instance | 0 | Sequence within specific aggregate |
+| `GlobalEventOrder` | Per aggregate type | 1 | Sequence across all aggregates of type |
 
 ### EventOrder
 
-Sequential position within an aggregate's event stream (per-aggregate instance).
+Sequential position within aggregate's event stream.
 
 ```java
-// Construction
+// API
 EventOrder.of(long value)
 EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED  // Constant: 0L
+
+// Methods
+EventOrder increment()
 
 // Usage
 EventOrder currentOrder = EventOrder.of(5);
 EventOrder nextOrder = currentOrder.increment();  // 6
-
-// Expected event order when appending
-eventStore.appendToStream(
-    aggregateType,
-    aggregateId,
-    EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED,  // First event for this aggregate instance
-    events
-);
 ```
 
-**Scope**: Per aggregate instance (e.g., Order with id "ORD-123" has its own EventOrder sequence starting at 0)
-
-**Pattern**: Starts at 0 for new aggregates, increments with each event (0, 1, 2, 3...).
+**Scope**: Per aggregate instance (Order `ORD-123` has own sequence: 0, 1, 2, 3...)
 
 ### GlobalEventOrder
 
-Global sequential position across ALL events in the event store for a specific aggregate type.
+Global sequential position across all events for aggregate type.
 
 ```java
-// Construction
+// API
 GlobalEventOrder.of(long value)
 GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER  // Constant: 1L
 
 // Usage
 GlobalEventOrder resumePoint = GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER;
-
-eventStore.subscribeToAggregateEventsInTransaction(
-    subscriberId,
-    aggregateType,
-    resumePoint,
-    event -> {
-        process(event);
-        // Subscription automatically tracks GlobalEventOrder
-    }
-);
 ```
 
-**Scope**: Per aggregate type (e.g., all "Orders" events share one GlobalEventOrder sequence, all "Customers" events share another)
-
-**Pattern**: Starts at 1, globally unique within aggregate type, monotonically increasing (1, 2, 3, 4...).
+**Scope**: Per aggregate type (all "Orders" share one sequence: 1, 2, 3, 4...)
+**Use**: Subscription resume points, event ordering across instances.
 
 ---
 
 ## Versioning
 
-**Package**: `dk.trustworks.essentials.components.foundation.types`
+Package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types`
 
 ### EventRevision
 
-Event schema version (for event evolution).
+Event schema version.
 
 ```java
-// Construction
+// API
 EventRevision.of(int value)
 EventRevision.FIRST  // Constant: 1
 
 // Usage
-EventRevision revision = EventRevision.of(2);  // Event schema v2
-
-// Typically resolved automatically from @Revision annotation
-EventRevision revision = PersistableEvent.resolveEventRevision(event);
+EventRevision revision = EventRevision.of(2);
 ```
+
+**Pattern**: Resolved automatically from `@Revision` annotation.
 
 ### @Revision
 
-Annotation for marking event classes with their schema revision. Read by `PersistableEvent.resolveEventRevision()` when persisting events.
-
-**Package**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types`
+Annotation for event schema versioning.
 
 ```java
+package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types;
+
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Inherited
@@ -441,420 +330,153 @@ public @interface Revision {
 }
 ```
 
-#### Usage
+#### Usage Pattern
 
 ```java
-// Base event class with revision 2
+// Base event with revision 2
 @Revision(2)
 public class OrderEvent {
     public final OrderId orderId;
 
-    public OrderEvent(OrderId orderId) {
-        this.orderId = orderId;
-    }
-
-    // Nested event inherits @Revision(2) from parent
+    // Nested event inherits @Revision(2)
     public static class OrderAccepted extends OrderEvent {
-        public OrderAccepted(OrderId orderId) {
-            super(orderId);
-        }
+        // Revision = 2 (inherited)
     }
 
-    // Nested event overrides with revision 3
+    // Override to revision 3
     @Revision(3)
     public static class OrderAdded extends OrderEvent {
         public final CustomerId customerId;
-
-        public OrderAdded(OrderId orderId, CustomerId customerId) {
-            super(orderId);
-            this.customerId = customerId;
-        }
+        // Revision = 3 (overridden)
     }
 }
 
-// Event without annotation defaults to EventRevision.FIRST (1)
-public class ProductAdded extends ProductEvent {
+// No annotation = EventRevision.FIRST (1)
+public class ProductAdded {
     // Revision = 1 (default)
-}
-
-// Specific revision on nested class
-public class ProductEvent {
-    @Revision(2)
-    public static class ProductDiscontinued extends ProductEvent {
-        // Revision = 2
-    }
 }
 ```
 
-**How it works:**
-1. Annotate event classes with `@Revision(n)` to indicate schema version
-2. `PersistableEvent.resolveEventRevision()` reads the annotation
-3. If no annotation present, defaults to `EventRevision.FIRST` (1)
-4. Nested classes can override parent revision
-5. Annotation is `@Inherited`, so subclasses inherit parent revision unless overridden
+**How it works**:
+1. Annotate event classes with `@Revision(n)`
+2. EventStore reads annotation automatically
+3. No annotation → defaults to `EventRevision.FIRST` (1)
+4. Nested classes inherit parent revision (via `@Inherited`)
+5. Override in subclass if needed
 
 ---
 
 ## Utilities
 
-**Package**: `dk.trustworks.essentials.components.foundation.types`
+Package: `dk.trustworks.essentials.components.foundation.types`
 
 ### RandomIdGenerator
 
 ```java
-// Static method
+// API
 static String generate()
 
 // Usage
 String randomId = RandomIdGenerator.generate();
-// Returns: UUID string (e.g., "550e8400-e29b-41d4-a716-446655440000")
+// Returns UUID string: "550e8400-e29b-41d4-a716-446655440000"
 
 CorrelationId id = CorrelationId.of(RandomIdGenerator.generate());
-EventId eventId = EventId.of(RandomIdGenerator.generate());
 ```
 
-**Note**: Uses `UUID.randomUUID().toString()` internally.
+**Implementation**:
+- Default: `UUID.randomUUID().toString()`
+- If `com.fasterxml.uuid.Generators` on classpath: `Generators.timeBasedGenerator().generate().toString()`
+- Override: `RandomIdGenerator.overrideRandomIdGenerator(...)`
 
 ---
 
 ## Security
 
-### ⚠️ Critical: SQL Injection Risk
+### ⚠️ CRITICAL: SQL Injection Risk
 
-The components allow customization of table/column/index/function-names that are used with **String concatenation** → SQL injection risk.  
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL injection.
+Components allow customization of table/column/index/function names used via **string concatenation** → SQL injection risk.
 
-### AggregateType SQL Injection Risk
+Validation is applied but is **NOT exhaustive protection**.
 
-**⚠️ CRITICAL WARNING**: When using `AggregateType` with `SeparateTablePerAggregateTypePersistenceStrategy`, the value is converted to a table name and used in SQL statements via string concatenation.
+### AggregateType SQL Injection
 
-**This exposes `postgresql-event-store` to SQL injection attacks.**
+When using `AggregateType` with `SeparateTablePerAggregateTypePersistenceStrategy`, value is converted to table name and concatenated into SQL.
+
+**Exposes EventStore to SQL injection.**
 
 #### Validation Layer
 
-`SeparateTablePerAggregateTypePersistenceStrategy` calls `PostgresqlUtil.checkIsValidTableOrColumnName(String)` for initial validation:
+`PostgresqlUtil.checkIsValidTableOrColumnName(String)` validates:
+- Start: letter (A-Z) or underscore
+- Subsequent: letters, digits, underscores
+- No SQL/PostgreSQL reserved keywords
+- Max 63 characters
 
 ```java
-// Validation rules:
-// - Start with letter (A-Z) or underscore (_)
-// - Subsequent: letters, digits (0-9), underscores
-// - No reserved SQL/PostgreSQL keywords
-// - Max 63 characters
-
 // Examples
-PostgresqlUtil.checkIsValidTableOrColumnName("Order");      // ✅ OK
-PostgresqlUtil.checkIsValidTableOrColumnName("Customer");   // ✅ OK
-PostgresqlUtil.checkIsValidTableOrColumnName("SELECT");     // ❌ Throws - reserved keyword
-PostgresqlUtil.checkIsValidTableOrColumnName("123_table");  // ❌ Throws - starts with digit
-PostgresqlUtil.checkIsValidTableOrColumnName("drop; --");   // ❌ Throws - invalid characters
+PostgresqlUtil.checkIsValidTableOrColumnName("Orders");     // ✅ OK
+PostgresqlUtil.checkIsValidTableOrColumnName("SELECT");     // ❌ Throws
+PostgresqlUtil.checkIsValidTableOrColumnName("123_table"); // ❌ Throws
+PostgresqlUtil.checkIsValidTableOrColumnName("drop; --");  // ❌ Throws
 ```
 
-**⚠️ IMPORTANT**: This validation is **NOT exhaustive protection**.
+**⚠️ This validation is NOT exhaustive.**
 
 #### Developer Responsibilities
 
-**MUST:**
+**MUST**:
 1. **NEVER** use user input directly for `AggregateType`
-2. Derive `AggregateType` only from **controlled, trusted sources**:
+2. Derive only from **trusted sources**:
    - Hard-coded constants
    - Enum values
    - Pre-validated whitelist
-3. Implement **additional sanitization** beyond built-in validation
+3. Implement **additional sanitization**
 
-**Pattern - Safe Usage:**
+**Safe patterns**:
 
 ```java
-// ✅ SAFE - Hard-coded constant
-AggregateType ORDER = AggregateType.of("Order");
+// ✅ SAFE - Hard-coded
+AggregateType ORDER = AggregateType.of("Orders");
 
 // ✅ SAFE - Enum-based
 public enum AggregateTypes {
-    ORDER("Order"),
-    CUSTOMER("Customer");
+    ORDER("Orders"),
+    CUSTOMER("Customers");
 
     private final AggregateType type;
     AggregateTypes(String name) { this.type = AggregateType.of(name); }
     public AggregateType getType() { return type; }
 }
 
-// ✅ SAFE - Whitelist validation
-private static final Set<String> ALLOWED_AGGREGATE_TYPES =
-    Set.of("Order", "Customer", "Product");
+// ✅ SAFE - Whitelist
+private static final Set<String> ALLOWED = Set.of("Orders", "Customers");
 
-public AggregateType createAggregateType(String input) {
-    if (!ALLOWED_AGGREGATE_TYPES.contains(input)) {
-        throw new ValidationException("Invalid aggregate type: " + input);
+public AggregateType create(String input) {
+    if (!ALLOWED.contains(input)) {
+        throw new ValidationException("Invalid: " + input);
     }
     return AggregateType.of(input);
 }
 
 // ❌ DANGEROUS - User input
 @PostMapping("/events/{aggregateType}")
-public void appendEvent(@PathVariable String aggregateType, @RequestBody Event event) {
-    eventStore.appendToStream(
-        AggregateType.of(aggregateType),  // SQL INJECTION RISK!
-        event.getAggregateId(),
-        event
-    );
+public void append(@PathVariable String aggregateType, @RequestBody Event event) {
+    // SQL INJECTION RISK!
+    eventStore.appendToStream(AggregateType.of(aggregateType), ...);
 }
 ```
 
-See [postgresql-event-store Security](./LLM-postgresql-event-store.md#security) for full details.
+See [postgresql-event-store README Security](../components/postgresql-event-store/README.md#security) for full details.
 
----
+### What Validation Does NOT Protect Against
 
-## Usage Patterns
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
 
-### Event Store Integration
-
-```java
-// Define aggregate type (safe - constant)
-private static final AggregateType ORDER_TYPE = AggregateType.of("Orders");
-
-// Append events
-EventOrder expectedOrder = EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED;
-eventStore.appendToStream(
-    ORDER_TYPE,
-    orderId,
-    expectedOrder,
-    List.of(new OrderCreatedEvent(orderId, customerId))
-);
-
-// Load event stream
-Optional<AggregateEventStream> stream = eventStore.fetchStream(
-    ORDER_TYPE,
-    orderId
-);
-
-stream.ifPresent(s -> {
-    EventOrder currentOrder = s.eventOrderOfLastEvent();
-    List<PersistedEvent> events = s.events();
-});
-```
-
-### Subscription Pattern
-
-```java
-// Setup subscription manager (required)
-var subscriptionManager = EventStoreSubscriptionManager.builder()
-    .setEventStore(eventStore)
-    .setEventStorePollingBatchSize(10)
-    .setEventStorePollingInterval(Duration.ofMillis(100))
-    .setFencedLockManager(fencedLockManager)
-    .setSnapshotResumePointsEvery(Duration.ofSeconds(10))
-    .setDurableSubscriptionRepository(new PostgresqlDurableSubscriptionRepository(jdbi, eventStore))
-    .build();
-
-subscriptionManager.start();
-
-// Asynchronous subscription (out-of-transaction, after commit)
-subscriptionManager.subscribeToAggregateEventsAsynchronously(
-    SubscriberId.of("OrderEventProcessor"),
-    ORDER_TYPE,
-    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,  // Start from beginning on first subscription
-    Optional.empty(),  // No tenant filter
-    new PatternMatchingPersistedEventHandler() {
-        @SubscriptionEventHandler
-        public void handle(OrderCreatedEvent event) {
-            // Handle typed event
-        }
-
-        @SubscriptionEventHandler
-        public void handle(OrderAcceptedEvent event, PersistedEvent metadata) {
-            // Access metadata (eventId, globalOrder, timestamp, etc.)
-            EventId eventId = metadata.eventId();
-            GlobalEventOrder globalOrder = metadata.globalEventOrder();
-            EventOrder eventOrder = metadata.eventOrder();
-        }
-    }
-);
-
-// In-transaction subscription (same transaction as event append)
-subscriptionManager.subscribeToAggregateEventsInTransaction(
-    SubscriberId.of("OrderProjection"),
-    ORDER_TYPE,
-    Optional.empty(),  // No tenant filter
-    new TransactionalPersistedEventHandler() {
-        @Override
-        public void handle(PersistedEvent event, UnitOfWork unitOfWork) {
-            // Runs in SAME transaction as event append
-            updateProjection(event, unitOfWork);
-        }
-    }
-);
-```
-
-### Multi-Tenant Event Store
-
-Multi-tenancy is handled via the `PersistableEventMapper`, not as a parameter to `appendToStream`.
-
-```java
-// Configure PersistableEventMapper to associate events with tenant
-public class MultiTenantPersistableEventMapper implements PersistableEventMapper {
-    private final TenantResolver tenantResolver;
-
-    @Override
-    public PersistableEvent map(Object aggregateId,
-                                AggregateEventStreamConfiguration config,
-                                Object event,
-                                EventOrder eventOrder) {
-        return PersistableEvent.from(
-            EventId.random(),
-            config.aggregateType,
-            aggregateId,
-            EventTypeOrName.with(event.getClass()),
-            event,
-            eventOrder,
-            EventRevision.of(1),
-            new EventMetaData(),
-            OffsetDateTime.now(ZoneOffset.UTC),
-            null,
-            CorrelationId.random(),
-            tenantResolver.getCurrentTenant()  // Tenant association here
-        );
-    }
-}
-
-// Append events - tenant is embedded via mapper
-TenantId tenant = TenantId.of("acme-corp");
-eventStore.appendToStream(
-    ORDER_TYPE,
-    orderId,
-    expectedOrder,
-    events  // Tenant already embedded in events via PersistableEventMapper
-);
-
-// Fetch stream with tenant filter
-Optional<AggregateEventStream> stream = eventStore.fetchStream(
-    ORDER_TYPE,
-    orderId,
-    tenant  // Filter by tenant
-);
-
-// Read tenant from persisted events
-stream.ifPresent(s -> {
-    s.eventList().forEach(event -> {
-        Optional<? extends Tenant> eventTenant = event.tenant();
-        // Access tenant associated with event
-    });
-});
-```
-
-### Correlation Tracking
-
-```java
-// Generate correlation ID at service boundary
-CorrelationId correlationId = CorrelationId.random();
-
-// Propagate through call chain
-MDC.put("correlationId", correlationId.toString());
-
-try {
-    processOrder(orderId, correlationId);
-} finally {
-    MDC.remove("correlationId");
-}
-
-// Include in events
-EventMetadata metadata = EventMetadata.builder()
-    .correlationId(correlationId)
-    .build();
-```
-
-### Typed vs Named Events in Subscriptions
-
-See [Typed Events vs Named Events](#typed-events-vs-named-events) section for detailed comparison.
-
-```java
-// Subscribe to all events for an aggregate type
-subscriptionManager.subscribeToAggregateEventsAsynchronously(
-    SubscriberId.of("MixedEventHandler"),
-    ORDER_TYPE,
-    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
-    Optional.empty(),
-    new PatternMatchingPersistedEventHandler() {
-        // Typed Events - automatic deserialization and routing
-        @SubscriptionEventHandler
-        public void handle(OrderCreatedEvent event) {
-            // Type-safe access to domain event
-            System.out.println("Order created: " + event.orderId());
-        }
-
-        @SubscriptionEventHandler
-        public void handle(OrderAcceptedEvent event, PersistedEvent metadata) {
-            // Type-safe with metadata access
-            System.out.println("Order accepted at: " + metadata.timestamp());
-        }
-
-        // Named Events - raw JSON for events without Java classes
-        @SubscriptionEventHandler
-        private void handle(String json, PersistedEvent metadata) {
-            // Check if this is a named event
-            if (metadata.event().getEventName().isPresent()) {
-                String eventName = metadata.event().getEventName().get().toString();
-                System.out.println("Named event: " + eventName);
-                System.out.println("JSON: " + json);
-                // Manual deserialization if needed
-            }
-        }
-
-        @Override
-        protected void handleUnmatchedEvent(PersistedEvent event) {
-            // Custom handling for events without matching @SubscriptionEventHandler
-            log.warn("Unmatched event: {}", event.event().getEventTypeOrName());
-        }
-    }
-);
-```
-
-### Event Versioning with @Revision
-
-```java
-// Version 1 of OrderCreated event (no annotation = revision 1)
-public record OrderCreatedV1(OrderId orderId, CustomerId customerId) {}
-
-// Version 2 adds totalAmount field
-@Revision(2)
-public record OrderCreatedV2(OrderId orderId, CustomerId customerId, Amount totalAmount) {}
-
-// Base event class with shared revision
-@Revision(2)
-public class OrderEvent {
-    public final OrderId orderId;
-
-    public OrderEvent(OrderId orderId) {
-        this.orderId = orderId;
-    }
-
-    // Inherits revision 2 from parent
-    public static class OrderAccepted extends OrderEvent {
-        public OrderAccepted(OrderId orderId) {
-            super(orderId);
-        }
-    }
-
-    // Overrides to revision 3 for schema change
-    @Revision(3)
-    public static class OrderAdded extends OrderEvent {
-        public final CustomerId customerId;
-        public final Amount totalAmount;
-
-        public OrderAdded(OrderId orderId, CustomerId customerId, Amount totalAmount) {
-            super(orderId);
-            this.customerId = customerId;
-            this.totalAmount = totalAmount;
-        }
-    }
-}
-
-// The EventStore automatically resolves the revision
-eventStore.appendToStream(
-    ORDER_TYPE,
-    orderId,
-    new OrderCreatedV2(orderId, customerId, Amount.of("99.95"))
-    // EventRevision.of(2) is automatically extracted from @Revision(2)
-);
-```
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
 ---
 
@@ -879,16 +501,13 @@ GlobalEventOrder extends LongType<GlobalEventOrder>
 
 // IntegerType subclasses
 EventRevision extends IntegerType<EventRevision>
-
-// Annotations
-@Revision - Annotation for marking event schema versions
 ```
 
 **Benefit**: Inherits all `SingleValueType` features:
-- Jackson serialization (with [types-jackson](./LLM-types-jackson.md))
-- Spring Data MongoDB persistence (with [types-springdata-mongo](./LLM-types-springdata-mongo.md))
-- JDBI argument support (with [types-jdbi](./LLM-types-jdbi.md))
-- Spring Web converters (with [types-spring-web](./LLM-types-spring-web.md))
+- Jackson serialization ([types-jackson](./LLM-types-jackson.md))
+- Spring Data MongoDB ([types-springdata-mongo](./LLM-types-springdata-mongo.md))
+- JDBI arguments ([types-jdbi](./LLM-types-jdbi.md))
+- Spring Web converters ([types-spring-web](./LLM-types-spring-web.md))
 
 ---
 
@@ -908,25 +527,25 @@ EventRevision extends IntegerType<EventRevision>
 
 ## Gotchas
 
-- `AggregateType` has SQL injection risk - **NEVER** use user input directly
-- `AggregateType` should use plural names (Orders, Customers) to distinguish from implementation classes (Order, Customer)
-- `EventOrder` starts at 0, `GlobalEventOrder` starts at 1 (different conventions)
-- `EventOrder` is per aggregate instance, `GlobalEventOrder` is per aggregate type (different scopes)
-- `EventTypeOrName` requires pattern matching - use `hasEventType()`/`hasEventName()` before extraction
-- Typed Events use FQCN and auto-deserialize, Named Events use logical names and raw JSON
-- `@Revision` is an annotation, `EventRevision` is the type - don't confuse them
-- `@Revision` defaults to 1 if not specified, can be overridden in subclasses
-- `EventRevision` is `IntegerType` (not `LongType`)
-- `SubscriberId` should be unique per consumer to avoid subscription conflicts
-- `RandomIdGenerator` uses UUID internally - not sequential, not sortable
-- All types are immutable - operations return new instances
+- ⚠️ `AggregateType` has SQL injection risk - **NEVER** use user input
+- ⚠️ `AggregateType` use plural names (Orders, Customers) vs implementation classes (Order, Customer)
+- ⚠️ `EventOrder` starts at 0, `GlobalEventOrder` starts at 1 - different conventions
+- ⚠️ `EventOrder` per aggregate instance, `GlobalEventOrder` per aggregate type - different scopes
+- ⚠️ `EventTypeOrName` requires pattern matching - check `hasEventType()`/`hasEventName()` first
+- ⚠️ Typed Events (FQCN + auto-deserialize) vs Named Events (string + raw JSON)
+- ⚠️ `@Revision` is annotation, `EventRevision` is type - don't confuse
+- ⚠️ `@Revision` defaults to 1, inheritable via `@Inherited`
+- ⚠️ `EventRevision` is `IntegerType` not `LongType`
+- ⚠️ `SubscriberId` must be unique per consumer
+- ⚠️ `RandomIdGenerator` uses UUID - not sequential, not sortable
+- ⚠️ All types immutable - operations return new instances
 
 ---
 
 ## See Also
 
-- [README](../components/foundation-types/README.md) - Full documentation
+- [README](../components/foundation-types/README.md) - Full documentation with examples
 - [LLM-types.md](./LLM-types.md) - Base `SingleValueType` patterns
 - [LLM-foundation.md](./LLM-foundation.md) - Foundation components using these types
 - [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md) - Event Store implementation
-- [LLM-eventsourced-aggregates.md](./LLM-eventsourced-aggregates.md) - Event-sourced aggregate framework
+- [LLM-eventsourced-aggregates.md](./LLM-eventsourced-aggregates.md) - Event-sourced aggregates

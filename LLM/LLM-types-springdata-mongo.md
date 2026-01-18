@@ -1,29 +1,39 @@
 # Types-SpringData-Mongo - LLM Reference
 
+> Token-efficient reference for LLMs. For detailed explanations, see [README.md](../types-springdata-mongo/README.md).
+
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types.springdata.mongo`
 - Purpose: Spring Data MongoDB persistence for `SingleValueType` implementations
 - Dependencies: `spring-data-mongodb` (provided scope)
 - Status: WORK-IN-PROGRESS
 
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>types-springdata-mongo</artifactId>
+</dependency>
+```
+
 ## TOC
 - [Core Classes](#core-classes)
 - [API Patterns](#api-patterns)
-- [Common Tasks](#common-tasks)
 - [JSR-310 Temporal Types](#jsr-310-temporal-types)
 - [Gotchas](#gotchas)
-- [See Also](#see-also)
 
 ## Core Classes
 
-| Class (`dk.trustworks.essentials.types.springdata.mongo`) | Interface | Purpose |
-|-----------------------------------------------------------|-----------|---------|
-| `SingleValueTypeConverter`                                | `GenericConverter` | Converts `SingleValueType` ↔ MongoDB types |
-| `SingleValueTypeRandomIdGenerator`                        | `BeforeConvertCallback<Object>` | Auto-generates `@Id` fields via `random()` method |
+Base package: `dk.trustworks.essentials.types.springdata.mongo`
+
+**Dependencies from other modules**:
+- `SingleValueType`, `CharSequenceType`, `NumberType`, all temporal types from [types](./LLM-types.md)
+
+| Class | Implements | Purpose |
+|-------|-----------|---------|
+| `SingleValueTypeConverter` | `GenericConverter` | Converts `SingleValueType` ↔ MongoDB types |
+| `SingleValueTypeRandomIdGenerator` | `BeforeConvertCallback<Object>` | Auto-generates `@Id` fields via `random()` method |
 
 ### SingleValueTypeConverter
-
-**Package:** `dk.trustworks.essentials.types.springdata.mongo.SingleValueTypeConverter`
 
 **Constructors:**
 ```java
@@ -34,30 +44,34 @@ SingleValueTypeConverter(List<Class<? extends CharSequenceType<?>>> explicitChar
 
 **Supported Conversions:**
 
-| SingleValueType (`dk.trustworks.essentials.types`)             | MongoDB Type | Notes |
-|------------------------------|--------------|-------|
-| `CharSequenceType`           | `String` | Basic conversion |
-| `CharSequenceType` (ObjectId) | `ObjectId` | Requires explicit registration |
-| `NumberType`                 | `Number` / `Decimal128` | Auto-handles Decimal128 |
-| `InstantType`                | `Date` | UTC timezone |
-| `LocalDateTimeType`          | `Date` | UTC timezone |
-| `LocalDateType`              | `Date` | UTC timezone |
-| `LocalTimeType`              | `Date` | UTC timezone |
+| `SingleValueType` Subtype | MongoDB Type | Notes |
+|---------------------------|--------------|-------|
+| `CharSequenceType` | `String` | Default conversion |
+| `CharSequenceType` (ObjectId values) | `ObjectId` | Requires explicit registration in constructor |
+| `NumberType` | `Number` / `Decimal128` | Auto-handles Decimal128 |
+| `InstantType` | `Date` | UTC timezone |
+| `LocalDateTimeType` | `Date` | UTC timezone |
+| `LocalDateType` | `Date` | UTC timezone |
+| `LocalTimeType` | `Date` | UTC timezone |
 
 **Not Supported:** `OffsetDateTimeType`, `ZonedDateTimeType` (Spring Data MongoDB limitation)
 
 ### SingleValueTypeRandomIdGenerator
 
-**Package:** `dk.trustworks.essentials.types.springdata.mongo.SingleValueTypeRandomIdGenerator`
+**Method:**
+```java
+public Object onBeforeConvert(Object entity, String collection)
+```
 
 **Behavior:**
-1. Finds `@Id` field of type `SingleValueType`
-2. If field value is `null`, invokes static `random()` method
+1. Finds `@Id` field of `SingleValueType` type
+2. If field value is `null`, invokes static `random()` method via reflection
 3. Sets generated value on entity
+4. Returns entity
 
 **Requirements:**
 - ID type must have `static random()` method
-- Registered as Spring bean
+- Must be registered as Spring bean
 
 ## API Patterns
 
@@ -80,22 +94,38 @@ public class MongoConfig {
 
 ### Pattern: ObjectId Map Key Registration
 
-When `CharSequenceType` used as Map key contains `ObjectId` values:
+When `CharSequenceType` used as Map key contains `ObjectId` values, explicitly register for ObjectId conversion:
 
 ```java
 @Bean
 public MongoCustomConversions mongoCustomConversions() {
     return new MongoCustomConversions(List.of(
-            new SingleValueTypeConverter(ProductId.class, OrderItemId.class)));
+        new SingleValueTypeConverter(ProductId.class, OrderItemId.class)));
 }
 ```
 
-**Example entity:**
+**Entity example:**
 ```java
 @Document
 public class Order {
     @Id public OrderId id;
     public Map<ProductId, Quantity> orderLines; // ProductId contains ObjectId
+}
+```
+
+**ID type example:**
+```java
+public class ProductId extends CharSequenceType<ProductId> implements Identifier {
+    public ProductId(CharSequence value) { super(value); }
+    public ProductId(String value) { super(value); }
+
+    public static ProductId of(CharSequence value) {
+        return new ProductId(value);
+    }
+
+    public static ProductId random() {
+        return new ProductId(ObjectId.get().toString());
+    }
 }
 ```
 
@@ -108,14 +138,12 @@ public MongoCustomConversions mongoCustomConversions() {
         config.useNativeDriverJavaTimeCodecs();
         // Or: config.useSpringDataJavaTimeCodecs(); (default)
         config.registerConverters(List.of(
-                new SingleValueTypeConverter(ProductId.class)));
+            new SingleValueTypeConverter(ProductId.class)));
     });
 }
 ```
 
-## Common Tasks
-
-### Task: Define Entity with Semantic Types
+### Pattern: Define Entity with Semantic Types
 
 ```java
 @Document
@@ -127,7 +155,7 @@ public class Order {
 }
 ```
 
-### Task: Create Repository
+### Pattern: Create Repository
 
 ```java
 public interface OrderRepository extends MongoRepository<Order, OrderId> {
@@ -135,36 +163,22 @@ public interface OrderRepository extends MongoRepository<Order, OrderId> {
 }
 ```
 
-### Task: Create ID Type with random()
-
-CharSequenceType-based (for ObjectId strings):
-```java
-public class OrderId extends CharSequenceType<OrderId> implements Identifier {
-    public OrderId(CharSequence value) { super(value); }
-    public OrderId(String value) { super(value); }
-
-    public static OrderId of(CharSequence value) {
-        return new OrderId(value);
-    }
-
-    public static OrderId random() {
-        return new OrderId(ObjectId.get().toString());
-    }
-}
-```
-
 ## JSR-310 Temporal Types
 
 ### Supported Types
 
-| Type Extends (`dk.trustworks.essentials.types`)| Wrapped Value | MongoDB Type | Timezone |
+Base package: `dk.trustworks.essentials.types`
+
+| Type Extends | Wrapped Value | MongoDB Type | Timezone |
 |--------------|---------------|--------------|----------|
 | `InstantType` | `Instant` | `Date` | UTC |
 | `LocalDateTimeType` | `LocalDateTime` | `Date` | UTC |
 | `LocalDateType` | `LocalDate` | `Date` | UTC |
 | `LocalTimeType` | `LocalTime` | `Date` | UTC |
 
-### Example: InstantType
+**Not Supported:** `OffsetDateTimeType`, `ZonedDateTimeType`
+
+### Pattern: InstantType
 
 ```java
 public class LastUpdated extends InstantType<LastUpdated> {
@@ -183,7 +197,7 @@ public class LastUpdated extends InstantType<LastUpdated> {
 }
 ```
 
-### Example: LocalDateTimeType
+### Pattern: LocalDateTimeType
 
 ```java
 public class Created extends LocalDateTimeType<Created> {
@@ -206,11 +220,11 @@ public class Created extends LocalDateTimeType<Created> {
 - ⚠️ **OffsetDateTime/ZonedDateTime unsupported** - Spring Data MongoDB limitation; use `InstantType` or `LocalDateTimeType`
 - ⚠️ **ObjectId Map keys** - `CharSequenceType` containing `ObjectId` as Map key requires explicit registration: `new SingleValueTypeConverter(YourType.class)`
 - ⚠️ **random() method required** - `SingleValueTypeRandomIdGenerator` invokes static `random()` method via reflection
-- ⚠️ **Decimal128 auto-conversion** - `BigDecimalType` values automatically converted from MongoDB `Decimal128`
+- ⚠️ **Decimal128 auto-conversion** - `NumberType` values automatically converted from MongoDB `Decimal128`
 
 ## See Also
 
-- [README.md](../types-springdata-mongo/README.md) - Full documentation with detailed explanations
-- [LLM-types.md](LLM-types.md) - Core types module (`SingleValueType`, `CharSequenceType`, etc.)
-- [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson serialization for types
+- [README.md](../types-springdata-mongo/README.md) - Full documentation
+- [LLM-types.md](LLM-types.md) - Core types module
+- [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson serialization
 - [OrderRepositoryIT.java](../types-springdata-mongo/src/test/java/dk/trustworks/essentials/types/springdata/mongo/OrderRepositoryIT.java) - Integration test examples

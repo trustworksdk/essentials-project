@@ -1,6 +1,6 @@
 # Foundation - LLM Reference
 
-> See [README](../components/foundation/README.md) for detailed developer documentation.
+> Quick reference for LLMs. For detailed explanations, see [README](../components/foundation/README.md).
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.foundation`
@@ -8,6 +8,19 @@
 - **Key Dependencies**: `shared`, `types`, `reactive`, `immutable`
 - **Scope**: Intra-service coordination (instances of same service sharing a database)
 - **Status**: WORK-IN-PROGRESS
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>foundation</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `InterceptorChain`, `PatternMatchingMethodInvoker` from [shared](./LLM-shared.md)
+- `CommandBus`, `LocalCommandBus` from [reactive](./LLM-reactive.md)
+- `JSONSerializer` from [immutable-jackson](./LLM-immutable-jackson.md)
+- `CorrelationId`, `MessageId`, `SubscriberId` from [foundation-types](./LLM-foundation-types.md)
 
 ## TOC
 - [Core Concepts](#core-concepts)
@@ -22,14 +35,16 @@
 
 ## Core Concepts
 
+**Base package**: `dk.trustworks.essentials.components.foundation`
+
 | Pattern | Package | Purpose | Scope |
 |---------|---------|---------|-------|
-| `UnitOfWork` | `transaction` | Technology-agnostic transaction management | Any database |
-| `DurableQueues` | `messaging.queue` | Point-to-point messaging, At-Least-Once delivery | Intra-service |
-| `FencedLock` | `fencedlock` | Distributed locking with fence tokens | Intra-service |
-| `Inbox` | `messaging.eip.store_and_forward` | Store-and-forward for incoming messages | External → Service |
-| `Outbox` | `messaging.eip.store_and_forward` | Store-and-forward for outgoing messages | Service → External |
-| `DurableLocalCommandBus` | `reactive.command` | CommandBus with durable sendAndDontWait | Intra-service |
+| `UnitOfWork` | `.transaction` | Technology-agnostic transaction management | Any database |
+| `DurableQueues` | `.messaging.queue` | Point-to-point messaging, At-Least-Once delivery | Intra-service |
+| `FencedLock` | `.fencedlock` | Distributed locking with fence tokens | Intra-service |
+| `Inbox` | `.messaging.eip.store_and_forward` | Store-and-forward for incoming messages | External → Service |
+| `Outbox` | `.messaging.eip.store_and_forward` | Store-and-forward for outgoing messages | Service → External |
+| `DurableLocalCommandBus` | `.reactive.command` | CommandBus with durable sendAndDontWait | Intra-service |
 
 **Intra-service**: Multiple instances of SAME service sharing a database. For cross-service (Sales ↔ Billing ↔ Shipping), use Kafka/RabbitMQ/Zookeeper.
 
@@ -40,11 +55,12 @@
 ### API
 
 ```java
+// dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory
 public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
-    // No return value, no UnitOfWork access
+    // No return, no UnitOfWork access
     void usingUnitOfWork(CheckedRunnable runnable);
 
-    // No return value, WITH UnitOfWork access
+    // No return, WITH UnitOfWork access
     void usingUnitOfWork(CheckedConsumer<UOW> consumer);
 
     // Return value, no UnitOfWork access
@@ -53,10 +69,11 @@ public interface UnitOfWorkFactory<UOW extends UnitOfWork> {
     // Return value, WITH UnitOfWork access
     <R> R withUnitOfWork(CheckedFunction<UOW, R> function);
 
-    UOW getRequiredUnitOfWork();  // Throws NoActiveUnitOfWorkException if no active transaction
+    UOW getRequiredUnitOfWork();  // Throws if no active UnitOfWork
     Optional<UOW> getCurrentUnitOfWork();
 }
 
+// dk.trustworks.essentials.components.foundation.transaction.UnitOfWork
 public interface UnitOfWork {
     void commit();
     void rollback();
@@ -68,106 +85,61 @@ public interface UnitOfWork {
 
 ### Implementations
 
-| Class | Technology | Supports |
-|-------|------------|----------|
-| `dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory` | JDBI | Direct JDBC transactions, supports `HandleAwareUnitOfWorkFactory` |
-| `dk.trustworks.essentials.components.foundation.transaction.spring.SpringTransactionAwareUnitOfWorkFactory` | Abstract Spring `UnitOfWorkFactory` | Supports `SpringTransactionAwareUnitOfWork`, Spring `@Transactional` / `TransactionTemplate` |
-| `dk.trustworks.essentials.components.foundation.transaction.spring.jdbi.SpringTransactionAwareJdbiUnitOfWorkFactory` | JDBI + Spring | Inherits from `SpringTransactionAwareUnitOfWorkFactory`, supports `HandleAwareUnitOfWorkFactory` |
-| `dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory` | MongoDB + Spring | Inherits from `SpringTransactionAwareUnitOfWorkFactory` |
+| Class | Package | Technology | Notes |
+|-------|---------|------------|-------|
+| `JdbiUnitOfWorkFactory` | `.transaction.jdbi` | JDBI | Direct JDBC, supports `HandleAwareUnitOfWork` |
+| `SpringTransactionAwareJdbiUnitOfWorkFactory` | `.transaction.spring.jdbi` | JDBI + Spring | Supports `HandleAwareUnitOfWork` |
+| `SpringMongoTransactionAwareUnitOfWorkFactory` | `.transaction.spring.mongo` | MongoDB + Spring | Spring managed MongoDB transactions |
 
 ### Nested Transaction Behavior
 
-Each `usingUnitOfWork`/`withUnitOfWork` call creates a new `UnitOfWork` instance, but nested calls reuse the same underlying database transaction:
-
-- **First call**: Creates `UnitOfWork` + underlying transaction (JDBI/Spring/Mongo), commits on success, rollbacks on exception
-- **Nested calls**: Create new `UnitOfWork` instances that **reuse the same underlying transaction**, only outermost call commits unless the innermost marks its `UnitOfWork` as rollback-only
-- **Exception in nested call**: Marks entire transaction for rollback
+- **First call**: Creates UnitOfWork + underlying transaction, commits on success
+- **Nested calls**: Create new UnitOfWork instances reusing same underlying transaction
+- **Exception**: Marks entire transaction for rollback
 
 ```java
-// Creates UnitOfWork #1 + underlying JDBC transaction
-unitOfWorkFactory.usingUnitOfWork(() -> {
+unitOfWorkFactory.usingUnitOfWork(() -> {  // UnitOfWork #1 + JDBC tx
     orderRepository.save(order);
 
-    // Creates UnitOfWork #2, reuses SAME underlying JDBC transaction
-    unitOfWorkFactory.usingUnitOfWork(() -> {
-        auditLog.record("Order saved");
-        // If this throws, entire JDBC transaction rolls back
-    });
-
-    // When outer completes, UnitOfWork #1 commits the underlying JDBC transaction
-});
-```
-
-**Key point**: Multiple `UnitOfWork` objects, one database transaction. Write methods using `usingUnitOfWork` / `withUnitOfWork` without worrying about nesting.
-
-### Usage
-
-```java
-// Simple - no return value
-unitOfWorkFactory.usingUnitOfWork(() -> {
-    orderRepository.save(order);
-    durableQueues.queueMessage(queueName, event);
-});
-
-// With return value
-String orderId = unitOfWorkFactory.withUnitOfWork(() -> {
-    Order order = orderRepository.save(new Order(...));
-    return order.getId();
-});
-
-// Explicit rollback control
-unitOfWorkFactory.usingUnitOfWork(uow -> {
-    try {
-        riskyOperation();
-    } catch (BusinessException e) {
-        uow.markAsRollbackOnly(e);  // Mark rollback without throwing
-    }
-});
-
-// Nested - joins outer transaction
-unitOfWorkFactory.usingUnitOfWork(() -> {
-    orderRepository.save(order);
-
-    unitOfWorkFactory.usingUnitOfWork(() -> {  // Joins same transaction
+    unitOfWorkFactory.usingUnitOfWork(() -> {  // UnitOfWork #2, reuses JDBC tx
         auditLog.record("Order saved");
     });
+
+    // Outer completes → commits underlying JDBC tx
 });
 ```
 
 ### Spring Integration
 
-Spring-aware factories transparently join Spring transactions:
+Spring-aware factories join Spring `@Transactional` methods:
 
 ```java
 @Transactional
 public void processOrder(Order order) {
-    // Spring transaction active - NO explicit usingUnitOfWork needed
+    // Spring tx active - NO explicit usingUnitOfWork needed
     orderRepository.save(order);  // Spring Data participates
 
-    // DurableQueues internally calls getRequiredUnitOfWork()
-    // which auto-creates UnitOfWork joining Spring transaction
+    // DurableQueues calls getRequiredUnitOfWork() internally
+    // which auto-creates UnitOfWork joining Spring tx
     durableQueues.queueMessage(queueName, new OrderProcessedEvent(order.getId()));
 }
 ```
 
 **When to use explicit `usingUnitOfWork` / `withUnitOfWork`:**
-1. **No transaction exists** - starts new transaction
-2. **Need return value** - use `withUnitOfWork` otherwise `usingUnitOfWork` is preferred
+1. No transaction exists - starts new transaction
+2. Need return value - use `withUnitOfWork`
 
-**Accessing the current UnitOfWork:**
+**Accessing current UnitOfWork:**
 ```java
-// Inside @Transactional or usingUnitOfWork/withUnitOfWork block
-UnitOfWork uow = unitOfWorkFactory.getRequiredUnitOfWork();  // Auto-creates if needed, but only for Spring transactions (used in framework code)
-uow.markAsRollbackOnly(exception);  // Manual rollback control
+UnitOfWork uow = unitOfWorkFactory.getRequiredUnitOfWork();
+uow.markAsRollbackOnly(exception);
 
-// For JDBI - access underlying Handle
+// For JDBI - access Handle
 HandleAwareUnitOfWork handleUow = (HandleAwareUnitOfWork) unitOfWorkFactory.getRequiredUnitOfWork();
-Handle handle = handleUow.handle();  // Execute custom JDBI queries
+Handle handle = handleUow.handle();
 
-// Check if transaction active (returns Optional.empty if not)
 Optional<UnitOfWork> maybeUow = unitOfWorkFactory.getCurrentUnitOfWork();
 ```
-
 **Note**: `getRequiredUnitOfWork()` throws `NoActiveUnitOfWorkException` if called outside a Spring managed transaction - use `usingUnitOfWork`/`withUnitOfWork` to create one first.
 
 ## DurableQueues (Messaging)
@@ -176,25 +148,26 @@ Optional<UnitOfWork> maybeUow = unitOfWorkFactory.getCurrentUnitOfWork();
 
 ### Key Features
 
-| Feature | Description                                                                                                                    |
-|---------|--------------------------------------------------------------------------------------------------------------------------------|
-| **At-Least-Once Delivery** | Messages guaranteed delivered at least once                                                                                    |
-| **Competing Consumers** | Multiple consumers per queue                                                                                                   |
-| **Dead Letter Queue** | Failed messages isolated for review (same `QueueName` with the message marked as a dead-letter-message (aka. a poison-message) |
-| **Ordered Messages** | Delivered in sequence per key                                                                                                  |
-| **Delayed Delivery** | Schedule messages for future delivery                                                                                          |
-| **Redelivery Policies** | Fixed/linear/exponential backoff                                                                                               |
+| Feature | Description |
+|---------|-------------|
+| **At-Least-Once Delivery** | Messages guaranteed delivered at least once |
+| **Competing Consumers** | Multiple consumers per queue |
+| **Dead Letter Queue** | Failed messages isolated (same QueueName, marked as dead-letter) |
+| **Ordered Messages** | Delivered in sequence per key |
+| **Delayed Delivery** | Schedule messages for future delivery |
+| **Redelivery Policies** | Fixed/linear/exponential backoff |
 
-**Design Requirement**: Handlers/Consumers MUST be idempotent (can receive duplicates).
+**Design Requirement**: Handlers MUST be idempotent (can receive duplicates).
 
 ### DurableQueues API
 
 ```java
+// dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues
 public interface DurableQueues {
     // Queue messages
-    QueueEntryId queueMessage(QueueName queueName, Object message);
-    QueueEntryId queueMessage(QueueName queueName, Object message, Duration deliverAfterDelay);
-    List<QueueEntryId> queueMessages(QueueName queueName, List<Object> messages);
+    QueueEntryId queueMessage(QueueName queueName, Message message);
+    QueueEntryId queueMessage(QueueName queueName, Message message, Duration deliveryDelay);
+    List<QueueEntryId> queueMessages(QueueName queueName, List<? extends Message> messages);
 
     // Consume
     DurableQueueConsumer consumeFromQueue(ConsumeFromQueue config);
@@ -208,7 +181,7 @@ public interface DurableQueues {
 
 ### Pattern Matching Handler
 
-Using `dk.trustworks.essentials.components.foundation.messaging.queue.PatternMatchingQueuedMessageHandler` that implements the `dk.trustworks.essentials.components.foundation.messaging.MessageHandler` interface:
+**Class**: `dk.trustworks.essentials.components.foundation.messaging.queue.PatternMatchingQueuedMessageHandler` implementing `dk.trustworks.essentials.components.foundation.messaging.MessageHandler`:
 
 ```java
 var consumer = durableQueues.consumeFromQueue(
@@ -217,32 +190,24 @@ var consumer = durableQueues.consumeFromQueue(
         .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff()
             .setRedeliveryDelay(Duration.ofMillis(200))
             .setMaximumNumberOfRedeliveries(5)
-            .setDeliveryErrorHandler(MessageDeliveryErrorHandler.stopRedeliveryOn(
-                ValidationException.class))
             .build())
         .setParallelConsumers(3)
         .setQueueMessageHandler(new PatternMatchingQueuedMessageHandler() {
             @MessageHandler
-            void handle(ProcessOrderCommand cmd) {
-                // Handle command
-            }
+            void handle(ProcessOrderCommand cmd) { }
 
             @MessageHandler
-            void handle(CancelOrderCommand cmd, QueuedMessage msg) {
-                // Access full message context
-            }
+            void handle(CancelOrderCommand cmd, QueuedMessage msg) { }
 
             @Override
-            protected void handleUnmatchedMessage(QueuedMessage msg) {
-                log.warn("Unmatched: {}", msg.getPayload().getClass());
-            }
+            protected void handleUnmatchedMessage(QueuedMessage msg) { }
         })
         .build());
 ```
 
 ### RedeliveryPolicy
 
-Class: dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy
+**Class**: `dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy`
 
 | Strategy | Formula | Use Case |
 |----------|---------|----------|
@@ -254,10 +219,7 @@ Class: dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy
 // Fixed: 500ms delay, max 5 retries
 RedeliveryPolicy.fixedBackoff(Duration.ofMillis(500), 5)
 
-// Linear: starts 1s, increases 1s per retry, max 30s delay, max 10 retries
-RedeliveryPolicy.linearBackoff(Duration.ofSeconds(1), Duration.ofSeconds(30), 10)
-
-// Exponential: starts 500ms, doubles each time, max 1min delay, max 8 retries
+// Exponential: starts 500ms, doubles, max 1min delay, max 8 retries
 RedeliveryPolicy.exponentialBackoff(
     Duration.ofMillis(500),  // initialRedeliveryDelay
     Duration.ofMillis(500),  // followupRedeliveryDelay
@@ -269,27 +231,27 @@ RedeliveryPolicy.exponentialBackoff(
 
 ### MessageDeliveryErrorHandler
 
-Interface: dk.trustworks.essentials.components.foundation.messaging.MessageDeliveryErrorHandler
+**Interface**: `dk.trustworks.essentials.components.foundation.messaging.MessageDeliveryErrorHandler`
 
 ```java
 // Always retry (default)
 MessageDeliveryErrorHandler.alwaysRetry()
 
-// Immediately move to DLQ on specific exceptions
+// Stop redelivery on specific exceptions → immediate DLQ
 MessageDeliveryErrorHandler.stopRedeliveryOn(
     ValidationException.class,
     IllegalArgumentException.class
 )
 ```
 
-### Dead Letter Queue (Dead Letter Message / Poison Message)
+### Dead Letter Queue
 
 ```java
 // Query DLQ
 List<QueuedMessage> deadLetters = durableQueues.getDeadLetterMessages(
     queueName, QueueingSortOrder.ASC, 0, 100);
 
-// Resurrect for redelivery
+// Resurrect
 durableQueues.resurrectDeadLetterMessage(queueEntryId, Duration.ofSeconds(10));
 
 // Manual mark as DLQ
@@ -298,25 +260,24 @@ durableQueues.markAsDeadLetterMessage(queueEntryId, "Invalid customer data");
 
 ### Interceptors
 
-Interface: dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor
+**Interface**: `dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor`
 
-Add cross-cutting behavior (logging, metrics, tracing):
+Add cross-cutting behavior:
 
 ```java
 var durableQueues = PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)
     .addInterceptor(new DurableQueuesMicrometerInterceptor(meterRegistry, "OrderService"))
-    .addInterceptor(new DurableQueuesMicrometerTracingInterceptor(tracer, propagator, registry))
     .build();
 ```
 
-**Built-in Interceptors:**
+**Built-in**:
 
 | Interceptor | Package | Metrics |
 |-------------|---------|---------|
-| `DurableQueuesMicrometerInterceptor` | `messaging.queue.micrometer` | Queue size gauges, counters (processed, handled, retries, DLQ) |
-| `DurableQueuesMicrometerTracingInterceptor` | `messaging.queue.micrometer` | Distributed tracing via Micrometer Observation |
-| `RecordExecutionTimeDurableQueueInterceptor` | `interceptor.micrometer` | Operation execution time |
+| `DurableQueuesMicrometerInterceptor` | `.messaging.queue.micrometer` | Queue size gauges, counters |
+| `DurableQueuesMicrometerTracingInterceptor` | `.messaging.queue.micrometer` | Distributed tracing |
+| `RecordExecutionTimeDurableQueueInterceptor` | `.interceptor.micrometer` | Execution time |
 
 ### Implementations
 
@@ -333,36 +294,35 @@ Based on [Martin Kleppmann's fenced locking](https://martin.kleppmann.com/2016/0
 
 ### The Problem: Split Brain
 
-```
-Timeline:
-Instance A: [Acquire Lock]──[Processing]──[GC PAUSE..........]──[Continues!]
-Instance B:                        [Lock Timeout]──[Acquire]──[Processing]
-                                        ↑
-                                   SPLIT BRAIN - Both active!
-```
+Traditional locks fail when holder becomes stale without knowing:
 
-Lock holder doesn't know lock was taken over.
+```
+Instance A: [Acquire Lock]──[Processing]──[GC PAUSE............................]──[Continues!]
+Instance B:                                   [Lock Timeout]──[Acquire]──[Processing]
+                                                                  ↑
+                                                             SPLIT BRAIN
+```
 
 ### The Solution: Fence Tokens
 
 **Fence token**: Monotonically increasing counter issued on lock acquire.
-**Lock confirmation**: Periodic heartbeat that updates the last confirmed timestamp to keep the lock alive without changing the token.
+**Lock confirmation**: Periodic heartbeat updating last confirmed timestamp without changing token.
 
 Downstream systems reject stale tokens:
 
 ```java
-// Lock holder: pass token to downstream
+// Lock holder: pass token
 FencedLock lock = lockManager.acquireLock(LockName.of("ProcessOrders"));
 long fenceToken = lock.getCurrentToken();
 orderService.processOrder(orderId, fenceToken);
 
-// Downstream: validate token
+// Downstream: validate
 if (lastSeenToken != null && fenceToken < lastSeenToken) {
     throw new StaleTokenException();
 }
 lastSeenTokens.put(orderId, fenceToken);
 
-// Database: include token in WHERE clause
+// Database: include token in WHERE
 UPDATE orders
 SET status = :status, last_fence_token = :token
 WHERE id = :id AND last_fence_token <= :token
@@ -371,31 +331,22 @@ WHERE id = :id AND last_fence_token <= :token
 ### API
 
 ```java
+// dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager
 public interface FencedLockManager extends Lifecycle {
-    // Blocks until lock is acquired
     FencedLock acquireLock(LockName lockName);
-
-    // Non-blocking attempt to acquire lock
     Optional<FencedLock> tryAcquireLock(LockName lockName);
-
-    // Attempt to acquire lock with timeout
     Optional<FencedLock> tryAcquireLock(LockName lockName, Duration timeout);
-
-    // Acquire lock asynchronously, callback invoked on acquire/release
     void acquireLockAsync(LockName lockName, LockCallback callback);
-
-    // Check if this lock manager holds the specified lock
+    void cancelAsyncLockAcquiring(LockName lockName);
     boolean isLockAcquired(LockName lockName);
-
-    // Get unique ID for this lock manager instance
+    boolean isLockedByThisLockManagerInstance(LockName lockName);
+    boolean isLockAcquiredByAnotherLockManagerInstance(LockName lockName);
     String getLockManagerInstanceId();
 }
 
+// dk.trustworks.essentials.components.foundation.fencedlock.FencedLock
 public interface FencedLock extends AutoCloseable {
-    // Get monotonic fence token for stale lock detection
     long getCurrentToken();
-
-    // Release the lock
     void release();
 }
 ```
@@ -412,12 +363,22 @@ public interface FencedLock extends AutoCloseable {
 ### Usage
 
 ```java
-// Synchronous - try-with-resources
+// Synchronous
 try (FencedLock lock = lockManager.acquireLock(LockName.of("MyLock"))) {
     performCriticalWork();
 }
 
-// Asynchronous - PREFERRED for long-running tasks
+// Pattern: Try-Acquire (Non-Blocking)
+Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));
+if (lock.isPresent()) {
+    try {
+        processOrders(lock.get().getCurrentToken());
+    } finally {
+        lockManager.releaseLock(lock.get());
+    }
+}
+
+// Asynchronous - PREFERRED for long-running
 lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
     @Override
     public void lockAcquired(FencedLock lock) {
@@ -430,6 +391,73 @@ lockManager.acquireLockAsync(LockName.of("ScheduledTask"), new LockCallback() {
         stopPeriodicProcessing();
     }
 });
+```
+
+### Pattern: Lock Status Queries
+
+```java
+// Check if lock exists in database
+Optional<FencedLock> lockInfo = lockManager.lookupLock(LockName.of("my-lock"));
+
+// Check if THIS instance holds the lock
+boolean heldByMe = lockManager.isLockedByThisLockManagerInstance(LockName.of("my-lock"));
+
+// Check if another instance holds the lock
+boolean heldByOther = lockManager.isLockAcquiredByAnotherLockManagerInstance(LockName.of("my-lock"));
+```
+
+## Common Use Cases
+
+### Singleton Worker Pattern
+
+```java
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+@Component
+public class ScheduledWorker {
+    @Scheduled(fixedDelay = 30000)
+    public void processOrders() {
+        Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));
+        if (lock.isPresent()) {
+            try {
+                processOrderBatch(lock.get().getCurrentToken());
+            } finally {
+                lockManager.releaseLock(lock.get());
+            }
+        }
+    }
+}
+```
+
+### Leadership Election
+
+```java
+@Component
+public class LeaderElection {
+    private volatile boolean isLeader = false;
+    @Autowired private FencedLockManager lockManager;
+
+    @PostConstruct
+    public void startElection() {
+        lockManager.acquireLockAsync(
+            LockName.of("service-leader"),
+            new LockCallback() {
+                @Override
+                public void lockAcquired(FencedLock lock) {
+                    isLeader = true;
+                    startLeaderActivities();
+                }
+
+                @Override
+                public void lockReleased(FencedLock lock) {
+                    isLeader = false;
+                    stopLeaderActivities();
+                }
+            }
+        );
+    }
+}
 ```
 
 ### Implementations
@@ -455,7 +483,7 @@ Kafka → KafkaListener → Inbox.addMessageReceived() → UnitOfWork.commit() �
                         DurableQueues → Handler
 ```
 
-**Configuration:**
+**Configuration**:
 
 ```java
 Inbox orderEventsInbox = inboxes.getOrCreateInbox(
@@ -470,17 +498,12 @@ Inbox orderEventsInbox = inboxes.getOrCreateInbox(
         .build(),
     new PatternMatchingMessageHandler() {
         @MessageHandler
-        void handle(ProcessOrderCommand cmd) {
-            processOrder(cmd);
-        }
+        void handle(ProcessOrderCommand cmd) { }
 
         @Override
-        protected void handleUnmatchedMessage(Message msg) {
-            log.warn("Unknown message type");
-        }
+        protected void handleUnmatchedMessage(Message msg) { }
     });
 
-// Kafka listener
 @KafkaListener(topics = ORDER_EVENTS_TOPIC, groupId = "order-processing")
 public void handle(OrderEvent event) {
     orderEventsInbox.addMessageReceived(new ProcessOrderCommand(event.getId()));
@@ -496,10 +519,10 @@ public void handle(OrderEvent event) {
 ```
 Database Update + Outbox.sendMessage() → UnitOfWork.commit()
                               ↓
-                        DurableQueues → Outbox Relay → Kafka
+                        DurableQueues → Relay → Kafka
 ```
 
-**Configuration:**
+**Configuration**:
 
 ```java
 Outbox kafkaOutbox = outboxes.getOrCreateOutbox(
@@ -510,11 +533,10 @@ Outbox kafkaOutbox = outboxes.getOrCreateOutbox(
         .setNumberOfParallelMessageConsumers(1)
         .build(),
     message -> {
-        var event = message.getPayload();
-        kafkaTemplate.send("order-events", event);
+        kafkaTemplate.send("order-events", message.getPayload());
     });
 
-// Usage - atomic with database update
+// Atomic with database update
 unitOfWorkFactory.usingUnitOfWork(() -> {
     Order order = orderRepository.save(new Order(...));
     kafkaOutbox.sendMessage(new OrderCreatedEvent(order.getId()));
@@ -522,6 +544,8 @@ unitOfWorkFactory.usingUnitOfWork(() -> {
 ```
 
 ### Message Consumption Modes
+
+**Enum**: `dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageConsumptionMode`
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
@@ -532,54 +556,39 @@ unitOfWorkFactory.usingUnitOfWork(() -> {
 
 **Package**: `dk.trustworks.essentials.components.foundation.messaging.queue`
 
-### OrderedMessage Structure
+### OrderedMessage
+
+**Class**: `dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMessage`
 
 ```java
 public class OrderedMessage extends Message {
     public String getKey();   // Entity ID (e.g., "Order-123")
-    public long getOrder();   // Sequential position - relative to the Entity ID (0, 1, 2...)
+    public long getOrder();   // Sequential position per key (0, 1, 2...)
 
     public static OrderedMessage of(Object payload, String key, long order);
 }
 ```
 
-Messages with same `key` processed in `order` sequence. Messages with different `key`s can be processed in parallel.
+Messages with same `key` processed in `order` sequence. Different `key`s can be parallel.
 
 ### Single-Node Ordering
 
-Automatic - no configuration needed:
+Automatic - no configuration:
 
 ```java
 durableQueues.consumeFromQueue(
     ConsumeFromQueue.builder()
         .setQueueName(QueueName.of("OrderEvents"))
-        .setParallelConsumers(10)  // Ordering still maintained per key
+        .setParallelConsumers(10)  // Ordering maintained per key
         .setQueueMessageHandler(handler)
         .build());
 ```
 
-**How it works:**
-
-Depending on the `DurableQueues` implementation, ordering is maintained using different fetcher approaches:
-
-**Centralized Fetcher** (PostgreSQL with `useCentralizedMessageFetcher=true`):
-- Single polling thread fetches messages
-- Tracks `inProcessOrderedKeys` to prevent concurrent processing of same key
-- Dispatches to worker threads only if key not in-process
-
-**Traditional Fetcher** (MongoDB, or PostgreSQL with `useCentralizedMessageFetcher=false`):
-- Each consumer thread tracks in-process keys via `orderedMessageDeliveryThreads`
-- Fetch queries exclude keys currently being processed
-
-**Result:** Sequential per key, parallel across keys
+**How**: Tracks in-process keys to prevent concurrent processing of same key.
 
 ### Multi-Node Ordering
 
-**Problem**: When running across multiple nodes (cluster):
-- Each node independently polls database
-- Without coordination, messages for same key can be processed out of order
-- Node 1 might fetch `Order-123:event-5` while Node 2 fetches `Order-123:event-4`
-- In-process key tracking only works within a single node, not cluster-wide
+**Problem**: Each node independently polls database → messages for same key processed out of order.
 
 **Solution**: Use Inbox/Outbox with `SingleGlobalConsumer`:
 
@@ -588,34 +597,35 @@ Inbox inbox = inboxes.getOrCreateInbox(
     InboxConfig.builder()
         .setInboxName(InboxName.of("OrderEventsInbox"))
         .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)  // Required!
-        .setNumberOfParallelMessageConsumers(10)  // Still uses threads on active node
+        .setNumberOfParallelMessageConsumers(10)
         .setRedeliveryPolicy(redeliveryPolicy)
         .build(),
     messageHandler);
 ```
 
-**How it works:**
-1. **FencedLock Coordination**: Ensures only ONE node actively consumes
-2. **Active Node**: The node holding the lock uses its message fetcher (Centralized or Traditional) to maintain ordering
-3. **Multi-threading**: Active node can still use multiple parallel threads (e.g., 10)
-4. **Failover**: Lock timeout → another node takes over
+**How it works**:
+1. FencedLock ensures only ONE node actively consumes
+2. Active node uses multiple threads (e.g., 10)
+3. Message fetcher ensures ordering per key
+4. Failover: Lock timeout → another node takes over
 
 ### Comparison
 
 | Scenario | Configuration | Ordering | Throughput |
 |----------|--------------|----------|------------|
-| Single node, unordered | `GlobalCompetingConsumers` | ❌ None | Highest |
-| Single node, ordered | `GlobalCompetingConsumers` | ✅ Per key | High |
-| Multi-node, unordered | `GlobalCompetingConsumers` | ❌ None | Highest (distributed) |
-| Multi-node, ordered | `SingleGlobalConsumer` + FencedLock | ✅ Per key, cluster-wide | Medium (one active) |
+| Single node | Any | ✅ Per key | High |
+| Multi-node, unordered | `GlobalCompetingConsumers` | ❌ None | Highest |
+| Multi-node, ordered | `SingleGlobalConsumer` + FencedLock | ✅ Per key, cluster-wide | Medium |
 
-**Best Practice**: Design for idempotency (required for At-Least-Once delivery anyway).
+**Best Practice**: Design for idempotency (required for At-Least-Once anyway).
 
 ## DurableLocalCommandBus
 
 **Package**: `dk.trustworks.essentials.components.foundation.reactive.command`
 
-Specialization of `CommandBus` (from [reactive](./LLM-reactive.md)) that uses DurableQueues for `sendAndDontWait`.
+**Class**: `dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus`
+
+CommandBus using DurableQueues for `sendAndDontWait`.
 
 ### Configuration
 
@@ -644,7 +654,7 @@ commandBus.sendAndDontWait(new ProcessOrderCommand(orderId));
 // Delayed execution
 commandBus.sendAndDontWait(new SendReminderCommand(customerId), Duration.ofHours(24));
 
-// Synchronous (returns result) - inherited from CommandBus
+// Synchronous (returns result)
 OrderId result = commandBus.send(new CreateOrderCommand(...));
 ```
 
@@ -655,6 +665,7 @@ OrderId result = commandBus.send(new CreateOrderCommand(...));
 **Package**: `dk.trustworks.essentials.components.foundation.json`
 
 ```java
+// dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
 JSONSerializer serializer = new JacksonJSONSerializer(objectMapper);
 
 String json = serializer.serialize(order);
@@ -667,9 +678,10 @@ Object event = serializer.deserialize(json, "com.example.OrderCreatedEvent");
 
 **Package**: `dk.trustworks.essentials.components.foundation.lifecycle`
 
-Integrates `Lifecycle` beans with Spring ApplicationContext:
+Integrates `Lifecycle` beans with Spring:
 
 ```java
+// dk.trustworks.essentials.components.foundation.lifecycle.DefaultLifecycleManager
 @Bean
 public DefaultLifecycleManager lifecycleManager() {
     return new DefaultLifecycleManager(
@@ -679,37 +691,40 @@ public DefaultLifecycleManager lifecycleManager() {
 }
 ```
 
-Components like `FencedLockManager`, `DurableQueues` implement `Lifecycle`.
-
 ### PostgreSQL Utilities
 
 **Package**: `dk.trustworks.essentials.components.foundation.postgresql`
 
 #### PostgresqlUtil
 
+**Class**: `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil`
+
 ```java
 // Validate table/column/index names (initial defense layer)
 PostgresqlUtil.checkIsValidTableOrColumnName("orders");  // OK
-PostgresqlUtil.checkIsValidTableOrColumnName("SELECT");  // Throws - reserved keyword
-PostgresqlUtil.checkIsValidTableOrColumnName("123_table");  // Throws - starts with digit
+PostgresqlUtil.checkIsValidTableOrColumnName("SELECT");  // Throws - keyword
 
-// Boolean validation variants
-PostgresqlUtil.isValidSqlIdentifier("valid_identifier");  // true, max 63 chars
+// Boolean variants
+PostgresqlUtil.isValidSqlIdentifier("valid_id");  // true, max 63 chars
 PostgresqlUtil.isValidQualifiedSqlIdentifier("schema.table");  // true, max 127 chars
 PostgresqlUtil.isValidFunctionName("my_function");  // true
 
-// Other utilities
+// Other
 int version = PostgresqlUtil.getServiceMajorVersion(handle);
 boolean hasPgCron = PostgresqlUtil.isPGExtensionAvailable(handle, "pg_cron");
 ```
 
-**Validation Rules:**
-- Start with letter (A-Z) or underscore (_)
-- Subsequent: letters, digits (0-9), underscores
-- No reserved SQL/PostgreSQL keywords
+**Validation Rules** (see [Security](#security) for full details):
+- Start: letter (A-Z) or underscore (`_`)
+- Subsequent: letters, digits, underscores
+- No reserved SQL keywords (300+ in `RESERVED_NAMES`)
 - Max 63 chars (simple) or 127 chars (qualified)
 
+⚠️ **Note**: Validation is an initial defense layer, NOT exhaustive protection. See [Security](#security).
+
 #### ListenNotify
+
+**Class**: `dk.trustworks.essentials.components.foundation.postgresql.ListenNotify`
 
 ```java
 // Add NOTIFY trigger
@@ -723,6 +738,8 @@ Flux<String> notifications = ListenNotify.listen(jdbi, "orders", Duration.ofMill
 ```
 
 #### MultiTableChangeListener
+
+**Class**: `dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener`
 
 ```java
 MultiTableChangeListener<TableChangeNotification> listener = MultiTableChangeListener.builder()
@@ -739,13 +756,13 @@ listener.start();
 
 ### MongoDB Utilities
 
-**Package**: `dk.trustworks.essentials.components.foundation.mongo`
+**Class**: `dk.trustworks.essentials.components.foundation.mongo.MongoUtil`
 
 ```java
 // Validate collection names (initial defense layer)
 MongoUtil.checkIsValidCollectionName("orders");  // OK
-MongoUtil.checkIsValidCollectionName("system.users");  // Throws - starts with system.
-MongoUtil.checkIsValidCollectionName("my$collection");  // Throws - contains $
+MongoUtil.checkIsValidCollectionName("system.users");  // Throws - system.
+MongoUtil.checkIsValidCollectionName("my$collection");  // Throws - $
 
 // Detect write conflicts for retry logic
 if (MongoUtil.isWriteConflict(exception)) {
@@ -753,19 +770,23 @@ if (MongoUtil.isWriteConflict(exception)) {
 }
 ```
 
-**Validation Rules:**
+**Validation Rules** (see [Security](#security) for full details):
 - Max 64 characters
 - No `$` or null characters
 - No `system.` prefix
 - Only letters, digits, underscores
 
+⚠️ **Note**: Validation is an initial defense layer, NOT exhaustive protection. See [Security](#security).
+
 ### TTLManager
 
-**Package**: `dk.trustworks.essentials.components.foundation.ttl`
+**Package**: `dk.trustworks.essentials.components.foundation.ttl` (interface)
+**Package**: `dk.trustworks.essentials.components.foundation.postgresql.ttl` (PostgreSQL impl)
 
-Handles scheduled deletion/archival of expired data (Time-To-Live management). Coordinates with `EssentialsScheduler` to execute TTL jobs using pg_cron or executor-based scheduling.
+**Class**: `dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager`
 
-#### Usage
+The TTLManager is responsible for scheduling and managing actions that enforce data lifecycle operations
+such as deletion or archival based on expiration policies.
 
 ```java
 PostgresqlTTLManager ttlManager = new PostgresqlTTLManager(scheduler, unitOfWorkFactory);
@@ -776,23 +797,32 @@ ttlManager.scheduleTTLJob(TTLJobDefinition.builder()
         .setTableName("audit_logs")  // ✅ Validated
         .setWhereClause("created_at < NOW() - INTERVAL '90 days'")  // ⚠️ NOT validated
         .build())
-    .setSchedule(CronScheduleConfiguration.of("0 3 * * *"))  // Daily at 3 AM
+    .setSchedule(CronScheduleConfiguration.of("0 3 * * *"))
     .build());
 ```
 
-#### TTLJobAction Options
-
-| Option | Description | Security                                                    |
-|--------|-------------|-------------------------------------------------------------|
-| `tableName` | Target table for deletion | ✅ Validated via `PostgresqlUtil` as first life of defense   |
-| `whereClause` | WHERE condition for deletion | ⚠️ **NOT validated** - must sanitize to avoid SQL injection |
-| `fullDeleteSql` | Complete DELETE statement | ⚠️ **NOT validated** - must sanitize to avoid SQL injection |
-
-**Security Warning**: `whereClause` and `fullDeleteSql` are executed directly without validation. Only use trusted sources - never allow external input.
+⚠️ **Security**: `whereClause` and `fullDeleteSql` are **NOT validated** - you must sanitize these values. See [Security](#security).
 
 ### EssentialsScheduler
 
 **Package**: `dk.trustworks.essentials.components.foundation.scheduler`
+
+**Class**: `dk.trustworks.essentials.components.foundation.scheduler.DefaultEssentialsScheduler`
+
+Represents a scheduler responsible for scheduling jobs defined by the `EssentialsScheduledJob` interface.  
+
+Note: This scheduler is not intended to replace a full-fledged scheduler such as Quartz or Spring, it is a simple
+scheduler that utilizes the postgresql `pg_cron` extension if available or a simple `ScheduledExecutorService` to schedule jobs.
+It is meant to be used internally by essentials components to schedule jobs.
+
+The `EssentialsScheduler` validates configuration inputs:
+
+| Component | Validated Field | Validation Method |
+|-----------|----------------|-------------------|
+| `PgCronJob` | `functionName()` | `PostgresqlUtil.isValidFunctionName()` |
+| `ExecutorScheduledJobRepository` | `sharedTableName` | `PostgresqlUtil.checkIsValidTableOrColumnName()` |
+| `Arg` | `name`, `table` | `PostgresqlUtil.checkIsValidTableOrColumnName()` |
+| `FunctionCall` | `functionName` | `PostgresqlUtil.isValidFunctionName()` |
 
 ```java
 EssentialsScheduler scheduler = DefaultEssentialsScheduler.builder()
@@ -807,7 +837,7 @@ if (scheduler.isPgCronAvailable()) {
     scheduler.schedulePgCronJob(PgCronJob.builder()
         .setJobName("cleanup_tokens")
         .setSchedule("0 * * * *")
-        .setFunctionName("cleanup_expired_tokens")
+        .setFunctionName("cleanup_expired_tokens")  // ✅ Validated by isValidFunctionName()
         .build());
 }
 
@@ -819,20 +849,22 @@ scheduler.scheduleExecutorJob(ExecutorJob.builder()
     .build());
 ```
 
+⚠️ **Note**: Validation is an initial defense layer, NOT exhaustive protection. See [Security](#security).
+
 ### IOExceptionUtil
 
 **Package**: `dk.trustworks.essentials.components.foundation`
+
+**Class**: `dk.trustworks.essentials.components.foundation.IOExceptionUtil`
 
 ```java
 try {
     performDatabaseOperation();
 } catch (Exception e) {
     if (IOExceptionUtil.isIOException(e)) {
-        // Transient error - safe to retry
-        scheduleRetry();
+        scheduleRetry();  // Transient error
     } else {
-        // Permanent error - don't retry
-        throw e;
+        throw e;  // Permanent error
     }
 }
 ```
@@ -843,46 +875,108 @@ Detects: `IOException`, `SQLTransientException`, JDBI `ConnectionException`, Mon
 
 ### ⚠️ Critical: SQL/NoSQL Injection Risk
 
-Component allows customization of table/column/index/function/collection-names that are used with **String concatenation** → SQL/NoSQL injection risk.  
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL/NoSQL injection.
+Components allow customization of table/column/index/function/collection names used with **String concatenation** → SQL/NoSQL injection risk.
+Validation methods provide an **initial defense layer**, but this is **NOT exhaustive protection**.
 
-### Critical Security Warnings
+### Built-in Validation
 
-⚠️ **SQL Injection Risk**
+#### PostgreSQL Validation
 
-Validation methods provide **ONLY an initial defense layer**, NOT exhaustive protection.
+**Class**: `dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil`
 
-| Component | Validated                                                             | NOT Validated |
-|-----------|-----------------------------------------------------------------------|---------------|
-| PostgreSQL | Table/column/index/function names via `checkIsValidTableOrColumnName` | WHERE clauses, function bodies, SQL values |
-| MongoDB | Collection names via `checkIsValidCollectionName`                     | Query filters, aggregation pipelines |
-| TTLManager | Table names                                                           | `whereClause`, `fullDeleteSql` |
+| Method | Validates |
+|--------|-----------|
+| `checkIsValidTableOrColumnName(String)` | Table, column, index names |
+| `isValidFunctionName(String)` | Function names (simple or qualified) |
+| `isValidSqlIdentifier(String)` | Simple SQL identifiers |
+| `isValidQualifiedSqlIdentifier(String)` | Qualified identifiers (`schema.name`) |
 
-**Developer Responsibilities:**
-1. **NEVER** use user input directly for table/column/index/function- and collection names
+**What PostgreSQL validation checks:**
+- Must start with letter (a-z, A-Z) or underscore (`_`)
+- Subsequent characters: letters, digits (0-9), or underscores
+- Max length: 63 characters (simple) or 127 characters (qualified `schema.name`)
+- Cannot be a reserved keyword (300+ PostgreSQL/SQL reserved words in `RESERVED_NAMES`)
+- For qualified names: exactly one dot, both parts must be valid identifiers
+
+#### MongoDB Validation
+
+**Class**: `dk.trustworks.essentials.components.foundation.mongo.MongoUtil`
+
+| Method | Validates |
+|--------|-----------|
+| `checkIsValidCollectionName(String)` | Collection names |
+
+**What MongoDB validation checks:**
+- Max length: 64 characters
+- Cannot contain `$` or null characters
+- Cannot start with `system.` (reserved for system collections)
+- Must only contain letters, digits, and underscores
+
+### What IS and IS NOT Validated
+
+| Component | Validated | NOT Validated |
+|-----------|-----------|---------------|
+| PostgreSQL | Table/column/index/function names | WHERE clauses, function bodies, SQL values |
+| MongoDB | Collection names | Query filters, aggregation pipelines |
+| TTLManager | Table names | `whereClause`, `fullDeleteSql` |
+| EssentialsScheduler | Function names, table names | Job parameters, custom SQL |
+
+### What Validation Does NOT Protect Against
+
+#### PostgreSQL
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+#### MongoDB
+- NoSQL injection via **values** (use Spring Data MongoDB's type-safe query methods)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- Query operator injection (e.g., `$where`, `$regex`, `$ne`)
+
+### Developer Responsibilities
+
+1. **NEVER** use user input directly for names
 2. Implement additional sanitization for ALL configuration values
 3. Derive names only from controlled, trusted sources
 4. Validate API input parameters
 5. Sanitize WHERE clauses, SQL values, function names
 
+### Safe Patterns
+
 ```java
-// ❌ DANGEROUS
-PostgresqlDurableQueues.builder()
-    .setSharedQueueTableName(userInput);  // SQL injection risk due to user input
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.foundation.mongo.MongoUtil;
+import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
 
 // ❌ DANGEROUS
-QueueName.of(userInput);  // Depends on implementation
-
-// ✅ SAFE
 PostgresqlDurableQueues.builder()
-    .setSharedQueueTableName("durable_queues");  // Fixed string
+    .setSharedQueueTableName(userInput);  // SQL injection risk
 
-// ✅ SAFE - whitelist validation
+// ✅ SAFE - Hardcoded only
+PostgresqlDurableQueues.builder()
+    .setSharedQueueTableName("durable_queues");
+
+// ✅ SAFE - Validate config values before use
+PostgresqlUtil.checkIsValidTableOrColumnName(tableName);  // Throws InvalidTableOrColumnNameException
+MongoUtil.checkIsValidCollectionName(collectionName);     // Throws InvalidCollectionNameException
+
+// ✅ SAFE - Check without throwing
+if (PostgresqlUtil.isValidSqlIdentifier(name)) {
+    // use name
+}
+
+// ✅ SAFE - Whitelist validation
 if (!ALLOWED_QUEUE_NAMES.contains(userInput)) {
     throw new ValidationException();
 }
 QueueName.of(userInput);
 ```
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
 See [README Security](../components/foundation/README.md#security) for full details.
 
@@ -894,7 +988,7 @@ All APIs require `principal` parameter for authorization. Throw `EssentialsSecur
 
 ### DBFencedLockApi
 
-Interface: dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi
+**Interface**: `dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi`
 
 ```java
 List<ApiDBFencedLock> getAllLocks(Object principal);
@@ -903,20 +997,20 @@ boolean releaseLock(Object principal, LockName lockName);
 
 ### DurableQueuesApi
 
-Interface: dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi
+**Interface**: `dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi`
 
 ```java
 Set<QueueName> getQueueNames(Object principal);
-Optional<ApiQueuedMessage> getQueuedMessage(Object principal, QueueEntryId queueEntryId);
+Optional<ApiQueuedMessage> getQueuedMessage(Object principal, QueueEntryId id);
 Optional<ApiQueuedMessage> resurrectDeadLetterMessage(Object principal, QueueEntryId id, Duration delay);
 Optional<ApiQueuedMessage> markAsDeadLetterMessage(Object principal, QueueEntryId id);
-boolean deleteMessage(Object principal, QueueEntryId queueEntryId);
+boolean deleteMessage(Object principal, QueueEntryId id);
 List<ApiQueuedMessage> getQueuedMessages(Object principal, QueueName queueName, QueueingSortOrder order, long start, long pageSize);
 ```
 
 ### SchedulerApi
 
-Interface: dk.trustworks.essentials.components.foundation.scheduler.api.SchedulerApi
+**Interface**: `dk.trustworks.essentials.components.foundation.scheduler.api.SchedulerApi`
 
 ```java
 List<ApiPgCronJob> getPgCronJobs(Object principal, long startIndex, long pageSize);
@@ -926,7 +1020,7 @@ List<ApiExecutorJob> getExecutorJobs(Object principal, long startIndex, long pag
 
 ### PostgresqlQueryStatisticsApi
 
-Interface: dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi
+**Interface**: `dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi`
 
 ```java
 List<ApiQueryStatistics> getTopTenSlowestQueries(Object principal);
@@ -941,13 +1035,11 @@ Requires `pg_stat_statements` extension.
 ```java
 @Configuration
 public class MessagingConfig {
-
     @Bean
     public DurableQueues durableQueues(Jdbi jdbi, UnitOfWorkFactory<JdbiUnitOfWork> uowFactory) {
         return PostgresqlDurableQueues.builder()
             .setJdbi(jdbi)
             .setUnitOfWorkFactory(uowFactory)
-            .setSharedQueueTableName("durable_queues")  // Fixed string - leave out for default
             .build();
     }
 
@@ -956,8 +1048,6 @@ public class MessagingConfig {
         return PostgresqlFencedLockManager.builder()
             .setJdbi(jdbi)
             .setUnitOfWorkFactory(uowFactory)
-            .setFencedLocksTableName("fenced_locks")  // Fixed string - leave out for default
-            .setLockManagerInstanceId("instance-" + UUID.randomUUID()) // Unique per instance - leave out to use the machines hostname
             .build();
     }
 
@@ -983,7 +1073,6 @@ public class OrderService {
 
     @PostConstruct
     public void setup() {
-        // Inbox: Kafka → Service
         kafkaInbox = inboxes.getOrCreateInbox(
             InboxConfig.builder()
                 .setInboxName(InboxName.of("OrderService:KafkaEvents"))
@@ -1000,14 +1089,8 @@ public class OrderService {
                 void handle(ProcessOrderCommand cmd) {
                     handleProcessOrder(cmd);
                 }
-
-                @Override
-                protected void handleUnmatchedMessage(Message msg) {
-                    log.warn("Unmatched: {}", msg.getPayload().getClass());
-                }
             });
 
-        // Outbox: Service → Kafka
         notificationOutbox = outboxes.getOrCreateOutbox(
             OutboxConfig.builder()
                 .setOutboxName(OutboxName.of("OrderService:Notifications"))
@@ -1015,12 +1098,7 @@ public class OrderService {
                 .setNumberOfParallelMessageConsumers(2)
                 .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofSeconds(1), 3))
                 .build(),
-            new PatternMatchingMessageHandler() {
-                @MessageHandler
-                void handle(OrderProcessedNotification notification) {
-                    kafkaTemplate.send("notifications", notification);
-                }
-            });
+            message -> kafkaTemplate.send("notifications", message.getPayload()));
     }
 
     @KafkaListener(topics = "order-events")
@@ -1032,8 +1110,6 @@ public class OrderService {
         unitOfWorkFactory.usingUnitOfWork(() -> {
             Order order = processOrder(cmd);
             orderRepository.save(order);
-
-            // Same transaction - atomic with database update
             notificationOutbox.sendMessage(new OrderProcessedNotification(order.getId()));
         });
     }
@@ -1043,9 +1119,9 @@ public class OrderService {
 ## See Also
 
 - [README](../components/foundation/README.md) - full documentation
-- [postgresql-queue](./LLM-postgresql-queue.md) - PostgreSQL DurableQueues implementation
-- [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) - MongoDB DurableQueues implementation
-- [postgresql-distributed-fenced-lock](./LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL FencedLock implementation
-- [springdata-mongo-distributed-fenced-lock](./LLM-springdata-mongo-distributed-fenced-lock.md) - MongoDB FencedLock implementation
+- [postgresql-queue](./LLM-postgresql-queue.md) - PostgreSQL DurableQueues
+- [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) - MongoDB DurableQueues
+- [postgresql-distributed-fenced-lock](./LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL FencedLock
+- [springdata-mongo-distributed-fenced-lock](./LLM-springdata-mongo-distributed-fenced-lock.md) - MongoDB FencedLock
 - [postgresql-event-store](./LLM-postgresql-event-store.md) - Event Store using foundation patterns
 - [reactive](./LLM-reactive.md) - EventBus and CommandBus abstractions

@@ -7,9 +7,23 @@
 - **Package**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`
 - **Purpose**: Full-featured Event Store with durable subscriptions, gap handling, reactive streaming
 - **Key deps**: PostgreSQL, JDBI 3, Jackson, Reactor Core (`provided` scope)
-- **Pattern**: Separate table per AggregateType
-- **Security**: ⚠️ Table/column names use String concatenation - MUST sanitize all config values
+- **Pattern**: Separate table per `AggregateType`
+- **Security**: ⚠️ Table/column names use String concatenation - MUST sanitize config values
 - **Status**: WORK-IN-PROGRESS
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>postgresql-event-store</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `UnitOfWork`, `UnitOfWorkFactory`, `HandleAwareUnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+- `FencedLockManager` from [foundation](./LLM-foundation.md) (for exclusive subscriptions)
+- `DurableQueues` from [foundation](./LLM-foundation.md) (for `EventProcessor` inbox)
+- `AggregateType`, `EventId`, `EventOrder`, `EventName`, `Tenant` from [foundation-types](./LLM-foundation-types.md)
+- `JSONSerializer` from [foundation](./LLM-foundation.md)
 
 ## TOC
 
@@ -22,56 +36,62 @@
 - [Gap Handling](#gap-handling)
 - [Interceptors & EventBus](#interceptors--eventbus)
 - [Multitenancy](#multitenancy)
-- [Configuration Reference](#configuration-reference)
-  - [EventStoreSubscriptionObserver](#eventstoresubscriptionobserver)
-  - [IdentifierColumnType](#identifiercolumntype)
-  - [JSONColumnType](#jsoncolumntype)
-  - [EventStreamTableColumnNames](#eventstreamtablecolumnnames)
-  - [Event Polling](#event-polling-low-level)
+- [Configuration](#configuration)
 - [Gotchas](#gotchas)
+- ⚠️ [Security](#security)
 
 ## Core Concepts
 
-| Concept | Type | Description                                                              |
-|---------|------|--------------------------------------------------------------------------|
-| **EventStream** | Logical | Events for `AggregateType` (e.g., "Orders" → `orders_events` table)      |
-| **AggregateEventStream** | Logical | Events for specific aggregate instance (e.g., "Order-123")               |
-| **EventOrder** | `long` (0-based) | Per-aggregate sequence - **strict ordering guaranteed**                  |
-| **GlobalEventOrder** | `long` (1-based) | Per-AggregateType sequence - **may arrive out-of-order**                 |
-| **Typed Events** | Default | Java FQCN identifier - auto deserialize via `deserialize()`              |
-| **Named Events** | Optional | Logical string name - manual JSON via `getJson()`                        |
-| **Gap** | Temporary | Missing `GlobalEventOrder` (transient=concurrent tx, permanent=rollback) |
+Base package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`
 
-**Key Classes**:
-- `PostgresqlEventStore` - Main EventStore implementation
-- `PersistableEvent` - Event representation ready for persistence (before storage) - created by `PersistableEventMapper`
-- `PersistableEventMapper` - Maps domain events to PersistableEvent (you implement)
-- `PersistedEvent` - Event wrapper with metadata (after storage)
-- `AggregateEventStream<ID>` - Stream of events for a specific aggregate
-- `EventStoreSubscriptionManager` - Subscription management
+| Concept | Type/Class | Description |
+|---------|------------|-------------|
+| **EventStream** | Logical | Events for `AggregateType` (e.g., "Orders" → `orders_events` table) |
+| **AggregateEventStream** | `eventstream.AggregateEventStream<ID>` | Events for specific aggregate instance |
+| **EventOrder** | `long` (0-based) | Per-aggregate sequence - **strict ordering guaranteed** |
+| **GlobalEventOrder** | `long` (1-based) | Per-AggregateType sequence - **may have gaps/out-of-order** |
+| **Typed Events** | Default | Java FQCN - auto deserialize via `event().deserialize()` |
+| **Named Events** | Optional | String name - manual JSON via `event().getJson()` |
+| **Gap** | Temporary | Missing `GlobalEventOrder` (transient or permanent) |
+
+### Key Classes
+
+Base package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql`
+
+| Class | Package Suffix | Role |
+|-------|----------------|------|
+| `PostgresqlEventStore` | (root) | Main implementation (implements both `EventStore` and `ConfigurableEventStore`) |
+| `PersistableEvent` | `persistence` | Event before storage - created by `PersistableEventMapper` |
+| `PersistableEventMapper` | `persistence` | Interface - maps domain events to `PersistableEvent` |
+| `PersistedEvent` | `eventstream` | Event after storage with metadata |
+| `AggregateEventStream<ID>` | `eventstream` | Stream of events for aggregate instance |
+| `EventStoreSubscriptionManager` | `subscription` | Subscription lifecycle management |
 
 ### EventStore vs ConfigurableEventStore
 
-| Interface | Purpose |
-|-----------|---------|
-| **`EventStore`** | Event operations (`appendToStream`, `fetchStream`, polling, subscriptions) |
-| **`ConfigurableEventStore<CONFIG>`** | Extends `EventStore` + register aggregate types, projectors, interceptors |
+| Interface | Purpose | When to Use |
+|-----------|---------|-------------|
+| `EventStore` | Event operations (`appendToStream`, `fetchStream`, polling, subscriptions) | Injected dependencies in application code |
+| `ConfigurableEventStore<CONFIG>` | Extends `EventStore` + register types, projectors, interceptors | Setup/configuration phase |
 
-**Usage:**
-- `EventStore` - Type for injected dependencies in application code
-- `ConfigurableEventStore<CONFIG>` - Setup/configuration phase (register aggregate types, add interceptors)
-- `PostgresqlEventStore` implements both
+**Implementation**: `PostgresqlEventStore` implements both.
 
 ```java
-// Setup - use ConfigurableEventStore
-ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore = new PostgresqlEventStore<>(...);
+// Setup phase - use ConfigurableEventStore
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+
+ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore =
+    new PostgresqlEventStore<>(...);
 eventStore.addAggregateEventStreamConfiguration(AggregateType.of("Orders"), OrderId.class);
 eventStore.addEventStoreInterceptor(new MyInterceptor());
 
-// Application - inject as EventStore
-@Service
+// Application code - inject as EventStore
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
+
 public class OrderService {
-    private final EventStore eventStore; // Use EventStore interface
+    private final EventStore eventStore;
     // ...
 }
 ```
@@ -81,6 +101,14 @@ public class OrderService {
 ### Minimal Configuration
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
+
 // 1. JDBI + Jackson
 var jdbi = Jdbi.create(url, user, pass);
 jdbi.installPlugin(new PostgresPlugin());
@@ -108,44 +136,46 @@ var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
 var eventStore = new PostgresqlEventStore<>(
     unitOfWorkFactory,
     persistenceStrategy,
-    Optional.empty(),  // Optional: EventBus for in-tx publishing using FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream interceptor
+    Optional.empty(),  // Optional EventBus for in-tx publishing
     es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory),
     new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver()
 );
 
-// 4. Register aggregate types - this is required before any events related to this AggregateType can be persisted
+// 4. Register aggregate types - REQUIRED before persisting events
 eventStore.addAggregateEventStreamConfiguration(
     AggregateType.of("Orders"), OrderId.class);
 ```
 
 ### PersistableEventMapper Implementation
 
+Interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEventMapper`
+
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
+import dk.trustworks.essentials.components.foundation.types.EventId;
+import dk.trustworks.essentials.components.foundation.types.EventOrder;
+import dk.trustworks.essentials.components.foundation.types.EventRevision;
+import dk.trustworks.essentials.components.foundation.types.EventTypeOrName;
+import dk.trustworks.essentials.components.foundation.types.CorrelationId;
+
 public class MyPersistableEventMapper implements PersistableEventMapper {
-    /**
-     * @param aggregateId   Aggregate instance ID (e.g., OrderId, CustomerId)
-     * @param config        Aggregate type config (contains aggregateType, serialization settings)
-     * @param event         Domain event to persist (e.g., OrderCreated, ProductAdded)
-     * @param eventOrder    Event order within aggregate (0-based sequence)
-     * @return PersistableEvent ready for storage
-     */
     @Override
     public PersistableEvent map(Object aggregateId, AggregateTypeConfiguration config,
                                 Object event, EventOrder eventOrder) {
         return PersistableEvent.from(
-            EventId.random(),                           // Unique event ID
-            config.aggregateType,                       // Aggregate type (e.g., "Orders")
-            aggregateId,                                // Aggregate instance ID
-            EventTypeOrName.with(event.getClass()),    // Event type (FQCN for typed events)
-            // EventTypeOrName.with(EventName.of("OrderCreated")),  // Named events alternative
-            event,                                      // Event payload (serialized to JSON)
-            eventOrder,                                 // Event order within aggregate
-            EventRevision.of(1),                       // Event schema version
-            new EventMetaData(),                       // Metadata (empty or populated)
-            OffsetDateTime.now(ZoneOffset.UTC),        // Timestamp (UTC)
-            null,                                       // causedByEventId - causal event ref (optional)
-            CorrelationId.random(),                    // Correlation ID for tracking
-            null                                        // tenant - multi-tenancy ID (optional)
+            EventId.random(),
+            config.aggregateType,
+            aggregateId,
+            EventTypeOrName.with(event.getClass()),    // Typed events
+            // EventTypeOrName.with(EventName.of("OrderCreated")),  // Named events
+            event,
+            eventOrder,
+            EventRevision.of(1),
+            new EventMetaData(),
+            OffsetDateTime.now(ZoneOffset.UTC),
+            null,                    // causedByEventId (optional)
+            CorrelationId.random(),
+            null                     // tenant (optional)
         );
     }
 }
@@ -153,30 +183,33 @@ public class MyPersistableEventMapper implements PersistableEventMapper {
 
 ## Event Operations
 
-Note: All operations must be performed within a `UnitOfWork` or a Spring Managed **transaction**. See [foundation UnitOfWork - Transactions](./LLM-foundation.md#unitofwork-transactions)
+**All operations require `UnitOfWork` or Spring Managed transaction**. See [foundation UnitOfWork](./LLM-foundation.md#unitofwork-transactions).
 
 ### Append Events
 
 ```java
-// Example with explicit UnitOfWork
+import dk.trustworks.essentials.components.foundation.types.AggregateType;
+
+var orders = AggregateType.of("Orders");
+
+// Without concurrency control
 eventStore.unitOfWorkFactory().usingUnitOfWork(() -> {
-    // No concurrency control
     eventStore.appendToStream(orders, orderId,
         new OrderCreated(orderId, customerId),
         new ProductAdded(orderId, productId, 2));
 });
 
-// With optimistic concurrency control (higher performance on appends)
+// With optimistic concurrency (recommended)
 eventStore.appendToStream(orders, orderId,
-    EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED,  // First event
+    EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED,
     new OrderCreated(orderId, customerId));
 
 eventStore.appendToStream(orders, orderId,
-    EventOrder.of(0),  // Append after event order 0 (expects event with eventorder 0 to exist)
+    EventOrder.of(0),  // Expect event 0 exists
     new ProductAdded(orderId, productId, 2));
 ```
 
-**Exception**: `OptimisticAppendToStreamException` if another tx appended after specified order.
+**Exception**: `OptimisticAppendToStreamException` if concurrent modification.
 
 ### Fetch Events
 
@@ -187,11 +220,11 @@ Optional<AggregateEventStream<OrderId>> stream =
 
 stream.ifPresent(s -> {
     List<PersistedEvent> events = s.eventList();
-    Optional<EventOrder> lastOrder = s.eventOrderOfLastEvent();  // For concurrency
+    Optional<EventOrder> lastOrder = s.eventOrderOfLastEvent();
     boolean isPartial = s.isPartialStream();
 });
 
-// From specific event order (partial rehydration)
+// From specific event order
 var partial = eventStore.fetchStream(orders, orderId, EventOrder.of(5));
 
 // By global order range
@@ -211,17 +244,19 @@ if (event instanceof OrderCreated oc) { /* handle */ }
 if (pe.event().getEventName().isPresent()) {
     String name = pe.event().getEventName().get().toString();
     String json = pe.event().getJson();
-    JsonNode node = objectMapper.readTree(json);  // Manual parsing
+    // Manual parsing
 }
 
 // Bulk deserialization (from eventsourced-aggregates module)
+import dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamEvolver;
+
 List<OrderEvent> events = EventStreamEvolver.extractEventsAsList(
     stream.eventList(), OrderEvent.class);
 ```
 
 ### PersistedEvent API
 
-Interface: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent
+Interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent`
 
 | Method | Type | Description |
 |--------|------|-------------|
@@ -237,16 +272,18 @@ Interface: dk.trustworks.essentials.components.eventsourced.eventstore.postgresq
 
 ## Subscriptions
 
-Interface: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager
+Interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager`
 
 ### Setup SubscriptionManager
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+
 var subscriptionManager = EventStoreSubscriptionManager.builder()
     .setEventStore(eventStore)
     .setEventStorePollingBatchSize(10)
     .setEventStorePollingInterval(Duration.ofMillis(100))
-    .setFencedLockManager(fencedLockManager)  // Required for exclusive subs
+    .setFencedLockManager(fencedLockManager)  // Required for exclusive
     .setSnapshotResumePointsEvery(Duration.ofSeconds(10))
     .setDurableSubscriptionRepository(
         new PostgresqlDurableSubscriptionRepository(jdbi, eventStore))
@@ -257,18 +294,21 @@ subscriptionManager.start();
 
 ### Subscription Types
 
-| Type | Transaction | Exclusive         | Resume Points | Use Case |
-|------|------------|-------------------|---------------|----------|
-| **Async** | Out-of-tx | No                | Yes | External integrations |
-| **Exclusive Async** | Out-of-tx | Yes (FencedLock)  | Yes | Single processor (inventory) |
-| **In-Transaction** | Same tx | No                | No | Consistent projections |
-| **Exclusive In-Tx** | Same tx | Yes (FencedLock)  | No | Critical projections |
+| Type | Transaction | Exclusive | Resume Points | Use Case |
+|------|------------|-----------|---------------|----------|
+| **Async** | Out-of-tx | No | Yes | External integrations |
+| **Exclusive Async** | Out-of-tx | Yes (FencedLock) | Yes | Single processor |
+| **In-Transaction** | Same tx | No | No | Consistent projections |
+| **Exclusive In-Tx** | Same tx | Yes (FencedLock) | No | Critical projections |
 
 ### Async Subscription
 
-EventHandler interface: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler
+Handler interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler`
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+import dk.trustworks.essentials.components.foundation.types.*;
+
 subscriptionManager.subscribeToAggregateEventsAsynchronously(
     SubscriberId.of("EmailNotifier"),
     AggregateType.of("Orders"),
@@ -283,12 +323,10 @@ subscriptionManager.subscribeToAggregateEventsAsynchronously(
 );
 ```
 
-**Resume Points**: Tracks last processed `GlobalEventOrder`, resumes from checkpoint on restart.
-**First Subscription**: `onFirstSubscriptionSubscribeFromAndIncluding` only applies when no resume point exists.
+- **Resume Points**: Tracks last processed `GlobalEventOrder`
+- **First Subscription**: `onFirstSubscriptionSubscribeFromAndIncluding` only applies when no resume point exists
 
 ### Exclusive Async Subscription
-
-EventHandler interface: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.PersistedEventHandler
 
 ```java
 subscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
@@ -306,39 +344,41 @@ subscriptionManager.exclusivelySubscribeToAggregateEventsAsynchronously(
 
 ### In-Transaction Subscription
 
-EventHandler interface: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.TransactionalPersistedEventHandler
+Handler interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.TransactionalPersistedEventHandler`
 
 ```java
-// Non-exclusive (all instances process)
+// Non-exclusive
 subscriptionManager.subscribeToAggregateEventsInTransaction(
     SubscriberId.of("OrderProjection"),
     AggregateType.of("Orders"),
     Optional.empty(),
     new TransactionalPersistedEventHandler() {
         public void handle(PersistedEvent event, UnitOfWork uow) {
-            // Runs in SAME tx - exception = rollback entire tx
+            // Runs in SAME tx - exception rolls back entire tx
             updateProjection(event, uow);
         }
     }
 );
 
-// Exclusive (one instance per cluster)
+// Exclusive
 subscriptionManager.exclusivelySubscribeToAggregateEventsInTransaction(
     SubscriberId.of("CriticalProjection"),
     AggregateType.of("Orders"),
     Optional.empty(),
-    new FencedLockAwareSubscriber() { /* ... */ },
-    new PatternMatchingTransactionalPersistedEventHandler() { /* ... */ }
+    new FencedLockAwareSubscriber() {},
+    new PatternMatchingTransactionalPersistedEventHandler() {}
 );
 ```
 
-**No Resume Points**: Events processed synchronously within appendToStream transaction.
+**No Resume Points**: Events processed synchronously within `appendToStream` transaction.
 
 ### Pattern Matching Handlers
 
 **PatternMatchingPersistedEventHandler** (async):
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
+
 public class OrderHandler extends PatternMatchingPersistedEventHandler {
     @SubscriptionEventHandler
     void handle(OrderCreated event) {}  // Event only
@@ -355,6 +395,7 @@ public class OrderHandler extends PatternMatchingPersistedEventHandler {
     }
 }
 ```
+
 **Unmatched Events**: Default throws `IllegalArgumentException`. Call `allowUnmatchedEvents()` to ignore or override `handleUnmatchedEvent(...)`.
 
 **PatternMatchingTransactionalPersistedEventHandler** (in-tx):
@@ -372,7 +413,7 @@ public class OrderProjection extends PatternMatchingTransactionalPersistedEventH
 }
 ```
 
-**Unmatched Events**: Default throws `IllegalArgumentException`. Call `allowUnmatchedEvents()` to ignore or override `handleUnmatchedEvent(...)`.
+**Unmatched Events**: Same as async version.
 
 ### Batched Subscription
 
@@ -381,7 +422,7 @@ subscriptionManager.batchSubscribeToAggregateEventsAsynchronously(
     SubscriberId.of("Analytics"),
     AggregateType.of("Orders"),
     GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
-    Optional.empty(),          // No tenant filter
+    Optional.empty(),
     100,                      // max batch size
     Duration.ofSeconds(5),    // max latency
     events -> analyticsService.processBatch(events)
@@ -390,21 +431,27 @@ subscriptionManager.batchSubscribeToAggregateEventsAsynchronously(
 
 ## EventProcessor Framework
 
+Base package: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor`
+
 ### Choose Processor
 
-| Processor | Processing                      | Exclusive | Latency | Consistency | Replay | Best For |
-|-----------|---------------------------------|-----------|---------|-------------|--------|----------|
-| `EventProcessor` | Async (Inbox)                   | Yes | Higher | Eventual | Yes | External integrations, long ops |
-| `InTransactionEventProcessor` | Sync (in-tx)                    | Configurable | Lowest | Strong | No | Consistent projections |
+| Processor | Processing | Exclusive | Latency | Consistency | Replay | Best For |
+|-----------|-----------|-----------|---------|-------------|--------|----------|
+| `EventProcessor` | Async (Inbox) | Yes | Higher | Eventual | Yes | External integrations, long ops |
+| `InTransactionEventProcessor` | Sync (in-tx) | Configurable | Lowest | Strong | No | Consistent projections |
 | `ViewEventProcessor` | Async Direct + queue on failure | Yes | Low | Eventual | Yes | Low-latency views |
 
+Note: All `@MessageHandler` annotated methods accept an optional `OrderedMessage` parameter as 2. parameter.
 
 ### EventProcessor (Inbox-based)
 
-External system integrations (Kafka, email, webhooks), long-running operations, operations that may fail and need retry. Events are queued to an Inbox and processed by background workers with configurable parallelism and redelivery policies. Higher latency but maximum reliability.
+For asynchronous external system integrations (Kafka, email, webhooks), long-running operations, operations needing retry. Events queued to `Inbox` with configurable parallelism and redelivery.
+Only supports exclusive processing.
 
 ```java
-@Service
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessor;
+import dk.trustworks.essentials.components.foundation.messaging.queue.RedeliveryPolicy;
+
 public class ShippingKafkaPublisher extends EventProcessor {
     @Override
     public String getProcessorName() { return "ShippingKafkaPublisher"; }
@@ -429,14 +476,16 @@ public class ShippingKafkaPublisher extends EventProcessor {
 }
 ```
 
-**Features**: Exclusive subscription (`FencedLock`), ordered processing per aggregate (`OrderedMessage`) via `Inbox`, redelivery via `RedeliveryPolicy`, Command handling (`@CmdHandler`) via `DurableLocalCommandBus`
+**Features**: Exclusive (`FencedLock`), ordered per-aggregate (`OrderedMessage` via `Inbox`), redelivery (`RedeliveryPolicy`), command handling (`@CmdHandler` via `DurableLocalCommandBus`).
 
 ### InTransactionEventProcessor
 
-View projections that must be atomically consistent with events. Processing happens synchronously within the same database transaction that appends the event. If processing fails, the entire transaction (including the event) rolls back. Lowest latency but no replay capability.
+For synchronous view projections requiring atomic consistency with events. Processing happens synchronously within same database transaction. Failure rolls back entire tx including event append.
+Supports exclusive as well as non-exclusive processing.
 
 ```java
-@Service
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
+
 public class OrderViewProcessor extends InTransactionEventProcessor {
     public OrderViewProcessor(EventProcessorDependencies deps) {
         super(deps, true);  // true = exclusive, false = non-exclusive
@@ -460,12 +509,13 @@ public class OrderViewProcessor extends InTransactionEventProcessor {
 
 ### ViewEventProcessor
 
-View projections where low latency is critical but occasional failures are acceptable. 
-Events are handled directly (no queue) for minimal latency. On failure, events are queued to a [DurableQueue](./LLM-foundation.md#durablequeues-messaging) for retry. 
-If the queue has pending messages for an aggregate, new events are also queued to maintain ordering. Best balance of latency and reliability for read models.
+For asynchronous view projections where low latency is critical but occasional failures acceptable. Events handled asynchronously directly (no queue) for minimal latency. On failure, queued to `DurableQueue` for retry. 
+If the queue has pending messages for a given aggregate id, new events related to the same aggregate-id are queued to maintain ordering.
+Only supports exclusive processing.
 
 ```java
-@Service
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
+
 public class OrderDashboard extends ViewEventProcessor {
     @Override
     public String getProcessorName() { return "OrderDashboard"; }
@@ -501,12 +551,14 @@ Optional<OrderSummary> summary = eventStore.inMemoryProjection(
     AggregateType.of("Orders"), orderId, OrderSummary.class);
 ```
 
-**Custom Projector**:
+### Custom Projector
 
-Interface: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.InMemoryProjector  
-Supporting class: dk.trustworks.essentials.components.eventsourced.aggregates.eventstream.EventStreamEvolver
+Interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.InMemoryProjector`
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.InMemoryProjector;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
+
 public class OrderSummaryProjector implements InMemoryProjector {
     public boolean supports(Class<?> projectionType) {
         return OrderSummary.class.equals(projectionType);
@@ -516,7 +568,6 @@ public class OrderSummaryProjector implements InMemoryProjector {
             AggregateType type, ID id, Class<PROJECTION> projClass, EventStore store) {
         return store.fetchStream(type, id).map(stream -> {
             var summary = new OrderSummary();
-            // You can also use EventStreamEvolver.extractEvents(stream.eventList(), OrderEvent.class) to deserialize events
             stream.eventList().forEach(pe -> {
                 switch (pe.event().deserialize()) {
                     case OrderCreated e -> summary.orderId = e.orderId();
@@ -530,7 +581,7 @@ public class OrderSummaryProjector implements InMemoryProjector {
 }
 ```
 
-For `@EventHandler`, `AnnotationBasedInMemoryProjector` and `EventStreamEvolver` patterns, see [eventsourced-aggregates: In-Memory Projections](./LLM-eventsourced-aggregates.md#in-memory-projections) and [eventsourced-aggregates: EventStreamEvolver](./LLM-eventsourced-aggregates.md#eventstreamevolver).
+**See also**: [eventsourced-aggregates](./LLM-eventsourced-aggregates.md) for `@EventHandler`, `AnnotationBasedInMemoryProjector`, `EventStreamEvolver` patterns.
 
 ## Gap Handling
 
@@ -546,25 +597,27 @@ Subscription sees: 2, 3 (gap at 1!)
 Later TX1 commits → resolves: 1, 2, 3
 ```
 
-**Gap Types**:
+### Gap Types
 
 | Type | Cause | Resolution |
 |------|-------|------------|
 | **Transient** | Concurrent tx not yet committed | Subscription waits/retries |
 | **Permanent** | Tx rolled back (timeout exceeded) | Excluded from queries |
 
-**Ordering Guarantees**:
+### Ordering Guarantees
 
-| Order Type | Guarantee | Reason                                                             |
-|------------|-----------|--------------------------------------------------------------------|
-| `EventOrder` | **Strict per-aggregate** | Unique constraint + optimistic concurrency                         |
-| `GlobalEventOrder` | **No strict guarantee** | Events across aggregates may arrive out-of-order and can have gaps |
+| Order Type | Guarantee | Reason |
+|------------|-----------|--------|
+| `EventOrder` | **Strict per-aggregate** | Unique constraint + optimistic concurrency |
+| `GlobalEventOrder` | **No strict guarantee** | Events across aggregates may arrive out-of-order |
 
-**Per-aggregate ordering is always preserved** - gaps only affect GlobalEventOrder across different aggregates.
+**Per-aggregate ordering is always preserved** - gaps only affect `GlobalEventOrder` across different aggregates.
 
-**Configuration**:
+### Configuration
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
+
 // Enable (default)
 var eventStore = new PostgresqlEventStore<>(...,
     es -> new PostgresqlEventStreamGapHandler<>(es, unitOfWorkFactory), ...);
@@ -574,30 +627,125 @@ var eventStore = new PostgresqlEventStore<>(...,
     es -> new NoEventStreamGapHandler<>(), ...);
 
 // Reset permanent gaps
-eventStore.resetPermanentGapsFor(AggregateType.of("Orders"));
+eventStreamGapHandler.resetPermanentGapsFor(AggregateType.of("Orders"));
 ```
 
 ## Interceptors & EventBus
 
-### EventStoreInterceptor
+### EventStoreInterceptor Interface
 
-Interface: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor
+**Interface**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor`
+
+Allows modification of events before persistence or after load/fetch. Each method supports before, after, or around interception logic.
 
 ```java
-interface EventStoreInterceptor {
-  default <ID> AggregateEventStream<ID> intercept(AppendToStream<ID> operation, EventStoreInterceptorChain<AppendToStream<ID>, AggregateEventStream<ID>> eventStoreInterceptorChain)
-  default <ID> Optional<PersistedEvent> intercept(LoadLastPersistedEventRelatedTo<ID> operation, EventStoreInterceptorChain<LoadLastPersistedEventRelatedTo<ID>, Optional<PersistedEvent>> eventStoreInterceptorChain)
-  default Optional<PersistedEvent> intercept(LoadEvent operation, EventStoreInterceptorChain<LoadEvent, Optional<PersistedEvent>> eventStoreInterceptorChain)
-  default List<PersistedEvent> intercept(LoadEvents operation, EventStoreInterceptorChain<LoadEvents, List<PersistedEvent>> eventStoreInterceptorChain)
-  default <ID> Optional<AggregateEventStream<ID>> intercept(FetchStream<ID> operation, EventStoreInterceptorChain<FetchStream<ID>, Optional<AggregateEventStream<ID>>> eventStoreInterceptorChain)
-  default Stream<PersistedEvent> intercept(LoadEventsByGlobalOrder operation, EventStoreInterceptorChain<LoadEventsByGlobalOrder, Stream<PersistedEvent>> eventStoreInterceptorChain)
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptorChain;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.*;
+
+public interface EventStoreInterceptor extends Interceptor {
+    // Intercept appendToStream/startStream
+    default <ID> AggregateEventStream<ID> intercept(
+            AppendToStream<ID> operation,
+            EventStoreInterceptorChain<AppendToStream<ID>, AggregateEventStream<ID>> chain) {
+        return chain.proceed();
+    }
+
+    // Intercept fetchStream
+    default <ID> Optional<AggregateEventStream<ID>> intercept(
+            FetchStream<ID> operation,
+            EventStoreInterceptorChain<FetchStream<ID>, Optional<AggregateEventStream<ID>>> chain) {
+        return chain.proceed();
+    }
+
+    // Intercept loadLastPersistedEventRelatedTo
+    default <ID> Optional<PersistedEvent> intercept(
+            LoadLastPersistedEventRelatedTo<ID> operation,
+            EventStoreInterceptorChain<LoadLastPersistedEventRelatedTo<ID>, Optional<PersistedEvent>> chain) {
+        return chain.proceed();
+    }
+
+    // Intercept loadEvent
+    default Optional<PersistedEvent> intercept(
+            LoadEvent operation,
+            EventStoreInterceptorChain<LoadEvent, Optional<PersistedEvent>> chain) {
+        return chain.proceed();
+    }
+
+    // Intercept loadEvents
+    default List<PersistedEvent> intercept(
+            LoadEvents operation,
+            EventStoreInterceptorChain<LoadEvents, List<PersistedEvent>> chain) {
+        return chain.proceed();
+    }
+
+    // Intercept loadEventsByGlobalOrder
+    default Stream<PersistedEvent> intercept(
+            LoadEventsByGlobalOrder operation,
+            EventStoreInterceptorChain<LoadEventsByGlobalOrder, Stream<PersistedEvent>> chain) {
+        return chain.proceed();
+    }
 }
 ```
-Example:
+
+### EventStoreInterceptorChain Interface
+
+**Interface**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptorChain`
+
 ```java
+public interface EventStoreInterceptorChain<OPERATION, RESULT> {
+    RESULT proceed();
+    OPERATION operation();
+    EventStore eventStore();
+}
+```
+
+### Interceptor Management
+
+```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
+
+// Add single interceptor
 eventStore.addEventStoreInterceptor(new LoggingEventStoreInterceptor());
 
+// Add multiple interceptors
+eventStore.addEventStoreInterceptors(List.of(interceptor1, interceptor2));
+
+// Remove interceptor
+eventStore.removeEventStoreInterceptor(interceptor);
+```
+
+### Interceptor Ordering
+
+Uses `@InterceptorOrder` from `dk.trustworks.essentials.shared.interceptor`. **Lower value = higher priority (runs first)**.
+
+```java
+import dk.trustworks.essentials.shared.interceptor.InterceptorOrder;
+
+@InterceptorOrder(1)   // Runs FIRST
+public class SecurityInterceptor implements EventStoreInterceptor { ... }
+
+@InterceptorOrder(10)  // Runs SECOND (default order is 10)
+public class LoggingInterceptor implements EventStoreInterceptor { ... }
+```
+
+⚠️ Interceptors automatically sorted by `ConfigurableEventStore` on registration.
+
+### Custom Interceptor Example
+
+```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptorChain;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.AppendToStream;
+import dk.trustworks.essentials.shared.interceptor.InterceptorOrder;
+
+@InterceptorOrder(5)
 public class LoggingEventStoreInterceptor implements EventStoreInterceptor {
+    @Override
     public <ID> AggregateEventStream<ID> intercept(
             AppendToStream<ID> op,
             EventStoreInterceptorChain<AppendToStream<ID>, AggregateEventStream<ID>> chain) {
@@ -611,26 +759,32 @@ public class LoggingEventStoreInterceptor implements EventStoreInterceptor {
 }
 ```
 
-**Built-in Interceptors**:
-- `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream` - Publish at `CommitStage.Flush` (requires `EventStoreEventBus`)
-- `MicrometerTracingEventStoreInterceptor` - Distributed tracing
-- `RecordExecutionTimeEventStoreInterceptor` - Execution time metrics
+### Built-in Interceptors
+
+**Base package**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor`
+
+| Interceptor | Package Suffix | Purpose |
+|-------------|----------------|---------|
+| `FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream` | — | Publish events at `CommitStage.Flush` (requires `EventStoreEventBus`) |
+| `MicrometerTracingEventStoreInterceptor` | `.micrometer` | Distributed tracing with Micrometer |
+| `RecordExecutionTimeEventStoreInterceptor` | `.micrometer` | Execution time metrics |
 
 ### EventStoreEventBus
 
-If you have a shared `EventStoreEventBus` then you can provide it to the `PostgresqlEventStore` constructor. If left out, a default instance is created.
-Note: When sharing the `EventStoreEventBus` then `PersistedEvents` are published together with events from other components, so subscribers need to take this into account.
+Optional shared event bus. If not provided, default instance created.
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.EventStoreEventBus;
+
 var eventBus = new EventStoreEventBus(unitOfWorkFactory);
 var eventStore = new PostgresqlEventStore<>(..., Optional.of(eventBus), ...);
 
 // Sync subscribers (BEFORE commit)
-eventBus.addSyncSubscriber(PersistedEvent persistedEvent ->
+eventBus.addSyncSubscriber(events ->
     events.forEach(e -> updateProjection(e)));
 
 // Async subscribers (AFTER commit)
-eventBus.addAsyncSubscriber(PersistedEvent persistedEvent ->
+eventBus.addAsyncSubscriber(events ->
     events.forEach(e -> sendNotification(e)));
 ```
 
@@ -638,9 +792,11 @@ eventBus.addAsyncSubscriber(PersistedEvent persistedEvent ->
 
 ## Multitenancy
 
-Configure a `TenantSerializer` with the `SeparateTablePerAggregateTypePersistenceStrategy` to enable multi-tenancy and expand your `PersistableEventMapper` with tenant mapping.
+Configure `TenantSerializer` with `SeparateTablePerAggregateTypePersistenceStrategy` and expand `PersistableEventMapper` with tenant mapping.
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
+
 // Enable multi-tenancy
 var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(
     jdbi, unitOfWorkFactory, eventMapper,
@@ -657,12 +813,11 @@ return PersistableEvent.from(..., tenantResolver.getCurrentTenant());
 
 // Tenant-scoped queries
 Stream<PersistedEvent> stream = eventStore.fetchStream(orders, orderId, tenant);
-// Load events for a specific tenant
 Stream<PersistedEvent> events = eventStore.loadEventsByGlobalOrder(
-        orders,         // aggregate type
-        LongRange.from(GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue()),
-        List.of(),     // a list of additional global orders 
-        tenant         // tenant filter
+    orders,
+    LongRange.from(GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER.longValue()),
+    List.of(),
+    tenant
 );
 
 // Read tenant
@@ -671,30 +826,27 @@ event.tenant().ifPresent(t -> log.info("Tenant: {}", t));
 
 **Built-in**: `TenantId`, `TenantSerializer.TenantIdSerializer`, `TenantSerializer.NoSupportForMultiTenancySerializer`.
 
-## Configuration Reference
+## Configuration
 
 ### EventStoreSubscriptionObserver
 
 Interface: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver`
 
-Provides observability into `EventStore` operations and subscription lifecycle.
+Observability for `EventStore` operations and subscription lifecycle.
 
-**Tracks**:
-- Subscription lifecycle (start/stop, lock acquire/release)
-- Event polling (batch sizes, durations, gaps)
-- Event handling (processing times, failures)
-- Resume point resolution
+**Tracks**: Subscription lifecycle, event polling, event handling, resume point resolution.
 
-**Built-in Implementations**:
+**Implementations**:
 
 | Implementation | Use Case |
 |----------------|----------|
 | `NoOpEventStoreSubscriptionObserver` | Default - no observability |
-| `MeasurementEventStoreSubscriptionObserver` | Micrometer metrics (production monitoring) |
-
-**Configuration**:
+| `MeasurementEventStoreSubscriptionObserver` | Micrometer metrics (production) |
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.*;
+
 // No observability (default)
 var eventStore = new PostgresqlEventStore<>(...,
     new EventStoreSubscriptionObserver.NoOpEventStoreSubscriptionObserver());
@@ -709,25 +861,20 @@ var observer = new MeasurementEventStoreSubscriptionObserver(
 var eventStore = new PostgresqlEventStore<>(..., observer);
 ```
 
-**Metrics tracked** (MeasurementEventStoreSubscriptionObserver):
-- Event handling duration/failures
-- Polling batch sizes/durations
-- Gap reconciliation times
-- Lock acquisition/release
-- Resume point resolution
-
-**Monitoring integration**: Prometheus, Datadog, New Relic, CloudWatch (via Micrometer).
-
-See [README EventStoreSubscriptionObserver](../components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for custom implementations.
+See [README EventStoreSubscriptionObserver](../components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for metrics and custom implementations.
 
 ### IdentifierColumnType
 
-| Value | PostgreSQL Type | Use Case                                                                                  |
-|-------|-----------------|-------------------------------------------------------------------------------------------|
-| `UUID` | UUID | UUID-based IDs (recommended - but requires all id's are UUID's / use `RandomIdGenerator`) |
-| `TEXT` | TEXT | String-based IDs                                                                          |
+Enum: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.IdentifierColumnType`
+
+| Value | PostgreSQL Type | Use Case |
+|-------|-----------------|----------|
+| `UUID` | UUID | UUID-based IDs (recommended - requires all IDs are UUIDs / use `RandomIdGenerator`) |
+| `TEXT` | TEXT | String-based IDs |
 
 ### JSONColumnType
+
+Enum: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.JSONColumnType`
 
 | Value | PostgreSQL Type | Use Case |
 |-------|-----------------|----------|
@@ -737,38 +884,40 @@ See [README EventStoreSubscriptionObserver](../components/postgresql-event-store
 ### EventStreamTableColumnNames
 
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.EventStreamTableColumnNames;
+
 // Use defaults (recommended)
 var columns = EventStreamTableColumnNames.defaultColumnNames();
 
 // Custom (⚠️ sanitize all names - see Security section)
 var columns = EventStreamTableColumnNames.builder()
-    .globalOrderColumn("global_order")          // Default
-    .timestampColumn("timestamp")               // Default
-    .eventIdColumn("event_id")                  // Default
-    .aggregateIdColumn("aggregate_id")          // Default
-    .eventOrderColumn("event_order")            // Default
-    .eventTypeColumn("event_type")              // Default
-    .eventRevisionColumn("event_revision")      // Default
-    .eventPayloadColumn("event_payload")        // Default
-    .eventMetaDataColumn("event_metadata")      // Default
-    .causedByEventIdColumn("caused_by_event_id") // Default
-    .correlationIdColumn("correlation_id")      // Default
-    .tenantColumn("tenant")                     // Default
+    .globalOrderColumn("global_order")
+    .timestampColumn("timestamp")
+    .eventIdColumn("event_id")
+    .aggregateIdColumn("aggregate_id")
+    .eventOrderColumn("event_order")
+    .eventTypeColumn("event_type")
+    .eventRevisionColumn("event_revision")
+    .eventPayloadColumn("event_payload")
+    .eventMetaDataColumn("event_metadata")
+    .causedByEventIdColumn("caused_by_event_id")
+    .correlationIdColumn("correlation_id")
+    .tenantColumn("tenant")
     .build();
 ```
 
 ### Event Polling (Low-Level)
 
-**Prefer EventStoreSubscriptionManager for production.**
+**Prefer `EventStoreSubscriptionManager` for production.**
 
 ```java
 // Backpressure-supporting
 Flux<PersistedEvent> flux = eventStore.pollEvents(
     aggregateType,
-    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,  // from (inclusive)
+    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
     Optional.of(100),                            // batch size
     Optional.of(Duration.ofMillis(500)),         // poll interval
-    Optional.of(tenant),                         // tenant filter
+    Optional.of(tenant),
     Optional.of(SubscriberId.of("custom")),
     Optional.of(EventStorePollingOptimizer.simpleJitterAndBackoff("custom"))
 );
@@ -796,13 +945,13 @@ Stream<PersistedEvent> events = eventStore.loadEventsByGlobalOrder(
 
 ### ❌ Don't
 
-- Skip concurrency control: `appendToStream(orders, id, event)` without expected order (no optimistic concurrency and lower performance)
-- Use mutable events with setters - events should be immutable
-- Use transient subscriptions for critical processing - loses events on restart
-- Trust GlobalEventOrder for strict ordering - only EventOrder is guaranteed per-aggregate
-- Forget to sanitize table/column names from external input - SQL injection risk
+- Skip concurrency control: `appendToStream(orders, id, event)` (lower performance, no optimistic concurrency)
+- Use mutable events with setters
+- Use transient subscriptions for critical processing
+- Trust `GlobalEventOrder` for strict ordering - only `EventOrder` guaranteed per-aggregate
+- Forget to sanitize table/column names from external input
 - Use `EventProcessor` for projections - use `InTransactionEventProcessor` or `ViewEventProcessor`
-- Process events outside UnitOfWork when using in-transaction subscriptions
+- Process events outside `UnitOfWork` when using in-transaction subscriptions
 
 ### Common Mistakes
 
@@ -823,7 +972,7 @@ try {
 **Subscription resume points**:
 ```java
 // ❌ Transient subscription
-eventStore.pollEvents(...);  // Loses events on restart without resume point
+eventStore.pollEvents(...);  // Loses events on restart
 
 // ✅ Durable subscription
 subscriptionManager.subscribeToAggregateEventsAsynchronously(
@@ -833,20 +982,18 @@ subscriptionManager.subscribeToAggregateEventsAsynchronously(
 **Projection consistency**:
 ```java
 // ❌ Eventual consistency when strong consistency needed
-public class Projection extends EventProcessor { /* ... */ }
+public class Projection extends EventProcessor {}
 
 // ✅ Strong consistency
-public class Projection extends InTransactionEventProcessor { /* ... */ }
+public class Projection extends InTransactionEventProcessor {}
 ```
 
 ## Security
 
 ### ⚠️ Critical: SQL Injection Risk
 
-The components allow customization of table/column/index/function-names that are used with **String concatenation** → SQL injection risk. 
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL injection.
-
-⚠️ **CRITICAL**: Table names, column names, and `AggregateType` values are used with **String concatenation** to create SQL statements.
+Components allow customization of table/column/index/function names used with **String concatenation** → SQL injection risk.
+Essentials applies naming convention validation as initial defense layer - **NOT exhaustive protection**.
 
 **MUST sanitize**:
 - `AggregateType` (converted to table name)
@@ -861,6 +1008,16 @@ While Essentials applies naming convention validation as an initial defense laye
 - Validate at application startup
 
 See [README Security](../components/postgresql-event-store/README.md#security) for details.
+
+### What Validation Does NOT Protect Against
+
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
 ## Related Modules
 
