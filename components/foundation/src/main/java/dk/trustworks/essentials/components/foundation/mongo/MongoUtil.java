@@ -44,6 +44,16 @@ public final class MongoUtil {
      *     <li>Contains only characters valid for Mongo collection names: letters, digits, and underscores</li>
      * </ul>
      * <p>
+     * <b>What Validation Does NOT Protect Against:</b>
+     * <ul>
+     *     <li>NoSQL injection via <b>values</b> (use Spring Data MongoDB's type-safe query methods)</li>
+     *     <li>Malicious input that passes naming conventions but exploits application logic</li>
+     *     <li>Configuration loaded from untrusted external sources without additional validation</li>
+     *     <li>Names that are technically valid but semantically dangerous</li>
+     *     <li>Query operator injection (e.g., {@code $where}, {@code $regex}, {@code $ne})</li>
+     * </ul>
+     * <p>
+     * <b>Bottom line:</b> Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
      *
      * @param collectionName The collection name to validate.
      * @throws InvalidCollectionNameException in case the collectionName violates the rules
