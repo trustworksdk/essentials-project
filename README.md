@@ -710,6 +710,24 @@ MongoUtil.checkIsValidCollectionName(collectionName);
 
 **Insufficient attention to these practices may leave your application vulnerable to attacks.**
 
+### What Validation Does NOT Protect Against
+
+#### PostgreSQL
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+#### MongoDB
+- NoSQL injection via **values** (use Spring Data MongoDB's type-safe query methods)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- Query operator injection (e.g., `$where`, `$regex`, `$ne`)
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ### Module-Specific Security Guidance
 
 See individual module documentation for detailed security considerations:

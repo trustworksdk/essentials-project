@@ -126,6 +126,16 @@ Configuration parameters are used directly in SQL statements via string concaten
 - Never use external/untrusted input for table/column/index names, `AggregateType` names
 - Validate all configuration values during application startup
 
+### What Validation Does NOT Protect Against
+
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ---
 
 ## Quick Start
@@ -1804,7 +1814,7 @@ var eventStore = new PostgresqlEventStore<>(
 - After a configurable timeout (typically longer than max transaction duration), transient gaps become **permanent**
 - Permanent gaps indicate the inserting transaction was rolled back or failed
 - Permanent gaps are excluded from `loadEventsByGlobalOrder` calls to prevent blocking subscriptions indefinitely
-- Reset permanent gaps using `resetPermanentGapsFor(AggregateType)` if needed (e.g., after data recovery)
+- Reset permanent gaps using `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler.resetPermanentGapsFor(AggregateType)` if needed (e.g., after data recovery)
 
 ### Disabling Gap Handling
 

@@ -67,6 +67,16 @@ This module does not introduce additional security concerns beyond those in [pos
 
 > ⚠️ **WARNING:** See the [postgresql-event-store Security section](../postgresql-event-store/README.md#security) and **Security** notices for [components README.md](../README.md#security) for critical information about SQL injection risks with configuration parameters like `AggregateType`, table names, and column names.
 
+### What Validation Does NOT Protect Against
+
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ---
 
 ## Why Spring Transaction Integration

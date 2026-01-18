@@ -15,6 +15,7 @@ This module enables seamless Avro serialization/deserialization of `SingleValueT
 - [Base Classes](#base-classes)
 - [Built-in Types](#built-in-types)
 - [Creating Custom Types](#creating-custom-types)
+- [SingleConcreteBigDecimalTypeConversion](#singleconcretebigdecimaltypeconversion)
 - [Gotchas](#gotchas)
 
 ## Installation
@@ -386,6 +387,108 @@ record Order {
     string id;
 }
 ```
+
+## SingleConcreteBigDecimalTypeConversion
+
+An alternative approach for `BigDecimalType` implementations:
+
+| Approach | Use Case | Requires |
+|----------|----------|----------|
+| `BaseBigDecimalTypeConversion` | Each field has its own logical type | LogicalTypeFactory + Conversion |
+| `SingleConcreteBigDecimalTypeConversion` | ALL `decimal` fields map to ONE type | Conversion only |
+
+### When to Use
+
+Use this simpler approach when:
+- You want ALL Avro `decimal` fields to map to a single `BigDecimalType` (e.g., `Amount`)
+- You want to preserve full precision using Avro's native `decimal` logical type
+- You don't need different semantic types for different decimal fields
+
+### Implementation
+
+Only a Conversion class is needed (no LogicalTypeFactory required):
+
+```java
+package com.myproject.types.avro;
+
+import dk.trustworks.essentials.types.Amount;
+import dk.trustworks.essentials.types.avro.SingleConcreteBigDecimalTypeConversion;
+
+public class AmountDecimalConversion extends SingleConcreteBigDecimalTypeConversion<Amount> {
+    @Override
+    public Class<Amount> getConvertedType() {
+        return Amount.class;
+    }
+}
+```
+
+### Maven Configuration
+
+Enable Avro's decimal logical type and register only the conversion:
+
+```xml
+<plugin>
+    <groupId>org.apache.avro</groupId>
+    <artifactId>avro-maven-plugin</artifactId>
+    <version>${avro.version}</version>
+    <executions>
+        <execution>
+            <phase>generate-sources</phase>
+            <goals>
+                <goal>idl-protocol</goal>
+            </goals>
+            <configuration>
+                <!-- Enable Avro's native decimal logical type -->
+                <enableDecimalLogicalType>true</enableDecimalLogicalType>
+                <!-- No customLogicalTypeFactories needed -->
+                <customConversions>
+                    <conversion>com.myproject.types.avro.AmountDecimalConversion</conversion>
+                </customConversions>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+### Schema Example
+
+Use Avro's standard `decimal` type (no `@logicalType` annotation needed):
+
+```avro
+@namespace("com.example.orders")
+protocol OrderProtocol {
+    record Order {
+        string       id;
+        decimal(9,2) totalAmountWithoutSalesTax;
+        decimal(4,1) salesTaxAmount;
+        decimal(9,2) totalAmountWithSalesTax;
+    }
+}
+```
+
+### Generated Java Class
+
+All `decimal` fields become your chosen `BigDecimalType`:
+
+```java
+@org.apache.avro.specific.AvroGenerated
+public class Order extends SpecificRecordBase implements SpecificRecord {
+    private String id;
+    private Amount totalAmountWithoutSalesTax;  // decimal(9,2) -> Amount
+    private Amount salesTaxAmount;               // decimal(4,1) -> Amount
+    private Amount totalAmountWithSalesTax;      // decimal(9,2) -> Amount
+    // ...
+}
+```
+
+### Trade-offs
+
+| `BaseBigDecimalTypeConversion` | `SingleConcreteBigDecimalTypeConversion` |
+|--------------------------------|------------------------------------------|
+| Different types per field (e.g., `Price`, `Tax`, `Total`) | Same type for ALL decimal fields |
+| Requires LogicalTypeFactory + Conversion per type | Only Conversion class needed |
+| Uses `string` primitive (text representation) | Uses native `decimal` (full precision) |
+| More type safety at field level | Simpler setup, fewer classes |
 
 ## Gotchas
 
