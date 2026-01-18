@@ -1,59 +1,71 @@
 # Spring PostgreSQL Event Store - LLM Reference
 
-> See [README](../components/spring-postgresql-event-store/README.md) for detailed explanations and motivation.
-
-## TOC
-- [Quick Facts](#quick-facts)
-- [Core Classes](#core-classes)
-- [Bean Configuration](#bean-configuration)
-- [Transaction Patterns](#transaction-patterns)
-- [API Reference](#api-reference)
-- [Event Lifecycle Callbacks](#event-lifecycle-callbacks)
-- [Gotchas](#gotchas)
-- [Dependencies](#dependencies)
-- [Test References](#test-references)
+> Quick reference for LLMs. For detailed explanations, see [README](../components/spring-postgresql-event-store/README.md).
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring`
 - **Purpose**: Spring transaction integration for PostgreSQL Event Store
 - **Core EventStore docs**: [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md)
 - **Key class**: `SpringTransactionAwareEventStoreUnitOfWorkFactory`
-- **Enables**: EventStore operations to participate in `@Transactional` boundaries
+- **Enables**: EventStore operations participate in `@Transactional` boundaries
 - **Status**: WORK-IN-PROGRESS
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>spring-postgresql-event-store</artifactId>
+</dependency>
+```
+
+## TOC
+- [Core Classes](#core-classes)
+- [Setup Patterns](#setup-patterns)
+- [Transaction Management](#transaction-management)
+- [API Reference](#api-reference)
+- [Event Lifecycle Callbacks](#event-lifecycle-callbacks)
+- [Gotchas](#gotchas)
+- [Dependencies](#dependencies)
+- [Test References](#test-references)
 
 ## Core Classes
 
+**Dependencies from other modules**:
+- `EventStore`, `ConfigurableEventStore`, `PersistedEvent` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `UnitOfWork`, `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+
 | Class | Package | Role |
 |-------|---------|------|
-| `SpringTransactionAwareEventStoreUnitOfWorkFactory` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring` | Main factory, creates UnitOfWork instances |
-| `SpringTransactionAwareEventStoreUnitOfWork` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring` (inner class) | UnitOfWork with JDBI `Handle` and event tracking |
+| `SpringTransactionAwareEventStoreUnitOfWorkFactory` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring` | Factory, creates UnitOfWork, registers callbacks |
+| `SpringTransactionAwareEventStoreUnitOfWork` | (inner class of factory) | UnitOfWork with JDBI `Handle` + event tracking |
 | `EventStoreUnitOfWorkFactory` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction` | Interface implemented by factory |
 | `EventStoreUnitOfWork` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction` | Interface for UnitOfWork |
 | `PersistedEventsCommitLifecycleCallback` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction` | Lifecycle hook interface |
 
-## Bean Configuration
+## Setup Patterns
 
-### Minimal Setup
+### Minimal Bean Configuration
 ```java
-@Configuration
-public class EventStoreConfig {
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
+import org.jdbi.v3.core.Jdbi;
+import org.springframework.jdbc.datasource.TransactionAwareDataSourceProxy;
+import org.springframework.transaction.PlatformTransactionManager;
 
-    @Bean
-    public Jdbi jdbi(DataSource dataSource) {
-        // CRITICAL: Use TransactionAwareDataSourceProxy
-        return Jdbi.create(new TransactionAwareDataSourceProxy(dataSource));
-    }
+@Bean
+public Jdbi jdbi(DataSource dataSource) {
+    // CRITICAL: Use TransactionAwareDataSourceProxy
+    return Jdbi.create(new TransactionAwareDataSourceProxy(dataSource));
+}
 
-    @Bean
-    public EventStoreUnitOfWorkFactory<?> unitOfWorkFactory(
-            Jdbi jdbi,
-            PlatformTransactionManager transactionManager) {
-        return new SpringTransactionAwareEventStoreUnitOfWorkFactory(jdbi, transactionManager);
-    }
+@Bean
+public EventStoreUnitOfWorkFactory<?> unitOfWorkFactory(
+        Jdbi jdbi,
+        PlatformTransactionManager transactionManager) {
+    return new SpringTransactionAwareEventStoreUnitOfWorkFactory(jdbi, transactionManager);
 }
 ```
 
-### With Callbacks
+### With Lifecycle Callbacks
 ```java
 @Bean
 public EventStoreUnitOfWorkFactory<?> unitOfWorkFactory(
@@ -67,18 +79,21 @@ public EventStoreUnitOfWorkFactory<?> unitOfWorkFactory(
 }
 ```
 
-## Transaction Patterns
+## Transaction Management
 
 ### Pattern 1: @Transactional (Recommended)
+EventStore operations auto-join Spring transactions. NO explicit `usingUnitOfWork()` needed.
+
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
+
 @Service
 public class OrderService {
-    private final PostgresqlEventStore<?> eventStore;
+    private final EventStore eventStore;
     private final OrderRepository orderRepository; // Spring Data
 
     @Transactional
     public void createOrder(OrderId orderId, CustomerId customerId) {
-        // NO explicit usingUnitOfWork() needed
         // EventStore auto-joins Spring transaction
         eventStore.appendToStream(ORDERS, orderId,
             new OrderCreated(orderId, customerId));
@@ -89,15 +104,18 @@ public class OrderService {
 }
 ```
 
-**How it works:**
+**Mechanism:**
 1. `@Transactional` starts Spring transaction
-2. `appendToStream()` → `getRequiredUnitOfWork()`
-3. Factory detects active Spring transaction
-4. Auto-creates `UnitOfWork` joining that transaction
+2. `appendToStream()` calls `getRequiredUnitOfWork()`
+3. Factory detects active Spring tx → auto-creates UnitOfWork
+4. Both EventStore + Spring Data commit together
+
+**See**: [foundation: getOrCreateNewUnitOfWork()](./LLM-foundation.md#unitofwork-transactions) for details.
 
 ### Pattern 2: Explicit usingUnitOfWork()
+Use when NO Spring transaction exists.
+
 ```java
-// Use when NO Spring transaction and no UnitOfWork exists 
 public void createOrder(OrderId orderId, CustomerId customerId) {
     unitOfWorkFactory.usingUnitOfWork(() -> {
         eventStore.appendToStream(ORDERS, orderId,
@@ -117,9 +135,25 @@ public void createOrder(OrderId orderId, CustomerId customerId) {
 }
 ```
 
+### Access Current UnitOfWork
+```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
+
+// Get optional
+Optional<EventStoreUnitOfWork> currentUow = unitOfWorkFactory.getCurrentUnitOfWork();
+
+// Get required (throws if none)
+EventStoreUnitOfWork uow = unitOfWorkFactory.getRequiredUnitOfWork();
+
+// Access JDBI Handle for custom queries
+Handle handle = uow.handle();
+```
+
 ## API Reference
 
 ### SpringTransactionAwareEventStoreUnitOfWorkFactory
+
+**Package**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring`
 
 **Constructor:**
 ```java
@@ -139,20 +173,16 @@ EventStoreUnitOfWorkFactory registerPersistedEventsCommitLifeCycleCallback(
 // Get JDBI instance
 Jdbi getJdbi()
 
-// Get current UnitOfWork (inherited from base)
+// Inherited from base UnitOfWorkFactory:
 Optional<SpringTransactionAwareEventStoreUnitOfWork> getCurrentUnitOfWork()
-
-// Get required UnitOfWork - throws if none exists (inherited)
 SpringTransactionAwareEventStoreUnitOfWork getRequiredUnitOfWork()
-
-// Start UnitOfWork (inherited)
 void usingUnitOfWork(UnitOfWorkCallback<SpringTransactionAwareEventStoreUnitOfWork> callback)
-
-// Start UnitOfWork with return value (inherited)
 <T> T withUnitOfWork(UnitOfWorkSupplier<T, SpringTransactionAwareEventStoreUnitOfWork> supplier)
 ```
 
 ### SpringTransactionAwareEventStoreUnitOfWork
+
+**Package**: Inner class of factory
 
 **Methods:**
 ```java
@@ -162,25 +192,25 @@ Handle handle()
 // Register persisted events (called by EventStore)
 void registerEventsPersisted(List<PersistedEvent> eventsPersistedInThisUnitOfWork)
 
-// Remove flushed events (multiple)
+// Remove flushed events
 void removeFlushedEventsPersisted(List<PersistedEvent> eventsPersistedToRemoveFromThisUnitOfWork)
-
-// Remove flushed event (single)
 void removeFlushedEventPersisted(PersistedEvent eventPersistedToRemoveFromThisUnitOfWork)
 ```
 
 ### PersistedEventsCommitLifecycleCallback
 
+**Package**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction`
+
 **Interface:**
 ```java
 public interface PersistedEventsCommitLifecycleCallback {
-    // Called before commit - throw to rollback
+    // Before commit - throw to rollback
     void beforeCommit(EventStoreUnitOfWork unitOfWork, List<PersistedEvent> events);
 
-    // Called after successful commit - exceptions logged, no rollback
+    // After commit - exceptions logged, no rollback
     void afterCommit(EventStoreUnitOfWork unitOfWork, List<PersistedEvent> events);
 
-    // Called after rollback
+    // After rollback
     void afterRollback(EventStoreUnitOfWork unitOfWork, List<PersistedEvent> events);
 }
 ```
@@ -197,18 +227,22 @@ public interface PersistedEventsCommitLifecycleCallback {
 
 ### Implementation Example
 ```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.PersistedEventsCommitLifecycleCallback;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+
 @Component
 public class EventPublisher implements PersistedEventsCommitLifecycleCallback {
 
     @Override
     public void beforeCommit(EventStoreUnitOfWork uow, List<PersistedEvent> events) {
-        // Validate before commit - throw to rollback
+        // Validate - throw to rollback
         events.forEach(this::validate);
     }
 
     @Override
     public void afterCommit(EventStoreUnitOfWork uow, List<PersistedEvent> events) {
-        // Publish to external systems AFTER successful commit
+        // Publish AFTER successful commit
         events.forEach(kafkaPublisher::publish);
     }
 
@@ -220,7 +254,11 @@ public class EventPublisher implements PersistedEventsCommitLifecycleCallback {
 ```
 
 ### Framework Usage
-`EventStoreEventBus` (from `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus`) uses this callback to publish events at each `CommitStage`.
+`EventStoreEventBus` uses this callback to publish events at each `CommitStage` (`BeforeCommit`, `AfterCommit`, `AfterRollback`).
+
+**Package**: `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.EventStoreEventBus`
+
+See [postgresql-event-store: EventBus](./LLM-postgresql-event-store.md#interceptors--eventbus) for details.
 
 ## Gotchas
 
@@ -253,7 +291,7 @@ public void processOrder(OrderId orderId) {
 ### ⚠️ Exception Handling in Callbacks
 - `beforeCommit()` exceptions → rollback
 - `afterCommit()` exceptions → logged, transaction already committed
-- Always handle external failures gracefully in `afterCommit()`
+- Handle external failures gracefully in `afterCommit()`:
 
 ```java
 public void afterCommit(EventStoreUnitOfWork uow, List<PersistedEvent> events) {
@@ -295,10 +333,15 @@ public void afterCommit(EventStoreUnitOfWork uow, List<PersistedEvent> events) {
 
 ## Test References
 
-Key test classes in `components/spring-postgresql-event-store/src/test/java/`:
-- `SpringTransactionAwareEventStoreUnitOfWorkFactory_OrderAggregateRootRepositoryIT` - UnitOfWork-managed transactions
-- `SpringManagedUnitOfWorkFactory_OrderAggregateRootRepositoryIT` - Spring-managed transactions
-- `OrderAggregateRootRepositoryTest` - Comprehensive examples
+Key test classes demonstrating usage patterns:
+
+**Path**: `components/spring-postgresql-event-store/src/test/java/.../spring/`
+
+| Test Class | Pattern Demonstrated |
+|------------|---------------------|
+| `SpringTransactionAwareEventStoreUnitOfWorkFactory_OrderAggregateRootRepositoryIT` | UnitOfWork-managed transactions |
+| `SpringManagedUnitOfWorkFactory_OrderAggregateRootRepositoryIT` | Spring-managed transactions |
+| `OrderAggregateRootRepositoryTest` | Base test with comprehensive examples |
 
 ## See Also
 

@@ -1,189 +1,151 @@
 # Types-Avro - LLM Reference
 
+> Token-efficient reference for Avro serialization of Essentials types. For explanations see [README.md](../types-avro/README.md).
+
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types.avro`
 - Purpose: Avro LogicalType serialization for `SingleValueType` implementations
 - Dependencies: `avro` (provided scope)
-- **Status**: WORK-IN-PROGRESS
-- Pattern: 3-class system per type (LogicalType + Factory + Conversion)
+- Status: WORK-IN-PROGRESS
+- Pattern: 3-class system per type (LogicalType + LogicalTypeFactory + Conversion)
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>types-avro</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `SingleValueType`, `CharSequenceType`, `NumberType`, temporal types from [types](./LLM-types.md)
 
 ## TOC
 - [Core Architecture](#core-architecture)
-- [Base Conversion Classes](#base-conversion-classes)
+- [Base Classes](#base-classes)
 - [Built-in Types](#built-in-types)
-- [API Patterns](#api-patterns)
-- [Common Tasks](#common-tasks)
-- [Maven Integration](#maven-integration)
+- [Schema Examples](#schema-examples)
+- [Custom Type Pattern](#custom-type-pattern)
+- [Maven Configuration](#maven-configuration)
 - [Gotchas](#gotchas)
-- [See Also](#see-also)
+
+---
 
 ## Core Architecture
 
-| Component | Role | Created At |
-|-----------|------|------------|
-| **LogicalType** | Schema validation (ensures correct Avro primitive) | Code generation |
-| **LogicalTypeFactory** | Creates LogicalType from schema | Code generation |
-| **Conversion** | Serializes/deserializes Java ↔ Avro primitive | Runtime |
+| Component | Purpose | Phase |
+|-----------|---------|-------|
+| `LogicalType` | Schema validation (ensures correct Avro primitive) | Code generation |
+| `LogicalTypeFactory` | Creates LogicalType from schema | Code generation |
+| `Conversion` | Serializes/deserializes Java <-> Avro primitive | Runtime |
 
-**Flow:**
-1. Schema defines `@logicalType("TypeName")` on Avro primitive
-2. Factory creates LogicalType during code generation
-3. Generated code uses semantic type instead of primitive
-4. Conversion handles runtime ser/deser
+**Flow:** Schema `@logicalType("X")` -> Factory creates LogicalType -> Generated code uses semantic type -> Conversion handles runtime ser/deser
 
-## Base Conversion Classes
+---
 
-Each `SingleValueType` subtype extends a base conversion.
+## Base Classes
 
-`SingleValueType` package: `dk.trustworks.essentials.types`
-`LogicalType Class` package: `dk.trustworks.essentials.types.avro`
-`Base Conversion` package: `dk.trustworks.essentials.types.avro`
+Base package: `dk.trustworks.essentials.types.avro`
 
-| SingleValueType | LogicalType Class | Base Conversion | Avro Type | Methods |
-|-----------------|-------------------|-----------------|-----------|---------|
-| `CharSequenceType` | `CharSequenceTypeLogicalType` | `BaseCharSequenceConversion<T>` | `string` | `fromCharSequence`, `toCharSequence`, `fromBytes`, `toBytes` |
-| `BigDecimalType` | `BigDecimalTypeLogicalType` | `BaseBigDecimalTypeConversion<T>` | `string` | `fromCharSequence`, `toCharSequence` |
-| `BigDecimalType` | `BigDecimalTypeLogicalType` | `SingleConcreteBigDecimalTypeConversion` | `decimal` | `fromBytes`, `toBytes` |
-| `IntegerType` | `IntegerTypeLogicalType` | `BaseIntegerTypeConversion<T>` | `int` | `fromInt`, `toInt` |
-| `LongType` | `LongTypeLogicalType` | `BaseLongTypeConversion<T>` | `long` | `fromLong`, `toLong` |
-| `DoubleType` | `DoubleTypeLogicalType` | `BaseDoubleTypeConversion<T>` | `double` | `fromDouble`, `toDouble` |
-| `FloatType` | `FloatTypeLogicalType` | `BaseFloatTypeConversion<T>` | `float` | `fromFloat`, `toFloat` |
-| `InstantType` | `InstantTypeLogicalType` | `BaseInstantTypeConversion<T>` | `long` | `fromLong`, `toLong` (millis since epoch) |
-| `LocalDateTimeType` | `LocalDateTimeTypeLogicalType` | `BaseLocalDateTimeTypeConversion<T>` | `long` | `fromLong`, `toLong` (millis) |
-| `LocalDateType` | `LocalDateTypeLogicalType` | `BaseLocalDateTypeConversion<T>` | `int` | `fromInt`, `toInt` (days) |
-| `LocalTimeType` | `LocalTimeTypeLogicalType` | `BaseLocalTimeTypeConversion<T>` | `long` | `fromLong`, `toLong` (millis) |
-| `OffsetDateTimeType` | `OffsetDateTimeTypeLogicalType` | `BaseOffsetDateTimeTypeConversion<T>` | `long` | `fromLong`, `toLong` (millis) |
-| `ZonedDateTimeType` | `ZonedDateTimeTypeLogicalType` | `BaseZonedDateTimeTypeConversion<T>` | `long` | `fromLong`, `toLong` (millis) |
+### LogicalType Classes
 
-### JSR-310 Constraints
-- **Timezone**: All temporal converters use `ZoneId.of("UTC")`
-- **Precision**: Millisecond only; nanoseconds truncated
+| SingleValueType Base | LogicalType Class | Validates Avro Type |
+|---------------------|-------------------|---------------------|
+| `CharSequenceType` | `CharSequenceTypeLogicalType` | `string` |
+| `BigDecimalType` | `BigDecimalTypeLogicalType` | `string` or `decimal` |
+| `IntegerType` | `IntegerTypeLogicalType` | `int` |
+| `LongType` | `LongTypeLogicalType` | `long` |
+| `DoubleType` | `DoubleTypeLogicalType` | `double` |
+| `FloatType` | `FloatTypeLogicalType` | `float` |
+| `InstantType` | `InstantTypeLogicalType` | `long` |
+| `LocalDateTimeType` | `LocalDateTimeTypeLogicalType` | `long` |
+| `LocalDateType` | `LocalDateTypeLogicalType` | `int` |
+| `LocalTimeType` | `LocalTimeTypeLogicalType` | `long` |
+| `OffsetDateTimeType` | `OffsetDateTimeTypeLogicalType` | `long` |
+| `ZonedDateTimeType` | `ZonedDateTimeTypeLogicalType` | `long` |
+
+### Conversion Base Classes
+
+| SingleValueType Base | Conversion Base | Key Methods |
+|---------------------|-----------------|-------------|
+| `CharSequenceType<T>` | `BaseCharSequenceConversion<T>` | `fromCharSequence`, `toCharSequence` |
+| `BigDecimalType<T>` | `BaseBigDecimalTypeConversion<T>` | `fromCharSequence`, `toCharSequence` |
+| `BigDecimalType<T>` | `SingleConcreteBigDecimalTypeConversion<T>` | (uses Avro's decimal) |
+| `IntegerType<T>` | `BaseIntegerTypeConversion<T>` | `fromInt`, `toInt` |
+| `LongType<T>` | `BaseLongTypeConversion<T>` | `fromLong`, `toLong` |
+| `DoubleType<T>` | `BaseDoubleTypeConversion<T>` | `fromDouble`, `toDouble` |
+| `FloatType<T>` | `BaseFloatTypeConversion<T>` | `fromFloat`, `toFloat` |
+| `InstantType<T>` | `BaseInstantTypeConversion<T>` | `fromLong`, `toLong` (millis) |
+| `LocalDateTimeType<T>` | `BaseLocalDateTimeTypeConversion<T>` | `fromLong`, `toLong` (millis) |
+| `LocalDateType<T>` | `BaseLocalDateTypeConversion<T>` | `fromInt`, `toInt` (days) |
+| `LocalTimeType<T>` | `BaseLocalTimeTypeConversion<T>` | `fromLong`, `toLong` (millis) |
+| `OffsetDateTimeType<T>` | `BaseOffsetDateTimeTypeConversion<T>` | `fromLong`, `toLong` (millis) |
+| `ZonedDateTimeType<T>` | `BaseZonedDateTimeTypeConversion<T>` | `fromLong`, `toLong` (millis) |
+
+**BigDecimalType Options:**
+- `BaseBigDecimalTypeConversion` - Each field has its own logical type (requires LogicalTypeFactory)
+- `SingleConcreteBigDecimalTypeConversion` - ALL `decimal` fields map to ONE type (e.g., `Amount`); no LogicalTypeFactory needed, uses Avro's native `decimal`; requires `enableDecimalLogicalType=true`
+
+**JSR-310 Constraints:** UTC timezone, millisecond precision only (nanoseconds truncated)
+
+---
 
 ## Built-in Types
 
-Ready-to-use conversions in `dk.trustworks.essentials.types.avro`:
+Ready-to-use for common Essentials types:
 
-| Type | LogicalType Name | Factory Class | Conversion Class |
-|------|------------------|---------------|------------------|
-| `Amount` | `Amount` | `AmountLogicalTypeFactory` | `AmountConversion` |
-| `Percentage` | `Percentage` | `PercentageLogicalTypeFactory` | `PercentageConversion` |
-| `CurrencyCode` | `CurrencyCode` | `CurrencyCodeLogicalTypeFactory` | `CurrencyCodeConversion` |
-| `CountryCode` | `CountryCode` | `CountryCodeLogicalTypeFactory` | `CountryCodeConversion` |
-| `EmailAddress` | `EmailAddress` | `EmailAddressLogicalTypeFactory` | `EmailAddressConversion` |
+| Type (`dk.trustworks.essentials.types`) | LogicalTypeFactory | Conversion |
+|-----------------------------------------|-------------------|------------|
+| `Amount` | `AmountLogicalTypeFactory` | `AmountConversion` |
+| `Percentage` | `PercentageLogicalTypeFactory` | `PercentageConversion` |
+| `CurrencyCode` | `CurrencyCodeLogicalTypeFactory` | `CurrencyCodeConversion` |
+| `CountryCode` | `CountryCodeLogicalTypeFactory` | `CountryCodeConversion` |
+| `EmailAddress` | `EmailAddressLogicalTypeFactory` | `EmailAddressConversion` |
 
-## API Patterns
+---
 
-### Pattern: BaseCharSequenceConversion
+## Schema Examples
 
-```java
-package dk.trustworks.essentials.types.avro;
-
-public abstract class BaseCharSequenceConversion<T extends CharSequenceType<T>>
-    extends Conversion<T> {
-
-    protected abstract LogicalType getLogicalType();
-
-    @Override
-    public final Schema getRecommendedSchema();
-
-    @Override
-    public final String getLogicalTypeName();
-
-    @Override
-    public T fromCharSequence(CharSequence value, Schema schema, LogicalType type);
-
-    @Override
-    public CharSequence toCharSequence(T value, Schema schema, LogicalType type);
-
-    @Override
-    public T fromBytes(ByteBuffer value, Schema schema, LogicalType type);
-
-    @Override
-    public ByteBuffer toBytes(T value, Schema schema, LogicalType type);
-}
-```
-
-### Pattern: BaseLongTypeConversion
-
-```java
-package dk.trustworks.essentials.types.avro;
-
-public abstract class BaseLongTypeConversion<T extends LongType<T>>
-    extends Conversion<T> {
-
-    protected abstract LogicalType getLogicalType();
-
-    @Override
-    public final Schema getRecommendedSchema();
-
-    @Override
-    public final String getLogicalTypeName();
-
-    @Override
-    public T fromLong(Long value, Schema schema, LogicalType type);
-
-    @Override
-    public Long toLong(T value, Schema schema, LogicalType type);
-}
-```
-
-### Pattern: BaseInstantTypeConversion
-
-```java
-package dk.trustworks.essentials.types.avro;
-
-public abstract class BaseInstantTypeConversion<T extends InstantType<T>>
-    extends Conversion<T> {
-
-    protected abstract LogicalType getLogicalType();
-
-    @Override
-    public final Schema getRecommendedSchema();
-
-    @Override
-    public final String getLogicalTypeName();
-
-    @Override
-    public T fromLong(Long value, Schema schema, LogicalType type);
-    // Returns: SingleValueType.from(Instant.ofEpochMilli(value), getConvertedType())
-
-    @Override
-    public Long toLong(T value, Schema schema, LogicalType type);
-    // Returns: value.value().toEpochMilli()
-}
-```
-
-### Pattern: LogicalType
-
-```java
-package dk.trustworks.essentials.types.avro;
-
-public class CharSequenceTypeLogicalType extends LogicalType {
-    public CharSequenceTypeLogicalType(String logicalTypeName) {
-        super(logicalTypeName);
-    }
-
-    @Override
-    public void validate(Schema schema) {
-        super.validate(schema);
-        if (schema.getType() != Schema.Type.STRING) {
-            throw new IllegalArgumentException("Can only be used with STRING type");
-        }
+### Avro IDL (.avdl)
+```avdl
+@namespace("com.example")
+protocol Orders {
+    record Order {
+        @logicalType("OrderId") string id;
+        @logicalType("Amount") string totalAmount;
+        @logicalType("LastUpdated") long lastUpdated;
+        decimal(9, 2) price;  // With SingleConcreteBigDecimalTypeConversion
     }
 }
 ```
 
-## Common Tasks
+### Avro Schema (.avsc)
+```json
+{
+  "type": "record",
+  "name": "Order",
+  "fields": [
+    {"name": "id", "type": {"type": "string", "logicalType": "OrderId"}},
+    {"name": "totalAmount", "type": {"type": "string", "logicalType": "Amount"}},
+    {"name": "lastUpdated", "type": {"type": "long", "logicalType": "LastUpdated"}}
+  ]
+}
+```
 
-### Task: Create Custom CharSequenceType Support
+---
 
-**1. LogicalTypeFactory:**
+## Custom Type Pattern
+
+### CharSequenceType Example
+
 ```java
-package com.example.types.avro;
+// 1. LogicalTypeFactory
+import dk.trustworks.essentials.types.avro.CharSequenceTypeLogicalType;
+import org.apache.avro.LogicalType;
+import org.apache.avro.LogicalTypes;
+import org.apache.avro.Schema;
 
 public class OrderIdLogicalTypeFactory implements LogicalTypes.LogicalTypeFactory {
-    public static final LogicalType ORDER_ID =
-        new CharSequenceTypeLogicalType("OrderId");
+    public static final LogicalType ORDER_ID = new CharSequenceTypeLogicalType("OrderId");
 
     @Override
     public LogicalType fromSchema(Schema schema) { return ORDER_ID; }
@@ -191,76 +153,30 @@ public class OrderIdLogicalTypeFactory implements LogicalTypes.LogicalTypeFactor
     @Override
     public String getTypeName() { return ORDER_ID.getName(); }
 }
-```
 
-**2. Conversion:**
-```java
-package com.example.types.avro;
+// 2. Conversion
+import dk.trustworks.essentials.types.avro.BaseCharSequenceConversion;
 
 public class OrderIdConversion extends BaseCharSequenceConversion<OrderId> {
     @Override
     public Class<OrderId> getConvertedType() { return OrderId.class; }
 
     @Override
-    protected LogicalType getLogicalType() {
-        return OrderIdLogicalTypeFactory.ORDER_ID;
-    }
+    protected LogicalType getLogicalType() { return OrderIdLogicalTypeFactory.ORDER_ID; }
 }
+
+// 3. Schema
+// @logicalType("OrderId") string id;
 ```
 
-**3. Schema:**
-```avro
-record Order {
-    @logicalType("OrderId")
-    string id;
-}
-```
+### InstantType Example
 
-**Result:** Generated class has `OrderId id` field, not `String id`.
-
-### Task: Create Custom LongType Support
-
-**1. LogicalTypeFactory:**
 ```java
-public class QuantityLogicalTypeFactory implements LogicalTypes.LogicalTypeFactory {
-    public static final LogicalType QUANTITY = new LongTypeLogicalType("Quantity");
+// 1. LogicalTypeFactory
+import dk.trustworks.essentials.types.avro.InstantTypeLogicalType;
 
-    @Override
-    public LogicalType fromSchema(Schema schema) { return QUANTITY; }
-
-    @Override
-    public String getTypeName() { return QUANTITY.getName(); }
-}
-```
-
-**2. Conversion:**
-```java
-public class QuantityConversion extends BaseLongTypeConversion<Quantity> {
-    @Override
-    public Class<Quantity> getConvertedType() { return Quantity.class; }
-
-    @Override
-    protected LogicalType getLogicalType() {
-        return QuantityLogicalTypeFactory.QUANTITY;
-    }
-}
-```
-
-**3. Schema:**
-```avro
-record Order {
-    @logicalType("Quantity")
-    long quantity;
-}
-```
-
-### Task: Create Custom InstantType Support
-
-**1. LogicalTypeFactory:**
-```java
 public class LastUpdatedLogicalTypeFactory implements LogicalTypes.LogicalTypeFactory {
-    public static final LogicalType LAST_UPDATED =
-        new InstantTypeLogicalType("LastUpdated");
+    public static final LogicalType LAST_UPDATED = new InstantTypeLogicalType("LastUpdated");
 
     @Override
     public LogicalType fromSchema(Schema schema) { return LAST_UPDATED; }
@@ -268,112 +184,70 @@ public class LastUpdatedLogicalTypeFactory implements LogicalTypes.LogicalTypeFa
     @Override
     public String getTypeName() { return LAST_UPDATED.getName(); }
 }
-```
 
-**2. Conversion:**
-```java
+// 2. Conversion
+import dk.trustworks.essentials.types.avro.BaseInstantTypeConversion;
+
 public class LastUpdatedConversion extends BaseInstantTypeConversion<LastUpdated> {
     @Override
     public Class<LastUpdated> getConvertedType() { return LastUpdated.class; }
 
     @Override
-    protected LogicalType getLogicalType() {
-        return LastUpdatedLogicalTypeFactory.LAST_UPDATED;
-    }
+    protected LogicalType getLogicalType() { return LastUpdatedLogicalTypeFactory.LAST_UPDATED; }
 }
+
+// 3. Schema
+// @logicalType("LastUpdated") long lastUpdated;  // millis since epoch
 ```
 
-**3. Schema:**
-```avro
-record Order {
-    @logicalType("LastUpdated")
-    long lastUpdated;  // millis since epoch
-}
-```
+**Same pattern** for: `LongType`, `IntegerType`, `DoubleType`, `FloatType`, and other temporal types.
 
-## Maven Integration
+---
 
-### Plugin Configuration
+## Maven Configuration
 
 ```xml
 <plugin>
     <groupId>org.apache.avro</groupId>
     <artifactId>avro-maven-plugin</artifactId>
-    <version>${avro.version}</version>
-    <executions>
-        <execution>
-            <phase>generate-sources</phase>
-            <goals>
-                <goal>idl-protocol</goal>
-            </goals>
-            <configuration>
-                <stringType>String</stringType>
-                <enableDecimalLogicalType>false</enableDecimalLogicalType>
-
-                <!-- Register LogicalTypeFactories -->
-                <customLogicalTypeFactories>
-                    <!-- Built-in -->
-                    <logicalTypeFactory>dk.trustworks.essentials.types.avro.AmountLogicalTypeFactory</logicalTypeFactory>
-                    <logicalTypeFactory>dk.trustworks.essentials.types.avro.CurrencyCodeLogicalTypeFactory</logicalTypeFactory>
-                    <!-- Custom -->
-                    <logicalTypeFactory>com.example.OrderIdLogicalTypeFactory</logicalTypeFactory>
-                    <logicalTypeFactory>com.example.QuantityLogicalTypeFactory</logicalTypeFactory>
-                </customLogicalTypeFactories>
-
-                <!-- Register Conversions -->
-                <customConversions>
-                    <!-- Built-in -->
-                    <conversion>dk.trustworks.essentials.types.avro.AmountConversion</conversion>
-                    <conversion>dk.trustworks.essentials.types.avro.CurrencyCodeConversion</conversion>
-                    <!-- Custom -->
-                    <conversion>com.example.OrderIdConversion</conversion>
-                    <conversion>com.example.QuantityConversion</conversion>
-                </customConversions>
-            </configuration>
-        </execution>
-    </executions>
+    <configuration>
+        <customLogicalTypeFactories>
+            <!-- Built-in -->
+            <logicalTypeFactory>dk.trustworks.essentials.types.avro.AmountLogicalTypeFactory</logicalTypeFactory>
+            <!-- Custom -->
+            <logicalTypeFactory>com.example.OrderIdLogicalTypeFactory</logicalTypeFactory>
+        </customLogicalTypeFactories>
+        <customConversions>
+            <!-- Built-in -->
+            <conversion>dk.trustworks.essentials.types.avro.AmountConversion</conversion>
+            <!-- Custom -->
+            <conversion>com.example.OrderIdConversion</conversion>
+        </customConversions>
+    </configuration>
 </plugin>
 ```
 
-### Usage Example
+See [README Maven Configuration](../types-avro/README.md#maven-plugin-configuration) for full example.
 
-```java
-// Create
-Order order = Order.newBuilder()
-    .setId(OrderId.of("ORD-123"))
-    .setQuantity(Quantity.of(5L))
-    .setTotalAmount(Amount.of("100.50"))
-    .setCurrency(CurrencyCode.of("USD"))
-    .setLastUpdated(LastUpdated.now())
-    .build();
-
-// Type-safe access - no casting
-OrderId id = order.getId();
-Quantity qty = order.getQuantity();
-Amount total = order.getTotalAmount();
-```
+---
 
 ## Gotchas
 
-- ⚠️ **3-class requirement** - Must create LogicalType, LogicalTypeFactory, and Conversion for each type
-- ⚠️ **Primitive must match** - Avro primitive must match LogicalType expectation:
-  - `CharSequenceType` → `string`
-  - `LongType` → `long`
-  - `IntegerType` → `int`
-  - `InstantType` → `long` (millis since epoch)
-- ⚠️ **Both registrations required** - Register BOTH `customLogicalTypeFactories` AND `customConversions` in plugin
-- ⚠️ **UTC timezone** - JSR-310 converters default to `ZoneId.of("UTC")`; create instances with `Clock.systemUTC()`
-- ⚠️ **Millisecond precision** - Temporal types truncate nanoseconds; use `.withNano(0)` for consistency:
-  ```java
-  LastUpdated.of(Instant.now(Clock.systemUTC()).with(ChronoField.NANO_OF_SECOND, 0))
-  ```
-- ⚠️ **Null safety** - All conversions return `null` for `null` input
-- ⚠️ **Schema validation** - LogicalTypes validate primitive type at schema parse time
+- **3-class requirement** - Must create LogicalType, LogicalTypeFactory, and Conversion for each type
+- **Primitive must match** - Avro primitive must match LogicalType expectation:
+  - `CharSequenceType` -> `string`
+  - `LongType`, `InstantType` -> `long`
+  - `IntegerType`, `LocalDateType` -> `int`
+  - `DoubleType` -> `double`, `FloatType` -> `float`
+- **Both registrations required** - Register BOTH `customLogicalTypeFactories` AND `customConversions`
+- **UTC timezone** - JSR-310 converters use `ZoneId.of("UTC")`; create with `Clock.systemUTC()`
+- **Millisecond precision** - Temporal types truncate nanoseconds; use `.withNano(0)` for consistency
+- **Null safety** - All conversions return `null` for `null` input
+
+---
 
 ## See Also
 
-- [README.md](../types-avro/README.md) - Full docs with detailed examples
-- [CustomConversionsTest.java](../types-avro/src/test/java/dk/trustworks/essentials/types/avro/CustomConversionsTest.java) - Test patterns
-- [LLM-types.md](LLM-types.md) - Core types module reference
-- [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson serialization
-- [LLM-types-jdbi.md](LLM-types-jdbi.md) - JDBI persistence
+- [README.md](../types-avro/README.md) - Full documentation with detailed examples
+- [LLM-types.md](LLM-types.md) - Core types module (`SingleValueType` hierarchy)
+- [CustomConversionsTest.java](../types-avro/src/test/java/dk/trustworks/essentials/types/avro/CustomConversionsTest.java) - Usage examples

@@ -1,5 +1,7 @@
 # Types-JDBI - LLM Reference
 
+> Quick reference for LLMs. For detailed explanations, see [types-jdbi/README.md](../types-jdbi/README.md).
+
 ## TOC
 - [Quick Facts](#quick-facts)
 - [Core Concepts](#core-concepts)
@@ -17,6 +19,16 @@
 - **Pattern**: Extend empty base class for your type
 - **Status**: WORK-IN-PROGRESS
 
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>types-jdbi</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `SingleValueType`, `CharSequenceType`, `NumberType`, all temporal types from [types](./LLM-types.md)
+
 ## Core Concepts
 
 | Component | Interface | Purpose |
@@ -28,8 +40,9 @@
 
 ## ArgumentFactory Bases
 
+Base package: `dk.trustworks.essentials.types.jdbi`
 
-| Base Type (`dk.trustworks.essentials.types`) | ArgumentFactory Base (`dk.trustworks.essentials.types.jdbi`) | SQL Type |
+| Base Type (`types` module) | ArgumentFactory Base | SQL Type |
 |-----------------------------------------------|--------------------------------------------------------------|----------|
 | `CharSequenceType<T>` | `CharSequenceTypeArgumentFactory<T>`                         | VARCHAR |
 | `BigDecimalType<T>` | `BigDecimalTypeArgumentFactory<T>`                           | NUMERIC |
@@ -42,9 +55,9 @@
 | `FloatType<T>` | `FloatTypeArgumentFactory<T>`                                | FLOAT |
 | `BooleanType<T>` | `BooleanTypeArgumentFactory<T>`                              | BOOLEAN |
 
-**JSR-310 Temporal** (`dk.trustworks.essentials.types.jdbi`):
+**JSR-310 Temporal**:
 
-| Base Type (`dk.trustworks.essentials.types`)  | ArgumentFactory Base (`dk.trustworks.essentials.types.jdbi`)                  | SQL Type |
+| Base Type (`types` module)  | ArgumentFactory Base                  | SQL Type |
 |-----------------------------------------------|----------------------------------------|----------|
 | `InstantType<T>`                              | `InstantTypeArgumentFactory<T>`        | TIMESTAMP |
 | `LocalDateTimeType<T>`                        | `LocalDateTimeTypeArgumentFactory<T>`  | TIMESTAMP |
@@ -55,8 +68,9 @@
 
 ## ColumnMapper Bases
 
+Base package: `dk.trustworks.essentials.types.jdbi`
 
-| Base Type (`dk.trustworks.essentials.types`) | ColumnMapper Base  (`dk.trustworks.essentials.types.jdbi`)                |
+| Base Type (`types` module) | ColumnMapper Base  |
 |-----------------------------------------------|-----------------------------------|
 | `CharSequenceType<T>` | `CharSequenceTypeColumnMapper<T>` |
 | `BigDecimalType<T>` | `BigDecimalTypeColumnMapper<T>`   |
@@ -71,7 +85,7 @@
 
 **JSR-310 Temporal**:
 
-| Base Type (`dk.trustworks.essentials.types`) | ColumnMapper Base  (`dk.trustworks.essentials.types.jdbi`)                |
+| Base Type (`types` module) | ColumnMapper Base  |
 |-----------|-------------------|
 | `InstantType<T>` | `InstantTypeColumnMapper<T>` |
 | `LocalDateTimeType<T>` | `LocalDateTimeColumnMapper<T>` |
@@ -82,9 +96,9 @@
 
 ## Built-in Implementations
 
-Ready-to-use for common types (`ArgumentFactory`and `ArgumentFactory` package `dk.trustworks.essentials.types.jdbi`):
+Ready-to-use for common types (package `dk.trustworks.essentials.types.jdbi`):
 
-| Type (`dk.trustworks.essentials.types`) | ArgumentFactory | ArgumentFactory |
+| Type (`dk.trustworks.essentials.types`) | ArgumentFactory | ColumnMapper |
 |-----------------------------------------|----------------|--------------|
 | `Amount` | `AmountArgumentFactory` | `AmountColumnMapper` |
 | `Percentage` | `PercentageArgumentFactory` | `PercentageColumnMapper` |
@@ -122,6 +136,7 @@ package dk.trustworks.essentials.types.jdbi;
 import dk.trustworks.essentials.types.CharSequenceType;
 import org.jdbi.v3.core.mapper.ColumnMapper;
 import org.jdbi.v3.core.statement.StatementContext;
+import java.sql.*;
 
 public abstract class CharSequenceTypeColumnMapper<T extends CharSequenceType<T>>
     implements ColumnMapper<T> {
@@ -144,6 +159,8 @@ public abstract class CharSequenceTypeColumnMapper<T extends CharSequenceType<T>
 package dk.trustworks.essentials.types.jdbi;
 
 import dk.trustworks.essentials.types.BigDecimalType;
+import org.jdbi.v3.core.argument.*;
+import org.jdbi.v3.core.config.ConfigRegistry;
 
 public abstract class BigDecimalTypeArgumentFactory<T extends BigDecimalType<T>>
     extends AbstractArgumentFactory<T> {
@@ -174,6 +191,11 @@ public class Jdbi {
 
 ```java
 // 1. Define type (in your codebase)
+package com.example;
+
+import dk.trustworks.essentials.types.CharSequenceType;
+import dk.trustworks.essentials.types.Identifier;
+
 public class OrderId extends CharSequenceType<OrderId> implements Identifier {
     public OrderId(CharSequence value) { super(value); }
     public OrderId(String value) { super(value); }
@@ -181,11 +203,17 @@ public class OrderId extends CharSequenceType<OrderId> implements Identifier {
 }
 
 // 2. Create empty ArgumentFactory
+package com.example;
+
 import dk.trustworks.essentials.types.jdbi.CharSequenceTypeArgumentFactory;
 
 public class OrderIdArgumentFactory extends CharSequenceTypeArgumentFactory<OrderId> {}
 
 // 3. Create empty ColumnMapper
+package com.example;
+
+import dk.trustworks.essentials.types.jdbi.CharSequenceTypeColumnMapper;
+
 public class OrderIdColumnMapper extends CharSequenceTypeColumnMapper<OrderId> {}
 ```
 
@@ -193,6 +221,7 @@ public class OrderIdColumnMapper extends CharSequenceTypeColumnMapper<OrderId> {
 
 ```java
 import org.jdbi.v3.core.Jdbi;
+import dk.trustworks.essentials.types.jdbi.*;
 
 Jdbi jdbi = Jdbi.create(dataSource);
 
@@ -222,6 +251,8 @@ jdbi.useHandle(handle ->
 ### Use in Queries - Results
 
 ```java
+import java.util.*;
+
 // Single column → single type
 Optional<OrderId> orderId = jdbi.withHandle(handle ->
     handle.createQuery("SELECT id FROM orders WHERE customer_id = :cust")
@@ -244,13 +275,14 @@ List<Order> orders = jdbi.withHandle(handle ->
 
 ### Spring Boot Configuration
 
-> See `dk.trustworks.essentials.components.boot.autoconfigure.postgresql.JdbiConfigurationCallback` for easy per component Jdbi configuration in Spring Boot.
+If using the Essentials Postgreql Spring Boot starter, then you can use beans implementing `dk.trustworks.essentials.components.boot.autoconfigure.postgresql.JdbiConfigurationCallback` to configure Jdbi.
 
 ```java
 import org.jdbi.v3.core.Jdbi;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import javax.sql.DataSource;
+import dk.trustworks.essentials.types.jdbi.*;
 
 @Configuration
 public class JdbiConfig {
@@ -259,12 +291,13 @@ public class JdbiConfig {
     public Jdbi jdbi(DataSource dataSource) {
         Jdbi jdbi = Jdbi.create(dataSource);
 
-        // Batch register
+        // Register ArgumentFactories
         jdbi.registerArgument(new OrderIdArgumentFactory());
         jdbi.registerArgument(new CustomerIdArgumentFactory());
         jdbi.registerArgument(new AmountArgumentFactory());
         jdbi.registerArgument(new TransactionTimeArgumentFactory());
 
+        // Register ColumnMappers
         jdbi.registerColumnMapper(new OrderIdColumnMapper());
         jdbi.registerColumnMapper(new CustomerIdColumnMapper());
         jdbi.registerColumnMapper(new AmountColumnMapper());
@@ -278,6 +311,10 @@ public class JdbiConfig {
 ### JSR-310 Temporal Example
 
 ```java
+import dk.trustworks.essentials.types.ZonedDateTimeType;
+import dk.trustworks.essentials.types.jdbi.*;
+import java.time.ZonedDateTime;
+
 // Type
 public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
     public TransactionTime(ZonedDateTime value) { super(value); }
@@ -288,6 +325,10 @@ public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
 // Support (empty classes)
 public class TransactionTimeArgumentFactory extends ZonedDateTimeTypeArgumentFactory<TransactionTime> {}
 public class TransactionTimeColumnMapper extends ZonedDateTimeTypeColumnMapper<TransactionTime> {}
+
+// Registration
+jdbi.registerArgument(new TransactionTimeArgumentFactory());
+jdbi.registerColumnMapper(new TransactionTimeColumnMapper());
 
 // Usage
 jdbi.useHandle(h ->
@@ -300,16 +341,16 @@ jdbi.useHandle(h ->
 
 ## Gotchas
 
-- **Must register both**: ArgumentFactory for params AND ColumnMapper for results
-- **Empty class pattern**: Just extend base, no implementation needed
-- **Type resolution**: ColumnMapper uses reflection to resolve `T` via `GenericType.resolveGenericTypeOnSuperClass()` - or pass explicit `Class<T>` to constructor
-- **Null handling**: ColumnMappers return `null` for SQL NULL values (no Optional wrapping)
-- **One-time registration**: Register once at `Jdbi` creation, not per-query
-- **Provided scope**: Must add `jdbi3-core` dependency to your project
-- **SQL type mapping**: Each ArgumentFactory specifies SQL type in constructor (VARCHAR, NUMERIC, etc.)
+- ⚠️ **Must register both**: ArgumentFactory for params AND ColumnMapper for results
+- ⚠️ **Empty class pattern**: Just extend base, no implementation needed
+- ⚠️ **Type resolution**: ColumnMapper uses reflection to resolve `T` via `GenericType.resolveGenericTypeOnSuperClass()` - or pass explicit `Class<T>` to constructor
+- ⚠️ **Null handling**: ColumnMappers return `null` for SQL NULL values (no Optional wrapping)
+- ⚠️ **One-time registration**: Register once at `Jdbi` creation, not per-query
+- ⚠️ **Provided scope**: Must add `jdbi3-core` dependency to your project (not transitive)
+- ⚠️ **SQL type mapping**: Each ArgumentFactory specifies SQL type in constructor (VARCHAR, NUMERIC, etc.)
 
 ## See Also
 
-- [README.md](../types-jdbi/README.md) - Examples and detailed explanations
+- [types-jdbi/README.md](../types-jdbi/README.md) - Examples and detailed explanations
 - [LLM-types.md](LLM-types.md) - `SingleValueType` and base types
 - [LLM-foundation.md](LLM-foundation.md) - Uses JDBI for UnitOfWork and persistence

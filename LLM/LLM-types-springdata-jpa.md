@@ -1,12 +1,25 @@
 # Types-SpringData-JPA - LLM Reference
 
+> Quick reference for LLMs. For detailed explanations, see [README.md](../types-springdata-jpa/README.md).
+
 ## Quick Facts
-- Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
+- Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 - Purpose: JPA `AttributeConverter` base classes for `SingleValueType` persistence
 - Dependencies: `spring-data-jpa`, `jakarta.persistence-api` (provided scope)
 - Status: **EXPERIMENTAL** - may be discontinued
+- Recommendation: Use [types-jdbi](LLM-types-jdbi.md) for SQL database persistence
 
-## TOC
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>types-springdata-jpa</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `SingleValueType`, `CharSequenceType`, `NumberType`, all temporal types from [types](./LLM-types.md)
+
+## Table of Contents
 - [Limitations](#limitations)
 - [Base AttributeConverters](#base-attributeconverters)
 - [API Signatures](#api-signatures)
@@ -15,67 +28,73 @@
 - [Built-in Converters](#built-in-converters)
 - [Integration Points](#integration-points)
 - [Gotchas](#gotchas)
+- [Test References](#test-references)
+- [See Also](#see-also)
 
 ## Limitations
 
 | Limitation | Impact |
 |------------|--------|
-| No ID autogeneration | Must generate IDs manually |
-| `@Id` not supported | Must use `@EmbeddedId` + `@Embeddable` |
-| One converter per type | Cannot use generic converter |
-| Duplicate ID field | ID types need both `SingleValueType` value and persistent field |
-
-**Recommendation:** Consider [types-jdbi](LLM-types-jdbi.md) for SQL database persistence.
+| No ID autogeneration | Must generate IDs manually (e.g., `OrderId.random()`) |
+| `@Id` not supported | Must use `@EmbeddedId` + `@Embeddable` for PKs |
+| One converter per type | Cannot use generic converter (unlike MongoDB) |
+| Duplicate ID field | `@Embeddable` IDs need both `SingleValueType` value + persistent field |
+| `@Embeddable` not reusable | Cannot use same type as `@EmbeddedId` AND regular property |
 
 ## Base AttributeConverters
 
+Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 
-| SingleValueType  (`dk.trustworks.essentials.types`)    | Base Converter (`dk.trustworks.essentials.types.springdata.jpa.converters`) | DB Type | Abstract Method |
-|----------------------|-----------------------------------------------------------------------------|---------|-----------------|
-| `CharSequenceType`   | `BaseCharSequenceTypeAttributeConverter<T>`                                 | `String` | `Class<T> getConcreteCharSequenceType()` |
-| `BigDecimalType`     | `BaseBigDecimalTypeAttributeConverter<T>`                                   | `Double` | `Class<T> getConcreteBigDecimalType()` |
-| `IntegerType`        | `BaseIntegerTypeAttributeConverter<T>`                                      | `Integer` | `Class<T> getConcreteIntegerType()` |
-| `LongType`           | `BaseLongTypeAttributeConverter<T>`                                         | `Long` | `Class<T> getConcreteLongType()` |
-| `ShortType`          | `BaseShortTypeAttributeConverter<T>`                                        | `Short` | `Class<T> getConcreteShortType()` |
-| `ByteType`           | `BaseByteTypeAttributeConverter<T>`                                         | `Byte` | `Class<T> getConcreteByteType()` |
-| `DoubleType`         | `BaseDoubleTypeAttributeConverter<T>`                                       | `Double` | `Class<T> getConcreteDoubleType()` |
-| `FloatType`          | `BaseFloatTypeAttributeConverter<T>`                                        | `Float` | `Class<T> getConcreteFloatType()` |
-| `InstantType`        | `BaseInstantTypeAttributeConverter<T>`                                      | `Instant` | `Class<T> getConcreteInstantType()` |
-| `LocalDateTimeType`  | `BaseLocalDateTimeTypeAttributeConverter<T>`                                | `LocalDateTime` | `Class<T> getConcreteLocalDateTimeType()` |
-| `LocalDateType`      | `BaseLocalDateTypeAttributeConverter<T>`                                    | `LocalDate` | `Class<T> getConcreteLocalDateType()` |
-| `LocalTimeType`      | `BaseLocalTimeTypeAttributeConverter<T>`                                    | `LocalTime` | `Class<T> getConcreteLocalTimeType()` |
-| `OffsetDateTimeType` | `BaseOffsetDateTimeTypeAttributeConverter<T>`                               | `OffsetDateTime` | `Class<T> getConcreteOffsetDateTimeType()` |
-| `ZonedDateTimeType`  | `BaseZonedDateTimeTypeAttributeConverter<T>`                                | `ZonedDateTime` | `Class<T> getConcreteZonedDateTimeType()` |
+| SingleValueType | Base Converter | DB Type | Abstract Method |
+|-----------------|----------------|---------|-----------------|
+| `CharSequenceType` | `BaseCharSequenceTypeAttributeConverter<T>` | `String` | `getConcreteCharSequenceType()` |
+| `BigDecimalType` | `BaseBigDecimalTypeAttributeConverter<T>` | `Double` | `getConcreteBigDecimalType()` |
+| `IntegerType` | `BaseIntegerTypeAttributeConverter<T>` | `Integer` | `getConcreteIntegerType()` |
+| `LongType` | `BaseLongTypeAttributeConverter<T>` | `Long` | `getConcreteLongType()` |
+| `ShortType` | `BaseShortTypeAttributeConverter<T>` | `Short` | `getConcreteShortType()` |
+| `ByteType` | `BaseByteTypeAttributeConverter<T>` | `Byte` | `getConcreteByteType()` |
+| `DoubleType` | `BaseDoubleTypeAttributeConverter<T>` | `Double` | `getConcreteDoubleType()` |
+| `FloatType` | `BaseFloatTypeAttributeConverter<T>` | `Float` | `getConcreteFloatType()` |
+| `InstantType` | `BaseInstantTypeAttributeConverter<T>` | `Instant` | `getConcreteInstantType()` |
+| `LocalDateTimeType` | `BaseLocalDateTimeTypeAttributeConverter<T>` | `LocalDateTime` | `getConcreteLocalDateTimeType()` |
+| `LocalDateType` | `BaseLocalDateTypeAttributeConverter<T>` | `LocalDate` | `getConcreteLocalDateType()` |
+| `LocalTimeType` | `BaseLocalTimeTypeAttributeConverter<T>` | `LocalTime` | `getConcreteLocalTimeType()` |
+| `OffsetDateTimeType` | `BaseOffsetDateTimeTypeAttributeConverter<T>` | `OffsetDateTime` | `getConcreteOffsetDateTimeType()` |
+| `ZonedDateTimeType` | `BaseZonedDateTimeTypeAttributeConverter<T>` | `ZonedDateTime` | `getConcreteZonedDateTimeType()` |
+
+All `SingleValueType` classes from package: `dk.trustworks.essentials.types`
 
 ## API Signatures
 
-### Base Converter Interface
-All base converters implement `jakarta.persistence.AttributeConverter<T, DB_TYPE>`:
+All base converters implement `jakarta.persistence.AttributeConverter<T, DB_TYPE>`.
 
+### Example: BaseCharSequenceTypeAttributeConverter
 ```java
-// From BaseCharSequenceTypeAttributeConverter<T>
-String convertToDatabaseColumn(T attribute);
-T convertToEntityAttribute(String dbData);
-protected abstract Class<T> getConcreteCharSequenceType();
+package dk.trustworks.essentials.types.springdata.jpa.converters;
 
-// From BaseLongTypeAttributeConverter<T>
-Long convertToDatabaseColumn(T attribute);
-T convertToEntityAttribute(Long dbData);
-protected abstract Class<T> getConcreteLongType();
+public abstract class BaseCharSequenceTypeAttributeConverter<T>
+    implements AttributeConverter<T, String> {
 
-// Pattern applies to all base converters (replace method name with type)
-```
-
-### Converter Creation Pattern
-```java
-@Converter(autoApply = true)
-public class {TypeName}AttributeConverter extends Base{BaseType}AttributeConverter<{TypeName}> {
-    @Override
-    protected Class<{TypeName}> getConcrete{BaseType}() {
-        return {TypeName}.class;
-    }
+    String convertToDatabaseColumn(T attribute);
+    T convertToEntityAttribute(String dbData);
+    protected abstract Class<T> getConcreteCharSequenceType();
 }
 ```
+
+### Example: BaseLongTypeAttributeConverter
+```java
+package dk.trustworks.essentials.types.springdata.jpa.converters;
+
+public abstract class BaseLongTypeAttributeConverter<T>
+    implements AttributeConverter<T, Long> {
+
+    Long convertToDatabaseColumn(T attribute);
+    T convertToEntityAttribute(Long dbData);
+    protected abstract Class<T> getConcreteLongType();
+}
+```
+
+Pattern applies to all base converters: replace type-specific method name and DB type.
 
 ## Common Tasks
 
@@ -117,19 +136,24 @@ public class LastUpdatedAttributeConverter extends BaseInstantTypeAttributeConve
 
 ### Task: Use in Entity (Non-ID Fields)
 ```java
+import jakarta.persistence.*;
+
 @Entity
 @Table(name = "orders")
 public class Order {
     @EmbeddedId
     public OrderId id;           // See Primary Key Handling
-    public CustomerId customerId; // Auto-converted via CustomerIdAttributeConverter
-    public AccountId accountId;   // Auto-converted via AccountIdAttributeConverter
-    public Amount totalPrice;     // Auto-converted via AmountAttributeConverter
+    public CustomerId customerId; // Auto-converted via @Converter(autoApply=true)
+    public AccountId accountId;   // Auto-converted
+    public Amount totalPrice;     // Auto-converted (built-in)
 }
 ```
 
 ### Task: Use in Repository
 ```java
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.*;
+
 public interface OrderRepository extends JpaRepository<Order, OrderId> {
     List<Order> findByCustomerId(CustomerId customerId);
     Optional<Order> findByAccountId(AccountId accountId);
@@ -140,6 +164,8 @@ public interface OrderRepository extends JpaRepository<Order, OrderId> {
 
 ### Entity with @EmbeddedId
 ```java
+import jakarta.persistence.*;
+
 @Entity
 @Table(name = "orders")
 public class Order {
@@ -149,14 +175,14 @@ public class Order {
 }
 ```
 
-### @Embeddable ID Type Requirements
-Must implement:
+### @Embeddable ID Requirements
+Required elements:
 1. `@Embeddable` annotation
-2. Separate persistent field (e.g., `private Long orderId`)
-3. No-arg constructor (use temp value like `-1L`)
-4. Update both fields in constructor
+2. Separate persistent field (`private Long orderId`)
+3. No-arg constructor with temp value (`-1L`)
+4. Update both `super()` and persistent field in constructor
 
-Issue: You cannot use same type as `@EmbeddedId` AND regular property as it causes dual-column mapping. Id types and property types must be different.
+**CRITICAL**: Cannot use same type as `@EmbeddedId` AND regular property (causes dual-column mapping).
 
 ```java
 import dk.trustworks.essentials.types.LongType;
@@ -168,17 +194,17 @@ import java.util.Random;
 public class OrderId extends LongType<OrderId> implements Identifier {
     private static final Random RANDOM = new Random();
 
-    // Required by JPA - actual persisted value
+    // JPA persistent field
     private Long orderId;
 
-    // Required by JPA - no-arg constructor
+    // JPA no-arg constructor
     protected OrderId() {
         super(-1L);
     }
 
     public OrderId(Long value) {
         super(value);
-        orderId = value;  // MUST update both fields!
+        orderId = value;  // Update both!
     }
 
     public static OrderId of(Long value) {
@@ -193,52 +219,58 @@ public class OrderId extends LongType<OrderId> implements Identifier {
 
 ## Built-in Converters
 
+Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 
-| Type (`dk.trustworks.essentials.types`)          | Converter (`dk.trustworks.essentials.types.springdata.jpa.converters`) | 
-|----------------|------------------------------------------------------------------------|
-| `Amount`       | `AmountAttributeConverter`                                             |
-| `Percentage`   | `PercentageAttributeConverter`                                         |
-| `CurrencyCode` | `CurrencyCodeAttributeConverter`                                       |
-| `CountryCode`  | `CountryCodeAttributeConverter`                                        |
-| `EmailAddress` | `EmailAddressAttributeConverter`                                       |
+| Type | Converter |
+|------|-----------|
+| `Amount` | `AmountAttributeConverter` |
+| `Percentage` | `PercentageAttributeConverter` |
+| `CurrencyCode` | `CurrencyCodeAttributeConverter` |
+| `CountryCode` | `CountryCodeAttributeConverter` |
+| `EmailAddress` | `EmailAddressAttributeConverter` |
 
-All annotated with `@Converter(autoApply = true)`.
+All types from: `dk.trustworks.essentials.types`
+All converters annotated with `@Converter(autoApply = true)`
 
 ## Integration Points
 
 ### Dependencies (Provided Scope)
-| Module | Classes Used |
-|--------|--------------|
-| **spring-data-jpa** | `JpaRepository` |
-| **jakarta.persistence-api** | `AttributeConverter`, `@Converter`, `@Embeddable`, `@EmbeddedId`, `@Entity` |
+| Dependency | Key Classes |
+|------------|-------------|
+| `spring-data-jpa` | `org.springframework.data.jpa.repository.JpaRepository` |
+| `jakarta.persistence-api` | `jakarta.persistence.{AttributeConverter, Converter, Embeddable, EmbeddedId, Entity, Table}` |
 
-### Related Essentials Modules
+### Related Modules
 | Module | Purpose |
 |--------|---------|
-| **[types](LLM-types.md)** | Base types: `SingleValueType`, `CharSequenceType`, `LongType`, etc. |
-| **[types-jdbi](LLM-types-jdbi.md)** | JDBI persistence (recommended alternative) |
-| **[types-jackson](LLM-types-jackson.md)** | JSON serialization |
+| [types](LLM-types.md) | Base `SingleValueType` classes |
+| [types-jdbi](LLM-types-jdbi.md) | JDBI persistence (recommended alternative) |
+| [types-jackson](LLM-types-jackson.md) | JSON serialization |
 
 ## Gotchas
 
-- ⚠️ **EXPERIMENTAL** - Module may be discontinued; prefer [types-jdbi](LLM-types-jdbi.md)
-- ⚠️ **No ID autogeneration** - Must generate IDs manually (e.g., `OrderId.random()`)
-- ⚠️ **@EmbeddedId required for PKs** - Cannot use `@Id` on `SingleValueType` fields
-- ⚠️ **Duplicate ID field required** - `@Embeddable` ID needs separate persistent field for JPA
-- ⚠️ **@Embeddable not reusable** - Cannot use same type as `@EmbeddedId` AND regular property (causes dual-column mapping)
-- ⚠️ **No-arg constructor** - Use temp value like `-1L` (SingleValueType cannot be null)
-- ⚠️ **One converter per type** - Each `SingleValueType` subclass needs its own `AttributeConverter`
-- ⚠️ **autoApply = true** - Always use to auto-apply converter to all entity fields of that type
-- ⚠️ **BigDecimal → Double** - Stored as `Double`, potential precision loss for high-precision calculations
-- ⚠️ **Must update both fields** - In `@Embeddable` ID constructor, update both `super()` and persistent field
+- **EXPERIMENTAL** - May be discontinued; prefer [types-jdbi](LLM-types-jdbi.md)
+- **No ID autogeneration** - Must generate IDs manually (`OrderId.random()`)
+- **@EmbeddedId required** - Cannot use `@Id` on `SingleValueType` fields
+- **Duplicate ID field** - `@Embeddable` needs both `SingleValueType` value + persistent field
+- **@Embeddable not reusable** - Cannot use as `@EmbeddedId` AND regular property
+- **No-arg constructor** - Use temp value (`-1L`) since `SingleValueType` cannot be null
+- **One converter per type** - Each `SingleValueType` needs own `AttributeConverter`
+- **autoApply = true required** - Auto-applies converter to all entity fields
+- **BigDecimal → Double** - Precision loss possible for high-precision calculations
+- **Update both fields** - `@Embeddable` constructor must update `super()` + persistent field
 
 ## Test References
-See `types-springdata-jpa/src/test/java/`:
-- `OrderRepositoryIT.java` - Integration test showing full usage pattern
-- `model/Order.java` - Entity example with `@EmbeddedId`
-- `model/OrderId.java` - `@Embeddable` ID implementation
+Test package: `dk.trustworks.essentials.types.springdata.jpa`
+
+| File | Demonstrates |
+|------|-------------|
+| `OrderRepositoryIT.java` | Full integration test with JPA repository |
+| `model/Order.java` | Entity with `@EmbeddedId` and converters |
+| `model/OrderId.java` | `@Embeddable` ID implementation pattern |
+| `converters/CustomerIdAttributeConverter.java` | Custom converter example |
 
 ## See Also
-- [README.md](../types-springdata-jpa/README.md) - Full documentation with detailed examples
+- [README.md](../types-springdata-jpa/README.md) - Full documentation
 - [LLM-types.md](LLM-types.md) - Core types module
-- [LLM-types-jdbi.md](LLM-types-jdbi.md) - JDBI persistence (recommended SQL alternative)
+- [LLM-types-jdbi.md](LLM-types-jdbi.md) - JDBI persistence (recommended alternative)

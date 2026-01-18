@@ -1,47 +1,65 @@
 # SpringData MongoDB Distributed Fenced Lock - LLM Reference
 
-> See [README](../components/springdata-mongo-distributed-fenced-lock/README.md) for detailed developer documentation.
+> Quick reference for LLMs. For detailed explanations, see [README](../components/springdata-mongo-distributed-fenced-lock/README.md).
 
 > For core FencedLock concepts (why, when, how), see [LLM-foundation.md](./LLM-foundation.md#fencedlock-distributed-locking).
 
 ## Quick Facts
 
-- **Package**: `dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo`
+- **Base Package**: `dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo`
 - **Purpose**: MongoDB-backed distributed fencing locks for intra-service coordination
-- **Extends**: `DBFencedLockManager<ClientSessionAwareUnitOfWork, DBFencedLock>` from foundation
+- **Extends**: `dk.trustworks.essentials.components.foundation.fencedlock.DBFencedLockManager<ClientSessionAwareUnitOfWork, DBFencedLock>`
 - **Key Deps**: Spring Data MongoDB, foundation module
 - **Scope**: Intra-service only (instances sharing same MongoDB database)
 - **Requirements**: MongoDB 4.0+ with replica set (for transactions)
 - **Status**: WORK-IN-PROGRESS
 
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>springdata-mongo-distributed-fenced-lock</artifactId>
+</dependency>
+```
+
 ## TOC
+
 - [Core Classes](#core-classes)
 - [Configuration](#configuration)
 - [Database Schema](#database-schema)
 - [Usage Patterns](#usage-patterns)
 - [Spring Integration](#spring-integration)
+- [MongoDB-Specific Behavior](#mongodb-specific-behavior)
 - [Logging](#logging)
-- [Security](#security)
+- ⚠️ [Security](#security)
 - [Common Use Cases](#common-use-cases)
-- [Integration with Other Components](#integration-with-other-components)
 - [Gotchas](#gotchas)
 - [Comparison with PostgreSQL](#comparison-with-postgresql)
 - [Dependencies & Tests](#dependencies--tests)
 
 ## Core Classes
 
-| Class | Package                                                    | Role |
-|-------|------------------------------------------------------------|------|
-| `MongoFencedLockManager` | `(root)`                                          | Main lock manager implementation |
-| `MongoFencedLockStorage` | `(root)`                                          | MongoDB persistence layer |
-| `MongoFencedLockManagerBuilder` | `(root)`                                   | Fluent builder |
-| `DBFencedLock` | `dk.trustworks.essentials.components.foundation.fencedlock` | Lock implementation (from foundation) |
+**Dependencies from other modules**:
+- `FencedLockManager`, `FencedLock`, `LockName`, `LockCallback`, `DBFencedLock` from [foundation](./LLM-foundation.md)
+- `ClientSessionAwareUnitOfWork`, `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+
+| Class | Role |
+|-------|------|
+| `MongoFencedLockManager` | Main lock manager implementation |
+| `MongoFencedLockStorage` | MongoDB persistence layer |
+| `MongoFencedLockManagerBuilder` | Fluent builder |
+| `dk.trustworks.essentials.components.foundation.fencedlock.DBFencedLock` | Lock implementation (from foundation) |
+| `dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager` | Interface (from foundation) |
+| `dk.trustworks.essentials.components.foundation.fencedlock.LockCallback` | Async callback interface (from foundation) |
 
 ## Configuration
 
 ### Builder Pattern
 
 ```java
+import dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockManager;
+import dk.trustworks.essentials.components.foundation.transaction.mongo.ClientSessionAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
+
 MongoFencedLockManager lockManager = MongoFencedLockManager.builder()
     .setMongoTemplate(mongoTemplate)                          // Required
     .setUnitOfWorkFactory(unitOfWorkFactory)                  // Required
@@ -56,16 +74,16 @@ MongoFencedLockManager lockManager = MongoFencedLockManager.builder()
 
 ### Configuration Options
 
-| Option | Type | Default          | Description                                             |
-|--------|------|------------------|---------------------------------------------------------|
-| `mongoTemplate` | `MongoTemplate` | Required         | Spring Data MongoDB template                            |
-| `unitOfWorkFactory` | `UnitOfWorkFactory<ClientSessionAwareUnitOfWork>` | Required         | Transaction management  |
-| `lockManagerInstanceId` | `String` | Hostname         | Unique ID for this manager instance                     |
-| `lockTimeOut` | `Duration` | 10 seconds       | Lock expiration without confirmation                    |
-| `lockConfirmationInterval` | `Duration` | 3 seconds        | Heartbeat interval                                      |
-| `fencedLocksCollectionName` | `String` | `"fenced_locks"` | Collection name ⚠️ NoSQL security risk  (see security) |
-| `eventBus` | `Optional<EventBus>` | Empty            | Event bus for lock events                               |
-| `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation` | `boolean` | `false`          | Release locks on IO errors during confirmation          |
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `mongoTemplate` | `MongoTemplate` | Required | Spring Data MongoDB template |
+| `unitOfWorkFactory` | `UnitOfWorkFactory<ClientSessionAwareUnitOfWork>` | Required | Transaction management |
+| `lockManagerInstanceId` | `String` | Hostname | Unique ID for this manager instance |
+| `lockTimeOut` | `Duration` | 10 seconds | Lock expiration without confirmation |
+| `lockConfirmationInterval` | `Duration` | 3 seconds | Heartbeat interval |
+| `fencedLocksCollectionName` | `String` | `"fenced_locks"` | Collection name ⚠️ NoSQL injection risk |
+| `eventBus` | `Optional<EventBus>` | Empty | Event bus for lock events |
+| `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation` | `boolean` | `false` | Release locks on IO errors during confirmation |
 
 ### Configuration Guidelines
 
@@ -75,6 +93,7 @@ Duration lockTimeout = Duration.ofSeconds(30);
 Duration confirmationInterval = lockTimeout.dividedBy(3);  // 10 seconds
 
 // Instance ID best practices
+import dk.trustworks.essentials.shared.network.Network;
 String instanceId = Network.hostName();                    // Use hostname (default)
 String instanceId = "service-" + UUID.randomUUID();        // Or unique ID
 ```
@@ -89,10 +108,10 @@ Automatically created with indexes on first use:
 // Collection: fenced_locks (default name)
 {
   _id/name: "ProcessOrders",                   // LockName (String)
-  lastIssuedFencedToken: 42,              // Long, monotonic counter
-  lockedByLockManagerInstanceId: "node-1", // String, null if unlocked
-  lockAcquiredTimestamp: ISODate(...),    // Instant, when acquired
-  lockLastConfirmedTimestamp: ISODate(...)// Instant, last heartbeat
+  lastIssuedFencedToken: 42,                   // Long, monotonic counter
+  lockedByLockManagerInstanceId: "node-1",     // String, null if unlocked
+  lockAcquiredTimestamp: ISODate(...),         // Instant, when acquired
+  lockLastConfirmedTimestamp: ISODate(...)     // Instant, last heartbeat
 }
 ```
 
@@ -109,21 +128,26 @@ Automatically created with indexes on first use:
 
 ## Usage Patterns
 
-All `FencedLockManager` API methods inherited from foundation. See [LLM-foundation.md#fencedlock-api](./LLM-foundation.md#fencedlock-api) for complete API reference.
+All `FencedLockManager` API methods inherited from foundation. See [LLM-foundation.md#fencedlock-api](./LLM-foundation.md#fencedlock-distributed-locking) for complete API reference.
 
-### Basic Lock Acquisition
+### Pattern: Try-With-Resources (Recommended)
 
 ```java
-// Try-with-resources (recommended for short-running locks with automatic release)
-try (var handle = lockManager.acquireLockAndGetLockHandle(
-        LockName.of("order-processor"),
-        Duration.ofSeconds(30))) {
-    processOrders(handle.getCurrentToken());
-} catch (LockException.LockAcquisitionException e) {
-    log.warn("Failed to acquire lock", e);
-}
+import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 
-// Try-acquire - returns immediately
+// Short-running locks with automatic release
+try (var handle = lockManager.acquireLock(
+        LockName.of("order-processor")) {
+    processOrders(handle.getCurrentToken());
+} 
+```
+
+### Pattern: Try-Acquire (Non-Blocking)
+
+```java
+import dk.trustworks.essentials.components.foundation.fencedlock.FencedLock;
+
+// Returns immediately
 Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));
 if (lock.isPresent()) {
     try {
@@ -134,9 +158,11 @@ if (lock.isPresent()) {
 }
 ```
 
-### Asynchronous Lock Acquisition
+### Pattern: Async Lock with Callback
 
 ```java
+import dk.trustworks.essentials.components.foundation.fencedlock.LockCallback;
+
 lockManager.acquireLockAsync(
     LockName.of("scheduled-task"),
     new LockCallback() {
@@ -153,7 +179,7 @@ lockManager.acquireLockAsync(
 );
 ```
 
-### Lock Status Queries
+### Pattern: Lock Status Queries
 
 ```java
 // Check if lock exists in database
@@ -166,42 +192,17 @@ boolean heldByMe = lockManager.isLockedByThisLockManagerInstance(LockName.of("my
 boolean heldByOther = lockManager.isLockAcquiredByAnotherLockManagerInstance(LockName.of("my-lock"));
 ```
 
-### MongoDB-Specific Behavior
-
-#### WriteConflict Handling
-
-```java
-// MongoFencedLockStorage automatically handles MongoDB WriteConflicts
-// Internally retries on WriteConflict exceptions
-try {
-    var lock = lockManager.tryAcquireLock(LockName.of("resource"));
-    if (lock.isEmpty()) {
-        // Lock held by another instance OR WriteConflict occurred
-    }
-} catch (Exception e) {
-    // Non-WriteConflict errors propagate
-}
-```
-
-#### Transaction Integration
-
-```java
-var unitOfWorkFactory = new SpringMongoTransactionAwareUnitOfWorkFactory(
-    transactionManager,
-    databaseFactory
-);
-var lockManager = MongoFencedLockManager.builder()
-    .setMongoTemplate(mongoTemplate)
-    .setUnitOfWorkFactory(unitOfWorkFactory)  // Joins existing transactions
-    .buildAndStart();
-```
-
 ## Spring Integration
 
 ### Bean Configuration
 
 ```java
-import java.beans.BeanProperty;
+import dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockManager;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.transaction.mongo.ClientSessionAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
+import dk.trustworks.essentials.types.springdata.mongo.SingleValueTypeConverter;
 
 @Configuration
 @EnableMongoRepositories
@@ -226,7 +227,7 @@ public class LockConfiguration {
         // Required for LockName serialization
         return new MongoCustomConversions(List.of(
                 new SingleValueTypeConverter(LockName.class)
-                                                 ));
+        ));
     }
 
     @Bean
@@ -235,8 +236,9 @@ public class LockConfiguration {
     }
 
     @Bean
-    public SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory(MongoTransactionManager mongoTransactionManager,
-                                                                          MongoDatabaseFactory databaseFactory) {
+    public SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory(
+            MongoTransactionManager transactionManager,
+            MongoDatabaseFactory databaseFactory) {
         return new SpringMongoTransactionAwareUnitOfWorkFactory(
                 transactionManager,
                 databaseFactory
@@ -253,6 +255,9 @@ public class LockConfiguration {
 ### MongoDB Requirements
 
 ```java
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+
 // MongoDB connection MUST support transactions (replica set or sharded cluster)
 @Bean
 public MongoClient mongoClient() {
@@ -279,9 +284,41 @@ public MongoFencedLockManager fencedLockManager(
                                  .setUnitOfWorkFactory(unitOfWorkFactory)
                                  .setLockTimeOut(Duration.ofSeconds(30))
                                  .setLockConfirmationInterval(Duration.ofSeconds(10))
-                                 .setFencedLocksCollectionName(appName + "_fenced_locks") // Custom collection name
+                                 .setFencedLocksCollectionName(appName + "_fenced_locks") // ⚠️ See Security
                                  .buildAndStart();
 }
+```
+
+## MongoDB-Specific Behavior
+
+### WriteConflict Handling
+
+```java
+// MongoFencedLockStorage automatically handles MongoDB WriteConflicts
+// Internally retries on WriteConflict exceptions
+try {
+    var lock = lockManager.tryAcquireLock(LockName.of("resource"));
+    if (lock.isEmpty()) {
+        // Lock held by another instance OR WriteConflict occurred
+    }
+} catch (Exception e) {
+    // Non-WriteConflict errors propagate
+}
+```
+
+### Transaction Integration
+
+```java
+import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
+
+var unitOfWorkFactory = new SpringMongoTransactionAwareUnitOfWorkFactory(
+    transactionManager,
+    databaseFactory
+);
+var lockManager = MongoFencedLockManager.builder()
+    .setMongoTemplate(mongoTemplate)
+    .setUnitOfWorkFactory(unitOfWorkFactory)  // Joins existing transactions
+    .buildAndStart();
 ```
 
 ## Logging
@@ -296,112 +333,48 @@ Configure loggers for lock operations:
 ```yaml
 # Logback/Spring Boot
 logging.level:
-  dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockStorage: DEBUG
-  dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockManager: DEBUG
+  dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo: DEBUG
 ```
 
 ```xml
 <!-- Logback.xml -->
-<logger name="dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockStorage" level="DEBUG"/>
-<logger name="dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockManager" level="DEBUG"/>
+<logger name="dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo" level="DEBUG"/>
 ```
 
 ## Security
 
 ### ⚠️ Critical: NoSQL Injection Risk
 
-The components allow customization of collection-names that are used with **String concatenation** → NoSQL injection risk.  
-While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against NoSQL injection.
+`fencedLocksCollectionName` is used directly as MongoDB collection name with **String concatenation** → NoSQL injection risk. While `MongoFencedLockStorage` calls `MongoUtil.checkIsValidCollectionName()` for basic validation, **this is NOT exhaustive protection**.
 
-### NoSQL Injection Risk
+See [README Security](../components/springdata-mongo-distributed-fenced-lock/README.md#security) for full details.
 
-⚠️ **CRITICAL**: `fencedLocksCollectionName` is used directly as MongoDB collection name.
+**Required practices:**
 
 ```java
 // ❌ DANGEROUS - Never use user input
 String collectionName = userInput + "_locks";  // NoSQL INJECTION RISK
 
 // ✅ SAFE - Use controlled values only
-String collectionName = "order_service_locks";         // Fixed string
-String collectionName = applicationName + "_fenced_locks";    // From trusted config
+String collectionName = "order_service_locks";              // Fixed string
+String collectionName = applicationName + "_fenced_locks";  // From trusted config
 ```
 
+**Mitigations:**
 1. Only use collection names from controlled sources (config files, constants)
 2. Never derive collection names from external/untrusted input
-3. Validate at application startup with `MongoUtil.checkIsValidCollectionName(collectionName)`
+3. Validate at startup: `MongoUtil.checkIsValidCollectionName(collectionName)`
 4. Use default collection name when possible
 
-## Common Use Cases
+### What Validation Does NOT Protect Against
 
-### Singleton Worker Pattern
+- NoSQL injection via **values** (use Spring Data MongoDB's type-safe query methods)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- Query operator injection (e.g., `$where`, `$regex`, `$ne`)
 
-```java
-@Component
-public class ScheduledWorker {
-    @Scheduled(fixedDelay = 30000)
-    public void processOrders() {
-        Optional<FencedLock> lock = lockManager.tryAcquireLock(LockName.of("order-processor"));
-        if (lock.isPresent()) {
-            try {
-                processOrderBatch(lock.get().getCurrentToken());
-            } finally {
-                lockManager.releaseLock(lock.get());
-            }
-        }
-    }
-}
-```
-
-### Leadership Election
-
-```java
-@Component
-public class LeaderElection {
-    private volatile boolean isLeader = false;
-    @Autowired private FencedLockManager lockManager;
-
-    @PostConstruct
-    public void startElection() {
-        lockManager.acquireLockAsync(
-            LockName.of("service-leader"),
-            new LockCallback() {
-                @Override
-                public void lockAcquired(FencedLock lock) {
-                    isLeader = true;
-                    startLeaderActivities();
-                }
-
-                @Override
-                public void lockReleased(FencedLock lock) {
-                    isLeader = false;
-                    stopLeaderActivities();
-                }
-            }
-        );
-    }
-}
-```
-
-## Integration with Other Components
-
-### Used By
-
-- [springdata-mongo-queue](./LLM-springdata-mongo-queue.md) - Queue consumer coordination
-- [spring-boot-starter-mongodb](./LLM-spring-boot-starter-modules.md) - Auto-configuration
-- [foundation Inbox/Outbox](./LLM-foundation.md#inboxoutbox-patterns) - SingleGlobalConsumer mode
-
-### Inbox with SingleGlobalConsumer Example
-
-```java
-// Inbox uses FencedLockManager for cluster-wide ordering
-Inbox inbox = inboxes.getOrCreateInbox(
-    InboxConfig.builder()
-        .setInboxName(InboxName.of("OrderEvents"))
-        .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
-        .build(),
-    messageHandler
-);
-```
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
 ## Gotchas
 
@@ -445,12 +418,12 @@ MongoClient client = MongoClients.create(
 
 ```java
 // ❌ WRONG - Lock not released on exception
-FencedLock lock = lockManager.acquireLock(lockName, timeout);
+FencedLock lock = lockManager.acquireLock(lockName);
 doWork(lock.getCurrentToken());
 lockManager.releaseLock(lock);  // Never called if doWork() throws
 
 // ✅ RIGHT - Try-with-resources
-try (var handle = lockManager.acquireLockAndGetLockHandle(lockName, timeout)) {
+try (var handle = lockManager.acquireLock(lockName)) {
     doWork(handle.getCurrentToken());
 }
 ```
@@ -458,6 +431,8 @@ try (var handle = lockManager.acquireLockAndGetLockHandle(lockName, timeout)) {
 ### ⚠️ Collection Name Security
 
 ```java
+import dk.trustworks.essentials.components.foundation.mongo.MongoUtil;
+
 // ❌ WRONG - User input in collection name
 String collectionName = request.getParameter("collection") + "_locks";
 
@@ -513,6 +488,7 @@ See: [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fe
 
 ## See Also
 
-- [LLM-foundation.md#fencedlock-api](./LLM-foundation.md#fencedlock-distributed-locking) - Core FencedLock concepts
+- [LLM-foundation.md#fencedlock-distributed-locking](./LLM-foundation.md#fencedlock-distributed-locking) - Core FencedLock concepts
 - [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fenced-lock.md) - PostgreSQL implementation
+- [LLM-springdata-mongo-queue.md](./LLM-springdata-mongo-queue.md) - Queue consumer coordination use case
 - [README](../components/springdata-mongo-distributed-fenced-lock/README.md) - Full documentation

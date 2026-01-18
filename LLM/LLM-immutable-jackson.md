@@ -1,64 +1,72 @@
 # Immutable-Jackson - LLM Reference
 
+> Token-efficient reference for Jackson deserialization of immutable classes. See [README.md](../immutable-jackson/README.md) for detailed explanations.
+
 ## Quick Facts
 - Package: `dk.trustworks.essentials.jackson.immutable`
 - Purpose: Jackson deserialization for immutable classes without matching constructors
 - Dependencies: `jackson-databind`, `objenesis` (both provided scope)
-- Key class: `EssentialsImmutableJacksonModule`
 - **Status**: WORK-IN-PROGRESS
 
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>immutable-jackson</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- Works with any immutable class; commonly used with `ImmutableValueObject` from [immutable](./LLM-immutable.md)
+- Often combined with `EssentialTypesJacksonModule` from [types-jackson](./LLM-types-jackson.md)
+
 ## TOC
-- [Quick Facts](#quick-facts)
 - [Core Classes](#core-classes)
-- [EssentialsImmutableJacksonModule](#essentialsimmutablejacksonmodule)
-  - [Registration](#registration)
-  - [Factory Configuration](#factory-configuration)
-- [ImmutableObjectsValueInstantiator](#immutableobjectsvalueinstantiator)
-  - [Instantiation Strategy](#instantiation-strategy)
+- [API Reference](#api-reference)
+- [Usage Patterns](#usage-patterns)
+- [Configuration](#configuration)
 - [Objenesis Behavior](#objenesis-behavior)
-- [Common Patterns](#common-patterns)
-  - [Immutable Class with Computed Field](#immutable-class-with-computed-field)
-  - [Java Record](#java-record)
-  - [Validated Class](#validated-class)
 - [Gotchas](#gotchas)
-- [See Also](#see-also)
+- [Test References](#test-references)
 
 ---
 
 ## Core Classes
 
-| Class | Purpose |
-|-------|---------|
-| `EssentialsImmutableJacksonModule` | Jackson module enabling immutable object deserialization |
+Base package: `dk.trustworks.essentials.jackson.immutable`
+
+| Class | Role |
+|-------|------|
+| `EssentialsImmutableJacksonModule` | Jackson module enabling immutable deserialization |
 | `ImmutableObjectsValueInstantiator` | Custom `ValueInstantiator` with Objenesis fallback |
 
 ---
 
-## EssentialsImmutableJacksonModule
+## API Reference
 
-**Location:** `dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule`
+### EssentialsImmutableJacksonModule
 
 ```java
+package dk.trustworks.essentials.jackson.immutable;
+
 public final class EssentialsImmutableJacksonModule extends SimpleModule {
     // Register with ObjectMapper
     public EssentialsImmutableJacksonModule();
 
-    // Factory with opinionated defaults (includes this module)
+    // Factory with opinionated defaults (includes this module + additionalModules)
     public static ObjectMapper createObjectMapper(Module... additionalModules);
 }
 ```
 
-### Registration
-
+**Registration:**
 ```java
-// Simple registration
+// Manual registration
 ObjectMapper mapper = new ObjectMapper();
 mapper.registerModule(new EssentialsImmutableJacksonModule());
 
-// Or use factory (includes module automatically)
+// Or use factory
 ObjectMapper mapper = EssentialsImmutableJacksonModule.createObjectMapper();
 
-// With additional modules
+// Factory with additional modules
 ObjectMapper mapper = EssentialsImmutableJacksonModule.createObjectMapper(
     new EssentialTypesJacksonModule(),
     new Jdk8Module(),
@@ -66,32 +74,11 @@ ObjectMapper mapper = EssentialsImmutableJacksonModule.createObjectMapper(
 );
 ```
 
-### Factory Configuration
-
-`createObjectMapper()` applies:
-
-| Setting | Configuration |
-|---------|---------------|
-| Field visibility | `Visibility.ANY` |
-| Getter/setter visibility | `Visibility.NONE` |
-| `AUTO_DETECT_GETTERS` | disabled |
-| `AUTO_DETECT_IS_GETTERS` | disabled |
-| `AUTO_DETECT_SETTERS` | disabled |
-| `AUTO_DETECT_CREATORS` | enabled |
-| `AUTO_DETECT_FIELDS` | enabled |
-| `DEFAULT_VIEW_INCLUSION` | disabled |
-| `FAIL_ON_UNKNOWN_PROPERTIES` | disabled |
-| `FAIL_ON_EMPTY_BEANS` | disabled |
-| `PROPAGATE_TRANSIENT_MARKER` | enabled |
-| `WRITE_DATES_AS_TIMESTAMPS` | disabled |
-
----
-
-## ImmutableObjectsValueInstantiator
-
-**Location:** `dk.trustworks.essentials.jackson.immutable.ImmutableObjectsValueInstantiator`
+### ImmutableObjectsValueInstantiator
 
 ```java
+package dk.trustworks.essentials.jackson.immutable;
+
 public final class ImmutableObjectsValueInstantiator extends ValueInstantiator {
     public ImmutableObjectsValueInstantiator(
         Class<?> typeToInstantiate,
@@ -106,48 +93,20 @@ public final class ImmutableObjectsValueInstantiator extends ValueInstantiator {
 }
 ```
 
-### Instantiation Strategy
+**Instantiation strategy:**
 
-| Step | Method | Condition |
-|------|--------|-----------|
-| 1 | Standard Jackson `ValueInstantiator` | If `standardJacksonValueInstantiator.canCreateUsingDefault()` returns true |
+| Priority | Method | When Used |
+|----------|--------|-----------|
+| 1 | Standard Jackson `ValueInstantiator` | If `canCreateUsingDefault()` returns true |
 | 2 | Objenesis (`ObjenesisStd`) | Fallback when standard instantiation fails |
 
 After instantiation, fields are set via reflection (even `final` fields).
 
 ---
 
-## Objenesis Behavior
+## Usage Patterns
 
-**Critical:** When Objenesis creates the instance:
-
-| Aspect | Behavior |
-|--------|----------|
-| Constructors | **NOT called** |
-| Field initializers | **NOT executed** |
-| Static initializers | Already executed (class loaded) |
-| Field values | Only from JSON (defaults = Java zero values) |
-
-### Example Impact
-
-```java
-public class Config {
-    public final String name;
-    public final int timeout = 30;  // Default NOT applied with Objenesis
-
-    public Config(String name) {
-        this.name = name;
-        // If Objenesis used and JSON lacks "timeout":
-        // timeout = 0 (not 30)
-    }
-}
-```
-
----
-
-## Common Patterns
-
-### Immutable Class with Computed Field
+### Pattern: Immutable Class with Computed Field
 
 ```java
 public final class ImmutableOrder {
@@ -163,23 +122,19 @@ public final class ImmutableOrder {
     }
 }
 
-// JSON with orderedTimestamp deserializes correctly
+// JSON includes orderedTimestamp - deserializes correctly
 // (field set via reflection, not constructor)
 ```
 
-### Java Record
+### Pattern: Java Record
 
 ```java
-public record CustomerInfo(
-    CustomerId id,
-    String name,
-    EmailAddress email
-) {}
+public record CustomerInfo(CustomerId id, String name, EmailAddress email) {}
 
 // Works seamlessly - records have canonical constructor
 ```
 
-### Validated Class
+### Pattern: Validated Class (⚠️ Validation Bypass Risk)
 
 ```java
 public class ValidatedOrder {
@@ -193,30 +148,106 @@ public class ValidatedOrder {
     }
 }
 
-// ⚠️ WARNING: If Objenesis used, validation is bypassed!
+// ⚠️ WARNING: If Objenesis used, validation is BYPASSED!
+```
+
+---
+
+## Configuration
+
+`createObjectMapper()` applies these defaults. See [README Configuration](../immutable-jackson/README.md#objectmapper-factory) for full details.
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| Field visibility | `ANY` | Serialize all fields |
+| Getter/setter visibility | `NONE` | Fields only, no getters/setters |
+| `AUTO_DETECT_GETTERS` | disabled | - |
+| `AUTO_DETECT_IS_GETTERS` | disabled | - |
+| `AUTO_DETECT_SETTERS` | disabled | - |
+| `AUTO_DETECT_CREATORS` | enabled | - |
+| `AUTO_DETECT_FIELDS` | enabled | - |
+| `DEFAULT_VIEW_INCLUSION` | disabled | - |
+| `FAIL_ON_UNKNOWN_PROPERTIES` | disabled | Don't fail on extra JSON fields |
+| `FAIL_ON_EMPTY_BEANS` | disabled | Allow empty objects |
+| `PROPAGATE_TRANSIENT_MARKER` | enabled | Respect `transient` keyword |
+| `WRITE_DATES_AS_TIMESTAMPS` | disabled | ISO-8601 format |
+
+**Manual configuration:**
+```java
+objectMapper.setVisibility(PropertyAccessor.FIELD, Visibility.ANY);
+objectMapper.setVisibility(PropertyAccessor.GETTER, Visibility.NONE);
+objectMapper.setVisibility(PropertyAccessor.SETTER, Visibility.NONE);
+```
+
+---
+
+## Objenesis Behavior
+
+**CRITICAL**: When Objenesis creates instance, constructors are BYPASSED.
+
+| Aspect | Behavior |
+|--------|----------|
+| Constructors | **NOT called** |
+| Field initializers | **NOT executed** |
+| Static initializers | Already executed (class loaded) |
+| Field values | Only from JSON (defaults = Java zero values) |
+
+**Example Impact:**
+```java
+public class Config {
+    public final String name;
+    public final int timeout = 30;  // Default NOT applied with Objenesis
+
+    public Config(String name) {
+        this.name = name;
+        // If Objenesis used and JSON lacks "timeout":
+        // timeout = 0 (not 30)
+    }
+}
 ```
 
 ---
 
 ## Gotchas
 
-- ⚠️ **Objenesis bypasses constructors** - validation logic won't run
-- ⚠️ **Field defaults not applied** - `int timeout = 30` becomes `0` if not in JSON
-- ⚠️ **Requires field-based serialization** - use `createObjectMapper()` or configure manually:
-    ```java
-    objectMapper.setVisibility(PropertyAccessor.FIELD, Visibility.ANY);
-    objectMapper.setVisibility(PropertyAccessor.GETTER, Visibility.NONE);
-    objectMapper.setVisibility(PropertyAccessor.SETTER, Visibility.NONE);
-    ```
-- ✅ **Private fields work** - reflection sets them directly
-- ✅ **Static fields unaffected** - class already loaded, static init already ran
-- ⚠️ **Collections may be null** - initialize in constructor or ensure JSON includes them
+See [README Gotchas](../immutable-jackson/README.md#gotchas) for detailed explanations.
+
+- ⚠️ **Objenesis bypasses constructors** → validation logic won't run
+- ⚠️ **Field defaults not applied** → `int timeout = 30` becomes `0` if not in JSON
+- ⚠️ **Requires field-based serialization** → use `createObjectMapper()` or configure manually
+- ✅ **Private fields work** → reflection sets them directly
+- ✅ **Static fields unaffected** → class already loaded, static init already ran
+- ⚠️ **Collections may be null** → ensure JSON includes them or initialize in constructor
+
+**Field initializer example:**
+```java
+public class Counter {
+    public final int count;
+    private static int instanceCount = 0;
+
+    public Counter(int count) {
+        this.count = count;
+        instanceCount++;  // NOT incremented when Objenesis creates instance
+    }
+}
+```
+
+---
+
+## Test References
+
+Key test files demonstrating usage:
+- `EssentialsImmutableJacksonModuleTest.java` - Comprehensive usage examples
+
+Test model classes (in `src/test`):
+- `ImmutableOrder.java` - Immutable class with computed timestamp
+- `OrderId`, `CustomerId`, `ProductId`, `AccountId` - SingleValueType examples
+- `ImmutableSerializationTestSubject.java` - Complex deserialization cases
 
 ---
 
 ## See Also
 
-- [README.md](../immutable-jackson/README.md) - Full documentation with examples
+- [README.md](../immutable-jackson/README.md) - Full documentation with detailed explanations
 - [LLM-types-jackson.md](LLM-types-jackson.md) - `SingleValueType` Jackson support
 - [LLM-immutable.md](LLM-immutable.md) - Core immutable patterns
-- [EssentialsImmutableJacksonModuleTest.java](../immutable-jackson/src/test/java/dk/trustworks/essentials/jackson/immutable/EssentialsImmutableJacksonModuleTest.java) - Test examples

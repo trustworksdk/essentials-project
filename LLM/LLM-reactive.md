@@ -1,76 +1,65 @@
 # Reactive - LLM Reference
 
+> Token-efficient reference for LLMs. For detailed explanations, see [README.md](../reactive/README.md).
+
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.reactive`
 - **Purpose**: In-memory event bus and command bus for event-driven JVM applications
 - **Dependencies**: `reactor-core` (provided), optional `spring-context` (provided)
 - **Foundation**: Uses `shared` module's `InterceptorChain` and `PatternMatchingMethodInvoker`
-- **Status**: WORK-IN-PROGRESS
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>reactive</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `InterceptorChain`, `PatternMatchingMethodInvoker`, `Lifecycle` from [shared](./LLM-shared.md)
 
 ## TOC
-- [Quick Facts](#quick-facts)
 - [Core Components](#core-components)
 - [LocalEventBus API](#localeventbus-api)
-  - [EventBus Interface](#eventbus-interface)
-  - [LocalEventBus Implementation](#localeventbus-implementation)
-  - [Event Handler Types](#event-handler-types)
-  - [AnnotatedEventHandler](#annotatedeventhandler)
-  - [Handler Annotation](#handler-annotation)
-  - [Sync vs Async Handlers](#sync-vs-async-handlers)
 - [LocalCommandBus API](#localcommandbus-api)
-  - [CommandBus Interface](#commandbus-interface)
-  - [LocalCommandBus Implementation](#localcommandbus-implementation)
-  - [Send Methods](#send-methods)
-  - [CommandHandler Types](#commandhandler-types)
-  - [Handler Annotations](#handler-annotations)
-  - [Error Handling](#error-handling)
-  - [Exceptions](#exceptions)
 - [Command Interceptors](#command-interceptors)
-  - [CommandBusInterceptor Interface](#commandbusinterceptor-interface)
-  - [CommandBusInterceptorChain Interface](#commandbusinterceptorchain-interface)
-  - [Interceptor Ordering](#interceptor-ordering)
-  - [Common Interceptor Patterns](#common-interceptor-patterns)
 - [Spring Integration](#spring-integration)
-  - [ReactiveHandlersBeanPostProcessor](#reactivehandlersbeanpostprocessor)
-  - [AsyncEventHandler Annotation](#asynceventhandler-annotation)
-  - [Registration Rules](#registration-rules)
 - [Common Patterns](#common-patterns)
-- [Dependencies & Integration](#dependencies--integration)
-- [Thread Safety](#thread-safety)
 - [Gotchas](#gotchas)
-- [See Also](#see-also)
 
 ---
 
 ## Core Components
 
-| Class | Package | Purpose |
-|-------|---------|---------|
-| **Event Bus** | | |
-| `EventBus` | `dk.trustworks.essentials.reactive` | Event bus interface |
-| `LocalEventBus` | `dk.trustworks.essentials.reactive` | **Implements `EventBus`** - Pub/sub bus with sync/async subscribers |
-| `EventHandler` | `dk.trustworks.essentials.reactive` | Event subscriber functional interface |
-| `AnnotatedEventHandler` | `dk.trustworks.essentials.reactive` | **Implements `EventHandler`** - `@Handler` annotation routing |
-| `OnErrorHandler` | `dk.trustworks.essentials.reactive` | Async handler error callback |
-| `Handler` | `dk.trustworks.essentials.reactive` | Annotation for event/command handler methods |
-| **Command Bus** | | |
-| `CommandBus` | `dk.trustworks.essentials.reactive.command` | Command bus interface |
-| `LocalCommandBus` | `dk.trustworks.essentials.reactive.command` | **Implements `CommandBus`** - CQRS bus (single handler per command) |
-| `AbstractCommandBus` | `dk.trustworks.essentials.reactive.command` | Abstract base class implementing `CommandBus` with caching |
-| `CommandHandler` | `dk.trustworks.essentials.reactive.command` | Command processor interface |
-| `AnnotatedCommandHandler` | `dk.trustworks.essentials.reactive.command` | **Implements `CommandHandler`** - `@Handler`/`@CmdHandler` routing |
-| `SendAndDontWaitErrorHandler` | `dk.trustworks.essentials.reactive.command` | Fire-and-forget error callback interface |
-| `CmdHandler` | `dk.trustworks.essentials.reactive.command` | Annotation for command handler methods (alias for `@Handler`) |
-| **Exceptions** | | |
-| `NoCommandHandlerFoundException` | `dk.trustworks.essentials.reactive.command` | Thrown when no handler found for command type |
-| `MultipleCommandHandlersFoundException` | `dk.trustworks.essentials.reactive.command` | Thrown when multiple handlers found for command type |
-| `SendCommandException` | `dk.trustworks.essentials.reactive.command` | Thrown when command execution fails |
-| **Interceptors** | | |
-| `CommandBusInterceptor` | `dk.trustworks.essentials.reactive.command.interceptor` | Command interception interface |
-| `CommandBusInterceptorChain` | `dk.trustworks.essentials.reactive.command.interceptor` | Interceptor chain interface |
-| **Spring Integration** | | |
-| `ReactiveHandlersBeanPostProcessor` | `dk.trustworks.essentials.reactive.spring` | Auto-register Spring beans as handlers |
-| `AsyncEventHandler` | `dk.trustworks.essentials.reactive.spring` | Annotation marking async event handlers |
+Base package: `dk.trustworks.essentials.reactive`
+
+| Class | Package Suffix         | Purpose |
+|-------|------------------------|---------|
+| **Event Bus** |                        | |
+| `EventBus` | .                      | Event bus interface |
+| `LocalEventBus` | .                      | Pub/sub bus with sync/async subscribers |
+| `EventHandler` | .                      | Event subscriber functional interface |
+| `AnnotatedEventHandler` | .                      | `@Handler` annotation routing base class |
+| `OnErrorHandler` | .                      | Async handler error callback |
+| `Handler` | .                      | Annotation for event/command handler methods |
+| **Command Bus** |                        | |
+| `CommandBus` | `.command`             | Command bus interface |
+| `LocalCommandBus` | `.command`             | CQRS bus (single handler per command) |
+| `AbstractCommandBus` | `.command`             | Abstract base with caching |
+| `CommandHandler` | `.command`             | Command processor interface |
+| `AnnotatedCommandHandler` | `.command`             | `@Handler`/`@CmdHandler` routing base class |
+| `SendAndDontWaitErrorHandler` | `.command`             | Fire-and-forget error callback interface |
+| `CmdHandler` | `.command`             | Annotation (alias for `@Handler`) |
+| **Exceptions** |                        | |
+| `NoCommandHandlerFoundException` | `.command`             | No handler found for command type |
+| `MultipleCommandHandlersFoundException` | `.command`             | Multiple handlers found |
+| `SendCommandException` | `.command`             | Command execution failed |
+| **Interceptors** |                        | |
+| `CommandBusInterceptor` | `.command.interceptor` | Command interception interface |
+| `CommandBusInterceptorChain` | `.command.interceptor` | Interceptor chain interface |
+| **Spring Integration** |                        | |
+| `ReactiveHandlersBeanPostProcessor` | `.spring`              | Auto-register Spring beans as handlers |
+| `AsyncEventHandler` | `.spring`              | Annotation marking async event handlers |
 
 ---
 
@@ -96,7 +85,6 @@ public interface EventBus extends Lifecycle {
 ### LocalEventBus Implementation
 
 **Package:** `dk.trustworks.essentials.reactive`
-**Implements:** `EventBus`
 
 ```java
 // Constructors
@@ -150,7 +138,6 @@ public interface OnErrorHandler {
 ### AnnotatedEventHandler
 
 **Package:** `dk.trustworks.essentials.reactive`
-**Implements:** `EventHandler`
 
 Base class for annotation-based event routing. Uses `PatternMatchingMethodInvoker` from `dk.trustworks.essentials.shared.reflection` with `InvocationStrategy.InvokeMostSpecificTypeMatched`.
 
@@ -160,7 +147,7 @@ public abstract class AnnotatedEventHandler implements EventHandler {
 }
 ```
 
-**Usage pattern:**
+**Pattern:**
 ```java
 public class OrderEventHandler extends AnnotatedEventHandler {
     @Handler
@@ -225,7 +212,7 @@ public interface CommandBus {
 ### LocalCommandBus Implementation
 
 **Package:** `dk.trustworks.essentials.reactive.command`
-**Implements:** `CommandBus`
+**Extends:** `AbstractCommandBus`
 
 ⚠️ **Non-durable**: `sendAndDontWait` commands lost on JVM restart. Use `DurableLocalCommandBus` from [foundation](./LLM-foundation.md) for durability.
 
@@ -239,14 +226,14 @@ LocalCommandBus(CommandBusInterceptor... interceptors)
 LocalCommandBus(SendAndDontWaitErrorHandler errorHandler, CommandBusInterceptor... interceptors)
 ```
 
-**Note:** Interceptors automatically sorted by `@InterceptorOrder` annotation on registration.
+**Note:** Interceptors automatically sorted by `@InterceptorOrder` on registration.
 
 ### Send Methods
 
 | Method | Blocking | Returns | Error Behavior | Durability |
 |--------|----------|---------|----------------|------------|
 | `send(cmd)` | Yes | `<R>` Result | Exception to caller | N/A |
-| `sendAsync(cmd)` | No | `Mono<R>` (`reactor.core.publisher.Mono`) | Exception in Mono error channel | N/A |
+| `sendAsync(cmd)` | No | `Mono<R>` | Exception in Mono error channel | N/A |
 | `sendAndDontWait(cmd)` | No | void | `SendAndDontWaitErrorHandler` callback | ❌ Lost on restart |
 | `sendAndDontWait(cmd, delay)` | No | void | `SendAndDontWaitErrorHandler` callback | ❌ Lost on restart |
 
@@ -270,7 +257,7 @@ public abstract class AnnotatedCommandHandler implements CommandHandler {
 
 Uses `PatternMatchingMethodInvoker` from `dk.trustworks.essentials.shared.reflection` with `InvocationStrategy.InvokeMostSpecificTypeMatched`.
 
-**Annotation-based example:**
+**Pattern:**
 ```java
 public class OrderCommandHandler extends AnnotatedCommandHandler {
     @Handler  // or @CmdHandler
@@ -283,7 +270,7 @@ public class OrderCommandHandler extends AnnotatedCommandHandler {
 
 ### Handler Annotations
 
-**Package:** `dk.trustworks.essentials.reactive` (`@Handler`) and `dk.trustworks.essentials.reactive.command` (`@CmdHandler`)
+**Packages:** `dk.trustworks.essentials.reactive` (`@Handler`), `dk.trustworks.essentials.reactive.command` (`@CmdHandler`)
 
 ```java
 // Used in both event and command handlers
@@ -301,7 +288,6 @@ public @interface CmdHandler {}
 
 **Package:** `dk.trustworks.essentials.reactive.command`
 
-**SendAndDontWaitErrorHandler Interface:**
 ```java
 public interface SendAndDontWaitErrorHandler {
     void handleError(Throwable exception, Object commandMessage, CommandHandler handler);
@@ -309,17 +295,8 @@ public interface SendAndDontWaitErrorHandler {
 ```
 
 **Implementations:**
-```java
-// Logs error, swallows exception (no retry)
-class FallbackSendAndDontWaitErrorHandler implements SendAndDontWaitErrorHandler {
-    // Package: dk.trustworks.essentials.reactive.command
-}
-
-// Logs error, rethrows exception (enables retry with DurableQueues)
-class RethrowingSendAndDontWaitErrorHandler implements SendAndDontWaitErrorHandler {
-    // Package: dk.trustworks.essentials.reactive.command
-}
-```
+- `FallbackSendAndDontWaitErrorHandler` - Logs error, swallows exception (no retry)
+- `RethrowingSendAndDontWaitErrorHandler` - Logs error, rethrows exception (enables retry with DurableQueues)
 
 ### Exceptions
 
@@ -383,7 +360,7 @@ public interface CommandBusInterceptorChain<R> {
 
 ### Interceptor Ordering
 
-Uses `@InterceptorOrder` annotation from `dk.trustworks.essentials.shared.interceptor` package. **Lower value = higher priority (runs first)**.
+Uses `@InterceptorOrder` from `dk.trustworks.essentials.shared.interceptor`. **Lower value = higher priority (runs first)**.
 
 ```java
 @InterceptorOrder(1)   // Runs FIRST
@@ -397,30 +374,18 @@ public class LoggingInterceptor implements CommandBusInterceptor { ... }
 
 ### Common Interceptor Patterns
 
-**UnitOfWork Interceptor:**
+**UnitOfWork Interceptor** (example using foundation module):
 ```java
-public class UnitOfWorkInterceptor implements CommandBusInterceptor {
-    @Override
-    public Object interceptSend(Object command, CommandBusInterceptorChain chain) {
-        return unitOfWorkFactory.withUnitOfWork(uow -> chain.proceed());
-    }
+// NOTE: UnitOfWorkControllingCommandBusInterceptor is from foundation module
+// Package: dk.trustworks.essentials.components.foundation.reactive.command
+import dk.trustworks.essentials.components.foundation.reactive.command.UnitOfWorkControllingCommandBusInterceptor;
 
-    @Override
-    public Object interceptSendAsync(Object command, CommandBusInterceptorChain chain) {
-        return unitOfWorkFactory.withUnitOfWork(uow -> chain.proceed());
-    }
-
-    @Override
-    public void interceptSendAndDontWait(Object command, CommandBusInterceptorChain chain) {
-        unitOfWorkFactory.withUnitOfWork(uow -> {
-            chain.proceed();
-            return null;
-        });
-    }
-}
+LocalCommandBus commandBus = new LocalCommandBus(
+    new UnitOfWorkControllingCommandBusInterceptor(unitOfWorkFactory)
+);
 ```
 
-**Security Interceptor:**
+**Custom Security Interceptor:**
 ```java
 @InterceptorOrder(1)
 public class SecurityInterceptor implements CommandBusInterceptor {
@@ -440,7 +405,7 @@ public class SecurityInterceptor implements CommandBusInterceptor {
 
 ### ReactiveHandlersBeanPostProcessor
 
-**Location:** `dk.trustworks.essentials.reactive.spring.ReactiveHandlersBeanPostProcessor`
+**Package:** `dk.trustworks.essentials.reactive.spring`
 
 Auto-discovers and registers handler beans. Eliminates manual `addCommandHandler()`/`addSyncSubscriber()` calls.
 
@@ -551,24 +516,6 @@ eventBus.addAsyncSubscriber(event -> {
 eventBus.publish(new OrderCreated(orderId, customerId));
 ```
 
-### Command Handler with Interceptor
-
-```java
-// Interceptor wraps all commands in UnitOfWork
-LocalCommandBus commandBus = new LocalCommandBus(
-    new UnitOfWorkControllingCommandBusInterceptor(unitOfWorkFactory)
-);
-
-// Handler doesn't manage UnitOfWork
-public class CreateOrderHandler implements CommandHandler {
-    @Override
-    public Object handle(Object command) {
-        // Already in UnitOfWork from interceptor
-        return orderRepository.save(Order.create(...)).getId();
-    }
-}
-```
-
 ### Multi-Command Handler with Events
 
 ```java
@@ -598,52 +545,16 @@ public class OrderCommandHandler extends AnnotatedCommandHandler {
 
 ---
 
-## Dependencies & Integration
-
-### Module Dependencies
-
-| Module | Classes Used | Package |
-|--------|--------------|---------|
-| **[shared](./LLM-shared.md)** | `InterceptorChain` | `dk.trustworks.essentials.shared.interceptor` |
-| | `PatternMatchingMethodInvoker` | `dk.trustworks.essentials.shared.reflection` |
-| | `Lifecycle` | `dk.trustworks.essentials.shared.functional` |
-| | `FailFast` | `dk.trustworks.essentials.shared` |
-| | `@InterceptorOrder` | `dk.trustworks.essentials.shared.interceptor` |
-| **reactor-core** (provided) | `Mono`, `Flux` | `reactor.core.publisher` |
-| | `Schedulers` | `reactor.core.scheduler` |
-| **spring-context** (provided, optional) | `BeanPostProcessor` | `org.springframework.beans.factory.config` |
-| | `ApplicationContextAware` | `org.springframework.context` |
-
-### Downstream Modules
-
-| Module | Classes | Package |
-|--------|---------|---------|
-| **[foundation](./LLM-foundation.md)** | `DurableLocalCommandBus` extends `AbstractCommandBus` | `dk.trustworks.essentials.components.foundation.messaging` |
-| **[postgresql-event-store](./LLM-postgresql-event-store.md)** | Event processors use `LocalEventBus` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor` |
-| **[eventsourced-aggregates](./LLM-eventsourced-aggregates.md)** | Aggregate repositories publish events | `dk.trustworks.essentials.components.eventsourced.aggregates` |
-
----
-
-## Thread Safety
-
-| Class | Thread Safety |
-|-------|---------------|
-| `LocalEventBus` | ✅ Thread-safe (concurrent maps, Reactor scheduling) |
-| `LocalCommandBus` | ✅ Thread-safe (concurrent handler cache, Reactor scheduling) |
-| Handler implementations | ⚠️ User responsibility |
-
----
-
 ## Gotchas
 
-- ⚠️ `LocalCommandBus.sendAndDontWait()` (`dk.trustworks.essentials.reactive.command.LocalCommandBus`) is **non-durable** - commands lost on JVM restart. Use `DurableLocalCommandBus` (`dk.trustworks.essentials.components.foundation.messaging.DurableLocalCommandBus`) from [foundation](./LLM-foundation.md) for persistence.
-- ⚠️ Each command type requires **exactly one handler** - throws `NoCommandHandlerFoundException` or `MultipleCommandHandlersFoundException` (both in `dk.trustworks.essentials.reactive.command`).
+- ⚠️ `LocalCommandBus.sendAndDontWait()` is **non-durable** - commands lost on JVM restart. Use `DurableLocalCommandBus` from [foundation](./LLM-foundation.md) for persistence.
+- ⚠️ Each command type requires **exactly one handler** - throws `NoCommandHandlerFoundException` or `MultipleCommandHandlersFoundException`.
 - ⚠️ Sync event handler exceptions **propagate to caller and roll back** the publishing `UnitOfWork`.
-- ⚠️ Async event handler exceptions go to `OnErrorHandler` (`dk.trustworks.essentials.reactive.OnErrorHandler`) - **no automatic retry**.
-- ⚠️ `@AsyncEventHandler` (`dk.trustworks.essentials.reactive.spring.AsyncEventHandler`) annotation only works with `ReactiveHandlersBeanPostProcessor` in Spring context. Manual registration uses `addAsyncSubscriber()`.
-- ⚠️ Interceptor order: **lower `@InterceptorOrder` (`dk.trustworks.essentials.shared.interceptor.InterceptorOrder`) = higher priority** (runs first). Default order is 10.
-- ⚠️ `AnnotatedEventHandler`/`AnnotatedCommandHandler` use reflection via `PatternMatchingMethodInvoker` (`dk.trustworks.essentials.shared.reflection.PatternMatchingMethodInvoker`) - consider performance for high-throughput scenarios.
-- ⚠️ Event handlers registered with `ReactiveHandlersBeanPostProcessor` (`dk.trustworks.essentials.reactive.spring.ReactiveHandlersBeanPostProcessor`) are added to **ALL** `EventBus` beans in the context.
+- ⚠️ Async event handler exceptions go to `OnErrorHandler` - **no automatic retry**.
+- ⚠️ `@AsyncEventHandler` annotation only works with `ReactiveHandlersBeanPostProcessor` in Spring context. Manual registration uses `addAsyncSubscriber()`.
+- ⚠️ Interceptor order: **lower `@InterceptorOrder` = higher priority** (runs first). Default order is 10.
+- ⚠️ `AnnotatedEventHandler`/`AnnotatedCommandHandler` use reflection - consider performance for high-throughput scenarios.
+- ⚠️ Event handlers registered with `ReactiveHandlersBeanPostProcessor` are added to **ALL** `EventBus` beans in the context.
 - ⚠️ `LocalCommandBus` automatically sorts interceptors on add - manual ordering not needed.
 
 ---
@@ -653,7 +564,6 @@ public class OrderCommandHandler extends AnnotatedCommandHandler {
 - [README.md](../reactive/README.md) - Full documentation with motivation, examples, best practices
 - [LLM-shared.md](./LLM-shared.md) - `InterceptorChain`, `PatternMatchingMethodInvoker`, `Lifecycle`
 - [LLM-foundation.md](./LLM-foundation.md) - `DurableLocalCommandBus`, `UnitOfWork`, `DurableQueues`
-- [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md) - Event processors using `LocalEventBus`
 
 **Test References:**
 - `LocalEventBusTest.java` - Event bus usage patterns

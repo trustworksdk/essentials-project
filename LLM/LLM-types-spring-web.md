@@ -1,11 +1,22 @@
 # Types-Spring-Web - LLM Reference
 
+> Quick reference for LLMs. For detailed explanations, see [README.md](../types-spring-web/README.md).
+
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types.spring.web`
-- Purpose: Spring WebMvc/WebFlux converter for `SingleValueType` as `@PathVariable`/`@RequestParam`
-- Dependencies: `spring-web` (provided scope)
+- Purpose: Spring WebMvc/WebFlux converter enabling `SingleValueType` as `@PathVariable`/`@RequestParam`
+- Dependencies: `spring-web` (provided), `spring-webmvc` (provided) or `spring-webflux` (provided)
 - Key class: `SingleValueTypeConverter`
-- Status: WORK-IN-PROGRESS
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>types-spring-web</artifactId>
+</dependency>
+```
+
+**Dependencies from other modules**:
+- `SingleValueType`, `CharSequenceType`, `NumberType`, all temporal types from [types](./LLM-types.md)
 
 ## TOC
 - [Core API](#core-api)
@@ -13,7 +24,6 @@
 - [Usage Patterns](#usage-patterns)
 - [JSR-310 Temporal Types](#jsr-310-temporal-types)
 - [Conversion Logic](#conversion-logic)
-- [Integration Points](#integration-points)
 - [Gotchas](#gotchas)
 - [See Also](#see-also)
 
@@ -21,11 +31,13 @@
 
 ## Core API
 
+Base package: `dk.trustworks.essentials.types.spring.web`
+
 ### SingleValueTypeConverter
 
-**Location:** `dk.trustworks.essentials.types.spring.web.SingleValueTypeConverter`
-
 ```java
+package dk.trustworks.essentials.types.spring.web;
+
 public final class SingleValueTypeConverter implements GenericConverter {
     @Override
     public Set<ConvertiblePair> getConvertibleTypes();
@@ -35,7 +47,7 @@ public final class SingleValueTypeConverter implements GenericConverter {
 }
 ```
 
-**Convertible Pairs:**
+**Convertible pairs:**
 - `String` → `CharSequenceType`
 - `Number` → `NumberType`
 - `String` → `NumberType`
@@ -45,9 +57,12 @@ public final class SingleValueTypeConverter implements GenericConverter {
 
 ## Configuration
 
-### WebMvc Setup
+### WebMvc
 
 ```java
+import dk.trustworks.essentials.types.spring.web.SingleValueTypeConverter;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
     @Override
@@ -57,9 +72,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
 }
 ```
 
-### WebFlux Setup
+### WebFlux
 
 ```java
+import dk.trustworks.essentials.types.spring.web.SingleValueTypeConverter;
+import org.springframework.web.reactive.config.WebFluxConfigurer;
+
 @Configuration
 public class WebFluxConfig implements WebFluxConfigurer {
     @Autowired
@@ -78,80 +96,102 @@ public class WebFluxConfig implements WebFluxConfigurer {
 }
 ```
 
-**Required for JSON bodies:** `types-jackson` module + `EssentialTypesJacksonModule` spring bean
+**JSON request/response bodies:** Requires `types-jackson` module with `EssentialTypesJacksonModule` bean. See [README Configuration](../types-spring-web/README.md#webmvc-configuration).
 
 ---
 
 ## Usage Patterns
 
-### CharSequenceType as @PathVariable
+### CharSequenceType as Path Variable
 
 ```java
-@GetMapping("/{orderId}")
+@GetMapping("/orders/{orderId}")
 public Order getOrder(@PathVariable OrderId orderId) {
     return orderService.findById(orderId);
 }
 ```
+- Converter parses `String` → `OrderId` (extends `CharSequenceType`)
+- Works for any `CharSequenceType` subclass
 
-### Multiple Semantic Types
+### NumberType as Request Param
 
 ```java
-@PostMapping("/customer/{customerId}")
+@GetMapping("/orders/by-quantity")
+public List<Order> findByQuantity(@RequestParam("min") Quantity minQuantity,
+                                  @RequestParam("max") Quantity maxQuantity) {
+    return orderService.findByQuantityRange(minQuantity, maxQuantity);
+}
+```
+- Converter parses `String` → `Quantity` (extends `NumberType`)
+- Auto-detects target number class (Integer, Long, BigDecimal, etc.)
+
+### Multiple Types Combined
+
+```java
+@PostMapping("/orders/customer/{customerId}")
 public Order updatePrice(@PathVariable CustomerId customerId,
                          @RequestParam("price") Amount price) {
     return orderService.updatePrice(customerId, price);
 }
 ```
 
-### NumberType as @RequestParam
-
-```java
-@GetMapping("/by-quantity")
-public List<Order> findByQuantity(@RequestParam("min") Quantity minQuantity,
-                                  @RequestParam("max") Quantity maxQuantity) {
-    return orderService.findByQuantityRange(minQuantity, maxQuantity);
-}
-```
-
 ### WebFlux Reactive
 
 ```java
-@GetMapping("/{orderId}")
+@GetMapping("/reactive/orders/{orderId}")
 public Mono<Order> getOrder(@PathVariable OrderId orderId) {
     return orderService.findById(orderId);
 }
 
-@GetMapping("/by-date/{dueDate}")
+@GetMapping("/reactive/orders/by-date/{dueDate}")
 public Flux<Order> findByDueDate(@PathVariable DueDate dueDate) {
     return orderService.findByDueDate(dueDate);
 }
 ```
+- Same converter works for both WebMvc and WebFlux
 
 ---
 
 ## JSR-310 Temporal Types
 
+Base package: `dk.trustworks.essentials.types`
+
 ### Supported Types
 
-| Base Type (`dk.trustworks.essentials.types`)  | Wrapped Value | Path/Param Format | Notes |
-|-----------------------------------------------|---------------|-------------------|-------|
-| `InstantType`                                 | `Instant` | `2024-01-15T10:30:00Z` | ISO-8601 |
-| `LocalDateTimeType`                           | `LocalDateTime` | `2024-01-15T10:30:00` | ISO-8601 |
-| `LocalDateType`                               | `LocalDate` | `2024-01-15` | ISO-8601 |
-| `LocalTimeType`                               | `LocalTime` | `10:30:00` | ISO-8601 |
-| `OffsetDateTimeType`                          | `OffsetDateTime` | `2024-01-15T10:30:00+01:00` | ISO-8601 |
-| `ZonedDateTimeType`                           | `ZonedDateTime` | URL-encoded string | Auto-decoded |
+| Your Type Extends | Wrapped Value | String Format | Notes |
+|-------------------|---------------|---------------|-------|
+| `InstantType` | `Instant` | `2024-01-15T10:30:00Z` | ISO-8601 |
+| `LocalDateTimeType` | `LocalDateTime` | `2024-01-15T10:30:00` | ISO-8601 |
+| `LocalDateType` | `LocalDate` | `2024-01-15` | ISO-8601 |
+| `LocalTimeType` | `LocalTime` | `10:30:00` | ISO-8601 |
+| `OffsetDateTimeType` | `OffsetDateTime` | `2024-01-15T10:30:00+01:00` | ISO-8601 |
+| `ZonedDateTimeType` | `ZonedDateTime` | URL-encoded | ⚠️ Must encode |
 
-### Usage
+### Pattern: Temporal Type as Path Variable
 
 ```java
-@GetMapping("/by-due-date/{dueDate}")
+// DueDate extends LocalDateType
+@GetMapping("/orders/by-due-date/{dueDate}")
 public List<Order> findByDueDate(@PathVariable DueDate dueDate) {
     return orderService.findByDueDate(dueDate);
 }
+// URL: /orders/by-due-date/2024-01-15
 ```
 
-**For JSON bodies:** Add `@JsonCreator` to constructor:
+### Pattern: ZonedDateTimeType Requires Encoding
+
+```java
+// TransactionTime extends ZonedDateTimeType
+@GetMapping("/orders/by-time/{time}")
+public Order getByTime(@PathVariable TransactionTime time) {
+    return orderService.findByTime(time);
+}
+// URL: /orders/by-time/2024-01-15T10%3A30%3A00%2B01%3A00%5BEurope%2FParis%5D
+```
+Client must URL-encode the `ZonedDateTime` string. Converter auto-decodes.
+
+### Pattern: JSON Body with @JsonCreator
+
 ```java
 public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
     @JsonCreator
@@ -164,71 +204,51 @@ public class TransactionTime extends ZonedDateTimeType<TransactionTime> {
     }
 }
 ```
+Required for JSON request/response bodies when using `types-jackson`.
 
 ---
 
 ## Conversion Logic
 
-### Implementation Details
-
-| Source Type | Target Type | Logic |
-|-------------|-------------|-------|
-| `SingleValueType` | Any | Returns `value()` |
-| `String` | `LocalDateTimeType` | `LocalDateTime.parse(source)` |
-| `String` | `LocalDateType` | `LocalDate.parse(source)` |
-| `String` | `InstantType` | `Instant.parse(source)` |
-| `String` | `LocalTimeType` | `LocalTime.parse(source)` |
-| `String` | `OffsetDateTimeType` | `OffsetDateTime.parse(source)` |
-| `String` | `ZonedDateTimeType` | `ZonedDateTime.parse(URLDecoder.decode(source, UTF_8))` |
-| `String` | `NumberType` | `NumberUtils.parseNumber()` → `SingleValueType.fromObject()` |
+| Source Type | Target Type | Implementation |
+|-------------|-------------|----------------|
+| `SingleValueType<?, ?>` | Any | `source.value()` |
+| `String` | `LocalDateTimeType` | `SingleValueType.fromObject(LocalDateTime.parse(source), targetType)` |
+| `String` | `LocalDateType` | `SingleValueType.fromObject(LocalDate.parse(source), targetType)` |
+| `String` | `InstantType` | `SingleValueType.fromObject(Instant.parse(source), targetType)` |
+| `String` | `LocalTimeType` | `SingleValueType.fromObject(LocalTime.parse(source), targetType)` |
+| `String` | `OffsetDateTimeType` | `SingleValueType.fromObject(OffsetDateTime.parse(source), targetType)` |
+| `String` | `ZonedDateTimeType` | `SingleValueType.fromObject(ZonedDateTime.parse(URLDecoder.decode(source, UTF_8)), targetType)` |
+| `String` | `NumberType` | `NumberType.resolveNumberClass()` + `NumberUtils.parseNumber()` + `SingleValueType.fromObject()` |
 | `Number` | `NumberType` | `SingleValueType.fromObject(source, targetType)` |
 | Other | `CharSequenceType` | `SingleValueType.fromObject(source, targetType)` |
 
-**Key method:** `SingleValueType.fromObject(Object value, Class<SingleValueType<?, ?>> type)`
-
----
-
-## Integration Points
-
-### Dependencies
-
-| Module | Scope | Purpose |
-|--------|-------|---------|
-| **types** | compile | `SingleValueType`, `CharSequenceType`, `NumberType`, JSR-310 types |
-| **spring-web** | provided | `GenericConverter`, `TypeDescriptor`, `FormatterRegistry` |
-| **spring-webmvc** | provided | WebMvc support (optional) |
-| **spring-webflux** | provided | WebFlux support (optional) |
-
-### Related Modules
-
-| Module | Relationship |
-|--------|--------------|
-| **[types-jackson](LLM-types-jackson.md)** | Required for `@RequestBody`/`@ResponseBody` JSON serialization |
-| **[types](LLM-types.md)** | Core types module with `SingleValueType` base classes |
+**Key method:** `dk.trustworks.essentials.types.SingleValueType.fromObject(Object value, Class<SingleValueType<?, ?>> type)`
 
 ---
 
 ## Gotchas
 
-⚠️ **Converter scope limited** - Only handles `@PathVariable` and `@RequestParam`; JSON bodies require `types-jackson` module
+⚠️ **Scope limitation** - Converter handles ONLY `@PathVariable` and `@RequestParam`, NOT `@RequestBody`/`@ResponseBody` (use `types-jackson`)
 
-⚠️ **ZonedDateTime URL encoding** - Must URL-encode `ZonedDateTimeType` in URLs:
+⚠️ **ZonedDateTimeType URL encoding** - Client MUST URL-encode before sending:
 ```java
-URLEncoder.encode(transactionTime.toString(), StandardCharsets.UTF_8)
+String encoded = URLEncoder.encode(transactionTime.toString(), StandardCharsets.UTF_8);
+// Use in URL: /orders/by-time/{encoded}
 ```
-Converter auto-decodes on receipt
+Converter auto-decodes via `URLDecoder.decode(source, UTF_8)`
 
-⚠️ **NumberType string parsing** - Converter uses `NumberType.resolveNumberClass()` + `NumberUtils.parseNumber()` to detect target number type (Integer, Long, BigDecimal, etc.)
+⚠️ **NumberType auto-detection** - Uses `NumberType.resolveNumberClass()` to determine target (`Integer`, `Long`, `BigDecimal`, etc.), then parses via `NumberUtils.parseNumber()`
 
-⚠️ **Type resolution requires constructor** - Uses `SingleValueType.fromObject()` which requires constructor accepting wrapped value type
+⚠️ **Constructor requirement** - `SingleValueType.fromObject()` requires constructor accepting wrapped value type
 
-⚠️ **Null handling** - Converter handles null gracefully
+⚠️ **Null safety** - Converter handles null source gracefully
 
 ---
 
 ## See Also
 
-- [README.md](../types-spring-web/README.md) - Full docs, examples, setup guide
-- [LLM-types.md](LLM-types.md) - Core types module reference
-- [LLM-types-jackson.md](LLM-types-jackson.md) - Jackson serialization for JSON bodies
-- Test reference: `WebMvcControllerTest.java`, `WebFluxControllerTest.java`
+- [README.md](../types-spring-web/README.md) - Complete documentation with examples
+- [LLM-types.md](LLM-types.md) - Core `SingleValueType` reference
+- [LLM-types-jackson.md](LLM-types-jackson.md) - JSON body serialization
+- Test references: `dk.trustworks.essentials.types.spring.web.WebMvcControllerTest`

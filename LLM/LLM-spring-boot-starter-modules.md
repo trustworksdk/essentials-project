@@ -1,48 +1,44 @@
 # Spring Boot Starters - LLM Reference
 
+> Quick reference for LLMs. For detailed explanations, see module README files.
+
 ## Quick Facts
 - Package: `dk.trustworks.essentials.components.boot.autoconfigure.*`
 - Purpose: Auto-configure Essentials components for Spring Boot
 - All beans: `@ConditionalOnMissingBean` (override by defining same type)
-- **Status**: WORK-IN-PROGRESS
+
+**Dependencies from other modules**:
+- `FencedLockManager`, `DurableQueues`, `UnitOfWorkFactory` from [foundation](./LLM-foundation.md)
+- `PostgresqlFencedLockManager` from [postgresql-distributed-fenced-lock](./LLM-postgresql-distributed-fenced-lock.md)
+- `PostgresqlDurableQueues` from [postgresql-queue](./LLM-postgresql-queue.md)
+- `EventStore`, `ConfigurableEventStore` from [postgresql-event-store](./LLM-postgresql-event-store.md)
+- `MongoFencedLockManager` from [springdata-mongo-distributed-fenced-lock](./LLM-springdata-mongo-distributed-fenced-lock.md)
+- `MongoDurableQueues` from [springdata-mongo-queue](./LLM-springdata-mongo-queue.md)
 
 ## TOC
 - [Starter Selection](#starter-selection)
 - [Auto-Configured Beans](#auto-configured-beans)
-  - [PostgreSQL Starter](#postgresql-starter)
-  - [MongoDB Starter](#mongodb-starter)
-  - [Event Store Starter](#event-store-starter)
-  - [Admin UI Starter](#admin-ui-starter)
 - [Configuration Properties](#configuration-properties)
-  - [PostgreSQL Starter](#postgresql-starter-1)
-  - [MongoDB Starter](#mongodb-starter-1)
-  - [Event Store Starter](#event-store-starter-1)
-  - [Admin UI Starter](#admin-ui-starter-1)
 - [Common Patterns](#common-patterns)
-  - [DurableLocalCommandBus Customization](#durablelocalcommandbus-customization)
-  - [JdbiConfigurationCallback](#jdbiconfigurationcallback-postgresqlevent-store)
-  - [MongoDB Custom Converters](#mongodb-custom-converters)
-  - [Event Store PersistableEventMapper](#event-store-persistableeventmapper)
-  - [Admin UI Authentication](#admin-ui-authentication)
-- [Security](#security)
+- ⚠️ [Security](#security)
 - [Dependencies](#dependencies)
 - [Gotchas](#gotchas)
 - [See Also](#see-also)
 
 ## Starter Selection
 
-| Starter | Includes | Adds | Artifact |
-|---------|----------|------|----------|
-| PostgreSQL | - | Jdbi, FencedLock, Queues, Inbox/Outbox, Scheduler | `spring-boot-starter-postgresql` |
-| MongoDB | - | MongoTemplate, FencedLock, Queues, Inbox/Outbox | `spring-boot-starter-mongodb` |
-| Event Store | PostgreSQL | EventStore, Subscriptions, EventProcessors | `spring-boot-starter-postgresql-event-store` |
-| Admin UI | Event Store | Vaadin admin views | `spring-boot-starter-admin-ui` |
+| Starter | Artifact | Use Case |
+|---------|----------|----------|
+| PostgreSQL | `spring-boot-starter-postgresql` | Microservices + PostgreSQL, not event-sourced |
+| MongoDB | `spring-boot-starter-mongodb` | Microservices + MongoDB, not event-sourced |
+| Event Store | `spring-boot-starter-postgresql-event-store` | Event-sourced apps + PostgreSQL |
+| Admin UI | `spring-boot-starter-admin-ui` | Monitoring/management web UI (requires Vaadin) |
 
-**Use Cases:**
-- **PostgreSQL**: Microservices + PostgreSQL, not event-sourced
-- **MongoDB**: Microservices + MongoDB, not event-sourced
-- **Event Store**: Event-sourced apps + PostgreSQL
-- **Admin UI**: Monitoring/management web UI (requires Vaadin)
+**Starter Relationships:**
+- Event Store includes PostgreSQL starter transitively
+- Admin UI includes Event Store starter transitively
+
+---
 
 ## Auto-Configured Beans
 
@@ -50,144 +46,99 @@
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.postgresql`
 
-#### Core Infrastructure
-| Bean | Type | Package |
-|------|------|---------|
-| `Jdbi` | Database | `org.jdbi.v3.core` |
-| `SpringTransactionAwareJdbiUnitOfWorkFactory` | Transaction | `dk.trustworks.essentials.components.foundation.transaction.jdbi` |
+See [spring-boot-starter-postgresql README](../components/spring-boot-starter-postgresql/README.md#auto-configured-beans) for full list.
 
-**Note:** `Jdbi` configured with:
-- `PostgresPlugin`
-- `TransactionAwareDataSourceProxy` (joins JDBI with Spring `@Transactional`)
+**Core Infrastructure:**
+- `Jdbi` - JDBI with PostgresPlugin + TransactionAwareDataSourceProxy
+- `SpringTransactionAwareJdbiUnitOfWorkFactory` - Spring transaction integration
 
-**Conditional:** `UnitOfWorkFactory` only if `SpringTransactionAwareEventStoreUnitOfWorkFactory` NOT on classpath
+**Components:**
+- `PostgresqlFencedLockManager` - Distributed locks
+- `PostgresqlDurableQueues` - Durable message queuing
+- `PostgresqlDurableQueuesStatistics` - Queue statistics (when enabled)
+- `Inboxes`, `Outboxes` - Store-and-forward patterns
+- `DurableLocalCommandBus` - Command bus with durable delivery
+- `MultiTableChangeListener` - PostgreSQL NOTIFY/LISTEN optimization
 
-#### Components
-| Bean | Type | Package | Config Prefix |
-|------|------|---------|---------------|
-| `PostgresqlFencedLockManager` | Lock | `dk.trustworks.essentials.components.distributed.fencedlock.postgresql` | `essentials.fenced-lock-manager` |
-| `PostgresqlDurableQueues` | Queue | `dk.trustworks.essentials.components.queue.postgresql` | `essentials.durable-queues` |
-| `PostgresqlDurableQueuesStatistics` | Stats | `dk.trustworks.essentials.components.queue.postgresql` | When `enable-queue-statistics=true` |
-| `Inboxes` | Pattern | `dk.trustworks.essentials.components.foundation.inbox` | - |
-| `Outboxes` | Pattern | `dk.trustworks.essentials.components.foundation.outbox` | - |
-| `DurableLocalCommandBus` | Command | `dk.trustworks.essentials.components.foundation.messaging` | - |
-| `MultiTableChangeListener` | Optimize | `dk.trustworks.essentials.components.foundation.postgresql.notifications` | `essentials.multi-table-change-listener` |
+**Reactive & Events:**
+- `LocalEventBus` - Event bus (when EventStoreEventBus not on classpath)
+- `ReactiveHandlersBeanPostProcessor` - Auto-register handlers
 
-#### Reactive & Events
-| Bean | Package | Config | Conditional |
-|------|---------|--------|-------------|
-| `LocalEventBus` | `dk.trustworks.essentials.reactive` | `essentials.reactive` | NOT if `EventStoreEventBus` on classpath |
-| `ReactiveHandlersBeanPostProcessor` | `dk.trustworks.essentials.components.boot.autoconfigure.postgresql` | - | - |
+**Serialization:**
+- `EssentialTypesJacksonModule` - Jackson support for types
+- `EssentialsImmutableJacksonModule` - Immutable support (when enabled)
+- `JacksonJSONSerializer` - JSON serializer (when JSONEventSerializer not on classpath)
 
-#### Scheduler
-| Bean | Package | Condition | Config |
-|------|---------|-----------|--------|
-| `EssentialsScheduler` | `dk.trustworks.essentials.components.foundation.scheduling` | `scheduler.enabled=true` | `essentials.scheduler` |
-| `PostgresqlTTLManager` | `dk.trustworks.essentials.components.foundation.postgresql.ttl` | `EssentialsScheduler` exists | - |
-| `TTLJobBeanPostProcessor` | `dk.trustworks.essentials.components.boot.autoconfigure.postgresql` | `PostgresqlTTLManager` exists | - |
+**Scheduler:**
+- `EssentialsScheduler` - Distributed scheduler (when enabled)
+- `PostgresqlTTLManager` - Time-to-live management
+- `TTLJobBeanPostProcessor` - Auto-register @TTLJob beans
 
-#### Serialization
-| Bean | Package | Condition |
-|------|---------|-----------|
-| `EssentialTypesJacksonModule` | `dk.trustworks.essentials.jackson.types` | Always |
-| `EssentialsImmutableJacksonModule` | `dk.trustworks.essentials.jackson.immutable` | Objenesis + `immutable-jackson-module-enabled=true` |
-| `JacksonJSONSerializer` | `dk.trustworks.essentials.components.foundation.json` | NOT if `JSONEventSerializer` on classpath |
+**Observability:**
+- Micrometer tracing interceptors (when `management.tracing.enabled=true`)
+- Performance logging interceptors
 
-#### Observability
-| Bean | Package | Condition |
-|------|---------|-----------|
-| `DurableQueuesMicrometerTracingInterceptor` | `dk.trustworks.essentials.components.foundation.interceptor.micrometer` | `management.tracing.enabled=true` |
-| `DurableQueuesMicrometerInterceptor` | `dk.trustworks.essentials.components.foundation.interceptor.micrometer` | `management.tracing.enabled=true` |
-| `RecordExecutionTimeMessageHandlerInterceptor` | `dk.trustworks.essentials.components.foundation.interceptor.micrometer` | Always |
-| `RecordExecutionTimeCommandBusInterceptor` | `dk.trustworks.essentials.components.foundation.interceptor.micrometer` | Always |
-| `RecordExecutionTimeDurableQueueInterceptor` | `dk.trustworks.essentials.components.foundation.interceptor.micrometer` | Always |
+**Admin APIs:**
+- `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `SchedulerApi`
 
-#### Admin APIs
-| Bean | Package | Purpose |
-|------|---------|---------|
-| `DBFencedLockApi` | `dk.trustworks.essentials.components.foundation.fencedlock.api` | Lock management |
-| `DurableQueuesApi` | `dk.trustworks.essentials.components.foundation.queue.api` | Queue management |
-| `PostgresqlQueryStatisticsApi` | `dk.trustworks.essentials.components.foundation.postgresql.api` | DB diagnostics |
-| `SchedulerApi` | `dk.trustworks.essentials.components.foundation.scheduling.api` | Scheduler management |
-
-#### Lifecycle
-| Bean | Package |
-|------|---------|
-| `DefaultLifecycleManager` | `dk.trustworks.essentials.components.foundation.lifecycle` |
+**Lifecycle:**
+- `DefaultLifecycleManager` - Manages Lifecycle beans
 
 ### MongoDB Starter
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.mongodb`
 
-#### Core Infrastructure
-| Bean | Type | Package |
-|------|------|---------|
-| `MongoTransactionManager` | Transaction | `org.springframework.data.mongodb` |
-| `SpringMongoTransactionAwareUnitOfWorkFactory` | Transaction | `dk.trustworks.essentials.components.foundation.transaction.spring.mongo` |
+See [spring-boot-starter-mongodb README](../components/spring-boot-starter-mongodb/README.md#auto-configured-beans) for full list.
 
-**`MongoTransactionManager` config:**
-- `ReadConcern.SNAPSHOT`
-- `WriteConcern.ACKNOWLEDGED`
+**Core Infrastructure:**
+- `MongoTransactionManager` - Transaction manager (ReadConcern.SNAPSHOT, WriteConcern.ACKNOWLEDGED)
+- `SpringMongoTransactionAwareUnitOfWorkFactory` - Spring transaction integration
 
-#### Components
-Same as PostgreSQL but MongoDB implementations:
+**Components:**
+- `MongoFencedLockManager` - Distributed locks
+- `MongoDurableQueues` - Durable message queuing
 
-| Bean | Package |
-|------|---------|
-| `MongoFencedLockManager` | `dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo` |
-| `MongoDurableQueues` | `dk.trustworks.essentials.components.queue.springdata.mongo` |
+**MongoDB Integration:**
+- `SingleValueTypeRandomIdGenerator` - ID generation for SingleValueType @Id fields
+- `MongoCustomConversions` - Converters for LockName, QueueEntryId, QueueName
 
-#### MongoDB Integration
-| Bean | Package | Purpose |
-|------|---------|---------|
-| `SingleValueTypeRandomIdGenerator` | `dk.trustworks.essentials.types.springdata.mongo` | Generate IDs for `SingleValueType` @Id fields |
-| `MongoCustomConversions` | `org.springframework.data.mongodb.core.convert` | Convert `LockName`, `QueueEntryId`, `QueueName` |
-
-**Note:** Reactive, serialization, observability same as PostgreSQL
+**Other:** Same reactive, serialization, observability as PostgreSQL starter
 
 ### Event Store Starter
 
 Package: `dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore`
 
+See [spring-boot-starter-postgresql-event-store README](../components/spring-boot-starter-postgresql-event-store/README.md#auto-configured-beans) for full list.
+
 **Includes:** All PostgreSQL starter beans
 
-#### Event Store Core
-| Bean | Package | Purpose |
-|------|---------|---------|
-| `PostgresqlEventStore` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql` | Append/load events |
-| `SeparateTablePerAggregateTypePersistenceStrategy` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence` | One table per `AggregateType` |
-| `SpringTransactionAwareEventStoreUnitOfWorkFactory` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring` | Spring transaction integration |
-| `JacksonJSONEventSerializer` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json` | Event JSON serialization |
+**Event Store Core:**
+- `PostgresqlEventStore` - Event persistence and loading
+- `SeparateTablePerAggregateTypePersistenceStrategy` - One table per AggregateType
+- `SpringTransactionAwareEventStoreUnitOfWorkFactory` - Spring transaction integration
+- `JacksonJSONEventSerializer` - Event JSON serialization
 
-#### Subscriptions & Processing
-| Bean | Package | Purpose |
-|------|---------|---------|
-| `EventStoreSubscriptionManager` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription` | Coordinate subscriptions |
-| `PostgresqlDurableSubscriptionRepository` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription` | Resume point persistence |
-| `EventProcessorDependencies` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor` | Bundle for `EventProcessor`/`InTransactionEventProcessor` |
-| `ViewEventProcessorDependencies` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor` | Bundle for `ViewEventProcessor` |
-| `AnnotationBasedInMemoryProjector` | `dk.trustworks.essentials.components.eventsourced.aggregates.modern.inmemory` | `@EventHandler` projection support |
+**Subscriptions & Processing:**
+- `EventStoreSubscriptionManager` - Coordinate subscriptions
+- `PostgresqlDurableSubscriptionRepository` - Resume point persistence
+- `EventProcessorDependencies` - Dependencies bundle for EventProcessor/InTransactionEventProcessor
+- `ViewEventProcessorDependencies` - Dependencies bundle for ViewEventProcessor
+- `AnnotationBasedInMemoryProjector` - @EventHandler projection support
 
-#### Event Publishing
-| Bean | Package | Purpose |
-|------|---------|---------|
-| `EventStoreEventBus` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus` | Publish events locally |
-| `PersistableEventMapper` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence` | Add metadata to events |
+**Event Publishing:**
+- `EventStoreEventBus` - Local event publishing
+- `PersistableEventMapper` - Event metadata mapping
 
-#### Observability
-| Bean | Package | Condition |
-|------|---------|-----------|
-| `MicrometerTracingEventStoreInterceptor` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer` | `management.tracing.enabled=true` |
-| `RecordExecutionTimeEventStoreInterceptor` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer` | Always |
-| `MeasurementEventStoreSubscriptionObserver` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer` | Always |
-| `EventStoreSubscriptionMonitorManager` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription` | Always (runs every 1m by default) |
-| `SubscriberGlobalOrderMicrometerMonitor` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer` | `management.tracing.enabled=true` |
+**Observability:**
+- `MicrometerTracingEventStoreInterceptor` - Distributed tracing (when enabled)
+- `RecordExecutionTimeEventStoreInterceptor` - Performance logging
+- `MeasurementEventStoreSubscriptionObserver` - Subscription metrics
+- `EventStoreSubscriptionMonitorManager` - Subscription health monitoring (runs every 1m by default)
+- `SubscriberGlobalOrderMicrometerMonitor` - Micrometer gauge for subscriber position
 
-#### Admin APIs
-| Bean | Package | Purpose |
-|------|---------|---------|
-| `EventStoreApi` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api` | Query events, manage subscriptions |
-| `PostgresqlEventStoreStatisticsApi` | `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api` | Event store statistics |
+**Admin APIs:**
+- `EventStoreApi` - Query events, manage subscriptions
+- `PostgresqlEventStoreStatisticsApi` - Event store statistics
 
 ### Admin UI Starter
 
@@ -195,7 +146,7 @@ Package: `dk.trustworks.essentials.components.boot.autoconfigure.adminui`
 
 **Includes:** All Event Store starter beans
 
-#### Auto-Configuration
+**Auto-Configuration:**
 ```java
 @AutoConfiguration
 @EnableVaadin("dk.trustworks.essentials.ui")
@@ -203,62 +154,56 @@ Package: `dk.trustworks.essentials.components.boot.autoconfigure.adminui`
 public class EssentialsAdminUIAutoConfiguration
 ```
 
-#### Views
-Package: `dk.trustworks.essentials.ui`
+**Views:** See [spring-boot-starter-admin-ui README](../components/spring-boot-starter-admin-ui/README.md) for full list
 
-| View Class | Route | Required Role |
-|------------|-------|---------------|
-| `AdminView` | `/` | Authenticated |
-| `LocksView` | `/locks` | `LOCK_READER` |
-| `QueuesView` | `/queues` | `QUEUE_READER` |
-| `SubscriptionsView` | `/subscriptions` | `SUBSCRIPTION_READER` |
-| `EventProcessorsView` | `/eventprocessors` | `SUBSCRIPTION_READER` |
-| `PostgresqlStatisticsView` | `/postgresql` | `POSTGRESQL_STATS_READER` |
-| `SchedulerView` | `/scheduler` | `SCHEDULER_READER` |
-| `AdminLoginView` | `/login` | Public |
-| `AccessDeniedView` | `/access-denied` | Public |
+**Required:** Implement `dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser` bean
 
-**Required:** Implement `EssentialsAuthenticatedUser` (`dk.trustworks.essentials.shared.security`) bean
+---
 
 ## Configuration Properties
 
 ### PostgreSQL Starter
 
+See [spring-boot-starter-postgresql README](../components/spring-boot-starter-postgresql/README.md#configuration-properties) for complete documentation.
+
 #### FencedLock
+
 Prefix: `essentials.fenced-lock-manager`
 
 | Property | Default | Notes |
 |----------|---------|-------|
-| `fenced-locks-table-name` | `fenced_locks` | ⚠️ Validated, not injection-proof |
+| `fenced-locks-table-name` | `fenced_locks` | Table name - see [Security](#security) |
 | `lock-time-out` | `15s` | Must be > `lock-confirmation-interval` |
 | `lock-confirmation-interval` | `4s` | Heartbeat frequency |
 | `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Local release on I/O error |
 
 #### DurableQueues
+
 Prefix: `essentials.durable-queues`
 
-| Property | Default | Notes                                   |
-|----------|---------|-----------------------------------------|
-| `shared-queue-table-name` | `durable_queues` | ⚠️ Validated, not injection-proof       |
+| Property | Default | Notes |
+|----------|---------|-------|
+| `shared-queue-table-name` | `durable_queues` | Table name - see [Security](#security) |
 | `transactional-mode` | `single-operation-transaction` | **Use this**, not `fully-transactional` |
-| `message-handling-timeout` | `30s` | Single-op mode only                     |
-| `use-centralized-message-fetcher` | `true` | Recommended                             |
-| `centralized-message-fetcher-polling-interval` | `20ms` | Base interval                           |
-| `centralized-polling-delay-back-off-factor` | `1.5` | Backoff multiplier                      |
-| `use-ordered-unordered-query` | `true` | Optimize mixed ordering                 |
-| `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false)              |
-| `max-polling-interval` | `2s` | Max backoff                             |
-| `verbose-tracing` | `false` | Include all ops in traces               |
-| `enable-queue-statistics` | `false` | Collect statistics                      |
-| `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - ⚠️ Validated, not injection-proof  |
-| `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats                      |
-| `queue-statistics-ttl-duration` | `90` | Days                                    |
+| `message-handling-timeout` | `30s` | Single-op mode only |
+| `use-centralized-message-fetcher` | `true` | Recommended |
+| `centralized-message-fetcher-polling-interval` | `20ms` | Base interval |
+| `centralized-polling-delay-back-off-factor` | `1.5` | Backoff multiplier |
+| `use-ordered-unordered-query` | `true` | Optimize mixed ordering |
+| `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
+| `max-polling-interval` | `2s` | Max backoff |
+| `verbose-tracing` | `false` | Include all ops in traces |
+| `enable-queue-statistics` | `false` | Collect statistics |
+| `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - see [Security](#security) |
+| `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
+| `queue-statistics-ttl-duration` | `90` | Days |
 
 **Transactional Modes:**
 - `single-operation-transaction`: Queue ops outside transaction, timeout-based ack (RECOMMENDED)
 - `fully-transactional`: Queue ops in transaction (breaks retries/DLQ - don't use)
 
 #### MultiTableChangeListener
+
 Prefix: `essentials.multi-table-change-listener`
 
 | Property | Default |
@@ -267,6 +212,7 @@ Prefix: `essentials.multi-table-change-listener`
 | `filter-duplicate-notifications` | `true` |
 
 #### EventBus
+
 Prefix: `essentials.reactive`
 
 | Property | Default |
@@ -278,6 +224,7 @@ Prefix: `essentials.reactive`
 | `command-bus-parallel-send-and-dont-wait-consumers` | min(processors, 4) |
 
 #### Scheduler
+
 Prefix: `essentials.scheduler`
 
 | Property | Default |
@@ -286,6 +233,7 @@ Prefix: `essentials.scheduler`
 | `number-of-threads` | min(processors, 4) |
 
 #### Metrics
+
 Prefix: `essentials.metrics`
 
 ```yaml
@@ -316,6 +264,7 @@ essentials:
 - `dk.trustworks.essentials.components.foundation.postgresql.micrometer.RecordSqlExecutionTimeLogger`
 
 #### Micrometer Tagging
+
 Prefix: `essentials.tracing-properties`
 
 | Property | Default | Notes |
@@ -323,37 +272,42 @@ Prefix: `essentials.tracing-properties`
 | `module-tag` | `null` | Tag value for 'module' in metrics |
 
 #### Lifecycle
+
 Prefix: `essentials`
 
 | Property | Default | Effect |
 |----------|---------|--------|
-| `life-cycles.start-life-cycles` | `true` | Auto-start `Lifecycle` beans |
+| `life-cycles.start-life-cycles` | `true` | Auto-start Lifecycle beans |
 | `reactive-bean-post-processor-enabled` | `true` | Auto-register handlers |
 | `immutable-jackson-module-enabled` | `true` | Enable immutable deserialization |
 
 ### MongoDB Starter
 
+See [spring-boot-starter-mongodb README](../components/spring-boot-starter-mongodb/README.md#configuration-properties) for complete documentation.
+
 #### FencedLock
+
 Prefix: `essentials.fenced-lock-manager`
 
-| Property | Default        | Notes |
-|----------|----------------|-------|
-| `fenced-locks-collection-name` | `fenced_locks` | ⚠️ Validated, not injection-proof |
-| `lock-time-out` | `15s`          | Must be > `lock-confirmation-interval` |
-| `lock-confirmation-interval` | `4s`           | Heartbeat frequency |
-| `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false`        | Local release on I/O error |
+| Property | Default | Notes |
+|----------|---------|-------|
+| `fenced-locks-collection-name` | `fenced_locks` | Collection name - see [Security](#security) |
+| `lock-time-out` | `12s` | Must be > `lock-confirmation-interval` |
+| `lock-confirmation-interval` | `5s` | Heartbeat frequency |
+| `release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation` | `false` | Local release on I/O error |
 
 #### DurableQueues
+
 Prefix: `essentials.durable-queues`
 
-| Property | Default                        | Notes |
-|----------|--------------------------------|-------|
-| `shared-queue-collection-name` | `durable_queues`               | ⚠️ Validated, not injection-proof |
-| `transactional-mode` | `single-operation-transaction` | **Use this** |
-| `message-handling-timeout` | `30s`                          | Single-op mode only |
-| `polling-delay-interval-increment-factor` | `0.5`                          | Backoff factor |
-| `max-polling-interval` | `2s`                           | Max backoff |
-| `verbose-tracing` | `false`                        | Include all ops in traces |
+| Property | Default | Notes |
+|----------|---------|-------|
+| `shared-queue-collection-name` | `durable_queues` | Collection name - see [Security](#security) |
+| `transactional-mode` | `single-operation-transaction` | **Use this**, not `fully-transactional` |
+| `message-handling-timeout` | `30s` | Single-op mode only |
+| `polling-delay-interval-increment-factor` | `0.5` | Backoff factor |
+| `max-polling-interval` | `2s` | Max backoff |
+| `verbose-tracing` | `false` | Include all ops in traces |
 
 **Note:** No centralized message fetcher (PostgreSQL-only feature)
 
@@ -361,27 +315,31 @@ Prefix: `essentials.durable-queues`
 
 ### Event Store Starter
 
+See [spring-boot-starter-postgresql-event-store README](../components/spring-boot-starter-postgresql-event-store/README.md#configuration-properties) for complete documentation.
+
 **Includes:** All PostgreSQL starter config
 
 #### Event Store
+
 Prefix: `essentials.eventstore`
 
-| Property | Default | Notes                                                      |
-|----------|---------|------------------------------------------------------------|
-| `identifier-column-type` | `text` | `text` or `uuid`                                           |
-| `json-column-type` | `jsonb` | `jsonb` (queryable) or `json` (faster writes)              |
-| `use-event-stream-gap-handler` | `true` | Detect sequence gaps                                       |
-| `verbose-tracing` | `false` | Low-level ops in traces                                    |
-| `add-annotation-based-in-memory-projector` | `true` | Enable `@EventHandler` projections                         |
+| Property | Default | Notes |
+|----------|---------|-------|
+| `identifier-column-type` | `text` | `text` or `uuid` |
+| `json-column-type` | `jsonb` | `jsonb` (queryable) or `json` (faster writes) |
+| `use-event-stream-gap-handler` | `true` | Detect sequence gaps |
+| `verbose-tracing` | `false` | Low-level ops in traces |
+| `add-annotation-based-in-memory-projector` | `true` | Enable @EventHandler projections |
 | `auto-flush-and-publish-after-append-to-stream` | `false` | Flush Publishing: Immediate publish (for processors/views) |
 
 **Flush Publishing:**
-- `false`: Events published at `BeforeCommit`/`AfterCommit` (batch)
+- `false`: Events published at BeforeCommit/AfterCommit (batch)
 - `true`: Also published immediately after `appendToStream()` (individual)
 
 See [postgresql-event-store: Flush Publishing](../components/postgresql-event-store/README.md#flush-publishing)
 
 #### Subscription Manager
+
 Prefix: `essentials.eventstore.subscription-manager`
 
 | Property | Default | Notes |
@@ -392,6 +350,7 @@ Prefix: `essentials.eventstore.subscription-manager`
 | `snapshot-resume-points-every` | `10s` | Save position frequency |
 
 #### Subscription Monitor
+
 Prefix: `essentials.eventstore.subscription-monitor`
 
 | Property | Default |
@@ -400,6 +359,7 @@ Prefix: `essentials.eventstore.subscription-monitor`
 | `interval` | `1m` |
 
 #### Event Store Metrics
+
 Prefix: `essentials.eventstore`
 
 ```yaml
@@ -427,15 +387,18 @@ essentials:
 **No additional config** - uses Event Store starter config
 
 **Required Setup:**
-1. Implement `EssentialsAuthenticatedUser` (`dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser`) bean
+1. Implement `dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser` bean
 2. Configure Spring Security with `VaadinWebSecurity`
 3. Add Vaadin + Spring Security dependencies
+
+---
 
 ## Common Patterns
 
 ### DurableLocalCommandBus Customization
 
 ```java
+// Package: dk.trustworks.essentials.components.foundation.messaging
 @Bean
 RedeliveryPolicy durableLocalCommandBusRedeliveryPolicy() {
     return RedeliveryPolicy.exponentialBackoff()
@@ -471,6 +434,7 @@ Classes:
 ### JdbiConfigurationCallback (PostgreSQL/Event Store)
 
 ```java
+// Package: dk.trustworks.essentials.components.foundation.postgresql
 @Component
 public class MyJdbiCustomizer implements JdbiConfigurationCallback {
     @Override
@@ -488,6 +452,8 @@ Called **before** `Lifecycle.start()`
 ### MongoDB Custom Converters
 
 ```java
+// Package: dk.trustworks.essentials.components.boot.autoconfigure.mongodb
+
 // For CharSequenceTypes using ObjectId values / Map keys using ObjectId values
 @Bean
 AdditionalCharSequenceTypesSupported additionalCharSequenceTypesSupported() {
@@ -517,6 +483,7 @@ See [types-springdata-mongo](../types-springdata-mongo/README.md)
 ### Event Store PersistableEventMapper
 
 ```java
+// Package: dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence
 @Bean
 public PersistableEventMapper persistableEventMapper() {
     return (aggregateId, aggregateTypeConfig, event, eventOrder) ->
@@ -541,6 +508,7 @@ Override to add correlation IDs, tenant IDs, etc.
 ### Admin UI Authentication
 
 ```java
+// Package: dk.trustworks.essentials.shared.security
 @Component
 public class SpringSecurityAuthenticatedUser implements EssentialsAuthenticatedUser {
     private final AuthenticationContext authContext;
@@ -585,11 +553,13 @@ Enum: `dk.trustworks.essentials.shared.security.EssentialsSecurityRoles`
 - `POSTGRESQL_STATS_READER`
 - `SCHEDULER_READER`
 
+---
+
 ## Security
 
 ### ⚠️ Critical: SQL/NoSQL Injection Risk
 
-The components allow customization of table/column/index/function/collection-names that are used with **String concatenation** → SQL/NoSQL injection risk. 
+Components allow customization of table/column/index/function/collection-names that are used with **String concatenation** → SQL/NoSQL injection risk.
 While Essentials applies naming convention validation as an initial defense layer, **this is NOT exhaustive protection** against SQL/NoSQL injection.
 
 ### Table/Collection Name Validation
@@ -612,6 +582,24 @@ While Essentials applies naming convention validation as an initial defense laye
 - All custom table/column/function/index and collection names
 - All custom `AggregateType` values
 
+### What Validation Does NOT Protect Against
+
+#### PostgreSQL
+- SQL injection via **values** (use parameterized queries)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- WHERE clauses and raw SQL strings
+
+#### MongoDB
+- NoSQL injection via **values** (use Spring Data MongoDB's type-safe query methods)
+- Malicious input that passes naming conventions but exploits application logic
+- Configuration loaded from untrusted external sources without additional validation
+- Names that are technically valid but semantically dangerous
+- Query operator injection (e.g., `$where`, `$regex`, `$ne`)
+
+**Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
+
 ### Bean Override
 
 All beans use `@ConditionalOnMissingBean`. Override by defining same type:
@@ -622,6 +610,8 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
     // Your implementation
 }
 ```
+
+---
 
 ## Dependencies
 
@@ -661,6 +651,8 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 <!-- Required: vaadin-spring-boot-starter, spring-boot-starter-security -->
 ```
 
+---
+
 ## Gotchas
 
 - ⚠️ **Transactional Mode**: Use `single-operation-transaction` for reliable retry/DLQ (fully-transactional breaks retries)
@@ -671,7 +663,10 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 - ⚠️ **Queue Statistics**: Extra DB overhead when enabled, use TTL to prevent unbounded growth
 - ⚠️ **Admin UI**: Requires both `EssentialsAuthenticatedUser` implementation AND Spring Security config (not auto-configured)
 
+---
+
 ## See Also
+
 - [foundation](./LLM-foundation.md) - Core patterns (UnitOfWork, FencedLock, DurableQueues, Inbox/Outbox)
 - [postgresql-event-store](./LLM-postgresql-event-store.md) - Event store internals
 - [postgresql-distributed-fenced-lock](./LLM-postgresql-distributed-fenced-lock.md) - Lock implementation
