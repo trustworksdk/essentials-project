@@ -19,7 +19,8 @@ USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Consolidate apt commands to reduce image layers and improve caching
-RUN apt-get update && \
+RUN rm -f /etc/apt/sources.list.d/yarn.list && \
+    apt-get update && \
     apt-get -y install --no-install-recommends \
         ca-certificates \
         curl \
@@ -83,8 +84,9 @@ RUN if [ "${INSTALL_RIPGREP}" = "true" ]; then \
         apt-get clean && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Prepare JetBrains Gateway support and IDE directories
+# Prepare JetBrains Gateway support, IDE directories, and Claude Code CLI support
 RUN mkdir -p /home/vscode/.local/share/JetBrains/RemoteDev \
+             /home/vscode/.local/bin \
              /home/vscode/.cache/JetBrains/RemoteDev \
              /home/vscode/.config/JetBrains \
              /home/vscode/.java \
@@ -115,6 +117,9 @@ RUN mkdir -p /home/vscode/.m2 && \
     mkdir -p /home/vscode/.gradle && \
     echo 'org.gradle.daemon=false' > /home/vscode/.gradle/gradle.properties && \
     echo 'org.gradle.caching=true' >> /home/vscode/.gradle/gradle.properties
+
+# Configure PATH for Claude Code CLI support (~/.local/bin is where claude install places the binary)
+RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/vscode/.bashrc
 
 # Revert DEBIAN_FRONTEND to its default mode for interactive use
 ENV DEBIAN_FRONTEND=dialog
