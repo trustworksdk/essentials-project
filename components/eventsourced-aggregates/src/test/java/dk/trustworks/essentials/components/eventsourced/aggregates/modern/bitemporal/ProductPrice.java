@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.modern.bitemporal;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.AggregateException;
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
 import dk.trustworks.essentials.shared.functional.tuple.*;
@@ -87,6 +88,11 @@ public class ProductPrice extends AggregateRoot<ProductId, ProductPriceEvent, Pr
     public void adjustPrice(Money newPrice, Instant newPriceValidFrom) {
         requireNonNull(newPrice, "No newPrice provided");
         requireNonNull(newPriceValidFrom, "No newPriceValidFrom provided");
+
+        if (priceOverTime == null) {
+            throw new AggregateException("Cannot adjust price on a non-initialized ProductPrice aggregate. " +
+                                         "Use the ProductPrice(ProductId, Money, Instant) constructor to create a new aggregate with an initial price.");
+        }
 
         var existingPriceAt = getPricePairAt(newPriceValidFrom);
         if (existingPriceAt.isEmpty()) {
@@ -202,27 +208,168 @@ public class ProductPrice extends AggregateRoot<ProductId, ProductPriceEvent, Pr
         return priceOverTime;
     }
 
-    private Optional<PriceValidity> findTheValidityPeriodOfTheNextPriceAfter(Instant fromIncluding) {
+    /**
+     * Finds the price whose validity period starts AFTER the given timestamp.<br>
+     * This is used when inserting a new price to determine where the new price's validity should end.
+     * <p>
+     * <b>Bi-Temporal Context:</b><br>
+     * In a bi-temporal model, prices have validity periods (business time). When inserting a new price,
+     * we need to know if there's already a price scheduled to start after our insertion point,
+     * so we can set the new price's {@code toExclusive} boundary correctly.
+     * </p>
+     * <pre>
+     * Example: We have two existing prices P1 and P2, and want to insert a new price at time 25.
+     *
+     * STEP 1 - Current state (two prices with a gap between them):
+     *
+     *     Time:     10                  40                  ∞
+     *               |                   |                   |
+     *               [-------P1----------[-------P2----------|---->
+     *               |   (100 DKK)       |   (150 DKK)       |
+     *               |   valid [10,40[   |   valid [40,∞[    |
+     *
+     *
+     * STEP 2 - Mark where we want to insert the new price (timestamp = 25):
+     *
+     *     Time:     10        25        40                  ∞
+     *               |         |         |                   |
+     *               [-------P1----------[-------P2----------|---->
+     *               |         ^         |                   |
+     *               |         |         |                   |
+     *                   insertion point
+     *                   (new price here)
+     *
+     *
+     * STEP 3 - This method finds the NEXT price (P2) starting AFTER timestamp 25:
+     *
+     *     Time:     10        25        40                  ∞
+     *               |         |         |                   |
+     *               [-------P1----------[-------P2----------|---->
+     *               |         ^         |                   |
+     *               |         |         +--- P2.fromInclusive (40) is AFTER 25
+     *               |         |              so P2 is returned
+     *               |    insertion point
+     *
+     *     This method returns P2 because:
+     *     - P2.fromInclusive (40) is AFTER timestamp (25) ✓
+     *     - P2 is the NEAREST price starting after timestamp
+     *       (if there were prices at 40 and 60, we'd return the one at 40)
+     *
+     *
+     * STEP 4 - The new price's validity is set to [25, 40[ using P2's fromInclusive:
+     *
+     *     Time:     10        25        40                  ∞
+     *               |         |         |                   |
+     *               [---P1----[---NEW---[-------P2----------|---->
+     *               |         |         |                   |
+     *               [10,25[   [25,40[   [40,∞[
+     *
+     *     Note: P1's validity was also adjusted from [10,40[ to [10,25[
+     *           by the companion method findTheValidityPeriodOfThePreviousPriceBefore()
+     * </pre>
+     *
+     * @param timestamp the point in time after which we're looking for the next price
+     * @return the {@link PriceValidity} of the next price starting after the timestamp,
+     *         or {@link Optional#empty()} if no such price exists (meaning the new price extends to infinity)
+     */
+    private Optional<PriceValidity> findTheValidityPeriodOfTheNextPriceAfter(Instant timestamp) {
         return priceOverTime.entrySet()
                             .stream()
-                            .map(entry -> Pair.of(Duration.between(fromIncluding, entry.getKey().fromInclusive),
-                                                  PriceValidity.of(entry.getValue()._1,
-                                                                   entry.getKey())))
-                            .sorted((o1, o2) -> o2._1.compareTo(o1._1))
-                            .map(pair -> pair._2)
-                            .findFirst();
+                            .filter(entry -> entry.getKey().fromInclusive.isAfter(timestamp))
+                            .min(Comparator.comparing(entry -> entry.getKey().fromInclusive))
+                            .map(entry -> PriceValidity.of(entry.getValue().priceId(),
+                                                           entry.getKey()));
     }
 
-    private Optional<PriceValidity> findTheValidityPeriodOfThePreviousPriceBefore(Instant fromIncluding) {
+    /**
+     * Finds the price whose validity period COVERS the given timestamp.<br>
+     * This is the price that is currently "active" at the given timestamp and whose validity
+     * period needs to be shortened (closed) when inserting a new price at that timestamp.
+     * <p>
+     * <b>Bi-Temporal Context:</b><br>
+     * In a bi-temporal model, when we insert a new price at a specific timestamp, we need to
+     * find which existing price is valid at that moment. That price's validity period must be
+     * adjusted to end at the new price's start time, maintaining a continuous, non-overlapping
+     * price timeline.
+     * </p>
+     * <pre>
+     * Example: We have an existing price P1 valid from 10 to ∞, and want to insert a new price at time 25.
+     *
+     * STEP 1 - Current state (single open-ended price):
+     *
+     *     Time:     10                                      ∞
+     *               |                                       |
+     *               [----------------P1---------------------|---->
+     *               |           (100 DKK)                   |
+     *               |           valid [10, ∞[               |
+     *
+     *
+     * STEP 2 - Mark where we want to insert the new price (timestamp = 25):
+     *
+     *     Time:     10        25                            ∞
+     *               |         |                             |
+     *               [----------------P1---------------------|---->
+     *               |         ^                             |
+     *               |         |                             |
+     *               |    insertion point                    |
+     *               |    (new price here)                   |
+     *
+     *
+     * STEP 3 - This method finds the price that COVERS timestamp 25:
+     *
+     *     Time:     10        25                            ∞
+     *               |         |                             |
+     *               [----------------P1---------------------|---->
+     *               |         ^                             |
+     *               |         |                             |
+     *               +----P1's TimeWindow [10, ∞[ COVERS 25--+
+     *                         because: 10 <= 25 < ∞
+     *
+     *     This method returns P1 because:
+     *     - P1's fromInclusive (10) is <= timestamp (25) ✓
+     *     - P1's toExclusive is null (open-ended, extends to ∞) ✓
+     *     - Therefore P1 "covers" timestamp 25
+     *
+     *
+     * STEP 4 - P1's validity is CLOSED at timestamp 25 (via PriceValidityAdjusted event):
+     *
+     *     Time:     10        25                            ∞
+     *               |         |                             |
+     *               [---P1----]                             |
+     *               |         |                             |
+     *               [10, 25[  +--- P1 now ends here         |
+     *                         |    (toExclusive = 25)       |
+     *
+     *
+     * STEP 5 - Final result after new price (P2) is inserted:
+     *
+     *     Time:     10        25                            ∞
+     *               |         |                             |
+     *               [---P1----[------------P2---------------|---->
+     *               |         |                             |
+     *               [10, 25[  [25, ∞[                       |
+     *               100 DKK   120 DKK (new price)           |
+     *
+     *
+     * How "covers" works ({@link TimeWindow#covers(Instant)}):
+     *   - Returns true when: fromInclusive <= timestamp AND (toExclusive is null OR timestamp &lt; toExclusive)
+     *   - Example: TimeWindow [10, 40[ covers 25 because 10 <= 25 AND 25 &lt; 40
+     *   - Example: TimeWindow [10, ∞[ covers 25 because 10 <= 25 AND toExclusive is null
+     *   - Example: TimeWindow [10, 25[ does NOT cover 25 because 25 is NOT &lt; 25
+     * </pre>
+     *
+     * @param timestamp the point in time for which we want to find the covering price
+     * @return the {@link PriceValidity} of the price valid at the given timestamp,
+     *         or {@link Optional#empty()} if no price covers that timestamp
+     *         (which means we're inserting before all existing prices)
+     */
+    private Optional<PriceValidity> findTheValidityPeriodOfThePreviousPriceBefore(Instant timestamp) {
         return priceOverTime.entrySet()
                             .stream()
-                            .map(entry -> Pair.of(Duration.between(fromIncluding, entry.getKey().fromInclusive),
-                                                  PriceValidity.of(entry.getValue()._1,
-                                                                   entry.getKey())))
-
-                            .sorted(Comparator.comparing(o -> o._1))
-                            .map(pair -> pair._2)
-                            .findFirst();
+                            .filter(entry -> entry.getKey().covers(timestamp))
+                            .findFirst()
+                            .map(entry -> PriceValidity.of(entry.getValue().priceId(),
+                                                           entry.getKey()));
     }
 
     /**
