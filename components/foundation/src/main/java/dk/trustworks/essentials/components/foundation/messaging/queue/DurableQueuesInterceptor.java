@@ -140,6 +140,19 @@ public interface DurableQueuesInterceptor extends Interceptor {
     }
 
     /**
+     * Intercept {@link MarkAsDeadLetterMessageDirect} calls.<br>
+     * This is similar to {@link #intercept(MarkAsDeadLetterMessage, InterceptorChain)} but does not return
+     * the updated message, which is useful when the message payload cannot be deserialized.
+     *
+     * @param operation        the operation
+     * @param interceptorChain the interceptor chain (call {@link InterceptorChain#proceed()} to continue the processing chain)
+     * @return true if the operation was successful (message was marked as dead letter), false otherwise
+     */
+    default boolean intercept(MarkAsDeadLetterMessageDirect operation, InterceptorChain<MarkAsDeadLetterMessageDirect, Boolean, DurableQueuesInterceptor> interceptorChain) {
+        return interceptorChain.proceed();
+    }
+
+    /**
      * Intercept {@link ResurrectDeadLetterMessage} calls
      *
      * @param operation        the operation

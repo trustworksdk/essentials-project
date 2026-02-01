@@ -964,6 +964,13 @@ Optional<QueuedMessage> marked = durableQueues.markAsDeadLetterMessage(
     "Manual intervention: Invalid customer data"
 );
 
+// Mark as dead letter WITHOUT returning/deserializing the message
+// Use when the payload cannot be deserialized (e.g., class was renamed/removed)
+boolean success = durableQueues.markAsDeadLetterMessageDirect(
+    queueEntryId,
+    deserializationException  // or a String reason
+);
+
 // Queue a message directly as a dead letter (skip normal processing)
 QueueEntryId entryId = durableQueues.queueMessageAsDeadLetterMessage(
     queueName,
@@ -1023,6 +1030,7 @@ Each interceptor can perform **before**, **after**, or **around** logic for any 
 | `intercept(AcknowledgeMessageAsHandled, chain)` | Acknowledge successful handling             |
 | `intercept(RetryMessage, chain)` | Mark message for retry                      |
 | `intercept(MarkAsDeadLetterMessage, chain)` | Move message to DLQ                         |
+| `intercept(MarkAsDeadLetterMessageDirect, chain)` | Move to DLQ without deserializing payload   |
 | `intercept(ResurrectDeadLetterMessage, chain)` | Resurrect from DLQ                          |
 | `intercept(DeleteMessage, chain)` | Delete a message                            |
 | `intercept(GetQueuedMessage, chain)` | Get a specific message                      |

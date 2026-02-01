@@ -175,6 +175,7 @@ public interface DurableQueues {
     // Dead Letter operations
     Optional<QueuedMessage> resurrectDeadLetterMessage(QueueEntryId id, Duration delay);
     Optional<QueuedMessage> markAsDeadLetterMessage(QueueEntryId id, String reason);
+    boolean markAsDeadLetterMessageDirect(QueueEntryId id, Throwable cause);  // No deserialization
     List<QueuedMessage> getDeadLetterMessages(QueueName queueName, QueueingSortOrder order, long startIndex, long pageSize);
 }
 ```
@@ -256,7 +257,12 @@ durableQueues.resurrectDeadLetterMessage(queueEntryId, Duration.ofSeconds(10));
 
 // Manual mark as DLQ
 durableQueues.markAsDeadLetterMessage(queueEntryId, "Invalid customer data");
+
+// Mark as DLQ without returning/deserializing message (for corrupted payloads)
+durableQueues.markAsDeadLetterMessageDirect(queueEntryId, deserializationException);
 ```
+
+**When to use `markAsDeadLetterMessageDirect`**: Use when the message payload cannot be deserialized (e.g., class was renamed/removed). The regular `markAsDeadLetterMessage` returns the updated `QueuedMessage`, which requires deserializing the payload again—causing a loop. The "Direct" variant updates the database without returning the message.
 
 ### Interceptors
 
