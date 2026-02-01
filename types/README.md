@@ -4,8 +4,18 @@ Essentials is a set of Java 17+ building blocks built from the ground up to have
 The philosophy is to provide high-level, strongly-typed building blocks that integrate easily with popular frameworks (Jackson, Spring Boot, Spring Data, JPA, etc.).
 
 > **NOTE:** This library is WORK-IN-PROGRESS
- 
+
 **LLM Context:** [LLM-types.md](../LLM/LLM-types.md)
+
+## Table of Contents
+- [Overview](#overview)
+- [The Problem: Primitive Obsession](#the-problem-primitive-obsession)
+- [What Are Semantic Types?](#what-are-semantic-types)
+- [Built-in Types](#built-in-types)
+- [SingleValueType Hierarchy](#singlevaluetype-hierarchy)
+- [Creating Custom Types](#creating-custom-types)
+- [Framework Integration](#framework-integration)
+- [See Also](#see-also)
 
 ## Overview
 

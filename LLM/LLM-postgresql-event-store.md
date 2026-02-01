@@ -955,38 +955,11 @@ Stream<PersistedEvent> events = eventStore.loadEventsByGlobalOrder(
 
 ### Common Mistakes
 
-**Concurrency control**:
-```java
-// ❌ No concurrency control
-eventStore.appendToStream(orders, id, event);
-
-// ✅ With optimistic concurrency
-try {
-    eventStore.appendToStream(orders, id, EventOrder.of(5), event);
-} catch (OptimisticAppendToStreamException e) {
-    var current = eventStore.fetchStream(orders, id);
-    // Reload, recompute, retry
-}
-```
-
-**Subscription resume points**:
-```java
-// ❌ Transient subscription
-eventStore.pollEvents(...);  // Loses events on restart
-
-// ✅ Durable subscription
-subscriptionManager.subscribeToAggregateEventsAsynchronously(
-    SubscriberId.of("MyHandler"), ...);  // Resume point persisted
-```
-
-**Projection consistency**:
-```java
-// ❌ Eventual consistency when strong consistency needed
-public class Projection extends EventProcessor {}
-
-// ✅ Strong consistency
-public class Projection extends InTransactionEventProcessor {}
-```
+| Mistake | Problem | Solution |
+|---------|---------|----------|
+| `appendToStream(orders, id, event)` | No concurrency control | Use `appendToStream(orders, id, EventOrder.of(n), event)` |
+| Using `eventStore.pollEvents()` | Transient, loses events on restart | Use `subscriptionManager.subscribeToAggregateEventsAsynchronously()` |
+| Using `EventProcessor` for projections | Eventual consistency | Use `InTransactionEventProcessor` (strong) or `ViewEventProcessor` (low-latency) |
 
 ## Security
 

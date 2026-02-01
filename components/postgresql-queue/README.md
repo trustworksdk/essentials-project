@@ -6,6 +6,17 @@ PostgreSQL implementation of the `DurableQueues` interface for durable message q
 
 **LLM Context:** [LLM-postgresql-queue.md](../../LLM/LLM-postgresql-queue.md)
 
+## Table of Contents
+- [Overview](#overview)
+- [Maven Dependency](#maven-dependency)
+- ⚠️ [Security](#security)
+- [PostgreSQL-Specific Configuration](#postgresql-specific-configuration)
+- [Polling Mechanisms](#polling-mechanisms)
+- [Polling Optimization](#polling-optimization)
+- [Table Schema](#table-schema)
+- [Usage](#usage)
+- [Comparison with MongoDB Implementation](#comparison-with-mongodb-implementation)
+
 ## Overview
 
 This module provides `PostgresqlDurableQueues`, a PostgreSQL-backed implementation of the [`DurableQueues`](../foundation/README.md#durablequeues-messaging) interface from the foundation module.

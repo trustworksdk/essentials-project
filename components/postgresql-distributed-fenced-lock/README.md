@@ -4,7 +4,15 @@
 
 PostgreSQL implementation of the `FencedLockManager` for distributed lock coordination.
 
-**LLM-context**: [LLM-postgresql-distributed-fenced-lock.md](../../LLM/LLM-postgresql-distributed-fenced-lock.md)
+**LLM Context:** [LLM-postgresql-distributed-fenced-lock.md](../../LLM/LLM-postgresql-distributed-fenced-lock.md)
+
+## Table of Contents
+- [Overview](#overview)
+- [Maven Dependency](#maven-dependency)
+- ⚠️ [Security](#security)
+- [PostgreSQL-Specific Configuration](#postgresql-specific-configuration)
+- [Usage](#usage)
+- [Comparison with MongoDB Implementation](#comparison-with-mongodb-implementation)
 
 ## Overview
 

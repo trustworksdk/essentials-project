@@ -470,8 +470,8 @@ public class LeaderElection {
 
 | Implementation | Module |
 |---------------|--------|
-| `dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager` | [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fenced-lock.md) |
-| `dk.trustworks.essentials.components.distributed.fencedlock.springdata.mongo.MongoFencedLockManager` | [LLM-springdata-mongo-distributed-fenced-lock.md](./LLM-springdata-mongo-distributed-fenced-lock.md) |
+| `PostgresqlFencedLockManager` | [LLM-postgresql-distributed-fenced-lock.md](./LLM-postgresql-distributed-fenced-lock.md) |
+| `MongoFencedLockManager` | [LLM-springdata-mongo-distributed-fenced-lock.md](./LLM-springdata-mongo-distributed-fenced-lock.md) |
 
 ## Inbox/Outbox Patterns
 
@@ -992,135 +992,43 @@ See [README Security](../components/foundation/README.md#security) for full deta
 
 All APIs require `principal` parameter for authorization. Throw `EssentialsSecurityException` if unauthorized.
 
-### DBFencedLockApi
-
-**Interface**: `dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi`
-
-```java
-List<ApiDBFencedLock> getAllLocks(Object principal);
-boolean releaseLock(Object principal, LockName lockName);
-```
-
-### DurableQueuesApi
-
-**Interface**: `dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi`
-
-```java
-Set<QueueName> getQueueNames(Object principal);
-Optional<ApiQueuedMessage> getQueuedMessage(Object principal, QueueEntryId id);
-Optional<ApiQueuedMessage> resurrectDeadLetterMessage(Object principal, QueueEntryId id, Duration delay);
-Optional<ApiQueuedMessage> markAsDeadLetterMessage(Object principal, QueueEntryId id);
-boolean deleteMessage(Object principal, QueueEntryId id);
-List<ApiQueuedMessage> getQueuedMessages(Object principal, QueueName queueName, QueueingSortOrder order, long start, long pageSize);
-```
-
-### SchedulerApi
-
-**Interface**: `dk.trustworks.essentials.components.foundation.scheduler.api.SchedulerApi`
-
-```java
-List<ApiPgCronJob> getPgCronJobs(Object principal, long startIndex, long pageSize);
-long getTotalPgCronJobs(Object principal);
-List<ApiExecutorJob> getExecutorJobs(Object principal, long startIndex, long pageSize);
-```
-
-### PostgresqlQueryStatisticsApi
-
-**Interface**: `dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi`
-
-```java
-List<ApiQueryStatistics> getTopTenSlowestQueries(Object principal);
-```
-
-Requires `pg_stat_statements` extension.
+| API | Key Methods |
+|-----|-------------|
+| `DBFencedLockApi` | `getAllLocks()`, `releaseLock()` |
+| `DurableQueuesApi` | `getQueueNames()`, `getQueuedMessages()`, `resurrectDeadLetterMessage()`, `deleteMessage()` |
+| `SchedulerApi` | `getPgCronJobs()`, `getExecutorJobs()` |
+| `PostgresqlQueryStatisticsApi` | `getTopTenSlowestQueries()` (requires `pg_stat_statements`) |
 
 ## Common Patterns
 
-### Complete Spring Configuration
+### Spring Configuration Summary
 
 ```java
 @Configuration
 public class MessagingConfig {
-    @Bean
-    public DurableQueues durableQueues(Jdbi jdbi, UnitOfWorkFactory<JdbiUnitOfWork> uowFactory) {
-        return PostgresqlDurableQueues.builder()
-            .setJdbi(jdbi)
-            .setUnitOfWorkFactory(uowFactory)
-            .build();
+    @Bean public DurableQueues durableQueues(Jdbi jdbi, UnitOfWorkFactory<JdbiUnitOfWork> uow) {
+        return PostgresqlDurableQueues.builder().setJdbi(jdbi).setUnitOfWorkFactory(uow).build();
     }
-
-    @Bean
-    public FencedLockManager fencedLockManager(Jdbi jdbi, UnitOfWorkFactory<JdbiUnitOfWork> uowFactory) {
-        return PostgresqlFencedLockManager.builder()
-            .setJdbi(jdbi)
-            .setUnitOfWorkFactory(uowFactory)
-            .build();
+    @Bean public FencedLockManager fencedLockManager(Jdbi jdbi, UnitOfWorkFactory<JdbiUnitOfWork> uow) {
+        return PostgresqlFencedLockManager.builder().setJdbi(jdbi).setUnitOfWorkFactory(uow).build();
     }
-
-    @Bean
-    public Inboxes inboxes(DurableQueues durableQueues, FencedLockManager fencedLockManager) {
-        return Inboxes.durableQueueBasedInboxes(durableQueues, fencedLockManager);
+    @Bean public Inboxes inboxes(DurableQueues dq, FencedLockManager flm) {
+        return Inboxes.durableQueueBasedInboxes(dq, flm);
     }
-
-    @Bean
-    public Outboxes outboxes(DurableQueues durableQueues, FencedLockManager fencedLockManager) {
-        return Outboxes.durableQueueBasedOutboxes(durableQueues, fencedLockManager);
+    @Bean public Outboxes outboxes(DurableQueues dq, FencedLockManager flm) {
+        return Outboxes.durableQueueBasedOutboxes(dq, flm);
     }
 }
 ```
 
 ### Event-Driven Microservice Pattern
 
-```java
-@Service
-public class OrderService {
-    private final Inbox kafkaInbox;
-    private final Outbox notificationOutbox;
+1. Create Inbox with `SingleGlobalConsumer` for ordered Kafka events
+2. Create Outbox with `GlobalCompetingConsumers` for notifications
+3. `@KafkaListener` → `inbox.addMessageReceived(command)`
+4. Handler: `unitOfWorkFactory.usingUnitOfWork()` → process → `outbox.sendMessage()`
 
-    @PostConstruct
-    public void setup() {
-        kafkaInbox = inboxes.getOrCreateInbox(
-            InboxConfig.builder()
-                .setInboxName(InboxName.of("OrderService:KafkaEvents"))
-                .setMessageConsumptionMode(MessageConsumptionMode.SingleGlobalConsumer)
-                .setNumberOfParallelMessageConsumers(5)
-                .setRedeliveryPolicy(RedeliveryPolicy.exponentialBackoff()
-                    .setInitialRedeliveryDelay(Duration.ofMillis(100))
-                    .setRedeliveryDelayMultiplier(2.0)
-                    .setMaximumNumberOfRedeliveries(5)
-                    .build())
-                .build(),
-            new PatternMatchingMessageHandler() {
-                @MessageHandler
-                void handle(ProcessOrderCommand cmd) {
-                    handleProcessOrder(cmd);
-                }
-            });
-
-        notificationOutbox = outboxes.getOrCreateOutbox(
-            OutboxConfig.builder()
-                .setOutboxName(OutboxName.of("OrderService:Notifications"))
-                .setMessageConsumptionMode(MessageConsumptionMode.GlobalCompetingConsumers)
-                .setNumberOfParallelMessageConsumers(2)
-                .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofSeconds(1), 3))
-                .build(),
-            message -> kafkaTemplate.send("notifications", message.getPayload()));
-    }
-
-    @KafkaListener(topics = "order-events")
-    public void handleKafkaEvent(OrderEvent event) {
-        kafkaInbox.addMessageReceived(toCommand(event));
-    }
-
-    private void handleProcessOrder(ProcessOrderCommand cmd) {
-        unitOfWorkFactory.usingUnitOfWork(() -> {
-            Order order = processOrder(cmd);
-            orderRepository.save(order);
-            notificationOutbox.sendMessage(new OrderProcessedNotification(order.getId()));
-        });
-    }
-}
-```
+See [README](../components/foundation/README.md) for full examples.
 
 ## See Also
 
