@@ -20,9 +20,10 @@ import dk.trustworks.essentials.reactive.Handler;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.reflection.Methods;
 import org.slf4j.*;
+import org.slf4j.event.Level;
 
 import java.lang.reflect.*;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
@@ -117,22 +118,40 @@ public class AnnotatedCommandHandler implements CommandHandler {
         try {
             return handlerMethod.invoke(invokeCommandHandlerMethodsOn, command);
         } catch (InvocationTargetException e) {
-            log.error(msg("Failed to handle command of type {} using @{} annotated method {} in '{}'",
-                          commandType.getName(),
-                          Handler.class.getSimpleName(),
-                          handlerMethod.toString(),
-                          invokeCommandHandlerMethodsOn.toString()),
-                      e);
+            logException(e, commandType, handlerMethod);
             return Exceptions.sneakyThrow(e.getTargetException());
         } catch (Exception e) {
-            log.error(msg("Failed to handle command of type {} using @{} annotated method {} in '{}'",
-                          commandType.getName(),
-                          Handler.class.getSimpleName(),
-                          handlerMethod.toString(),
-                          invokeCommandHandlerMethodsOn.toString()),
-                      e);
+            logException(e, commandType, handlerMethod);
             return Exceptions.sneakyThrow(e);
         }
+    }
+
+    private void logException(Exception exception, Class<?> commandType, Method handlerMethod) {
+        getExceptionLogLevel(exception).ifPresent(level ->
+                log.atLevel(level)
+                   .setCause(exception)
+                   .log(msg("Failed to handle command of type {} using @{} annotated method {} in '{}'",
+                            commandType.getName(),
+                            Handler.class.getSimpleName(),
+                            handlerMethod.toString(),
+                            invokeCommandHandlerMethodsOn.toString()))
+        );
+    }
+
+    /**
+     * Determines the log level for exception logging in the {@link #handle(Object)} method.
+     * Override this method to customize exception logging behavior.
+     * <p>
+     * Return {@link Optional#empty()} to suppress logging entirely.
+     * Return an {@link Optional} containing a {@link Level} to log at that level.
+     * <p>
+     * Default implementation returns {@link Level#ERROR}.
+     *
+     * @param exception the exception that was caught during command handling
+     * @return an Optional containing the log level, or empty to suppress logging
+     */
+    protected Optional<Level> getExceptionLogLevel(Exception exception) {
+        return Optional.of(Level.ERROR);
     }
 
     private Method getHandlerMethod(Class<?> commandType) {
