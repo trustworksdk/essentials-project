@@ -6,6 +6,16 @@ MongoDB implementation of the `DurableQueues` interface using Spring Data MongoD
 
 **LLM Context:** [LLM-springdata-mongo-queue.md](../../LLM/LLM-springdata-mongo-queue.md)
 
+## Table of Contents
+- [Overview](#overview)
+- [Maven Dependency](#maven-dependency)
+- ⚠️ [Security](#security)
+- [MongoDB-Specific Configuration](#mongodb-specific-configuration)
+- [Polling Optimization](#polling-optimization)
+- [Collection Schema](#collection-schema)
+- [Usage](#usage)
+- [Comparison with PostgreSQL Implementation](#comparison-with-postgresql-implementation)
+
 ## Overview
 
 This module provides `MongoDurableQueues`, a MongoDB-backed implementation of the [`DurableQueues`](../foundation/README.md#durablequeues-messaging) interface from the foundation module.

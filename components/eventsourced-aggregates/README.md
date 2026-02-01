@@ -2,7 +2,7 @@
 
 > **NOTE:** This library is WORK-IN-PROGRESS
 
-**LLM-Context:** [LLM-eventsourced-aggregates.md](../../LLM/LLM-eventsourced-aggregates.md)
+**LLM Context:** [LLM-eventsourced-aggregates.md](../../LLM/LLM-eventsourced-aggregates.md)
 
 This library provides multiple flavors of Event-Sourced Aggregates designed to work with the [`EventStore`](../postgresql-event-store/README.md).
 

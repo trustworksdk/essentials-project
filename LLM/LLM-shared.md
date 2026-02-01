@@ -35,45 +35,6 @@
 
 **Dependencies from other modules**: None - this is the foundational module that other modules depend on.
 
-## Feature Overview
-
-Base package: `dk.trustworks.essentials.shared`
-
-| Feature | Package                       | Purpose |
-|---------|-------------------------------|---------|
-| **FailFast** | .                             | Enhanced null/validation checks |
-| **Exceptions** | .                             | Root cause analysis, sneaky throw |
-| **Lifecycle** | .                             | Start/stop interface |
-| **MessageFormatter** | .                             | SLF4J-style message formatting |
-| **Tuples** | `functional.tuple`            | Immutable tuples (Empty, Single, Pair, Triple, Quad) |
-| **Either** | `functional.tuple`            | Choice type - one of two values |
-| **Result** | `functional.tuple`            | Either specialization with success/error semantics |
-| **ComparableTuple** | `functional.tuple.comparable` | Comparable tuples |
-| **Checked*** | `functional`                  | Bridge checked exceptions to functional interfaces |
-| **TripleFunction** | `functional`                  | Three-argument function |
-| **QuadFunction** | `functional`                  | Four-argument function |
-| **Lists** | `collections`                 | Indexed stream, first/last, partition |
-| **Streams** | `collections`                 | Zip streams |
-| **Reflector** | `reflection`                  | High-performance caching reflection API |
-| **Reflection utilities** | `reflection`                  | Accessibles, BoxedTypes, Classes, Constructors, Fields, Interfaces, Methods, Parameters |
-| **PatternMatchingMethodInvoker** | `reflection.invocation`       | Reflective method dispatch by type |
-| **FunctionalInterfaceLoggingNameResolver** | `reflection`                  | Extract readable names from lambdas |
-| **StopWatch** | `time`                        | Time operations |
-| **MeasurementRecorder** | `measurement`                 | Pluggable measurement recording |
-| **MeasurementTaker** | `measurement`                 | Facade for multiple recorders |
-| **If** | `logic`                       | Expression-based if/else |
-| **InterceptorChain** | `interceptor`                 | Chain-of-responsibility pattern |
-| **MessageTemplate** | `messages`                    | Structured messages with typed parameters |
-| **EssentialsSecurityProvider** | `security`                    | Role-based security for Admin UI APIs |
-| **EssentialsSecurityValidator** | `security`                    | Security validation utilities |
-| **EssentialsSecurityRoles** | `security`                    | Predefined security roles |
-| **EssentialsAuthenticatedUser** | `security`                    | Authenticated user interface |
-| **ThreadFactoryBuilder** | `concurrent`                  | Named, daemon-aware thread factories |
-| **GenericType** | `types`                       | Capture generic type information |
-| **Network** | `network`                     | Network utilities (hostname) |
-
----
-
 ## Core Utilities
 
 ### FailFast
@@ -393,72 +354,28 @@ All tuple implementations implement `Comparable` for sorted collections.
 
 ### Checked Functional Interfaces
 
-**Base package**: `dk.trustworks.essentials.shared.functional`
+**Package**: `dk.trustworks.essentials.shared.functional`
 
-Bridge checked exceptions to standard Java functional interfaces.
+Bridge checked exceptions to standard Java functional interfaces. Each has a `safe()` method that wraps checked exceptions in `CheckedExceptionRethrownException` (unchecked).
+
+| Interface | Wraps/Returns   | Static Method                                                |
+|-----------|-----------------|--------------------------------------------------------------|
+| `CheckedRunnable` | `Runnable`      | `safe(CheckedRunnable)`, `safe(String ctx, CheckedRunnable)` |
+| `CheckedSupplier<R>` | `Supplier<R>`   | `safe(CheckedSupplier<R>)`, `safe(String ctx, CheckedSupplier<R>)` |
+| `CheckedConsumer<T>` | `Consumer<T>`   | `safe(CheckedConsumer<T>)`, `safe(String ctx, CheckedConsumer<T>)` |
+| `CheckedFunction<T,R>` | `Function<T,R>` | `safe(CheckedFunction)`, `safe(String ctx, CheckedFunction)` |
+| `CheckedBiFunction<T,U,R>` | `BiFunction`    | `safe(CheckedBiFunction)`, `safe(String ctx, CheckedBiFunction)` |
+| `CheckedTripleFunction` | `TripleFunction`  | `safe(CheckedTripleFunction)`, `safe(String ctx, CheckedTripleFunction)` |
+| `CheckedQuadFunction` | `QuadFunction`    | `safe(CheckedQuadFunction)`, `safe(String ctx, CheckedQuadFunction)` |
 
 ```java
-// Interfaces
-@FunctionalInterface CheckedRunnable {
-    void run() throws Exception;
-    static Runnable safe(CheckedRunnable r)
-}
-
-@FunctionalInterface CheckedSupplier<R> {
-    R get() throws Exception;
-    static <R> Supplier<R> safe(CheckedSupplier<R> s)
-}
-
-@FunctionalInterface CheckedConsumer<T> {
-    void accept(T t) throws Exception;
-    static <T> Consumer<T> safe(CheckedConsumer<T> c)
-}
-
-@FunctionalInterface CheckedFunction<T, R> {
-    R apply(T t) throws Exception;
-    static <T, R> Function<T, R> safe(CheckedFunction<T, R> f)
-    static <T, R> Function<T, R> safe(String contextMsg, CheckedFunction<T, R> f)
-}
-
-@FunctionalInterface CheckedBiFunction<T, U, R> {
-    R apply(T t, U u) throws Exception;
-    static <T, U, R> BiFunction<T, U, R> safe(CheckedBiFunction<T, U, R> f)
-}
-
-// Also: CheckedTripleFunction, CheckedQuadFunction
-
 // Usage
-import dk.trustworks.essentials.shared.functional.CheckedFunction;
-
 items.stream()
      .map(CheckedFunction.safe(item -> Files.readString(Path.of(item))))
-     .collect(Collectors.toList());
-
-// With context
-items.stream()
-     .map(CheckedFunction.safe("Reading file", item -> Files.readString(Path.of(item))))
-     .collect(Collectors.toList());
+     .toList();
 ```
 
-All `safe()` methods wrap checked exceptions in `dk.trustworks.essentials.shared.functional.CheckedExceptionRethrownException` (unchecked). `RuntimeException`'s are propagated unchanged.
-
-### Higher-Arity Functions
-
-**Base package**: `dk.trustworks.essentials.shared.functional`
-
-```java
-@FunctionalInterface
-public interface TripleFunction<T1, T2, T3, R> {
-    R apply(T1 t1, T2 t2, T3 t3);
-    default <V> TripleFunction<T1, T2, T3, V> andThen(Function<? super R, ? extends V> after);
-}
-
-@FunctionalInterface
-public interface QuadFunction<T1, T2, T3, T4, R> {
-    R apply(T1 t1, T2 t2, T3 t3, T4 t4);
-    default <V> QuadFunction<T1, T2, T3, T4, V> andThen(Function<? super R, ? extends V> after);
-}
-```
+Also provides `TripleFunction<T1,T2,T3,R>` and `QuadFunction<T1,T2,T3,T4,R>` for higher-arity functions.
 
 ---
 
@@ -576,68 +493,18 @@ Optional<Field> idField = reflector.findFieldByAnnotation(Id.class);
 
 ### Reflection Utilities
 
-Low-level utilities in `dk.trustworks.essentials.shared.reflection`.
+**Package**: `dk.trustworks.essentials.shared.reflection`
 
-#### Accessibles
-
-```java
-static <T extends AccessibleObject> T accessible(T object)
-static boolean isAccessible(AccessibleObject object)
-```
-
-#### BoxedTypes
-
-```java
-static boolean isPrimitiveType(Class<?> type)   // int.class → true
-static boolean isBoxedType(Class<?> type)       // Integer.class → true
-static Class<?> boxedType(Class<?> type)        // int.class → Integer.class
-```
-
-#### Classes
-
-```java
-static Class<?> forName(String fqcn)
-static Class<?> forName(String fqcn, ClassLoader loader)
-static boolean doesClassExistOnClasspath(String fqcn)
-static boolean doesClassExistOnClasspath(String fqcn, ClassLoader loader)
-static List<Class<?>> superClasses(Class<?> type)  // Excludes Object
-static int compareTypeSpecificity(Class<?> left, Class<?> right)
-// Returns: -1 if left less specific, 0 if equal, 1 if left more specific
-```
-
-#### Constructors
-
-```java
-static List<Constructor<?>> constructors(Class<?> type)
-```
-
-#### Fields
-
-```java
-static Set<Field> fields(Class<?> type)
-static Optional<Field> findField(Set<Field> fields, String name, Class<?> type)
-```
-
-#### Interfaces
-
-```java
-static Set<Class<?>> interfaces(Class<?> type)
-```
-
-#### Methods
-
-```java
-static Set<Method> methods(Class<?> type)
-static Optional<Method> findMatchingMethod(Set<Method> methods, String name, Class<?> returnType, Class<?>... paramTypes)
-```
-
-#### Parameters
-
-```java
-static Class<?>[] argumentTypes(Object... arguments)
-static boolean parameterTypesMatches(Class<?>[] actual, Class<?>[] declared, boolean exactMatch)
-static final class NULL_ARGUMENT_TYPE {}
-```
+| Class | Key Methods                                                                                           |
+|-------|-------------------------------------------------------------------------------------------------------|
+| `Accessibles` | `T accessible(T)`, `isAccessible(AccessibleObject)`                                                   |
+| `BoxedTypes` | `isPrimitiveType(Class)`, `isBoxedType(Class)`, `Class boxedType(Class)`                              |
+| `Classes` | `Class forName(String)`, `List<Class> superClasses(Class)`, `intcompareTypeSpecificity(Class, Class)` |
+| `Constructors` | `List<Constructor> constructors(Class)`                                                               |
+| `Fields` | `List<Field> fields(Class)`, `findField(Set, String, Class)`                                          |
+| `Interfaces` | `List<Class> interfaces(Class)`                                                                       |
+| `Methods` | `List<Method> methods(Class)`, `findMatchingMethod(Set, String, Class, Class...)`                     |
+| `Parameters` | `List<Class> argumentTypes(Object...)`, `boolean parameterTypesMatches(Class[], Class[], boolean)`    |
 
 ### PatternMatchingMethodInvoker
 
@@ -796,112 +663,39 @@ logger.info("Loaded {} items in {}", result.result.size(), result.duration);
 
 ⚠️ StopWatch instances are NOT thread-safe. Use separate instances per thread.
 
-### MeasurementRecorder
+### MeasurementRecorder & MeasurementTaker
 
-**Base package**: `dk.trustworks.essentials.shared.measurement`
+**Package**: `dk.trustworks.essentials.shared.measurement`
+
+Pluggable interface for recording measurements - integrate with logging, Micrometer, or custom metrics systems.
 
 ```java
-import dk.trustworks.essentials.shared.measurement.MeasurementRecorder;
-import dk.trustworks.essentials.shared.measurement.MeasurementContext;
-
-// Core interface
+// MeasurementRecorder - core interface
 public interface MeasurementRecorder {
     void record(MeasurementContext context, Duration duration);
 }
 
-// MeasurementContext
-class MeasurementContext {
-    String getMetricName()
-    String getDescription()
-    Map<String, String> getTags()
+// Built-in: LoggingMeasurementRecorder, MicrometerMeasurementRecorder
 
-    static Builder builder(String metricName)
-}
-
-class MeasurementContext.Builder {
-    Builder description(String description)
-    Builder tag(String key, String value)
-    Builder tag(String key, CharSequence value)
-    Builder tag(String key, int value)
-    Builder optionalTag(String key, String value)
-    MeasurementContext build()
-}
-
-// Built-in implementations
-class LoggingMeasurementRecorder implements MeasurementRecorder {
-    LoggingMeasurementRecorder(Logger logger, LogThresholds thresholds)
-}
-
-class MicrometerMeasurementRecorder implements MeasurementRecorder {
-    MicrometerMeasurementRecorder(MeterRegistry meterRegistry)
-}
-
-// LogThresholds
-class LogThresholds {
-    LogThresholds(long debug, long info, long warn, long error)
-    static LogThresholds defaultThresholds()  // (25, 100, 500, 2000) ms
-}
-
-// Usage
+// MeasurementContext - metric metadata
 var context = MeasurementContext.builder("processing.time")
     .description("Time to process data")
     .tag("type", "STANDARD")
-    .tag("id", id.toString())
     .build();
 
-measurementRecorder.record(context, duration);
-```
-
-### MeasurementTaker
-
-**Class**: `dk.trustworks.essentials.shared.measurement.MeasurementTaker`
-
-Facade for recording with multiple `MeasurementRecorder`s.
-
-```java
-import dk.trustworks.essentials.shared.measurement.MeasurementTaker;
-import dk.trustworks.essentials.shared.measurement.MeasurementContext;
-
-// Builder
-static Builder builder()
-
-class Builder {
-    Builder addRecorder(MeasurementRecorder recorder)
-    Builder withOptionalMicrometerMeasurementRecorder(Optional<MeterRegistry> registry)
-    MeasurementTaker build()
-}
-
-// Recording
-<T> T record(MeasurementContext context, Supplier<T> block)
-void recordTime(MeasurementContext context, Duration elapsed)
+// MeasurementTaker - facade for multiple recorders
+var taker = MeasurementTaker.builder()
+    .addRecorder(loggingRecorder)
+    .withOptionalMicrometerMeasurementRecorder(Optional.of(meterRegistry))
+    .build();
 
 // Fluent API
-FluentMeasurementContext context(String metricName)
-
-class FluentMeasurementContext {
-    FluentMeasurementContext description(String description)
-    FluentMeasurementContext tag(String key, String/CharSequence/int value)
-    FluentMeasurementContext optionalTag(String key, String value)
-    <T> T record(Supplier<T> block)
-    FluentMeasurementContext record(Duration recordedDuration)
-}
-
-// Usage - Fluent
-return measurementTaker.context("processing.time")
-                        .description("Time to process")
-                        .tag("type", type)
-                        .record(chain::proceed);
-
-// Usage - Direct
-measurementTaker.recordTime(
-    MeasurementContext.builder("invocation.time")
-                      .description("Method invocation")
-                      .tag("class", className)
-                      .tag("method", methodName)
-                      .build(),
-    duration
-);
+return taker.context("processing.time")
+    .tag("type", type)
+    .record(chain::proceed);
 ```
+
+**LogThresholds**: Default thresholds (debug=25ms, info=100ms, warn=500ms, error=2000ms).
 
 ---
 
@@ -1046,49 +840,14 @@ ExecutorService executor = Executors.newScheduledThreadPool(10,
 
 ### MessageTemplate
 
-**Base package**: `dk.trustworks.essentials.shared.messages`
+**Package**: `dk.trustworks.essentials.shared.messages`
 
-Type-safe structured messages with hierarchical keys.
+Type-safe structured messages with hierarchical keys. Templates: `MessageTemplate0` through `MessageTemplate4` for 0-4 typed parameters.
 
 ```java
-import dk.trustworks.essentials.shared.messages.MessageTemplates;
-import dk.trustworks.essentials.shared.messages.MessageTemplate0;
-import dk.trustworks.essentials.shared.messages.MessageTemplate2;
-import dk.trustworks.essentials.shared.messages.Message;
-
-// Base interface
-public interface MessageTemplate {
-    String getKey()
-    String getDefaultMessage()
-}
-
-// Typed templates
-MessageTemplate0, MessageTemplate1<P1>, MessageTemplate2<P1,P2>,
-MessageTemplate3<P1,P2,P3>, MessageTemplate4<P1,P2,P3,P4>
-
-// Factory
-class MessageTemplates {
-    static MessageTemplate0 root(String key)
-}
-
-// MessageTemplate0 methods
-MessageTemplate0 subKey(String key)
-<P1> MessageTemplate1<P1> key1(String key, String defaultMessage)
-<P1,P2> MessageTemplate2<P1,P2> key2(String key, String defaultMessage)
-<P1,P2,P3> MessageTemplate3<P1,P2,P3> key3(String key, String defaultMessage)
-<P1,P2,P3,P4> MessageTemplate4<P1,P2,P3,P4> key4(String key, String defaultMessage)
-
-// Message
-class Message {
-    String getKey()
-    String getMessage()
-    Object[] getParameters()
-}
-
-// Usage
+// Define templates
 MessageTemplate0 ROOT = MessageTemplates.root("ESSENTIALS");
 MessageTemplate0 VALIDATION = ROOT.subKey("VALIDATION");
-
 MessageTemplate2<BigDecimal, BigDecimal> AMOUNT_TOO_HIGH =
     VALIDATION.key2("AMOUNT_TOO_HIGH", "Amount {0} is higher than {1}");
 
@@ -1105,133 +864,41 @@ throw new ValidationException(AMOUNT_TOO_HIGH.create(amount, maxAmount));
 
 ## Security
 
-**Base package**: `dk.trustworks.essentials.shared.security`
+**Package**: `dk.trustworks.essentials.shared.security`
 
-⚠️ **Purpose**: Role-based access control for **Essentials Admin UI only** - not for business application code.
+⚠️ **Purpose**: Role-based access control for **Essentials Admin UI only** - not for business application code. Secures DurableQueuesApi, FencedLockApi, SubscriptionApi, etc.
 
-Secures administrative APIs: DurableQueuesApi, FencedLockApi, SubscriptionApi, etc.
+### Core Interfaces
 
-### EssentialsSecurityProvider
+| Type | Purpose |
+|------|---------|
+| `EssentialsSecurityProvider` | Framework-independent role validation |
+| `EssentialsAuthenticatedUser` | Authenticated user with role checks |
 
-Framework-independent role-based security abstraction.
-
-```java
-public interface EssentialsSecurityProvider {
-    boolean isAllowed(Object principal, String requiredRole)
-    Optional<String> getPrincipalName(Object principal)
-}
-
-// Built-in implementations
-class AllAccessSecurityProvider implements EssentialsSecurityProvider
-class NoAccessSecurityProvider implements EssentialsSecurityProvider
-```
+**Built-in implementations**: `AllAccessSecurityProvider`, `NoAccessSecurityProvider`, `AllAccessAuthenticatedUser`, `NoAccessAuthenticatedUser`
 
 ### EssentialsSecurityRoles
 
-```java
-public enum EssentialsSecurityRoles {
-    ESSENTIALS_ADMIN("essentials_admin"),
-    LOCK_READER("essentials_lock_reader"),
-    LOCK_WRITER("essentials_lock_writer"),
-    QUEUE_READER("essentials_queue_reader"),
-    QUEUE_PAYLOAD_READER("essentials_queue_payload_reader"),
-    QUEUE_WRITER("essentials_queue_writer"),
-    SUBSCRIPTION_READER("essentials_subscription_reader"),
-    SUBSCRIPTION_WRITER("essentials_subscription_writer"),
-    POSTGRESQL_STATS_READER("essentials_postgresql_stats_reader"),
-    SCHEDULER_READER("essentials_scheduler_reader");
-
-    String getRoleName()
-}
-```
+| Role | Description |
+|------|-------------|
+| `ESSENTIALS_ADMIN` | Full access to all APIs |
+| `LOCK_READER`, `LOCK_WRITER` | FencedLock read/write |
+| `QUEUE_READER`, `QUEUE_WRITER`, `QUEUE_PAYLOAD_READER` | DurableQueues operations |
+| `SUBSCRIPTION_READER`, `SUBSCRIPTION_WRITER` | Subscription management |
+| `SCHEDULER_READER`, `POSTGRESQL_STATS_READER` | Scheduler and stats |
 
 ### EssentialsSecurityValidator
 
-**Class**: `dk.trustworks.essentials.shared.security.EssentialsSecurityValidator`
-
 ```java
-import dk.trustworks.essentials.shared.security.EssentialsSecurityValidator;
-import dk.trustworks.essentials.shared.security.EssentialsSecurityRoles;
-
-// Validation - throws EssentialsSecurityException if check fails
-static void validateHasEssentialsSecurityRole(
-    EssentialsSecurityProvider provider,
-    Object principal,
-    EssentialsSecurityRoles role
-)
-
-static void validateHasAnyEssentialsSecurityRoles(
-    EssentialsSecurityProvider provider,
-    Object principal,
-    EssentialsSecurityRoles... roles  // At least ONE required
-)
-
-static void validateHasEssentialsSecurityRoles(
-    EssentialsSecurityProvider provider,
-    Object principal,
-    EssentialsSecurityRoles... roles  // ALL required
-)
-
-// Check without throwing
-static boolean hasEssentialsSecurityRole(
-    EssentialsSecurityProvider provider,
-    Object principal,
-    EssentialsSecurityRoles role
-)
-
-static boolean hasAnyEssentialsSecurityRoles(
-    EssentialsSecurityProvider provider,
-    Object principal,
-    EssentialsSecurityRoles... roles
-)
-
-// Usage (from component APIs)
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidator.*;
 import static dk.trustworks.essentials.shared.security.EssentialsSecurityRoles.*;
 
-validateHasAnyEssentialsSecurityRoles(securityProvider, principal,
-                                      QUEUE_READER, ESSENTIALS_ADMIN);
-```
+// Throws EssentialsSecurityException if unauthorized
+validateHasEssentialsSecurityRole(provider, principal, QUEUE_READER);
+validateHasAnyEssentialsSecurityRoles(provider, principal, QUEUE_READER, ESSENTIALS_ADMIN);
 
-### EssentialsSecurityException
-
-**Class**: `dk.trustworks.essentials.shared.security.EssentialsSecurityException`
-
-```java
-public class EssentialsSecurityException extends RuntimeException {
-    EssentialsSecurityException(String message)
-}
-```
-
-### EssentialsAuthenticatedUser
-
-**Interface**: `dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser`
-
-```java
-public interface EssentialsAuthenticatedUser {
-    Object getPrincipal()
-    boolean isAuthenticated()
-    boolean hasRole(String role)
-    Optional<String> getPrincipalName()
-
-    // Convenience role checks
-    boolean hasAdminRole()
-    boolean hasLockReaderRole()
-    boolean hasLockWriterRole()
-    boolean hasQueueReaderRole()
-    boolean hasQueuePayloadReaderRole()
-    boolean hasQueueWriterRole()
-    boolean hasSubscriptionReaderRole()
-    boolean hasSubscriptionWriterRole()
-    boolean hasSchedulerReaderRole()
-    boolean hasPostgresqlStatsReaderRole()
-
-    void logout()
-}
-
-// Built-in implementations
-class AllAccessAuthenticatedUser implements EssentialsAuthenticatedUser
-class NoAccessAuthenticatedUser implements EssentialsAuthenticatedUser
+// Check without throwing
+boolean allowed = hasEssentialsSecurityRole(provider, principal, QUEUE_READER);
 ```
 
 ---

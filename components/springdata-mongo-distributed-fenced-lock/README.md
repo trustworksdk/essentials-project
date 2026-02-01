@@ -4,7 +4,15 @@
 
 MongoDB implementation of the `FencedLockManager` using Spring Data MongoDB for distributed lock coordination.
 
-**LLM-context:** [LLM-springdata-mongo-distributed-fenced-lock.md](../../LLM/LLM-springdata-mongo-distributed-fenced-lock.md)
+**LLM Context:** [LLM-springdata-mongo-distributed-fenced-lock.md](../../LLM/LLM-springdata-mongo-distributed-fenced-lock.md)
+
+## Table of Contents
+- [Overview](#overview)
+- [Maven Dependency](#maven-dependency)
+- ⚠️ [Security](#security)
+- [MongoDB-Specific Configuration](#mongodb-specific-configuration)
+- [Usage](#usage)
+- [Comparison with PostgreSQL Implementation](#comparison-with-postgresql-implementation)
 
 ## Overview
 

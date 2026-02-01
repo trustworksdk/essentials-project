@@ -2,7 +2,7 @@
 
 > **NOTE:** This library is WORK-IN-PROGRESS
 
-**LLM-Context:** [LLM-kotlin-eventsourcing.md](../../LLM/LLM-kotlin-eventsourcing.md)
+**LLM Context:** [LLM-kotlin-eventsourcing.md](../../LLM/LLM-kotlin-eventsourcing.md)
 
 This library provides an **experimental** Kotlin-focused `Decider`/`Evolver` approach to event sourcing, designed to integrate with the [`EventStore`](../postgresql-event-store/README.md) and [`CommandBus`](../../reactive/README.md#commandbus).
 
