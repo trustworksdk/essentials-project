@@ -1062,6 +1062,29 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     @Override
+    public boolean markAsDeadLetterMessageDirect(MarkAsDeadLetterMessageDirect operation) {
+        requireNonNull(operation, "You must provide a MarkAsDeadLetterMessageDirect instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var rowsUpdated = unitOfWorkFactory.getRequiredUnitOfWork().handle()
+                                                           .createUpdate(durableQueuesSql.getMarkAsDeadLetterMessageDirectSql())
+                                                           .bind("lastDeliveryError", operation.getCauseForBeingMarkedAsDeadLetter())
+                                                           .bind("id", operation.queueEntryId)
+                                                           .execute();
+                                                   if (rowsUpdated > 0) {
+                                                       log.debug("Marked message with id '{}' as Dead Letter Message (direct, no return)", operation.queueEntryId);
+                                                       return true;
+                                                   } else {
+                                                       log.error("Failed to Mark message with id '{}' as Dead Letter Message (direct)", operation.queueEntryId);
+                                                       return false;
+                                                   }
+                                               }).proceed();
+    }
+
+    @Override
     public Optional<QueuedMessage> resurrectDeadLetterMessage(ResurrectDeadLetterMessage operation) {
         requireNonNull(operation, "You must provide a ResurrectDeadLetterMessage instance");
         operation.validate();
@@ -1175,7 +1198,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                        log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
                                                                          + "while deserializing message with id '{}'",
                                                                  operation.queueName, e.queueEntryId.get(), e);
-                                                       markAsDeadLetterMessage(e.queueEntryId.get(), e);
+                                                       // Use markAsDeadLetterMessageDirect to avoid deserializing the message again
+                                                       markAsDeadLetterMessageDirect(e.queueEntryId.get(), e);
                                                        return Optional.<QueuedMessage>empty();
                                                    }
                                                }).proceed();
@@ -1502,51 +1526,52 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
                     var                 excluded = excludeKeysPerQueue.getOrDefault(queueName, Collections.emptySet());
                     List<QueuedMessage> messagesForQueue;
+                    MessageMappingResult mappingResult;
 
-                    try {
-                        if (useOrderedUnorderedQuery) {
-                            var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
-                            var orderedQ = uow.handle().createQuery(orderedSql)
-                                              .bind("queueName", queueName)
-                                              .bind("now", now)
-                                              .bind("limit", availableWorkerSlotsForThisQueue);
-                            if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
+                    if (useOrderedUnorderedQuery) {
+                        var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
+                        var orderedQ = uow.handle().createQuery(orderedSql)
+                                          .bind("queueName", queueName)
+                                          .bind("now", now)
+                                          .bind("limit", availableWorkerSlotsForThisQueue);
+                        if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
 
-                            messagesForQueue = orderedQ.map(queuedMessageMapper).list();
-                            if (messagesForQueue.isEmpty()) {
-                                var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
-                                var unorderedQ = uow.handle().createQuery(unorderedSql)
-                                                    .bind("queueName", queueName)
-                                                    .bind("now", now)
-                                                    .bind("limit", availableWorkerSlotsForThisQueue);
-                                messagesForQueue = unorderedQ.map(queuedMessageMapper).list();
-                            }
-                        } else {
-                            var sql = durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excluded);
-                            var query = uow.handle().createQuery(sql)
-                                           .bind("queueName", queueName)
-                                           .bind("now", now)
-                                           .bind("limit", availableWorkerSlotsForThisQueue);
-                            if (!excluded.isEmpty()) query.bindList("excludedKeys", new ArrayList<>(excluded));
-                            messagesForQueue = query.map(queuedMessageMapper).list();
-                        }
+                        mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
+                        messagesForQueue = mappingResult.successfulMessages();
+                        handleFailedMappings(queueName, mappingResult);
 
-                        log.debug("[{}] Batch fetched {} messages with {} slots available",
-                                  queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
                         if (messagesForQueue.isEmpty()) {
-                            optimizer.queuePollingReturnedNoMessages();
-                            log.trace("[{}] No messages fetched for this queue", queueName);
-                        } else {
-                            optimizer.queuePollingReturnedMessages(messagesForQueue);
-                            log.trace("[{}] Fetched {} messages for this queue", queueName, messagesForQueue.size());
+                            var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
+                            var unorderedQ = uow.handle().createQuery(unorderedSql)
+                                                .bind("queueName", queueName)
+                                                .bind("now", now)
+                                                .bind("limit", availableWorkerSlotsForThisQueue);
+                            mappingResult = mapQueryResultsWithExceptionHandling(unorderedQ);
+                            messagesForQueue = mappingResult.successfulMessages();
+                            handleFailedMappings(queueName, mappingResult);
                         }
-                        allMessages.addAll(messagesForQueue);
-
-                    } catch (DurableQueueDeserializationException e) {
-                        log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
-                                          + "while deserializing message with id '{}'", queueName, e.queueEntryId.get(), e);
-                        markAsDeadLetterMessage(e.queueEntryId.get(), e);
+                    } else {
+                        var sql = durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excluded);
+                        var query = uow.handle().createQuery(sql)
+                                       .bind("queueName", queueName)
+                                       .bind("now", now)
+                                       .bind("limit", availableWorkerSlotsForThisQueue);
+                        if (!excluded.isEmpty()) query.bindList("excludedKeys", new ArrayList<>(excluded));
+                        mappingResult = mapQueryResultsWithExceptionHandling(query);
+                        messagesForQueue = mappingResult.successfulMessages();
+                        handleFailedMappings(queueName, mappingResult);
                     }
+
+                    log.debug("[{}] Batch fetched {} messages with {} slots available",
+                              queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
+                    if (messagesForQueue.isEmpty()) {
+                        optimizer.queuePollingReturnedNoMessages();
+                        log.trace("[{}] No messages fetched for this queue", queueName);
+                    } else {
+                        optimizer.queuePollingReturnedMessages(messagesForQueue);
+                        log.trace("[{}] Fetched {} messages for this queue", queueName, messagesForQueue.size());
+                    }
+                    allMessages.addAll(messagesForQueue);
                 }
 
                 log.debug("Batch fetched {} messages for {} queues: {}",
@@ -1701,6 +1726,37 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         successfulMessages.addAll(allResults.stream().filter(Objects::nonNull).toList());
 
         return new MessageMappingResult(successfulMessages, failedMappings);
+    }
+
+    /**
+     * Handles failed message mappings by logging and marking them as dead letter messages.
+     * Uses a direct SQL update to avoid re-deserializing the payload (which would fail again).
+     *
+     * @param queueName     the queue name for logging context
+     * @param mappingResult the result containing failed mappings to handle
+     */
+    private void handleFailedMappings(QueueName queueName, MessageMappingResult mappingResult) {
+        for (var failedMapping : mappingResult.failedMappings()) {
+            log.error("[{}] Marking Message as DeadLetterMessage due to deserialization failure for message id '{}'",
+                      queueName, failedMapping.queueEntryId(), failedMapping.mappingException());
+            try {
+                // Use markAsDeadLetterMessageDirect() instead of markAsDeadLetterMessage() because:
+                // 1. markAsDeadLetterMessage() returns the updated message using the regular mapper
+                // 2. The regular mapper would try to deserialize the payload again
+                // 3. This would fail with the same deserialization error, causing an infinite loop
+                var success = markAsDeadLetterMessageDirect(failedMapping.queueEntryId(), failedMapping.mappingException());
+                if (success) {
+                    log.debug("[{}] Successfully marked message '{}' as dead letter due to deserialization failure",
+                              queueName, failedMapping.queueEntryId());
+                } else {
+                    log.warn("[{}] Failed to mark message '{}' as dead letter - message may have been deleted",
+                             queueName, failedMapping.queueEntryId());
+                }
+            } catch (Exception e) {
+                log.error("[{}] Error marking message '{}' as dead letter: {}",
+                          queueName, failedMapping.queueEntryId(), e.getMessage(), e);
+            }
+        }
     }
 
     /**

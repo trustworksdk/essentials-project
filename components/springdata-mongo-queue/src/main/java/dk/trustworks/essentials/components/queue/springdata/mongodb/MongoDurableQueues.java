@@ -923,6 +923,41 @@ public final class MongoDurableQueues implements DurableQueues {
     }
 
     @Override
+    public final boolean markAsDeadLetterMessageDirect(MarkAsDeadLetterMessageDirect operation) {
+        requireNonNull(operation, "You must provide a MarkAsDeadLetterMessageDirect instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   if (transactionalMode == TransactionalMode.FullyTransactional) {
+                                                       unitOfWorkFactory.getRequiredUnitOfWork();
+                                                   }
+
+                                                   var queueEntryId                         = operation.queueEntryId;
+                                                   var findMessageToMarkAsDeadLetterMessage = query(where("id").is(queueEntryId));
+
+                                                   var update = new Update().set("isBeingDelivered", false)
+                                                                            .set("deliveryTimestamp", null)
+                                                                            .set("nextDeliveryTimestamp", null)
+                                                                            .set("isDeadLetterMessage", true)
+                                                                            .set("lastDeliveryError", operation.getCauseForBeingMarkedAsDeadLetter());
+                                                   // Use updateFirst instead of findAndModify to avoid returning/deserializing the document
+                                                   var updateResult = mongoTemplate.updateFirst(findMessageToMarkAsDeadLetterMessage,
+                                                                                                update,
+                                                                                                DurableQueuedMessage.class,
+                                                                                                this.sharedQueueCollectionName);
+                                                   if (updateResult.getModifiedCount() > 0) {
+                                                       log.debug("Marked message with id '{}' as Dead Letter Message (direct, no return)", queueEntryId);
+                                                       return true;
+                                                   } else {
+                                                       log.error("Failed to Mark message with id '{}' as Dead Letter Message (direct)", queueEntryId);
+                                                       return false;
+                                                   }
+                                               }).proceed();
+    }
+
+    @Override
     public final Optional<QueuedMessage> resurrectDeadLetterMessage(ResurrectDeadLetterMessage operation) {
         requireNonNull(operation, "You must provide a ResurrectDeadLetterMessage instance");
         operation.validate();
@@ -1139,14 +1174,16 @@ public final class MongoDurableQueues implements DurableQueues {
                                                                                                  .build());
             session.startTransaction();
             try {
-                markAsDeadLetterMessage(e.queueEntryId.get(), e);
+                // Use markAsDeadLetterMessageDirect to avoid deserializing the message again
+                markAsDeadLetterMessageDirect(e.queueEntryId.get(), e);
                 session.commitTransaction();
             } catch (RuntimeException ex) {
                 session.abortTransaction();
                 Exceptions.sneakyThrow(ex);
             }
         } else {
-            markAsDeadLetterMessage(e.queueEntryId.get(), e);
+            // Use markAsDeadLetterMessageDirect to avoid deserializing the message again
+            markAsDeadLetterMessageDirect(e.queueEntryId.get(), e);
         }
     }
 

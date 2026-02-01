@@ -29,18 +29,30 @@ public class ProxyJSONSerializer implements JSONSerializer {
     private final JSONSerializer delegate;
     private boolean  corruptJSONDuringDeserializationEnabled = false;
     private Class<?> onlyCorruptForPayloadType;
+    private boolean  persistentCorruption = false;
 
     public ProxyJSONSerializer(JSONSerializer delegate) {
         this.delegate = delegate;
     }
 
     /**
-     * Enable corrupting of JSON during deserialization for a specific payload type
+     * Enable corrupting of JSON during deserialization for a specific payload type.
+     * Corruption is disabled after the first corrupted deserialization attempt.
      * @param payloadType The fully qualified class name that should trigger deserialization failure
      */
     public void enableJSONCorruptionDuringDeserialization(Class<?> payloadType) {
+        enableJSONCorruptionDuringDeserialization(payloadType, false);
+    }
+
+    /**
+     * Enable corrupting of JSON during deserialization for a specific payload type.
+     * @param payloadType The fully qualified class name that should trigger deserialization failure
+     * @param persistent If true, corruption persists across multiple deserialization attempts (simulates permanently missing class)
+     */
+    public void enableJSONCorruptionDuringDeserialization(Class<?> payloadType, boolean persistent) {
         this.corruptJSONDuringDeserializationEnabled = true;
         this.onlyCorruptForPayloadType = payloadType;
+        this.persistentCorruption = persistent;
     }
 
     /**
@@ -49,6 +61,7 @@ public class ProxyJSONSerializer implements JSONSerializer {
     public void disableJSONCorruptionDuringDeserialization() {
         this.corruptJSONDuringDeserializationEnabled = false;
         this.onlyCorruptForPayloadType = null;
+        this.persistentCorruption = false;
     }
 
     @Override
@@ -67,7 +80,9 @@ public class ProxyJSONSerializer implements JSONSerializer {
                 javaType.equals(onlyCorruptForPayloadType.getName())) {
             // Corrupt the JSON by removing a closing brace - this will cause parse errors
             json = json.substring(0, json.length() - 1);
-            disableJSONCorruptionDuringDeserialization();
+            if (!persistentCorruption) {
+                disableJSONCorruptionDuringDeserialization();
+            }
         }
 
         return delegate.deserialize(json, javaType);
@@ -79,7 +94,9 @@ public class ProxyJSONSerializer implements JSONSerializer {
                 javaType.getName().equals(onlyCorruptForPayloadType.getName())) {
             // Corrupt the JSON by removing a closing brace - this will cause parse errors
             json = json.substring(0, json.length() - 1);
-            disableJSONCorruptionDuringDeserialization();
+            if (!persistentCorruption) {
+                disableJSONCorruptionDuringDeserialization();
+            }
         }
 
         return delegate.deserialize(json, javaType);
@@ -93,7 +110,9 @@ public class ProxyJSONSerializer implements JSONSerializer {
             // Corrupt the JSON by removing a closing brace - this will cause parse errors
             jsonStr = jsonStr.substring(0, jsonStr.length() - 1);
             json = jsonStr.getBytes(UTF_8);
-            disableJSONCorruptionDuringDeserialization();
+            if (!persistentCorruption) {
+                disableJSONCorruptionDuringDeserialization();
+            }
         }
 
         return delegate.deserialize(json, javaType);
@@ -107,7 +126,9 @@ public class ProxyJSONSerializer implements JSONSerializer {
             // Corrupt the JSON by removing a closing brace - this will cause parse errors
             jsonStr = jsonStr.substring(0, jsonStr.length() - 1);
             json = jsonStr.getBytes(UTF_8);
-            disableJSONCorruptionDuringDeserialization();
+            if (!persistentCorruption) {
+                disableJSONCorruptionDuringDeserialization();
+            }
         }
 
         return delegate.deserialize(json, javaType);

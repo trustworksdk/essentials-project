@@ -732,6 +732,26 @@ public class DurableQueuesSql {
     }
 
     /**
+     * SQL statement for marking a message as dead letter without returning the row.
+     * This is used when the message has a deserialization error - returning the row
+     * would cause the mapper to try deserializing again, which would fail.
+     *
+     * @return SQL statement for direct dead letter marking without returning the row
+     */
+    public String getMarkAsDeadLetterMessageDirectSql() {
+        return bind("""
+                    UPDATE {:tableName} SET
+                    next_delivery_ts = NULL,
+                    last_delivery_error = :lastDeliveryError,
+                    is_dead_letter_message = TRUE,
+                    is_being_delivered = FALSE,
+                    delivery_ts = NULL
+                    WHERE id = :id AND is_dead_letter_message = FALSE
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
      * SQL statement for getting the resurrect as dead letter message sql.
      *
      * @return SQL statement for getting the resurrect as dead letter message sql

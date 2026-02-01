@@ -815,6 +815,62 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         consumer.cancel();
     }
 
+    @Test
+    void verify_deserialization_failure_in_one_queue_does_not_block_other_queues() {
+        // Given: Two queues - QueueA with a poison message, QueueB with a valid message
+        var queueA = QueueName.of("QueueA");
+        var queueB = QueueName.of("QueueB");
+
+        durableQueues.purgeQueue(queueA);
+        durableQueues.purgeQueue(queueB);
+
+        // Queue a valid message to QueueB FIRST (before enabling corruption)
+        var validMessage = Message.of(new OrderEvent.OrderAccepted(OrderId.random()));
+        var validMsgId = withDurableQueue(() -> durableQueues.queueMessage(queueB, validMessage));
+
+        // Queue a message to QueueA that will fail deserialization PERSISTENTLY
+        // This simulates a permanently missing class (e.g., class was renamed/removed)
+        var poisonMessage = Message.of(new OrderEvent.OrderAdded(OrderId.random(), CustomerId.random(), 12345));
+        jsonSerializerProxy.enableJSONCorruptionDuringDeserialization(OrderEvent.OrderAdded.class, true);
+        var poisonMsgId = withDurableQueue(() -> durableQueues.queueMessage(queueA, poisonMessage));
+
+        try {
+            // When: Start consumers for both queues
+            var queueAHandler = new RecordingQueuedMessageHandler();
+            var queueBHandler = new RecordingQueuedMessageHandler();
+
+            var consumerA = durableQueues.consumeFromQueue(queueA,
+                                                            RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 3),
+                                                            1, queueAHandler);
+            var consumerB = durableQueues.consumeFromQueue(queueB,
+                                                            RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 3),
+                                                            1, queueBHandler);
+
+            // Then: QueueB should receive its message even though QueueA's message failed
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> {
+                          // QueueB's valid message should be processed
+                          assertThat(queueBHandler.messages).hasSize(1);
+                          assertThat(queueBHandler.messages.peek().getPayload()).isInstanceOf(OrderEvent.OrderAccepted.class);
+
+                          // QueueA's poison message should be marked as dead letter
+                          // We can't use getDeadLetterMessage() because it would try to deserialize the payload again
+                          // Instead, verify via queue counts
+                          assertThat(durableQueues.getTotalMessagesQueuedFor(queueA)).isEqualTo(0);
+                          assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueA)).isEqualTo(1);
+                      });
+
+            // QueueA handler should not have received any messages
+            assertThat(queueAHandler.messages).isEmpty();
+
+            consumerA.cancel();
+            consumerB.cancel();
+        } finally {
+            // Always disable corruption to avoid affecting other tests
+            jsonSerializerProxy.disableJSONCorruptionDuringDeserialization();
+        }
+    }
+
 
    protected static class RecordingQueuedMessageHandler implements QueuedMessageHandler {
         Consumer<Message>              functionLogic;

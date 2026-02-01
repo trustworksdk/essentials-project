@@ -609,6 +609,61 @@ public interface DurableQueues extends Lifecycle {
     Optional<QueuedMessage> markAsDeadLetterMessage(MarkAsDeadLetterMessage operation);
 
     /**
+     * Mark an already Queued Message as a Dead Letter Message (or Poison Message) <b>without returning the updated message</b>.<br>
+     * This is useful when the message payload cannot be deserialized (e.g., due to a missing class) and returning the
+     * message would trigger another deserialization failure.<br>
+     * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
+     * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
+     * Note this method MUST be called within an existing {@link UnitOfWork} IF
+     * using {@link TransactionalMode#FullyTransactional}
+     *
+     * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
+     * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
+     * @return true if the operation was successful (message was marked as dead letter), false otherwise
+     * @see #markAsDeadLetterMessage(MarkAsDeadLetterMessage)
+     */
+    default boolean markAsDeadLetterMessageDirect(QueueEntryId queueEntryId,
+                                                  Throwable causeForBeingMarkedAsDeadLetter) {
+        return markAsDeadLetterMessageDirect(new MarkAsDeadLetterMessageDirect(queueEntryId,
+                                                                               causeForBeingMarkedAsDeadLetter));
+    }
+
+    /**
+     * Mark an already Queued Message as a Dead Letter Message (or Poison Message) <b>without returning the updated message</b>.<br>
+     * This is useful when the message payload cannot be deserialized (e.g., due to a missing class) and returning the
+     * message would trigger another deserialization failure.<br>
+     * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
+     * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
+     * Note this method MUST be called within an existing {@link UnitOfWork} IF
+     * using {@link TransactionalMode#FullyTransactional}
+     *
+     * @param queueEntryId                    the unique id of the message that must be marked as a Dead Letter Message
+     * @param causeForBeingMarkedAsDeadLetter the optional reason for the message being marked as a Dead Letter Message
+     * @return true if the operation was successful (message was marked as dead letter), false otherwise
+     * @see #markAsDeadLetterMessage(MarkAsDeadLetterMessage)
+     */
+    default boolean markAsDeadLetterMessageDirect(QueueEntryId queueEntryId,
+                                                  String causeForBeingMarkedAsDeadLetter) {
+        return markAsDeadLetterMessageDirect(new MarkAsDeadLetterMessageDirect(queueEntryId,
+                                                                               causeForBeingMarkedAsDeadLetter));
+    }
+
+    /**
+     * Mark an already Queued Message as a Dead Letter Message (or Poison Message) <b>without returning the updated message</b>.<br>
+     * This is useful when the message payload cannot be deserialized (e.g., due to a missing class) and returning the
+     * message would trigger another deserialization failure.<br>
+     * Dead Letter Messages won't be delivered to any {@link DurableQueueConsumer} (called by the {@link DurableQueueConsumer})<br>
+     * To deliver a Dead Letter Message you must first resurrect the message using {@link #resurrectDeadLetterMessage(QueueEntryId, Duration)}<br>
+     * Note this method MUST be called within an existing {@link UnitOfWork} IF
+     * using {@link TransactionalMode#FullyTransactional}
+     *
+     * @param operation the {@link MarkAsDeadLetterMessageDirect} operation
+     * @return true if the operation was successful (message was marked as dead letter), false otherwise
+     * @see #markAsDeadLetterMessage(MarkAsDeadLetterMessage)
+     */
+    boolean markAsDeadLetterMessageDirect(MarkAsDeadLetterMessageDirect operation);
+
+    /**
      * Resurrect a Dead Letter Message for redelivery after the specified <code>deliveryDelay</code><br>
      * Note this method MUST be called within an existing {@link UnitOfWork} IF
      * using {@link TransactionalMode#FullyTransactional}
