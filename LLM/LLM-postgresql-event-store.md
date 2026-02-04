@@ -478,6 +478,23 @@ public class ShippingKafkaPublisher extends EventProcessor {
 
 **Features**: Exclusive (`FencedLock`), ordered per-aggregate (`OrderedMessage` via `Inbox`), redelivery (`RedeliveryPolicy`), command handling (`@CmdHandler` via `DurableLocalCommandBus`).
 
+**`@CmdHandler` + Delayed Messages:**
+```java
+@MessageHandler
+void on(OrderConfirmed event, OrderedMessage message) {
+    // Schedule delayed command (grace period check after 15 min)
+    getCommandBus().sendAndDontWait(new CheckGracePeriod(event.orderId()), Duration.ofMinutes(15));
+}
+
+@CmdHandler
+void handle(CheckGracePeriod cmd) {
+    // Called after delay - check state before acting (idempotent)
+    if (todo.getStatus() == Status.AWAITING_GRACE_PERIOD) {
+        getCommandBus().sendAndDontWait(new InitiatePayment(cmd.orderId()));
+    }
+}
+```
+
 ### InTransactionEventProcessor
 
 For synchronous view projections requiring atomic consistency with events. Processing happens synchronously within same database transaction. Failure rolls back entire tx including event append.
@@ -530,6 +547,19 @@ public class OrderDashboard extends ViewEventProcessor {
         // Direct handling (low latency) - on error, queued for retry
         dashboardService.addOrder(event);
     }
+}
+```
+
+**Version = EventOrder Pattern** (for JDBI/JPA view entities):
+```java
+@MessageHandler
+void on(OrderConfirmed event, OrderedMessage message) {
+    var view = repository.getById(event.orderId());
+    long loadedVersion = view.version();  // Previous EventOrder
+    var updated = view.withStatus(OrderStatus.CONFIRMED, message.getOrder()); // version = EventOrder
+
+    int rows = repository.update(updated, loadedVersion); // WHERE version = :expectedVersion
+    if (rows == 0) throw new OptimisticLockingException("OrderListView", event.orderId());
 }
 ```
 

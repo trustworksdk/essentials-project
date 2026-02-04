@@ -1516,6 +1516,50 @@ public class ShippingEventKafkaPublisher extends EventProcessor {
 - **Redelivery**: Failed events are retried per `RedeliveryPolicy`
 - **Command Handling**: `@CmdHandler` methods handle commands via `DurableLocalCommandBus`
 
+#### `@CmdHandler` and Delayed Messages
+
+`EventProcessor` supports `@CmdHandler` annotated methods for handling commands, enabling **delayed message/command scheduling** via the `DurableLocalCommandBus`:
+
+```java
+@Service
+public class OrderFulfillmentProcessor extends EventProcessor {
+
+    // Handle events
+    @MessageHandler
+    void on(OrderConfirmed event, OrderedMessage message) {
+        // Schedule a delayed command for grace period check
+        getCommandBus().sendAndDontWait(
+            new CheckGracePeriodExpired(event.orderId()),
+            Duration.ofMinutes(15)  // Delivery delay
+        );
+    }
+
+    // Handle commands (delivered after delay via DurableLocalCommandBus)
+    @CmdHandler
+    void handle(CheckGracePeriodExpired cmd) {
+        // Called after 15 minutes - check if order was cancelled
+        var todo = todoRepository.findById(cmd.orderId());
+        if (todo != null && todo.getStatus() == Status.AWAITING_GRACE_PERIOD) {
+            // Grace period expired, proceed with next step
+            getCommandBus().sendAndDontWait(new InitiatePayment(cmd.orderId()));
+        }
+    }
+}
+
+// Command for delayed check
+public record CheckGracePeriodExpired(OrderId orderId) {}
+```
+
+**Use cases for delayed commands:**
+- **Grace periods**: Wait before initiating actions (e.g., allow cancellation window)
+- **Timeout checks**: Verify conditions after a delay
+- **Scheduled retries**: Retry failed operations after a backoff period
+
+**Key behaviors:**
+- Commands are persisted in `DurableLocalCommandBus`'s durable queue and delivered after the specified delay
+- If the service restarts, delayed commands are still delivered
+- Handlers must be idempotent - check state before acting
+
 ### InTransactionEventProcessor
 
 **Class:** `InTransactionEventProcessor`  
@@ -1604,6 +1648,59 @@ public class OrderDashboardProcessor extends ViewEventProcessor {
 1. Events are handled **directly** for low latency
 2. On **error**, the event is queued to a [DurableQueue](../foundation/README.md#durablequeues-messaging) for retry
 3. If queue already has messages for that aggregate ID, new events are queued to maintain order
+
+#### Version = EventOrder Pattern for View Entities
+
+When building view projections with JDBI or other persistence, set the view entity's `version` field to the event's `EventOrder` (obtained via `message.getOrder()`). This enables:
+- **Idempotency**: Replaying the same event produces the same version
+- **Optimistic locking**: Concurrent updates are detected
+- **Gap detection**: Missing events can be identified
+
+**JDBI View Entity Example:**
+
+```java
+// View entity with version = EventOrder
+public record OrderListView(
+    OrderId orderId,
+    CustomerId customerId,
+    OrderStatus status,
+    Money totalAmount,
+    long version,        // = EventOrder of last processed event
+    OffsetDateTime lastUpdated
+) {
+    public OrderListView withStatus(OrderStatus newStatus, long eventOrder) {
+        return new OrderListView(orderId, customerId, newStatus, totalAmount,
+                                 eventOrder, OffsetDateTime.now(UTC));
+    }
+}
+
+// JDBI Repository with optimistic locking
+@RegisterConstructorMapper(OrderListView.class)
+public interface OrderListViewRepository {
+    @SqlUpdate("""
+        UPDATE order_list_view
+        SET status = :status, version = :version, last_updated = NOW()
+        WHERE order_id = :orderId AND version = :expectedVersion
+        """)
+    int update(@BindMethods OrderListView view, @Bind("expectedVersion") long expectedVersion);
+}
+
+// Projector setting version = EventOrder
+@Service
+public class OrderListProjector extends ViewEventProcessor {
+    @MessageHandler
+    void on(OrderConfirmed event, OrderedMessage message) {
+        var view = repository.getById(event.orderId());
+        long loadedVersion = view.version();  // Previous EventOrder
+        var updated = view.withStatus(OrderStatus.CONFIRMED, message.getOrder());
+
+        int rowsUpdated = repository.update(updated, loadedVersion);
+        if (rowsUpdated == 0) {
+            throw new OptimisticLockingException("OrderListView", event.orderId());
+        }
+    }
+}
+```
 
 ### Processor Lifecycle
 
