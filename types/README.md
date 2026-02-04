@@ -15,6 +15,7 @@ The philosophy is to provide high-level, strongly-typed building blocks that int
 - [SingleValueType Hierarchy](#singlevaluetype-hierarchy)
 - [Creating Custom Types](#creating-custom-types)
 - [Framework Integration](#framework-integration)
+- [Testing with AssertJ](#testing-with-assertj)
 - [See Also](#see-also)
 
 ## Overview
@@ -454,6 +455,84 @@ value class Quantity(override val value: Int) : IntValueType<Quantity> {
 | JDBI v3                        | `types-jdbi` |
 | Apache Avro                    | `types-avro` |
 | Spring WebMvc/WebFlux          | `types-spring-web` |
+
+## Testing with AssertJ
+
+When writing tests for `CharSequenceType` subclasses using AssertJ, you need to cast to `CharSequence` for equality assertions to work correctly.
+
+### The Issue
+
+`CharSequenceType` implements `CharSequence`, but AssertJ's `assertThat()` method has multiple overloads.  
+Without an explicit cast, the compiler may select a generic object assertion rather than the `CharSequence`-specific assertion, which can lead to unexpected comparison behavior.
+
+### Solution: Cast to CharSequence
+
+```java
+import static org.assertj.core.api.Assertions.assertThat;
+
+// CORRECT - cast to CharSequence for isEqualTo/isNotEqualTo
+assertThat((CharSequence) CustomerId.of("Test")).isEqualTo(CustomerId.of("Test"));
+assertThat((CharSequence) CustomerId.of("Test")).isEqualTo(new CustomerId("Test"));
+assertThat((CharSequence) CustomerId.of("Test")).isNotEqualTo(CustomerId.of("Other"));
+
+// Type-safe: different CharSequenceType subclasses are never equal
+assertThat((CharSequence) ProductId.of("Test")).isNotEqualTo(CustomerId.of("Test"));
+```
+
+### Alternative Approaches
+
+If you prefer to avoid casting, there are alternative assertion patterns:
+
+```java
+// Use .equals() directly - returns boolean, no cast needed
+assertThat(CustomerId.of("Test").equals(CustomerId.of("Test"))).isTrue();
+assertThat(CustomerId.of("Test").equals(CustomerId.of("Other"))).isFalse();
+
+// Compare the underlying value() - works for String comparisons
+assertThat(CustomerId.of("Test").value()).isEqualTo("Test");
+assertThat(new CustomerId("Test").value()).isEqualTo("Test");
+
+// hashCode comparisons work without casting
+assertThat(CustomerId.of("Test").hashCode()).isEqualTo(CustomerId.of("Test").hashCode());
+```
+
+### Testing Substring Operations
+
+The `substring()` methods on `CharSequenceType` return the concrete type, so the same casting pattern applies:
+
+```java
+ProductId productId = ProductId.of("Some-product-id");
+
+// substring(beginIndex) - returns concrete type
+ProductId partOfId = productId.substring(2);
+assertThat((CharSequence) partOfId).isEqualTo(ProductId.of("me-product-id"));
+
+// substring(beginIndex, endIndex) - returns concrete type
+ProductId slice = productId.substring(2, 5);
+assertThat((CharSequence) slice).isEqualTo(ProductId.of("me-"));
+```
+
+### Testing Comparable Behavior
+
+`CharSequenceType` implements `Comparable`, and comparisons work without casting:
+
+```java
+// compareTo with same type
+assertThat(CustomerId.of("Test").compareTo(CustomerId.of("Test"))).isEqualTo(0);
+assertThat(CustomerId.of("Test").compareTo(CustomerId.of("Test2"))).isNotEqualTo(0);
+
+// compareTo with raw String
+assertThat(CustomerId.of("Test").compareTo("Test")).isEqualTo(0);
+assertThat(CustomerId.of("Test").compareTo("Test2")).isNotEqualTo(0);
+```
+
+### toString() Assertions
+
+The `toString()` method returns the underlying value, so standard String assertions work:
+
+```java
+assertThat(CustomerId.of("Test").toString()).isEqualTo("Test");
+```
 
 ## See Also
 

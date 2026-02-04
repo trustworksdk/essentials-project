@@ -386,6 +386,29 @@ See [LLM-types-integrations.md](LLM-types-integrations.md) for overview.
 - **Percentage scale**: Enforces minimum scale of 2
 - **Identifier**: Optional marker interface for semantic searchability
 - **Kotlin package**: `dk.trustworks.essentials.kotlin.types` (not `types.kotlin`)
+- **AssertJ with CharSequenceType**: Cast to `CharSequence` for proper equality assertions (see below)
+
+### AssertJ Testing with CharSequenceType
+
+When testing `CharSequenceType` subclasses with AssertJ, cast to `CharSequence` for `isEqualTo`/`isNotEqualTo`:
+
+```java
+// CORRECT - cast to CharSequence
+assertThat((CharSequence) CustomerId.of("Test")).isEqualTo(CustomerId.of("Test"));
+assertThat((CharSequence) ProductId.of("ABC")).isNotEqualTo(ProductId.of("XYZ"));
+
+// Also works for substring operations
+ProductId partOfId = productId.substring(2, 5);
+assertThat((CharSequence) partOfId).isEqualTo(ProductId.of("me-"));
+
+// Alternative - use .equals() directly (no cast needed)
+assertThat(CustomerId.of("Test").equals(CustomerId.of("Test"))).isTrue();
+
+// value() comparison works without casting
+assertThat(CustomerId.of("Test").value()).isEqualTo("Test");
+```
+
+**Why the cast?** AssertJ's `assertThat()` overloads select `AbstractCharSequenceAssert` when passed a `CharSequence`, enabling string-aware equality. Without the cast, AssertJ may use generic object assertion which can produce unexpected results.
 
 ---
 
