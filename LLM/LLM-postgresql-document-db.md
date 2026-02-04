@@ -255,6 +255,19 @@ val orders = listOf(order1, order2, order3)
 repo.saveAll(orders)  // More efficient than loop
 ```
 
+### Event Projection Pattern
+
+⚠️ For event projections with `ViewEventProcessor`, use `update(entity, Version.of(message.order))` NOT `update(entity)`:
+
+```kotlin
+@MessageHandler
+fun on(event: ProductAddedToOrder, message: OrderedMessage) {
+    val view = repo.getById(event.orderId)
+    view.itemCount++
+    repo.update(view, Version.of(message.order))  // version = EventOrder, NOT auto-increment
+}
+```
+
 ## Query API
 
 ### Operators

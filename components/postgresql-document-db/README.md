@@ -570,6 +570,30 @@ val updatedOrder = orderRepository.update(order)
 
 **Variant:** `update(entity, nextVersion)` lets you specify the exact next version instead of auto-incrementing.
 
+> ⚠️ **Event Projection Pattern:** When using DocumentDB for event projections (with `ViewEventProcessor`), **always use `update(entity, Version.of(message.order))`** to set the version to the `EventOrder`.  
+> Do NOT use `update(entity)` which auto-increments—this is for CRUD operations, not event projections.
+
+**Event Projection Example:**
+
+```kotlin
+@MessageHandler
+fun on(event: ProductAddedToOrder, message: OrderedMessage) {
+    val view = repository.getById(event.orderId)
+
+    // Modify entity
+    view.itemCount = view.itemCount + 1
+    view.totalAmount = view.totalAmount.add(lineTotal)
+
+    // Use update(entity, nextVersion) with EventOrder - NOT update(entity)
+    repository.update(view, Version.of(message.order))
+}
+```
+
+This ensures:
+- **Idempotency**: Replaying events produces the same version
+- **Optimistic locking**: Uses loaded version as expected, sets version to EventOrder
+- **Consistency**: Version tracks which event last updated the view
+
 ### Read (Query Entities)
 
 Multiple methods for retrieving entities, depending on your needs:
