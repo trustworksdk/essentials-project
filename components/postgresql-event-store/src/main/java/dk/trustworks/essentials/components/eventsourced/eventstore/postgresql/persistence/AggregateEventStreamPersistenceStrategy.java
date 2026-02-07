@@ -317,4 +317,13 @@ public interface AggregateEventStreamPersistenceStrategy<CONFIG extends Aggregat
      * @return a map where the key is the aggregate type and the value is the corresponding table name
      */
     Map<AggregateType, String> getSeparateTablePerAggregateEventStreamTableNames();
+
+    /**
+     * Retrieves a mapping of table names to their corresponding aggregate types
+     * for event streams that are stored in separate tables.
+     *
+     * @return a map where the keys are the table names as strings and the values
+     *         are the corresponding aggregate types.
+     */
+    Map<String, AggregateType> getSeparateTablePerEventStreamTableNameAggregates();
 }

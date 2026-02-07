@@ -963,6 +963,12 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
     }
 
     @Override
+    public Map<String, AggregateType> getSeparateTablePerEventStreamTableNameAggregates() {
+        return aggregateTypeConfigurations.entrySet().stream()
+                                          .collect(Collectors.toMap(entry -> entry.getValue().eventStreamTableName, Map.Entry::getKey));
+    }
+
+    @Override
     public Optional<GlobalEventOrder> findHighestGlobalEventOrderPersisted(EventStoreUnitOfWork unitOfWork, AggregateType aggregateType) {
         requireNonNull(unitOfWork, "No unitOfWork provided");
         requireNonNull(aggregateType, "No aggregateType provided");

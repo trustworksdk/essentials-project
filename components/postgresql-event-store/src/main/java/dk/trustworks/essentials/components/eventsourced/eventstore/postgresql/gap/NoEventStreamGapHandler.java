@@ -55,6 +55,10 @@ public final class NoEventStreamGapHandler<CONFIG extends AggregateEventStreamCo
         return Stream.empty();
     }
 
+    @Override
+    public void registerPermanentGaps(AggregateType aggregateType, List<GlobalEventOrder> gaps, String reason) {
+    }
+
     private class NoSubscriptionGapHandler implements SubscriptionGapHandler {
         private SubscriberId subscriberId;
 

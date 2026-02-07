@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
@@ -59,6 +60,8 @@ public class EssentialsEventStoreProperties {
     private final EventStoreSubscriptionManagerProperties subscriptionManager = new EventStoreSubscriptionManagerProperties();
 
     private final EventStoreSubscriptionMonitorProperties subscriptionMonitor = new EventStoreSubscriptionMonitorProperties();
+
+    private final CdcProperties cdc = new CdcProperties();
 
     /**
      * Should the Tracing produces only include all operations or only top level operations (default false)
@@ -148,6 +151,15 @@ public class EssentialsEventStoreProperties {
      */
     public EventStoreSubscriptionMonitorProperties getSubscriptionMonitor() {
         return this.subscriptionMonitor;
+    }
+
+    /**
+     * Retrieves the change data capture (CDC) properties associated with the event store.
+     *
+     * @return the {@link CdcProperties} that contains the CDC configuration.
+     */
+    public CdcProperties getCdc() {
+        return cdc;
     }
 
     /**

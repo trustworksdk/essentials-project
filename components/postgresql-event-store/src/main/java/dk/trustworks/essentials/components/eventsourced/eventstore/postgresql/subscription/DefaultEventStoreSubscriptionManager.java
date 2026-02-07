@@ -292,6 +292,13 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     }
 
     @Override
+    public Optional<EventStoreSubscription> getSubscription(SubscriberId subscriberId, AggregateType aggregateType) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        return Optional.ofNullable(subscribers.get(Pair.of(subscriberId, aggregateType)));
+    }
+
+    @Override
     public Optional<GlobalEventOrder> getCurrentEventOrder(SubscriberId subscriberId, AggregateType aggregateType) {
         return Optional.ofNullable(this.subscribers.get(Pair.of(subscriberId, aggregateType)))
                        .flatMap(EventStoreSubscription::currentResumePoint)

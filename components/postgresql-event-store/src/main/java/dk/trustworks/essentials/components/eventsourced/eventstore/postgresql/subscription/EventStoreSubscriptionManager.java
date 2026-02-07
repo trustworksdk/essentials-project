@@ -566,7 +566,22 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
 
     boolean hasSubscription(SubscriberId subscriberId, AggregateType aggregateType);
 
+    /**
+     * Retrieves the set of active subscriptions.
+     *
+     * @return a set of pairs where each pair consists of a SubscriberId and an AggregateType,
+     * representing the active subscriptions.
+     */
     Set<Pair<SubscriberId, AggregateType>> getActiveSubscriptions();
+
+    /**
+     * Retrieves the subscription associated with the given subscriber ID and aggregate type.
+     *
+     * @param subscriberId the unique identifier of the subscriber for which the subscription is to be retrieved
+     * @param aggregateType the type of aggregate associated with the subscription
+     * @return an Optional containing the corresponding EventStoreSubscription if present, otherwise an empty Optional
+     */
+    Optional<EventStoreSubscription> getSubscription(SubscriberId subscriberId, AggregateType aggregateType);
 
     /**
      * @return current event order for the given subscriber only of the subscriber has a registered resume point

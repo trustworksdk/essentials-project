@@ -22,10 +22,14 @@ import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.Wal2JsonTailerErrorHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
@@ -55,13 +59,20 @@ import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
 import io.micrometer.tracing.propagation.Propagator;
 import org.jdbi.v3.core.Jdbi;
+import org.postgresql.ds.PGSimpleDataSource;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.util.StringUtils;
 
+import javax.sql.DataSource;
+import java.net.URI;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
 
@@ -242,6 +253,13 @@ public class EventStoreConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                                                                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
+        return new PostgresqlEventStreamGapHandler<>(eventStore, eventStoreUnitOfWorkFactory);
+    }
+
+    @Bean
     @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
     public MicrometerTracingEventStoreInterceptor micrometerTracingEventStoreInterceptor(Optional<Tracer> tracer,
                                                                                          Optional<Propagator> propagator,
@@ -398,6 +416,172 @@ public class EventStoreConfiguration {
                                                             essentialsProperties.getTracingProperties().getModuleTag());
     }
 
+    // CDC ############################################################################################
+
+    @Bean
+    @ConditionalOnMissingBean
+    public EventStore cdcEventStore(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                    EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
+                                    CdcEventBus cdcEventBus,
+                                    EssentialsEventStoreProperties essentialsProperties) {
+        return new CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration>(
+                eventStore,
+                eventStoreUnitOfWorkFactory,
+                eventStreamGapHandler,
+                cdcEventBus,
+                essentialsProperties.getCdc()
+        );
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public CdcDispatcher cdcDispatcher(CdcInboxRepository cdcInboxRepository,
+                                       EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                       EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
+                                       Wal2JsonToPersistedEventConverter converter,
+                                       WalGlobalOrdersExtractor walGlobalOrdersExtractor,
+                                       SubscriptionResetOnPoisonNotifier subscriptionResetOnPoisonNotifier,
+                                       CdcEventBus cdcEventBus,
+                                       EssentialsEventStoreProperties essentialsProperties,
+                                       CdcConsumerGroup group,
+                                       CdcSlotNameProvider slotNameProvider) {
+
+        var slotProps = essentialsProperties.getCdc().getSlot();
+        String slotName = slotProps.getName() != null && !slotProps.getName().isBlank()
+                          ? slotProps.getName()
+                          : slotNameProvider.slotName(group);
+
+        return new CdcDispatcher(cdcInboxRepository,
+                                 eventStoreUnitOfWorkFactory,
+                                 eventStreamGapHandler,
+                                 converter,
+                                 walGlobalOrdersExtractor,
+                                 Optional.of(subscriptionResetOnPoisonNotifier),
+                                 cdcEventBus::publish,
+                                 slotName,
+                                 essentialsProperties.getCdc().getCdcDispatcher()
+        );
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public SubscriptionResetOnPoisonNotifier subscriptionResetOnPoisonNotifier(EventStoreSubscriptionManager eventStoreSubscriptionManager,
+                                                                               DurableSubscriptionRepository durableSubscriptionRepository) {
+        return new SubscriptionResetOnPoisonNotifier(eventStoreSubscriptionManager, durableSubscriptionRepository);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public CdcEventBus cdcEventBus() {
+        return new CdcEventBus();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public Wal2JsonToPersistedEventConverter wal2JsonToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
+        return new JacksonWal2JsonToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public WalGlobalOrdersExtractor walGlobalOrdersExtractor(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
+        return new JacksonWalGlobalOrdersExtractor(jsonSerializer, aggregateTypeResolver);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public AggregateTypeResolver aggregateTypeResolver(EventStore eventStore) {
+        var postgresqlEventStore           = (PostgresqlEventStore<?>) eventStore;
+        var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates();
+        return new DefaultAggregateTypeResolver(aggregateEventStreamTableNames);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public CdcConsumerGroup cdcConsumerGroup(EssentialsEventStoreProperties props) {
+        return CdcConsumerGroup.of(props.getCdc().getSlot().getGroup());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public CdcSlotNameProvider cdcSlotNameProvider(DataSourceProperties dsProps) {
+        // best-effort db name extraction; you can improve this later
+        String url = dsProps.getUrl();
+        String db = null;
+        if (url != null) {
+            try {
+                URI uri = URI.create(url.replace("jdbc:", ""));
+                String path = uri.getPath();
+                if (path != null && path.length() > 1) {
+                    db = path.substring(1);
+                }
+            } catch (Exception ignored) {}
+        }
+        return new DefaultCdcSlotNameProvider(db);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public Wal2JsonTailer wal2JsonTailer(@Qualifier("essentialsReplicationDataSource")  DataSource replicationDataSource,
+                                         Jdbi jdbi,
+                                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                         CdcInboxRepository cdcInboxRepository,
+                                         EssentialsEventStoreProperties properties,
+                                         CdcConsumerGroup group,
+                                         CdcSlotNameProvider slotNameProvider,
+                                         Optional<MeterRegistry> meterRegistry,
+                                         Optional<Wal2JsonTailerErrorHandler> errorHandler) {
+
+        var slotProps = properties.getCdc().getSlot();
+        String slotName = slotProps.getName() != null && !slotProps.getName().isBlank()
+                          ? slotProps.getName()
+                          : slotNameProvider.slotName(group);
+
+        return new Wal2JsonTailer(replicationDataSource,
+                                  jdbi,
+                                  eventStoreUnitOfWorkFactory,
+                                  slotName,
+                                  cdcInboxRepository,
+                                  properties.getCdc().getWal2JsonTailer(),
+                                  properties.getCdc().getSlot().getMode(),
+                                  meterRegistry,
+                                  errorHandler);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public CdcInboxRepository cdcInboxRepository(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
+        return new CdcInboxRepository(eventStoreUnitOfWorkFactory);
+    }
+
+    @Bean(name = "essentialsReplicationDataSource")
+    @Qualifier("essentialsReplicationDataSource")
+    public DataSource replicationDataSource(DataSourceProperties properties) throws SQLException {
+        var jdbcUrl = properties.getUrl();
+        if (jdbcUrl == null) {
+            throw new IllegalStateException("spring.datasource.url must be set");
+        }
+
+        URI uri = URI.create(jdbcUrl.replace("jdbc:", ""));
+
+        var host     = uri.getHost();
+        int port     = uri.getPort() == -1 ? 5432 : uri.getPort();
+        var database = uri.getPath().replaceFirst("/", "");
+
+        PGSimpleDataSource pg = new PGSimpleDataSource();
+        pg.setServerNames(new String[]{host});
+        pg.setPortNumbers(new int[]{port});
+        pg.setDatabaseName(database);
+        pg.setUser(properties.getUsername());
+        pg.setPassword(properties.getPassword());
+
+        pg.setProperty("replication", "database");
+        pg.setProperty("preferQueryMode", "simple");
+
+        return pg;
+    }
+
     // # Api ##########################################################################################
 
     @Bean
@@ -420,4 +604,6 @@ public class EventStoreConfiguration {
                                                             eventStore.getUnitOfWorkFactory(),
                                                             aggregateEventStreamTableNames);
     }
+
+
 }
