@@ -29,7 +29,7 @@ import java.util.stream.Stream;
 /**
  * The {@link PostgresqlEventStore} can be configured with an {@link EventStreamGapHandler}, which keeps track of
  * transient and permanent {@link AggregateType} event-stream gaps, related to a specific {@link SubscriberId}.
- * The {@link EventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional)} will keep track of event stream gaps if you specify
+ * The {@link EventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)} will keep track of event stream gaps if you specify
  * a {@link SubscriberId}<br>
  * <br>
  * A transient event stream gap is defined as a gap in an event stream, where a {@link PersistedEvent#globalEventOrder()}
@@ -86,4 +86,13 @@ public interface EventStreamGapHandler<CONFIG extends AggregateEventStreamConfig
      * @return stream of permanent gap {@link GlobalEventOrder}'s registered for the given aggregate type
      */
     Stream<GlobalEventOrder> getPermanentGapsFor(AggregateType aggregateType);
+
+    /**
+     * Registers a list of permanent gaps for the specified aggregate type, providing a reason for the registration.
+     *
+     * @param aggregateType the aggregate type to which the permanent gaps belong
+     * @param gaps          the list of global event orders representing the gaps to be registered
+     * @param reason        the reason for registering these gaps as permanent
+     */
+    void registerPermanentGaps(AggregateType aggregateType, List<GlobalEventOrder> gaps, String reason);
 }

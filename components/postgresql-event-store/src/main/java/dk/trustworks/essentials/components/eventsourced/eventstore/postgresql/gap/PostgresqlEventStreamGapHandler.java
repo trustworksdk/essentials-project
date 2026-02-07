@@ -118,24 +118,24 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             jdbi.registerArgument(new SubscriberIdArgumentFactory());
             jdbi.registerColumnMapper(new SubscriberIdColumnMapper());
             handle.execute("CREATE TABLE IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (\n" +
-                                                "   subscriber_id text NOT NULL,\n" +
-                                                "   aggregate_type text NOT NULL,\n" +
-                                                "   gap_global_event_order bigint NOT NULL\n," +
-                                                "   first_discovered TIMESTAMP WITH TIME ZONE NOT NULL\n," +
-                                                "   PRIMARY KEY (subscriber_id, aggregate_type, gap_global_event_order)\n" +
-                                                ")");
+                                   "   subscriber_id text NOT NULL,\n" +
+                                   "   aggregate_type text NOT NULL,\n" +
+                                   "   gap_global_event_order bigint NOT NULL\n," +
+                                   "   first_discovered TIMESTAMP WITH TIME ZONE NOT NULL\n," +
+                                   "   PRIMARY KEY (subscriber_id, aggregate_type, gap_global_event_order)\n" +
+                                   ")");
             log.info("Ensured Table '{}' exists", TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME);
 
             handle.execute("CREATE INDEX IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME + " ON \n" +
-                                                TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)");
+                                   TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)");
             log.info("Ensured Index '{}' exists", TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME);
 
             handle.execute("CREATE TABLE IF NOT EXISTS " + PERMANENT_GAPS_TABLE_NAME + " (\n" +
-                                                "   aggregate_type text NOT NULL,\n" +
-                                                "   gap_global_event_order bigint NOT NULL\n," +
-                                                "   added_timestamp TIMESTAMP WITH TIME ZONE NOT NULL," +
-                                                "   PRIMARY KEY (aggregate_type, gap_global_event_order)\n" +
-                                                ")");
+                                   "   aggregate_type text NOT NULL,\n" +
+                                   "   gap_global_event_order bigint NOT NULL\n," +
+                                   "   added_timestamp TIMESTAMP WITH TIME ZONE NOT NULL," +
+                                   "   PRIMARY KEY (aggregate_type, gap_global_event_order)\n" +
+                                   ")");
             log.info("Ensured table '{}' exists", PERMANENT_GAPS_TABLE_NAME);
         });
     }
@@ -164,26 +164,26 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     public List<GlobalEventOrder> resetPermanentGapsFor(AggregateType aggregateType, LongRange resetForThisSpecificGlobalEventOrdersRange) {
         requireNonNull(resetForThisSpecificGlobalEventOrdersRange, "No resetForThisSpecificGlobalEventOrdersRange provided");
         List<GlobalEventOrder> globalEventOrdersRemoved = unitOfWorkFactory.withUnitOfWork(unitOfWork ->
-                                                                        {
-                                                                            var sql = "DELETE FROM " + PERMANENT_GAPS_TABLE_NAME + " WHERE aggregate_type = :aggregate_type \n";
-                                                                            if (resetForThisSpecificGlobalEventOrdersRange.isOpenRange()) {
-                                                                                sql += " AND gap_global_event_order >= :gap_global_event_order_from_and_including";
-                                                                            } else {
-                                                                                sql += " AND gap_global_event_order >= :gap_global_event_order_from_and_including AND gap_global_event_order <= :gap_global_event_order_to_and_including";
-                                                                            }
-                                                                            sql += "  RETURNING gap_global_event_order";
-                                                                            var update = unitOfWork.handle().createQuery(sql)
-                                                                                                   .bind("aggregate_type", requireNonNull(aggregateType, "No aggregateType provided"));
-                                                                            if (resetForThisSpecificGlobalEventOrdersRange.isOpenRange()) {
-                                                                                update.bind("gap_global_event_order_from_and_including", resetForThisSpecificGlobalEventOrdersRange.fromInclusive);
-                                                                            } else {
-                                                                                update.bind("gap_global_event_order_from_and_including", resetForThisSpecificGlobalEventOrdersRange.fromInclusive);
-                                                                                update.bind("gap_global_event_order_to_and_including", resetForThisSpecificGlobalEventOrdersRange.toInclusive);
-                                                                            }
-                                                                            return update
-                                                                                    .mapTo(GlobalEventOrder.class)
-                                                                                    .list();
-                                                                        });
+                                                                                           {
+                                                                                               var sql = "DELETE FROM " + PERMANENT_GAPS_TABLE_NAME + " WHERE aggregate_type = :aggregate_type \n";
+                                                                                               if (resetForThisSpecificGlobalEventOrdersRange.isOpenRange()) {
+                                                                                                   sql += " AND gap_global_event_order >= :gap_global_event_order_from_and_including";
+                                                                                               } else {
+                                                                                                   sql += " AND gap_global_event_order >= :gap_global_event_order_from_and_including AND gap_global_event_order <= :gap_global_event_order_to_and_including";
+                                                                                               }
+                                                                                               sql += "  RETURNING gap_global_event_order";
+                                                                                               var update = unitOfWork.handle().createQuery(sql)
+                                                                                                                      .bind("aggregate_type", requireNonNull(aggregateType, "No aggregateType provided"));
+                                                                                               if (resetForThisSpecificGlobalEventOrdersRange.isOpenRange()) {
+                                                                                                   update.bind("gap_global_event_order_from_and_including", resetForThisSpecificGlobalEventOrdersRange.fromInclusive);
+                                                                                               } else {
+                                                                                                   update.bind("gap_global_event_order_from_and_including", resetForThisSpecificGlobalEventOrdersRange.fromInclusive);
+                                                                                                   update.bind("gap_global_event_order_to_and_including", resetForThisSpecificGlobalEventOrdersRange.toInclusive);
+                                                                                               }
+                                                                                               return update
+                                                                                                       .mapTo(GlobalEventOrder.class)
+                                                                                                       .list();
+                                                                                           });
         log.info("[{}] Removed {} Permanent Gap(s), according to reset range {}, with GlobalEventOrder: {}",
                  aggregateType,
                  globalEventOrdersRemoved.size(),
@@ -224,6 +224,33 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     public Stream<GlobalEventOrder> getPermanentGapsFor(AggregateType aggregateType) {
         return getPermanentGapsAsLongFor(aggregateType)
                 .map(GlobalEventOrder::of);
+    }
+
+    @Override
+    public void registerPermanentGaps(AggregateType aggregateType, List<GlobalEventOrder> gaps, String reason) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(gaps, "No gaps provided");
+        if (gaps.isEmpty()) return;
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            var now = now();
+            var batch = uow.handle().prepareBatch("""
+                                                      INSERT INTO permanent_gaps(aggregate_type, gap_global_event_order, added_timestamp)
+                                                      VALUES (:aggregate_type, :gap_global_event_order, :added_timestamp)
+                                                      ON CONFLICT DO NOTHING
+                                                  """);
+
+            for (var g : gaps) {
+                batch.bind("aggregate_type", aggregateType)
+                     .bind("gap_global_event_order", g)
+                     .bind("added_timestamp", now)
+                     .add();
+            }
+            batch.execute();
+        });
+
+        log.warn("[{}] Registered {} permanent gap(s) due to poison/skip. reason='{}' gaps={}",
+                 aggregateType, gaps.size(), reason, gaps);
     }
 
     private Stream<Long> getPermanentGapsAsLongFor(AggregateType aggregateType) {

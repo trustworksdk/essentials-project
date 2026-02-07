@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.foundation.postgresql;
 import dk.trustworks.essentials.shared.Exceptions;
 import org.jdbi.v3.core.Handle;
 import org.postgresql.util.PSQLException;
+import org.slf4j.*;
 
 import java.util.*;
 import java.util.regex.Pattern;
@@ -27,6 +28,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 public final class PostgresqlUtil {
+
+    private static final Logger log = LoggerFactory.getLogger(PostgresqlUtil.class);
+
     /**
      * Read the major Postgresql server version
      *
@@ -75,6 +79,44 @@ public final class PostgresqlUtil {
         requireNonNull(e, "No exception provided");
         Throwable rootCause = Exceptions.getRootCause(e);
         return rootCause instanceof PSQLException && rootCause.getMessage() != null && rootCause.getMessage().contains("must be loaded via \"shared_preload_libraries\"");
+    }
+
+    public static boolean isLogicalDecodingEnabled(org.jdbi.v3.core.Handle handle) {
+        var walLevel = handle.createQuery("show wal_level")
+                             .mapTo(String.class)
+                             .one()
+                             .trim()
+                             .toLowerCase();
+
+        int maxSlots = Integer.parseInt(handle.createQuery("show max_replication_slots")
+                                              .mapTo(String.class).one().trim());
+        int maxSenders = Integer.parseInt(handle.createQuery("show max_wal_senders")
+                                                .mapTo(String.class).one().trim());
+
+        log.debug("wal_level: '{}', max_replication_slots: '{}', max_wal_senders: '{}'", walLevel, maxSlots, maxSenders);
+        return ("logical".equals(walLevel)) && maxSlots > 0 && maxSenders > 0;
+    }
+
+    public static boolean isOutputPluginUsable(Handle handle, String pluginName) {
+        // Requires a role with sufficient privileges to create replication slots
+        // (often needs REPLICATION role or superuser depending on setup).
+        String slot = "probe_" + pluginName + "_" + UUID.randomUUID().toString().replace("-", "");
+
+        try {
+            handle.execute("select * from pg_create_logical_replication_slot(?, ?)", slot, pluginName);
+
+            handle.execute("select pg_drop_replication_slot(?)", slot);
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to create replication slot for output plugin '{}' -> '{}'", pluginName, e.getMessage());
+            try {
+                handle.execute("select pg_drop_replication_slot(?)", slot);
+            } catch (Exception ignore) {
+                log.warn("Failed to create replication slot for output plugin '{}' -> '{}'", pluginName, e.getMessage());
+                // ignore
+            }
+            return false;
+        }
     }
 
     /**
