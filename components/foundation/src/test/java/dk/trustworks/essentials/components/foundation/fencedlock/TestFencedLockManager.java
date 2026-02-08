@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2025 the original author or authors.
+ * Copyright 2021-2026 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import dk.trustworks.essentials.shared.Lifecycle;
 import org.jdbi.v3.core.*;
 import org.slf4j.*;
 
-import java.time.*;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 

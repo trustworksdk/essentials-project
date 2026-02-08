@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2025 the original author or authors.
+ * Copyright 2021-2026 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.foundation.scheduler.executor.Executo
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.PgCronJob;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.ttl.*;
-import dk.trustworks.essentials.shared.*;
+import dk.trustworks.essentials.shared.Lifecycle;
 import org.slf4j.*;
 
 import java.nio.charset.StandardCharsets;
@@ -30,8 +30,8 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-import static dk.trustworks.essentials.shared.MessageFormatter.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
+import static dk.trustworks.essentials.shared.MessageFormatter.*;
 
 /**
  * Manages TTL (Time-To-Live) jobs in a PostgreSQL environment. This class schedules and executes
