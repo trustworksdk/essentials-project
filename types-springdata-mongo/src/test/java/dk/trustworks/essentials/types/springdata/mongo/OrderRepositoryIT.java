@@ -1,5 +1,5 @@
 /*
- * Copyright 2021-2025 the original author or authors.
+ * Copyright 2021-2026 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@
 package dk.trustworks.essentials.types.springdata.mongo;
 
 import dk.trustworks.essentials.types.*;
-import dk.trustworks.essentials.types.springdata.mongo.model.Order;
 import dk.trustworks.essentials.types.springdata.mongo.model.*;
+import dk.trustworks.essentials.types.springdata.mongo.model.Order;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
