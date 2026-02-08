@@ -182,7 +182,7 @@ public abstract class BaseBigDecimalTypeConversion<T extends BigDecimalType<T>> 
      * Default conversion uses this logic: <code>SingleValueType.from(new BigDecimal(value), getConvertedType());</code>
      * Override this method to provide a custom to {@link BigDecimalType} conversion
      *
-     * @param stringValue the {@link BigDecimalType}øs value represented as a string
+     * @param stringValue the {@link BigDecimalType}'s value represented as a string
      * @return the {@link BigDecimalType} instance corresponding to the <code>stringValue</code>
      */
     protected T convertToBigDecimalType(String stringValue) {
