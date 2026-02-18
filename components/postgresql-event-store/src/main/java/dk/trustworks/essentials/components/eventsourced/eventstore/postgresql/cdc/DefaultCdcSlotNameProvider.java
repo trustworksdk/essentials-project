@@ -34,14 +34,14 @@ public class DefaultCdcSlotNameProvider implements CdcSlotNameProvider {
     private final String databaseNameOrAlias;
 
     public DefaultCdcSlotNameProvider(String databaseNameOrAlias) {
-        this.databaseNameOrAlias = databaseNameOrAlias == null ? "db" : databaseNameOrAlias;
-        PostgresqlUtil.checkIsValidTableOrColumnName(databaseNameOrAlias);
+        this.databaseNameOrAlias = databaseNameOrAlias == null ? "db" : databaseNameOrAlias.replace("-", "_");
+        PostgresqlUtil.checkIsValidTableOrColumnName(this.databaseNameOrAlias);
     }
 
     @Override
     public String slotName(CdcConsumerGroup group) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(group.name());
-        return ("essentials_" + group.name() + "_" + databaseNameOrAlias).toLowerCase();
+        var name = group.name().replace("-", "_");
+        return ("essentials_" + name + "_" + databaseNameOrAlias).toLowerCase();
     }
 
 }

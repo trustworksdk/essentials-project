@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.Wal2JsonTailerProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.Wal2JsonTailerErrorHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -85,6 +86,7 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
     void starts_and_persists_wal2json_messages_for_inserts() {
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
+        var availability = new CdcAvailability();
         var tailer = new Wal2JsonTailer(
                 replicationDataSource,
                 jdbi,
@@ -98,6 +100,8 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
                         Duration.ofMillis(100)
                                                  ),
                 PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
                 Optional.empty(),
                 Optional.empty()
         );
@@ -128,6 +132,7 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
     void stops_and_does_not_persist_after_stop() {
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
+        var availability = new CdcAvailability();
         var tailer = new Wal2JsonTailer(
                 replicationDataSource,
                 jdbi,
@@ -141,6 +146,8 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
                         Duration.ofMillis(100)
                                                  ),
                 PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
                 Optional.empty(),
                 Optional.empty()
         );
@@ -212,6 +219,7 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
             }
         };
 
+        var availability = new CdcAvailability();
         var tailer = new Wal2JsonTailer(
                 replicationDataSource,
                 jdbi,
@@ -225,6 +233,8 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
                         Duration.ofMillis(100)
                                                  ),
                 PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
                 Optional.empty(),
                 Optional.of(handler)
         );
@@ -249,6 +259,112 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
     }
 
     @Test
+    void exposes_slot_lock_status_and_metric() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+        var registry = new SimpleMeterRegistry();
+
+        var availability = new CdcAvailability();
+        var tailer = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                Wal2JsonTailerProperties.defaults(
+                        Duration.ofMillis(20),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(2),
+                        Duration.ofMillis(100)
+                                                 ),
+                PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
+                Optional.of(registry),
+                Optional.empty()
+        );
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(5))
+                  .pollInterval(Duration.ofMillis(50))
+                  .untilAsserted(() -> {
+                      var status = tailer.getStatus();
+                      assertThat(status.slotName()).isEqualTo(slotName);
+                      assertThat(status.slotLockAcquired()).isTrue();
+
+                      double metric = registry.get("essentials.cdc.wal2json.slot_lock_acquired")
+                                             .tag("slot", slotName)
+                                             .gauge()
+                                             .value();
+                      assertThat(metric).isEqualTo(1.0);
+                  });
+
+        tailer.stop();
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(2))
+                  .pollInterval(Duration.ofMillis(50))
+                  .untilAsserted(() -> assertThat(tailer.getStatus().slotLockAcquired()).isFalse());
+    }
+
+    @Test
+    void only_one_tailer_can_acquire_slot_lock() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        var availability1 = new CdcAvailability();
+        var tailer1 = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                Wal2JsonTailerProperties.defaults(
+                        Duration.ofMillis(20),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(2),
+                        Duration.ofMillis(100)
+                                                 ),
+                PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability1,
+                Optional.empty(),
+                Optional.empty()
+        );
+
+        var availability2 = new CdcAvailability();
+        var tailer2 = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                Wal2JsonTailerProperties.defaults(
+                        Duration.ofMillis(20),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(2),
+                        Duration.ofMillis(100)
+                                                 ),
+                PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability2,
+                Optional.empty(),
+                Optional.empty()
+        );
+
+        tailer1.startAndAwaitReady(Duration.ofSeconds(10));
+        tailer2.start();
+
+        Awaitility.await()
+                  .during(Duration.ofSeconds(1))
+                  .atMost(Duration.ofSeconds(2))
+                  .pollInterval(Duration.ofMillis(50))
+                  .untilAsserted(() -> assertThat(tailer2.getStatus().slotLockAcquired()).isFalse());
+
+        tailer1.stop();
+        tailer2.stop();
+    }
+
+    @Test
     void perf_500_inserts_throughput_and_latency_based_on_inbox_payloads() {
         int totalRows = 500;
         int batchSize = 25;
@@ -257,6 +373,7 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
 
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
+        var availability = new CdcAvailability();
         var tailer = new Wal2JsonTailer(
                 replicationDataSource,
                 jdbi,
@@ -270,6 +387,8 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
                         Duration.ofMillis(100)
                                                  ),
                 PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
                 Optional.empty(),
                 Optional.empty()
         );

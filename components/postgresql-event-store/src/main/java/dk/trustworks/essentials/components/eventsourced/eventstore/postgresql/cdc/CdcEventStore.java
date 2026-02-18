@@ -49,17 +49,20 @@ public class CdcEventStore<CONFIG> implements EventStore {
     private final EventStreamGapHandler<?>                                    eventStreamGapHandler;
     private final CdcEventBus                                                 cdcBus;
     private final int                                                         backfillBatchSize;
+    private final CdcAvailability                                             availability;
 
     public CdcEventStore(EventStore delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
                          CdcEventBus cdcBus,
-                         CdcProperties cdcProperties) {
+                         CdcProperties cdcProperties,
+                         CdcAvailability availability) {
         this.eventStore = requireNonNull(delegate, "delegate eventStore must not be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
         this.eventStreamGapHandler = requireNonNull(eventStreamGapHandler, "eventStreamGapHandler must not be null");
         this.cdcBus = requireNonNull(cdcBus, "cdcBus must not be null");
         requireNonNull(cdcProperties, "cdcProperties must not be null");
+        this.availability = requireNonNull(availability, "availability must not be null");
         requireTrue(cdcProperties.getCdcEventStoreBackfillBatchSize() >= 1, "backfillBatchSize must be >= 1");
         this.backfillBatchSize = cdcProperties.getCdcEventStoreBackfillBatchSize();
     }
@@ -72,6 +75,16 @@ public class CdcEventStore<CONFIG> implements EventStore {
                                            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
                                            Optional<SubscriberId> subscriptionId,
                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory) {
+        if (!availability.isActive()) {
+            availability.fallbackUsed();
+            return eventStore.pollEvents(aggregateType,
+                                         fromInclusiveGlobalOrder,
+                                         loadEventsByGlobalOrderBatchSize,
+                                         pollingInterval,
+                                         onlyIncludeEventIfItBelongsToTenant,
+                                         subscriptionId,
+                                         eventStorePollingOptimizerFactory);
+        }
 
         var resume = GlobalEventOrder.of(fromInclusiveGlobalOrder);
 

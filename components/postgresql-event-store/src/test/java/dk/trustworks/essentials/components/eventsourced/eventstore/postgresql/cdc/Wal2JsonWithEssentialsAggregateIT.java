@@ -102,6 +102,7 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 Duration.ofMillis(250)
                                                                  );
 
+        var availability = new CdcAvailability();
         var tailer = new Wal2JsonTailer(
                 replicationDataSource,
                 jdbi,
@@ -110,6 +111,8 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 inboxRepository,
                 cfg,
                 PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
                 Optional.empty(),
                 Optional.empty()
         );
@@ -123,7 +126,8 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 Optional.empty(),
                 cdcPersistedEvents::addAll,
                 slotName,
-                CdcDispatcherProperties.defaults()
+                CdcDispatcherProperties.defaults(),
+                availability
         );
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
@@ -178,6 +182,7 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 Duration.ofMillis(250)
                                         );
 
+        var availability = new CdcAvailability();
         var tailer = new Wal2JsonTailer(
                 replicationDataSource,
                 jdbi,
@@ -186,6 +191,8 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 inboxRepository,
                 cfg,
                 PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
                 Optional.empty(),
                 Optional.empty()
         );
@@ -199,7 +206,8 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 Optional.empty(),
                 cdcPersistedEvents::addAll,
                 slotName,
-                CdcDispatcherProperties.defaults()
+                CdcDispatcherProperties.defaults(),
+                availability
         );
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));

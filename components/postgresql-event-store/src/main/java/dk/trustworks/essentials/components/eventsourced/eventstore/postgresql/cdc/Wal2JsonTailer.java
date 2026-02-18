@@ -31,6 +31,7 @@ import org.slf4j.*;
 import javax.sql.DataSource;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.sql.*;
 import java.time.Duration;
 import java.util.Optional;
@@ -54,6 +55,8 @@ public class Wal2JsonTailer implements Lifecycle {
     private final Wal2JsonTailerErrorHandler                                    errorHandler;
     private final Wal2JsonTailerProperties                                      wal2JsonTailerProperties;
     private final PgSlotMode                                                    pgSlotMode;
+    private final CdcMode                                                       cdcMode;
+    private final CdcAvailability                                               availability;
 
     private ExecutorService executor;
     private Future<?>       loopFuture;
@@ -75,6 +78,7 @@ public class Wal2JsonTailer implements Lifecycle {
     private final AtomicReference<String> lastReceiveLsn       = new AtomicReference<>("n/a");
     private final AtomicReference<String> lastAckedLsn         = new AtomicReference<>("n/a");
     private final AtomicReference<String> lastMessagePreview   = new AtomicReference<>("");
+    private final AtomicBoolean           slotLockAcquired     = new AtomicBoolean(false);
     private       Counter                 connectAttemptsCounter;
     private       Counter                 connectSuccessCounter;
     private       Counter                 connectFailuresCounter;
@@ -93,6 +97,8 @@ public class Wal2JsonTailer implements Lifecycle {
             CdcInboxRepository inboxRepository,
             Wal2JsonTailerProperties wal2JsonTailerProperties,
             PgSlotMode pgSlotMode,
+            CdcMode cdcMode,
+            CdcAvailability availability,
             Optional<MeterRegistry> meterRegistry,
             Optional<Wal2JsonTailerErrorHandler> errorHandler) {
         this.replicationDataSource = requireNonNull(replicationDataSource, "replicationDataSource cannot be null");
@@ -103,6 +109,8 @@ public class Wal2JsonTailer implements Lifecycle {
         this.inboxRepository = requireNonNull(inboxRepository, "inboxRepository cannot be null");
         this.wal2JsonTailerProperties = requireNonNull(wal2JsonTailerProperties, "properties cannot be null");
         this.pgSlotMode = requireNonNull(pgSlotMode, "pgSlotMode cannot be null");
+        this.cdcMode = requireNonNull(cdcMode, "cdcMode cannot be null");
+        this.availability = requireNonNull(availability, "availability cannot be null");
         requireNonNull(wal2JsonTailerProperties.getPollInterval(), "pollInterval cannot be null");
         requireNonNull(wal2JsonTailerProperties.getPollBackoffInterval(), "pollBackoffInterval cannot be null");
         requireNonNull(wal2JsonTailerProperties.getMaxPollBackoffInterval(), "maxPollBackInterval cannot be null");
@@ -136,6 +144,10 @@ public class Wal2JsonTailer implements Lifecycle {
         Gauge.builder("essentials.cdc.wal2json.null_polls", nullPolls, AtomicLong::get).tag("slot", slotName).register(meterRegistry);
 
         Gauge.builder("essentials.cdc.wal2json.inbox_write_failures", inboxWriteFailures, AtomicLong::get).tag("slot", slotName).register(meterRegistry);
+
+        Gauge.builder("essentials.cdc.wal2json.slot_lock_acquired", slotLockAcquired, v -> v.get() ? 1.0 : 0.0)
+             .tag("slot", slotName)
+             .register(meterRegistry);
     }
 
     @Override
@@ -145,6 +157,7 @@ public class Wal2JsonTailer implements Lifecycle {
         }
 
         stopping.set(false);
+        availability.inactive(slotName, "starting");
         log.info("[{}] ⚙️ Starting Essentials Wal2JsonTailer", slotName);
 
 
@@ -153,6 +166,7 @@ public class Wal2JsonTailer implements Lifecycle {
             if (!logicalOk) {
                 log.warn("Logical decoding not enabled (wal_level/max_replication_slots/max_wal_senders). CDC disabled.");
                 wal2jsonAvailable = false;
+                availability.failed(slotName, "logical decoding not enabled");
                 return;
             }
 
@@ -161,12 +175,16 @@ public class Wal2JsonTailer implements Lifecycle {
 
             if (!usable) {
                 log.warn("wal2json output plugin not usable (missing plugin or insufficient privileges). CDC disabled.");
+                availability.failed(slotName, "wal2json plugin not usable");
             }
         });
 
         if (!wal2jsonAvailable) {
             started.set(false);
             log.info("wal2json CDC is not available - cannot start Wal2JsonTailer");
+            if (cdcMode == CdcMode.REQUIRE) {
+                throw new IllegalStateException("wal2json CDC is required but not available");
+            }
             return;
         }
 
@@ -198,6 +216,8 @@ public class Wal2JsonTailer implements Lifecycle {
             if (executor != null) {
                 executor.shutdownNow();
             }
+            slotLockAcquired.set(false);
+            availability.inactive(slotName, "stopped");
             started.set(false);
         }
 
@@ -270,11 +290,11 @@ public class Wal2JsonTailer implements Lifecycle {
     }
 
     private void streamOnce() throws SQLException, InterruptedException {
-        jdbi.useHandle(handle -> PgReplicationSlots.ensureSlot(handle.getConnection(), slotName, pgSlotMode));
-
         log.info("[{}] Opening replication connection...", slotName);
 
-        try (Connection replConn = replicationDataSource.getConnection()) {
+        Connection replConn = null;
+        try {
+            replConn = replicationDataSource.getConnection();
             replConn.setAutoCommit(true);
             PGConnection pgConn = replConn.unwrap(PGConnection.class);
 
@@ -284,6 +304,15 @@ public class Wal2JsonTailer implements Lifecycle {
                           replConn.getMetaData().getURL(),
                           pgConn.getBackendPID());
             }
+
+            if (!tryAcquireSlotLock(replConn, slotName)) {
+                log.info("[{}] CDC slot lock not acquired; another tailer is active for this slot", slotName);
+                availability.inactive(slotName, "slot lock not acquired");
+                sleepQuietly(wal2JsonTailerProperties.getPollInterval());
+                return;
+            }
+
+            jdbi.useHandle(handle -> PgReplicationSlots.ensureSlot(handle.getConnection(), slotName, pgSlotMode));
 
             try (PGReplicationStream stream =
                          pgConn.getReplicationAPI()
@@ -298,6 +327,7 @@ public class Wal2JsonTailer implements Lifecycle {
                                .start()) {
 
                 log.info("[{}] Logical replication stream started", slotName);
+                availability.active(slotName);
 
                 if (connectSuccessCounter != null) connectSuccessCounter.increment();
 
@@ -403,6 +433,7 @@ public class Wal2JsonTailer implements Lifecycle {
                 }
             }
         } catch (Exception e) {
+            availability.failed(slotName, e.getMessage());
             Wal2JsonTailerErrorHandler.Decision decision = errorHandler.onStreamError(slotName, e);
             log.warn("[{}] CDC stream error (decision={}): '{}'", slotName, decision, e.getMessage(), e);
 
@@ -421,6 +452,25 @@ public class Wal2JsonTailer implements Lifecycle {
                     throw new RuntimeException(msg("[{}] Retry wal message poll", slotName), e);
                 }
             }
+        } finally {
+            if (replConn != null) {
+                try {
+                    if (slotLockAcquired.get()) {
+                        releaseSlotLock(replConn, slotName);
+                    }
+                } catch (Exception e) {
+                    log.warn("[{}] Failed to release advisory slot lock: {}", slotName, e.getMessage(), e);
+                } finally {
+                    slotLockAcquired.set(false);
+                    try {
+                        replConn.close();
+                    } catch (SQLException closeEx) {
+                        log.debug("[{}] Failed to close replication connection: {}", slotName, closeEx.getMessage(), closeEx);
+                    }
+                }
+            } else {
+                slotLockAcquired.set(false);
+            }
         }
     }
 
@@ -435,6 +485,35 @@ public class Wal2JsonTailer implements Lifecycle {
             Thread.sleep(d.toMillis());
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private static long slotLockKey(String slotName) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(("essentials:cdc:slot:" + slotName).getBytes(StandardCharsets.UTF_8));
+            return ByteBuffer.wrap(digest).getLong();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to compute advisory lock key for slot '" + slotName + "'", e);
+        }
+    }
+
+    private boolean tryAcquireSlotLock(Connection c, String slotName) throws SQLException {
+        try (var ps = c.prepareStatement("select pg_try_advisory_lock(?)")) {
+            ps.setLong(1, slotLockKey(slotName));
+            try (var rs = ps.executeQuery()) {
+                rs.next();
+                boolean acquired = rs.getBoolean(1);
+                slotLockAcquired.set(acquired);
+                return acquired;
+            }
+        }
+    }
+
+    private void releaseSlotLock(Connection c, String slotName) throws SQLException {
+        try (var ps = c.prepareStatement("select pg_advisory_unlock(?)")) {
+            ps.setLong(1, slotLockKey(slotName));
+            ps.execute();
         }
     }
 
@@ -461,6 +540,27 @@ public class Wal2JsonTailer implements Lifecycle {
     @Override
     public boolean isStarted() {
         return started.get();
+    }
+
+    public Wal2JsonTailerStatus getStatus() {
+        return new Wal2JsonTailerStatus(
+                slotName,
+                slotLockAcquired.get(),
+                started.get(),
+                lastReceiveLsn.get(),
+                lastAckedLsn.get(),
+                lastMessageEpochMs.get()
+        );
+    }
+
+    public record Wal2JsonTailerStatus(
+            String slotName,
+            boolean slotLockAcquired,
+            boolean started,
+            String lastReceiveLsn,
+            String lastAckedLsn,
+            long lastMessageEpochMs
+    ) {
     }
 
     final class PgReplicationSlots {

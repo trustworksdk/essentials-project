@@ -21,6 +21,7 @@ import java.time.Duration;
 public class CdcProperties {
 
     private boolean enabled                        = true;
+    private CdcMode mode                           = CdcMode.AUTO;
     private int     cdcEventStoreBackfillBatchSize = 1000;
 
     private final Wal2JsonTailerProperties wal2JsonTailer = new Wal2JsonTailerProperties();
@@ -44,6 +45,19 @@ public class CdcProperties {
      */
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    /**
+     * CDC startup mode:
+     * - {@code AUTO}: fall back to polling if CDC cannot start
+     * - {@code REQUIRE}: fail startup if CDC cannot start
+     */
+    public CdcMode getMode() {
+        return mode;
+    }
+
+    public void setMode(CdcMode mode) {
+        this.mode = mode;
     }
 
     /**
