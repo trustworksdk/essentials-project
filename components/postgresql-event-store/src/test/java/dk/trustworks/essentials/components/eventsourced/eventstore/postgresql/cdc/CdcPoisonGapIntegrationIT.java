@@ -71,7 +71,9 @@ public class CdcPoisonGapIntegrationIT extends AbstractWal2JsonPostgresIT {
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
         gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
 
-        cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties());
+        var availability = new CdcAvailability();
+        availability.active("test");
+        cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties(), availability);
 
         inboxRepository = new CdcInboxRepository(unitOfWorkFactory);
     }
@@ -107,6 +109,8 @@ public class CdcPoisonGapIntegrationIT extends AbstractWal2JsonPostgresIT {
 
         List<PersistedEvent> cdcBus = new CopyOnWriteArrayList<>();
 
+        var availability = new CdcAvailability();
+        availability.active(slotName);
         var dispatcher = new CdcDispatcher(
                 inboxRepository,
                 unitOfWorkFactory,
@@ -116,7 +120,8 @@ public class CdcPoisonGapIntegrationIT extends AbstractWal2JsonPostgresIT {
                 Optional.of(poisonNotifier),
                 cdcBus::addAll,
                 slotName,
-                CdcDispatcherProperties.defaults()
+                CdcDispatcherProperties.defaults(),
+                availability
         );
 
         var orderId = OrderId.of("beed77fb-1115-1115-9c48-03ed5bfe8f89");

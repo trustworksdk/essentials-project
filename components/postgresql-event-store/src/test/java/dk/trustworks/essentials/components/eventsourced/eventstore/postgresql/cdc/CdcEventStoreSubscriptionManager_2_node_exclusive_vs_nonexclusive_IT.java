@@ -244,6 +244,21 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
             SubscriberId  subscriberId  = SubscriberId.of("sub-1");
             String        slotName      = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
+            // Persist many events so the subscription advances (so poison gap is "behind" current)
+            // Do this BEFORE subscribing to avoid timing races with CDC live subscription setup.
+            var orderId = OrderId.random();
+            appendEventsReturningPersisted(
+                    node1.baseEventStore,
+                    aggregateType,
+                    orderId,
+                    List.of(
+                            new OrderEvent.OrderAdded(orderId, CustomerId.random(), 1),
+                            new OrderEvent.ProductAddedToOrder(orderId, ProductId.random(), 2),
+                            new OrderEvent.ProductRemovedFromOrder(orderId, ProductId.random()),
+                            new OrderEvent.OrderAccepted(orderId)
+                           )
+                                           );
+
             // Create subscriptions on both nodes
             var resets   = new CopyOnWriteArrayList<GlobalEventOrder>();
             var received = new ConcurrentLinkedDeque<PersistedEvent>();
@@ -318,22 +333,6 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
                 });
             }
 
-            // Persist many events so the subscription advances (so poison gap is "behind" current)
-            var orderId = OrderId.random();
-            node1.baseEventStore.getUnitOfWorkFactory().usingUnitOfWork(() -> {
-                node1.baseEventStore.appendToStream(
-                        aggregateType,
-                        orderId,
-                        EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED,
-                        List.of(
-                                new OrderEvent.OrderAdded(orderId, CustomerId.random(), 1),
-                                new OrderEvent.ProductAddedToOrder(orderId, ProductId.random(), 2),
-                                new OrderEvent.ProductRemovedFromOrder(orderId, ProductId.random()),
-                                new OrderEvent.OrderAccepted(orderId)
-                               )
-                                                  );
-            });
-
             // Let subscription consume those (hybrid backfill)
             Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
                 assertThat(received.size()).isGreaterThanOrEqualTo(4);
@@ -347,6 +346,8 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
             var                   converter = new JacksonWal2JsonToPersistedEventConverter(node1.jsonSerializer, resolver);
             var                   extractor = new JacksonWalGlobalOrdersExtractor(node1.jsonSerializer, resolver);
 
+            var availability = new CdcAvailability();
+            availability.active(slotName);
             var dispatcher = new CdcDispatcher(
                     node1.inboxRepository,
                     node1.unitOfWorkFactory,
@@ -356,7 +357,8 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
                     Optional.of(notifier),
                     cdcBus::publish,
                     slotName,
-                    CdcDispatcherProperties.defaults()
+                    CdcDispatcherProperties.defaults(),
+                    availability
             );
 
             dispatcher.start();
@@ -465,16 +467,15 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
 
             // Persist 1..10
             var orderId = OrderId.random();
-            unitOfWorkFactory.usingUnitOfWork(() -> {
-                eventStore.appendToStream(
-                        aggregateType,
-                        orderId,
-                        EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED,
-                        IntStream.rangeClosed(1, 10)
-                                 .mapToObj(i -> new OrderEvent.OrderAdded(orderId, CustomerId.random(), i))
-                                 .toList()
-                                         );
-            });
+            var appended = appendEventsReturningPersisted(
+                    eventStore,
+                    aggregateType,
+                    orderId,
+                    IntStream.rangeClosed(1, 10)
+                             .mapToObj(i -> new OrderEvent.OrderAdded(orderId, CustomerId.random(), i))
+                             .toList()
+                                                           );
+            cdcBus.publish(appended);
 
             // Wait until we've processed at least 10 events (so resume is > 5)
             Awaitility.await()
@@ -642,7 +643,9 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
     private HybridManagerContext createHybridManager(String nodeName, CdcEventBus bus) {
         // create Jdbi, unitOfWorkFactory, serializer, baseEventStore, gapHandler as you already do
         // then wrap:
-        var cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, bus, new CdcProperties());
+        var availability = new CdcAvailability();
+        availability.active("test");
+        var cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, bus, new CdcProperties(), availability);
 
         var durableRepo = new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore);
         var manager = EventStoreSubscriptionManager.createFor(
@@ -691,5 +694,21 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
         });
     }
 
+    private List<PersistedEvent> appendEventsReturningPersisted(
+            EventStore store,
+            AggregateType type,
+            OrderId orderId,
+            List<? extends OrderEvent> events
+                                                               ) {
+        return store.getUnitOfWorkFactory().withUnitOfWork(() -> {
+            var stream = store.appendToStream(
+                    type,
+                    orderId,
+                    EventOrder.NO_EVENTS_PREVIOUSLY_PERSISTED,
+                    events
+                                             );
+            return stream.eventList();
+        });
+    }
 
 }

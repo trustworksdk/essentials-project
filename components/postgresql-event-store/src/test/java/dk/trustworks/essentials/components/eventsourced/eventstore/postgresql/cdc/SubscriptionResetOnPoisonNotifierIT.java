@@ -56,6 +56,7 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
     private DurableSubscriptionRepository                                           durableSubscriptionRepository;
     private FencedLockManager                                                       fencedLockManager;
     private EventStoreSubscriptionManager                                           eventStoreSubscriptionManager;
+    private CdcAvailability                                                        availability;
 
     @BeforeEach
     void setup() {
@@ -76,7 +77,8 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
         gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
 
-        cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties());
+        availability = new CdcAvailability();
+        cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties(), availability);
 
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore);
 
@@ -126,6 +128,8 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
                 durableSubscriptionRepository
         );
 
+        var availability = new CdcAvailability();
+        availability.active(slotName);
         var dispatcher = new CdcDispatcher(
                 inboxRepository,
                 unitOfWorkFactory,
@@ -135,7 +139,8 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
                 Optional.of(poisonNotifier),
                 cdcEventStore.getCdcBus()::publish, // publish converted events
                 slotName,
-                CdcDispatcherProperties.defaults()
+                CdcDispatcherProperties.defaults(),
+                availability
         );
 
         var received   = new CopyOnWriteArrayList<Long>();
@@ -178,28 +183,24 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
         // --- When: produce normal events 1..5 ---
         var orderId = OrderId.of("beed77fb-1115-1115-9c48-03ed5bfe8f89");
 
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            eventStore.appendToStream(
-                    ORDERS,
-                    orderId,
-                    List.of(
-                            new OrderEvent.OrderAdded(orderId, CustomerId.of("C1"), 100),
-                            new OrderEvent.ProductAddedToOrder(orderId, ProductId.of("P1"), 2),
-                            new OrderEvent.ProductRemovedFromOrder(orderId, ProductId.of("P1"))
-                           )
-                                     );
-        });
+        appendAndPublish(
+                ORDERS,
+                orderId,
+                List.of(
+                        new OrderEvent.OrderAdded(orderId, CustomerId.of("C1"), 100),
+                        new OrderEvent.ProductAddedToOrder(orderId, ProductId.of("P1"), 2),
+                        new OrderEvent.ProductRemovedFromOrder(orderId, ProductId.of("P1"))
+                       )
+        );
 
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            eventStore.appendToStream(
-                    ORDERS,
-                    orderId,
-                    List.of(
-                            new OrderEvent.OrderAdded(orderId, CustomerId.of("C2"), 200),
-                            new OrderEvent.OrderAdded(orderId, CustomerId.of("C3"), 300)
-                           )
-                                     );
-        });
+        appendAndPublish(
+                ORDERS,
+                orderId,
+                List.of(
+                        new OrderEvent.OrderAdded(orderId, CustomerId.of("C2"), 200),
+                        new OrderEvent.OrderAdded(orderId, CustomerId.of("C3"), 300)
+                       )
+        );
 
         // Wait until subscription has consumed at least 5 events
         await()
@@ -263,23 +264,28 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
                       assertThat(rp.getResumeFromAndIncluding().longValue()).isEqualTo(2L);
                   });
 
-        // And: subscription should not stall; append another event and verify we eventually see a higher GO
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            eventStore.appendToStream(
-                    ORDERS,
-                    orderId,
-                    List.of(new OrderEvent.OrderAdded(orderId, CustomerId.of("C4"), 400))
-                                     );
-        });
-
+        // Wait until replay has actually started (GO=2 is a permanent gap).
+        // We avoid clearing the list to prevent racing with an already in-flight replay.
+        long initialCount5 = received.stream().filter(go -> go == 5L).count();
         await()
                   .atMost(Duration.ofSeconds(10))
                   .pollInterval(Duration.ofMillis(50))
                   .untilAsserted(() -> {
-                      // We don’t assert exact ordering here (reset can cause replays)
-                      // But we *must* see progress beyond 5 (e.g. 6)
-                      assertThat(received.stream().max(Long::compareTo).orElse(0L)).isGreaterThanOrEqualTo(6L);
+                      long count5 = received.stream().filter(go -> go == 5L).count();
+                      assertThat(count5).isGreaterThanOrEqualTo(initialCount5 + 1);
                   });
+
+        // And: subscription should not stall; append another event and verify we eventually see a higher GO
+        appendAndPublish(
+                ORDERS,
+                orderId,
+                List.of(new OrderEvent.OrderAdded(orderId, CustomerId.of("C4"), 400))
+        );
+
+        await()
+                  .atMost(Duration.ofSeconds(10))
+                  .pollInterval(Duration.ofMillis(50))
+                  .untilAsserted(() -> assertThat(received).contains(6L));
 
 
         dispatcher.stop();
@@ -292,21 +298,20 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
 
         AggregateType aggregateType = ORDERS;
         SubscriberId  subscriberId  = SubscriberId.of("ordering-it");
+        availability.active("test");
 
         // Persist 3 events → backfill range
         var orderId = OrderId.of("beed77fb-1115-1115-9c48-03ed5bfe8f89");
 
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            eventStore.appendToStream(
-                    aggregateType,
-                    orderId,
-                    List.of(
-                            new OrderEvent.OrderAdded(orderId, CustomerId.of("C1"), 100),
-                            new OrderEvent.ProductAddedToOrder(orderId, ProductId.of("P1"), 2),
-                            new OrderEvent.ProductRemovedFromOrder(orderId, ProductId.of("P1"))
-                           )
-                                     );
-        });
+        appendAndPublish(
+                aggregateType,
+                orderId,
+                List.of(
+                        new OrderEvent.OrderAdded(orderId, CustomerId.of("C1"), 100),
+                        new OrderEvent.ProductAddedToOrder(orderId, ProductId.of("P1"), 2),
+                        new OrderEvent.ProductRemovedFromOrder(orderId, ProductId.of("P1"))
+                       )
+        );
 
         // Capture emitted events
         List<Long> receivedOrders = new CopyOnWriteArrayList<>();
@@ -334,13 +339,11 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
                                 );
 
         // 🔥 Inject live CDC event *while backfill is still running*
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            eventStore.appendToStream(
-                    aggregateType,
-                    orderId,
-                    List.of(new OrderEvent.OrderAdded(orderId, CustomerId.of("C2"), 200))
-                                     );
-        });
+        appendAndPublish(
+                aggregateType,
+                orderId,
+                List.of(new OrderEvent.OrderAdded(orderId, CustomerId.of("C2"), 200))
+        );
 
         // Then: must eventually emit 1,2,3,4 IN ORDER
         await()
@@ -414,13 +417,11 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
         // Persist enough events so the subscriber can advance beyond 5 (to prove rewind is meaningful)
         // Create 12 events => expected resumeFromAndIncluding ends up >= 13 eventually
         var orderId = OrderId.of("beed77fb-1115-1115-9c48-03ed5bfe8f89");
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            var events = new ArrayList<Object>();
-            for (int i = 0; i < 12; i++) {
-                events.add(new OrderEvent.OrderAdded(orderId, CustomerId.of("C" + i), 100 + i));
-            }
-            eventStore.appendToStream(aggregateType, orderId, events);
-        });
+        var events = new ArrayList<Object>();
+        for (int i = 0; i < 12; i++) {
+            events.add(new OrderEvent.OrderAdded(orderId, CustomerId.of("C" + i), 100 + i));
+        }
+        appendAndPublish(aggregateType, orderId, events);
 
         // Wait until the subscription has definitely processed past the gap (so current resume > 5)
         Awaitility.await()
@@ -480,6 +481,17 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
         subscription.unsubscribe();
         subscriptionManager.stop();
         fencedLockManager.stop();
+    }
+
+    private void appendAndPublish(AggregateType aggregateType, OrderId orderId, List<?> events) {
+        var persisted = unitOfWorkFactory.withUnitOfWork(uow ->
+                                                                 eventStore.appendToStream(
+                                                                         aggregateType,
+                                                                         orderId,
+                                                                         events
+                                                                 ).eventList()
+                                                        );
+        cdcEventStore.getCdcBus().publish(persisted);
     }
 
 }

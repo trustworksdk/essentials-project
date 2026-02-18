@@ -47,6 +47,7 @@ public class CdcDispatcher implements Lifecycle {
     private final Duration                                                      pollInterval;
     private final int                                                           batchSize;
     private final PoisonPolicy                                                  poisonPolicy;
+    private final CdcAvailability                                               availability;
 
     private final AtomicBoolean started  = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
@@ -62,7 +63,8 @@ public class CdcDispatcher implements Lifecycle {
                          Optional<CdcPoisonNotifier> cdcPoisonNotifier,
                          Consumer<List<PersistedEvent>> onEvents,
                          String slotName,
-                         CdcDispatcherProperties cdcDispatcherProperties) {
+                         CdcDispatcherProperties cdcDispatcherProperties,
+                         CdcAvailability availability) {
         this.inbox = requireNonNull(inbox, "inbox cannot be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
         this.eventStreamGapHandler = requireNonNull(eventStreamGapHandler, "eventStreamGapHandler cannot be null");
@@ -76,11 +78,18 @@ public class CdcDispatcher implements Lifecycle {
         requireTrue(cdcDispatcherProperties.getBatchSize() >= 1, "batchSize has to be 1 or greater");
         this.batchSize = cdcDispatcherProperties.getBatchSize();
         this.poisonPolicy = requireNonNull(cdcDispatcherProperties.getPoisonPolicy(), "poisonPolicy cannot be null");
+        this.availability = requireNonNull(availability, "availability cannot be null");
     }
 
     @Override
     public void start() {
         if (!started.compareAndSet(false, true)) return;
+
+        if (!availability.isActive()) {
+            started.set(false);
+            log.info("[{}] CDC dispatcher not started because CDC is not active (state={})", slotName, availability.getState());
+            return;
+        }
 
         log.info("[{}] ⚙️ Starting CDC dispatcher, polling every '{}' ms, batch size '{}' and poison policy '{}'", slotName, pollInterval.toMillis(), batchSize, poisonPolicy);
 

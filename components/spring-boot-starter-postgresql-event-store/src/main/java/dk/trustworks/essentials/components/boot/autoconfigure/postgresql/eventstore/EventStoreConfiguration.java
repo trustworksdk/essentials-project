@@ -30,6 +30,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bu
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.Wal2JsonTailerErrorHandler;
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.health.CdcHealthIndicator;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
@@ -63,6 +64,8 @@ import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
+import org.springframework.boot.actuate.autoconfigure.health.ConditionalOnEnabledHealthIndicator;
+import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
@@ -245,7 +248,7 @@ public class EventStoreConfiguration {
                                                                 persistenceStrategy,
                                                                 Optional.of(eventStoreLocalEventBus),
                                                                 eventStore -> essentialsComponentsProperties.isUseEventStreamGapHandler() ?
-                                                                              new PostgresqlEventStreamGapHandler<>(eventStore, eventStoreUnitOfWorkFactory) :
+                                                                              new PostgresqlEventStreamGapHandler<>(eventStoreUnitOfWorkFactory) :
                                                                               new NoEventStreamGapHandler<>(),
                                                                 eventStoreSubscriptionObserver);
         configurableEventStore.addEventStoreInterceptors(eventStoreInterceptors);
@@ -254,9 +257,8 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
-                                                                                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
-        return new PostgresqlEventStreamGapHandler<>(eventStore, eventStoreUnitOfWorkFactory);
+    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
+        return new PostgresqlEventStreamGapHandler<>(eventStoreUnitOfWorkFactory);
     }
 
     @Bean
@@ -419,23 +421,45 @@ public class EventStoreConfiguration {
     // CDC ############################################################################################
 
     @Bean
+    @ConditionalOnClass(HealthIndicator.class)
+    @ConditionalOnEnabledHealthIndicator("cdc")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public HealthIndicator cdcHealthIndicator(CdcAvailability availability,
+                                              Optional<Wal2JsonTailer> tailer,
+                                              Optional<CdcDispatcher> dispatcher,
+                                              EssentialsEventStoreProperties properties) {
+        return new CdcHealthIndicator(availability, tailer, dispatcher, properties);
+    }
+
+    @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public EventStore cdcEventStore(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                                     EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                     EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
                                     CdcEventBus cdcEventBus,
-                                    EssentialsEventStoreProperties essentialsProperties) {
+                                    EssentialsEventStoreProperties essentialsProperties,
+                                    CdcAvailability availability) {
         return new CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration>(
                 eventStore,
                 eventStoreUnitOfWorkFactory,
                 eventStreamGapHandler,
                 cdcEventBus,
-                essentialsProperties.getCdc()
+                essentialsProperties.getCdc(),
+                availability
         );
     }
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcAvailability cdcAvailability(Optional<MeterRegistry> meterRegistry) {
+        return new CdcAvailability(meterRegistry);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcDispatcher cdcDispatcher(CdcInboxRepository cdcInboxRepository,
                                        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                        EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
@@ -445,7 +469,8 @@ public class EventStoreConfiguration {
                                        CdcEventBus cdcEventBus,
                                        EssentialsEventStoreProperties essentialsProperties,
                                        CdcConsumerGroup group,
-                                       CdcSlotNameProvider slotNameProvider) {
+                                       CdcSlotNameProvider slotNameProvider,
+                                       CdcAvailability availability) {
 
         var slotProps = essentialsProperties.getCdc().getSlot();
         String slotName = slotProps.getName() != null && !slotProps.getName().isBlank()
@@ -460,12 +485,14 @@ public class EventStoreConfiguration {
                                  Optional.of(subscriptionResetOnPoisonNotifier),
                                  cdcEventBus::publish,
                                  slotName,
-                                 essentialsProperties.getCdc().getCdcDispatcher()
+                                 essentialsProperties.getCdc().getCdcDispatcher(),
+                                 availability
         );
     }
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public SubscriptionResetOnPoisonNotifier subscriptionResetOnPoisonNotifier(EventStoreSubscriptionManager eventStoreSubscriptionManager,
                                                                                DurableSubscriptionRepository durableSubscriptionRepository) {
         return new SubscriptionResetOnPoisonNotifier(eventStoreSubscriptionManager, durableSubscriptionRepository);
@@ -473,24 +500,28 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcEventBus cdcEventBus() {
         return new CdcEventBus();
     }
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public Wal2JsonToPersistedEventConverter wal2JsonToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
         return new JacksonWal2JsonToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
     }
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public WalGlobalOrdersExtractor walGlobalOrdersExtractor(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
         return new JacksonWalGlobalOrdersExtractor(jsonSerializer, aggregateTypeResolver);
     }
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public AggregateTypeResolver aggregateTypeResolver(EventStore eventStore) {
         var postgresqlEventStore           = (PostgresqlEventStore<?>) eventStore;
         var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates();
@@ -499,12 +530,14 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcConsumerGroup cdcConsumerGroup(EssentialsEventStoreProperties props) {
         return CdcConsumerGroup.of(props.getCdc().getSlot().getGroup());
     }
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcSlotNameProvider cdcSlotNameProvider(DataSourceProperties dsProps) {
         // best-effort db name extraction; you can improve this later
         String url = dsProps.getUrl();
@@ -523,6 +556,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public Wal2JsonTailer wal2JsonTailer(@Qualifier("essentialsReplicationDataSource")  DataSource replicationDataSource,
                                          Jdbi jdbi,
                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
@@ -530,6 +564,7 @@ public class EventStoreConfiguration {
                                          EssentialsEventStoreProperties properties,
                                          CdcConsumerGroup group,
                                          CdcSlotNameProvider slotNameProvider,
+                                         CdcAvailability availability,
                                          Optional<MeterRegistry> meterRegistry,
                                          Optional<Wal2JsonTailerErrorHandler> errorHandler) {
 
@@ -545,18 +580,22 @@ public class EventStoreConfiguration {
                                   cdcInboxRepository,
                                   properties.getCdc().getWal2JsonTailer(),
                                   properties.getCdc().getSlot().getMode(),
+                                  properties.getCdc().getMode(),
+                                  availability,
                                   meterRegistry,
                                   errorHandler);
     }
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcInboxRepository cdcInboxRepository(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
         return new CdcInboxRepository(eventStoreUnitOfWorkFactory);
     }
 
     @Bean(name = "essentialsReplicationDataSource")
     @Qualifier("essentialsReplicationDataSource")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public DataSource replicationDataSource(DataSourceProperties properties) throws SQLException {
         var jdbcUrl = properties.getUrl();
         if (jdbcUrl == null) {
