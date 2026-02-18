@@ -282,6 +282,12 @@ public class EventStoreConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
+        return new PostgresqlEventStreamGapHandler<>(eventStoreUnitOfWorkFactory);
+    }
+
+    @Bean
     @ConditionalOnProperty(prefix = "management.tracing", name = "enabled", havingValue = "true")
     public MicrometerTracingEventStoreInterceptor micrometerTracingEventStoreInterceptor(Optional<Tracer> tracer,
                                                                                          Optional<Propagator> propagator,

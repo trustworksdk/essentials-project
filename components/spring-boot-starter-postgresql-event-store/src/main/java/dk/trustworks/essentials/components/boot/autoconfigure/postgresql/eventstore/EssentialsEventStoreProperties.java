@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.projection.An
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream;
