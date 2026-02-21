@@ -39,6 +39,7 @@ import org.junit.jupiter.api.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
@@ -70,7 +71,7 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
-        gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
+        gapHandler = new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory);
 
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, eventStore);
 
@@ -530,6 +531,528 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
     }
 
     @Test
+    void hybrid_2node_batched_non_exclusive_duplicate_delivery_is_expected_and_ordered_per_node() {
+        var cdcBus = new CdcEventBus();
+        var node1 = createHybridManager("node1", cdcBus);
+        var node2 = createHybridManager("node2", cdcBus);
+
+        try {
+            var node1Orders = new CopyOnWriteArrayList<Long>();
+            var node2Orders = new CopyOnWriteArrayList<Long>();
+            var orderId = OrderId.random();
+
+            var sub1 = node1.manager.batchSubscribeToAggregateEventsAsynchronously(
+                    SubscriberId.of("batched-node1-sub"),
+                    ORDERS,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    10,
+                    Duration.ofMillis(50),
+                    new BatchedPersistedEventHandler() {
+                        @Override
+                        public int handleBatch(List<PersistedEvent> events) {
+                            events.forEach(event -> node1Orders.add(event.globalEventOrder().longValue()));
+                            return 10;
+                        }
+
+                        @Override
+                        public void onResetFrom(EventStoreSubscription subscription, GlobalEventOrder subscribeFromAndIncludingGlobalOrder) {
+                        }
+                    }
+            );
+
+            var sub2 = node2.manager.batchSubscribeToAggregateEventsAsynchronously(
+                    SubscriberId.of("batched-node2-sub"),
+                    ORDERS,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    10,
+                    Duration.ofMillis(50),
+                    new BatchedPersistedEventHandler() {
+                        @Override
+                        public int handleBatch(List<PersistedEvent> events) {
+                            events.forEach(event -> node2Orders.add(event.globalEventOrder().longValue()));
+                            return 10;
+                        }
+
+                        @Override
+                        public void onResetFrom(EventStoreSubscription subscription, GlobalEventOrder subscribeFromAndIncludingGlobalOrder) {
+                        }
+                    }
+            );
+
+            var appended = appendEventsReturningPersisted(
+                    node1.baseEventStore,
+                    ORDERS,
+                    orderId,
+                    IntStream.rangeClosed(1, 6)
+                             .mapToObj(i -> new OrderEvent.OrderAdded(orderId, CustomerId.random(), i))
+                             .toList()
+            );
+            cdcBus.publish(appended);
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                assertThat(node1Orders).containsExactly(1L, 2L, 3L, 4L, 5L, 6L);
+                assertThat(node2Orders).containsExactly(1L, 2L, 3L, 4L, 5L, 6L);
+            });
+
+            sub1.stop();
+            sub2.stop();
+        } finally {
+            safeStop(node1);
+            safeStop(node2);
+        }
+    }
+
+    @Test
+    void hybrid_2node_exclusive_failover_replays_from_last_durable_resume_point() {
+        var cdcBus = new CdcEventBus();
+        var node1 = createHybridManager("node1", cdcBus);
+        var node2 = createHybridManager("node2", cdcBus);
+
+        try {
+            AggregateType aggregateType = ORDERS;
+            SubscriberId subscriberId = SubscriberId.of("exclusive-failover-resume-sub");
+            var orderId = OrderId.random();
+
+            appendEventsReturningPersisted(
+                    node1.baseEventStore,
+                    aggregateType,
+                    orderId,
+                    IntStream.rangeClosed(1, 6)
+                             .mapToObj(i -> new OrderEvent.OrderAdded(orderId, CustomerId.random(), i))
+                             .toList()
+            );
+
+            var node1Orders = new ConcurrentLinkedDeque<Long>();
+            var node2Orders = new ConcurrentLinkedDeque<Long>();
+
+            var sub1 = node1.manager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    new FencedLockAwareSubscriber() {
+                        @Override
+                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint rp) {
+                        }
+
+                        @Override
+                        public void onLockReleased(FencedLock fencedLock) {
+                        }
+                    },
+                    e -> node1Orders.add(e.globalEventOrder().longValue())
+            );
+
+            var sub2 = node2.manager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    new FencedLockAwareSubscriber() {
+                        @Override
+                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint rp) {
+                        }
+
+                        @Override
+                        public void onLockReleased(FencedLock fencedLock) {
+                        }
+                    },
+                    e -> node2Orders.add(e.globalEventOrder().longValue())
+            );
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(sub1.isActive() ^ sub2.isActive()).isTrue());
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                var all = new ArrayList<Long>();
+                all.addAll(node1Orders);
+                all.addAll(node2Orders);
+                assertThat(all).containsAll(List.of(1L, 2L, 3L, 4L, 5L, 6L));
+            });
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                var resume = node1.durableSubscriptionRepository
+                        .getResumePoint(subscriberId, aggregateType)
+                        .orElseThrow()
+                        .getResumeFromAndIncluding()
+                        .longValue();
+                assertThat(resume).isGreaterThanOrEqualTo(7L);
+            });
+
+            boolean node1Active = sub1.isActive();
+            if (node1Active) {
+                node1.manager.stop();
+            } else {
+                node2.manager.stop();
+            }
+
+            Awaitility.await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+                if (node1Active) {
+                    assertThat(sub2.isActive()).isTrue();
+                } else {
+                    assertThat(sub1.isActive()).isTrue();
+                }
+            });
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                var active = node1Active ? sub2 : sub1;
+                assertThat(active.currentResumePoint()).isPresent();
+                assertThat(active.currentResumePoint().orElseThrow().getResumeFromAndIncluding().longValue()).isGreaterThanOrEqualTo(7L);
+            });
+
+            sub1.stop();
+            sub2.stop();
+        } finally {
+            safeStop(node1);
+            safeStop(node2);
+        }
+    }
+
+    @Test
+    void hybrid_poison_reset_triggered_on_standby_does_not_rewind_active_exclusive_subscription() throws InterruptedException {
+        var cdcBus = new CdcEventBus();
+        var node1 = createHybridManager("node1", cdcBus);
+        var node2 = createHybridManager("node2", cdcBus);
+
+        try {
+            AggregateType aggregateType = ORDERS;
+            SubscriberId subscriberId = SubscriberId.of("standby-poison-sub");
+            var orderId = OrderId.random();
+            var resets1 = new CopyOnWriteArrayList<Long>();
+            var resets2 = new CopyOnWriteArrayList<Long>();
+            var received1 = new CopyOnWriteArrayList<Long>();
+            var received2 = new CopyOnWriteArrayList<Long>();
+
+            appendEventsReturningPersisted(
+                    node1.baseEventStore,
+                    aggregateType,
+                    orderId,
+                    IntStream.rangeClosed(1, 10)
+                             .mapToObj(i -> new OrderEvent.OrderAdded(orderId, CustomerId.random(), i))
+                             .toList()
+            );
+
+            var sub1 = node1.manager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    new FencedLockAwareSubscriber() {
+                        @Override
+                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint rp) {
+                        }
+
+                        @Override
+                        public void onLockReleased(FencedLock fencedLock) {
+                        }
+                    },
+                    new PersistedEventHandler() {
+                        @Override
+                        public void onResetFrom(EventStoreSubscription s, GlobalEventOrder g) {
+                            resets1.add(g.longValue());
+                        }
+
+                        @Override
+                        public void handle(PersistedEvent e) {
+                            received1.add(e.globalEventOrder().longValue());
+                        }
+                    }
+            );
+
+            var sub2 = node2.manager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    new FencedLockAwareSubscriber() {
+                        @Override
+                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint rp) {
+                        }
+
+                        @Override
+                        public void onLockReleased(FencedLock fencedLock) {
+                        }
+                    },
+                    new PersistedEventHandler() {
+                        @Override
+                        public void onResetFrom(EventStoreSubscription s, GlobalEventOrder g) {
+                            resets2.add(g.longValue());
+                        }
+
+                        @Override
+                        public void handle(PersistedEvent e) {
+                            received2.add(e.globalEventOrder().longValue());
+                        }
+                    }
+            );
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(sub1.isActive() ^ sub2.isActive()).isTrue());
+            boolean node1Active = sub1.isActive();
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                var resume = node1.durableSubscriptionRepository
+                        .getResumePoint(subscriberId, aggregateType)
+                        .orElseThrow()
+                        .getResumeFromAndIncluding()
+                        .longValue();
+                assertThat(resume).isGreaterThan(5L);
+            });
+
+            var standbyManager = node1Active ? node2.manager : node1.manager;
+            var standbyRepo = node1Active ? node2.durableSubscriptionRepository : node1.durableSubscriptionRepository;
+            new SubscriptionResetOnPoisonNotifier(standbyManager, standbyRepo)
+                    .onPoison(aggregateType, List.of(GlobalEventOrder.of(5L)), "it-poison-standby");
+
+            Thread.sleep(1000);
+
+            var resumeAfter = node1.durableSubscriptionRepository
+                    .getResumePoint(subscriberId, aggregateType)
+                    .orElseThrow()
+                    .getResumeFromAndIncluding()
+                    .longValue();
+            var activeResets = node1Active ? resets1 : resets2;
+            assertThat(resumeAfter).isGreaterThan(5L);
+            assertThat(activeResets).isEmpty();
+
+            var followupOrderId1 = OrderId.random();
+            var appended = appendEventsReturningPersisted(
+                    node1.baseEventStore,
+                    aggregateType,
+                    followupOrderId1,
+                    IntStream.rangeClosed(11, 12)
+                             .mapToObj(i -> new OrderEvent.OrderAdded(followupOrderId1, CustomerId.random(), i))
+                             .toList()
+            );
+            cdcBus.publish(appended);
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                var activeReceived = node1Active ? received1 : received2;
+                assertThat(activeReceived).contains(11L, 12L);
+                assertThat(activeReceived.stream().filter(go -> go == 5L).count()).isLessThanOrEqualTo(1L);
+            });
+
+            sub1.stop();
+            sub2.stop();
+        } finally {
+            safeStop(node1);
+            safeStop(node2);
+        }
+    }
+
+    @Test
+    void hybrid_exclusive_lock_handover_during_poison_reset_keeps_resume_point_clamped() throws InterruptedException {
+        var cdcBus = new CdcEventBus();
+        var node1 = createHybridManager("node1", cdcBus);
+        var node2 = createHybridManager("node2", cdcBus);
+
+        try {
+            AggregateType aggregateType = ORDERS;
+            SubscriberId subscriberId = SubscriberId.of("exclusive-reset-handover-sub");
+            var orderId = OrderId.random();
+
+            appendEventsReturningPersisted(
+                    node1.baseEventStore,
+                    aggregateType,
+                    orderId,
+                    IntStream.rangeClosed(1, 10)
+                             .mapToObj(i -> new OrderEvent.OrderAdded(orderId, CustomerId.random(), i))
+                             .toList()
+            );
+
+            var resets = new CopyOnWriteArrayList<Long>();
+
+            var sub1 = node1.manager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    new FencedLockAwareSubscriber() {
+                        @Override
+                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint rp) {
+                        }
+
+                        @Override
+                        public void onLockReleased(FencedLock fencedLock) {
+                        }
+                    },
+                    new PersistedEventHandler() {
+                        @Override
+                        public void onResetFrom(EventStoreSubscription s, GlobalEventOrder g) {
+                            resets.add(g.longValue());
+                        }
+
+                        @Override
+                        public void handle(PersistedEvent e) {
+                        }
+                    }
+            );
+
+            var sub2 = node2.manager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    new FencedLockAwareSubscriber() {
+                        @Override
+                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint rp) {
+                        }
+
+                        @Override
+                        public void onLockReleased(FencedLock fencedLock) {
+                        }
+                    },
+                    new PersistedEventHandler() {
+                        @Override
+                        public void onResetFrom(EventStoreSubscription s, GlobalEventOrder g) {
+                            resets.add(g.longValue());
+                        }
+
+                        @Override
+                        public void handle(PersistedEvent e) {
+                        }
+                    }
+            );
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(sub1.isActive() ^ sub2.isActive()).isTrue());
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                var resume = node1.durableSubscriptionRepository
+                        .getResumePoint(subscriberId, aggregateType)
+                        .orElseThrow()
+                        .getResumeFromAndIncluding()
+                        .longValue();
+                assertThat(resume).isGreaterThan(5L);
+            });
+
+            boolean node1Active = sub1.isActive();
+            var activeManager = node1Active ? node1.manager : node2.manager;
+            var activeContext = node1Active ? node1 : node2;
+
+            var notifier = new SubscriptionResetOnPoisonNotifier(activeManager, activeContext.durableSubscriptionRepository);
+            var sawClampedResume = new AtomicBoolean(false);
+            var resetThread = new Thread(() -> notifier.onPoison(aggregateType, List.of(GlobalEventOrder.of(5L)), "it-poison-race"));
+            var stopThread = new Thread(() -> {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ignored) {
+                }
+                activeManager.stop();
+            });
+            resetThread.start();
+            stopThread.start();
+            resetThread.join();
+
+            var resumeAfterResetNode1 = node1.durableSubscriptionRepository.getResumePoint(subscriberId, aggregateType)
+                    .orElseThrow()
+                    .getResumeFromAndIncluding()
+                    .longValue();
+            var resumeAfterResetNode2 = node2.durableSubscriptionRepository.getResumePoint(subscriberId, aggregateType)
+                    .orElseThrow()
+                    .getResumeFromAndIncluding()
+                    .longValue();
+            sawClampedResume.set(Math.min(resumeAfterResetNode1, resumeAfterResetNode2) <= 5L);
+
+            stopThread.join();
+
+            Awaitility.await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
+                if (node1Active) {
+                    assertThat(sub2.isActive()).isTrue();
+                } else {
+                    assertThat(sub1.isActive()).isTrue();
+                }
+            });
+
+            assertThat(sawClampedResume.get()).isTrue();
+
+            sub1.stop();
+            sub2.stop();
+        } finally {
+            safeStop(node1);
+            safeStop(node2);
+        }
+    }
+
+    @Test
+    void hybrid_2node_auto_mode_with_one_node_failed_still_processes_after_failover_without_cdc_bus_publish() {
+        var cdcBus = new CdcEventBus();
+        var node1 = createHybridManager("node1", cdcBus);
+        var node2 = createHybridManager("node2", cdcBus, availability -> availability.failed("slot-disabled", "cdc disabled"));
+
+        try {
+            AggregateType aggregateType = ORDERS;
+            SubscriberId subscriberId = SubscriberId.of("mixed-mode-exclusive-sub");
+            var orderId = OrderId.random();
+            var node2Received = new CopyOnWriteArrayList<Long>();
+
+            appendEventsReturningPersisted(
+                    node1.baseEventStore,
+                    aggregateType,
+                    orderId,
+                    IntStream.rangeClosed(1, 3)
+                             .mapToObj(i -> new OrderEvent.OrderAdded(orderId, CustomerId.random(), i))
+                             .toList()
+            );
+
+            var sub1 = node1.manager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    new FencedLockAwareSubscriber() {
+                        @Override
+                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint rp) {
+                        }
+
+                        @Override
+                        public void onLockReleased(FencedLock fencedLock) {
+                        }
+                    },
+                    e -> {
+                    }
+            );
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(sub1.isActive()).isTrue());
+
+            var sub2 = node2.manager.exclusivelySubscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    aggregateType,
+                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+                    Optional.empty(),
+                    new FencedLockAwareSubscriber() {
+                        @Override
+                        public void onLockAcquired(FencedLock fencedLock, SubscriptionResumePoint rp) {
+                        }
+
+                        @Override
+                        public void onLockReleased(FencedLock fencedLock) {
+                        }
+                    },
+                    e -> node2Received.add(e.globalEventOrder().longValue())
+            );
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(sub1.isActive() ^ sub2.isActive()).isTrue());
+            node1.manager.stop();
+            Awaitility.await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> assertThat(sub2.isActive()).isTrue());
+
+            var followupOrderId2 = OrderId.random();
+            appendEventsReturningPersisted(
+                    node2.baseEventStore,
+                    aggregateType,
+                    followupOrderId2,
+                    IntStream.rangeClosed(4, 5)
+                             .mapToObj(i -> new OrderEvent.OrderAdded(followupOrderId2, CustomerId.random(), i))
+                             .toList()
+            );
+
+            Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(node2Received).contains(4L, 5L));
+
+            sub1.stop();
+            sub2.stop();
+        } finally {
+            safeStop(node1);
+            safeStop(node2);
+        }
+    }
+
+    @Test
     void reset_after_poison_never_advances_resume_point() {
 
         AggregateType aggregateType = ORDERS;
@@ -640,22 +1163,21 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
 
     }
 
-    private HybridManagerContext createHybridManager(String nodeName, CdcEventBus bus) {
-        // create Jdbi, unitOfWorkFactory, serializer, baseEventStore, gapHandler as you already do
-        // then wrap:
+    private HybridManagerContext createHybridManager(String nodeName, CdcEventBus bus, java.util.function.Consumer<CdcAvailability> availabilityCustomizer) {
         var availability = new CdcAvailability();
         availability.active("test");
+        availabilityCustomizer.accept(availability);
         var cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, bus, new CdcProperties(), availability);
 
         var durableRepo = new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore);
         var manager = EventStoreSubscriptionManager.createFor(
-                cdcEventStore, // <-- IMPORTANT: manager uses HYBRID store
+                cdcEventStore,
                 20,
                 Duration.ofMillis(100),
                 new PostgresqlFencedLockManager(jdbi, unitOfWorkFactory, Optional.of(nodeName), Duration.ofSeconds(3), Duration.ofMillis(500), false),
                 Duration.ofSeconds(2),
                 durableRepo
-                                                             );
+        );
         manager.start();
 
         var inboxRepo = new CdcInboxRepository(unitOfWorkFactory);
@@ -670,6 +1192,11 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
                 inboxRepo,
                 jacksonJSONSerializer
         );
+    }
+
+    private HybridManagerContext createHybridManager(String nodeName, CdcEventBus bus) {
+        return createHybridManager(nodeName, bus, ignored -> {
+        });
     }
 
     private static void safeStop(HybridManagerContext ctx) {

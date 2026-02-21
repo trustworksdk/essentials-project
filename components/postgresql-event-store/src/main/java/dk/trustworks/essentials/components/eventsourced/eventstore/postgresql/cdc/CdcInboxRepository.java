@@ -27,9 +27,12 @@ import java.util.*;
  * which is responsible for storing event messages.
  */
 @TTLJob(name = "eventstore_cdc_inbox_ttl",
+        tableName = "eventstore_cdc_inbox",
         tableNameProperty = "essentials.cdc.inbox-table-name",
         timestampColumn = "received_at",
-        ttlDurationProperty = "essentials.cdc.inbox-ttl-duration"
+        cronExpression = "30 0 * * *",
+        ttlDurationProperty = "essentials.cdc.inbox-ttl-duration",
+        defaultTtlDays = 90
 )
 public class CdcInboxRepository {
 

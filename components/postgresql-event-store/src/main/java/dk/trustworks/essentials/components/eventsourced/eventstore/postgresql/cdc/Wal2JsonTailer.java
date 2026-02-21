@@ -204,89 +204,96 @@ public class Wal2JsonTailer implements Lifecycle {
         if (!started.get()) {
             return;
         }
-        if (!stopping.compareAndSet(false, true)) {
-            return;
-        }
-        log.info("[{}] ⏹  Stopping Essentials Wal2JsonTailer", slotName);
-        try {
-            if (loopFuture != null) {
-                loopFuture.cancel(true);
+        boolean initiatedStop = stopping.compareAndSet(false, true);
+        if (initiatedStop) {
+            log.info("[{}] ⏹  Stopping Essentials Wal2JsonTailer", slotName);
+            try {
+                if (loopFuture != null) {
+                    loopFuture.cancel(true);
+                }
+            } finally {
+                if (executor != null) {
+                    executor.shutdownNow();
+                }
             }
-        } finally {
-            if (executor != null) {
-                executor.shutdownNow();
-            }
-            slotLockAcquired.set(false);
-            availability.inactive(slotName, "stopped");
-            started.set(false);
         }
-
-        log.info("[{}] 🛑 Stopped Essentials Wal2JsonTailer", slotName);
+        transitionToStoppedState("stopped");
     }
 
     private void runPollLoop() {
         long backoffMs = wal2JsonTailerProperties.getPollBackoffInterval().toMillis();
 
-        while (!Thread.currentThread().isInterrupted() && !stopping.get()) {
-            long attempt = connectAttempt.incrementAndGet();
-            long startNs = System.nanoTime();
-
-            try {
-                if (connectAttemptsCounter != null) connectAttemptsCounter.increment();
-
-                log.info("[{}] CDC connect attempt #{} (backoffMs={}, pollIntervalMs={})",
-                         slotName, attempt, backoffMs, wal2JsonTailerProperties.getPollInterval().toMillis());
-
-                streamOnce();
-
-                long durMs = (System.nanoTime() - startNs) / 1_000_000;
-                log.info("[{}] CDC streamOnce exited normally (attempt #{}, durationMs={})",
-                         slotName, attempt, durMs);
-
-                backoffMs = wal2JsonTailerProperties.getPollBackoffInterval().toMillis();
-            } catch (CancellationException ignored) {
-                log.info("[{}] CDC loop cancelled", slotName);
-                return;
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                log.info("[{}] CDC loop interrupted", slotName);
-                return;
-            } catch (Exception e) {
-                if (stopping.get() || Thread.currentThread().isInterrupted()) {
-                    return;
-                }
-
-                if (connectFailuresCounter != null) connectFailuresCounter.increment();
-
-                long durMs = (System.nanoTime() - startNs) / 1_000_000;
-
-                log.warn("[{}] CDC streamOnce failed (attempt #{}, durationMs={}, backoffMsNext={}, " +
-                                 "messages={}, inboxWrites={}, inboxWriteFailures={}, handlerFailures={}, " +
-                                 "lastReceiveLsn={}, lastAckedLsn={}, lastMsgPreview='{}')",
-                         slotName,
-                         attempt,
-                         durMs,
-                         Math.min(wal2JsonTailerProperties.getMaxPollBackoffInterval().toMillis(), backoffMs * wal2JsonTailerProperties.getBackOffFactor()),
-                         messagesReceived.get(),
-                         inboxWrites.get(),
-                         inboxWriteFailures.get(),
-                         handlerFailures.get(),
-                         lastReceiveLsn.get(),
-                         lastAckedLsn.get(),
-                         lastMessagePreview.get(),
-                         e);
+        try {
+            while (!Thread.currentThread().isInterrupted() && !stopping.get()) {
+                long attempt = connectAttempt.incrementAndGet();
+                long startNs = System.nanoTime();
 
                 try {
-                    sleepBackoffWithJitter(backoffMs);
+                    if (connectAttemptsCounter != null) connectAttemptsCounter.increment();
+
+                    log.info("[{}] CDC connect attempt #{} (backoffMs={}, pollIntervalMs={})",
+                             slotName, attempt, backoffMs, wal2JsonTailerProperties.getPollInterval().toMillis());
+
+                    streamOnce();
+
+                    long durMs = (System.nanoTime() - startNs) / 1_000_000;
+                    log.info("[{}] CDC streamOnce exited normally (attempt #{}, durationMs={})",
+                             slotName, attempt, durMs);
+
+                    backoffMs = wal2JsonTailerProperties.getPollBackoffInterval().toMillis();
+                } catch (CancellationException ignored) {
+                    log.info("[{}] CDC loop cancelled", slotName);
+                    return;
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
-                    log.debug("[{}] CDC interrupted during backoff, shutting down", slotName);
+                    log.info("[{}] CDC loop interrupted", slotName);
                     return;
-                }
+                } catch (Exception e) {
+                    if (stopping.get() || Thread.currentThread().isInterrupted()) {
+                        return;
+                    }
 
-                backoffMs = (long) Math.min(wal2JsonTailerProperties.getMaxPollBackoffInterval().toMillis(), backoffMs * wal2JsonTailerProperties.getBackOffFactor());
+                    if (connectFailuresCounter != null) connectFailuresCounter.increment();
+
+                    long durMs = (System.nanoTime() - startNs) / 1_000_000;
+
+                    log.warn("[{}] CDC streamOnce failed (attempt #{}, durationMs={}, backoffMsNext={}, " +
+                                     "messages={}, inboxWrites={}, inboxWriteFailures={}, handlerFailures={}, " +
+                                     "lastReceiveLsn={}, lastAckedLsn={}, lastMsgPreview='{}')",
+                             slotName,
+                             attempt,
+                             durMs,
+                             Math.min(wal2JsonTailerProperties.getMaxPollBackoffInterval().toMillis(), backoffMs * wal2JsonTailerProperties.getBackOffFactor()),
+                             messagesReceived.get(),
+                             inboxWrites.get(),
+                             inboxWriteFailures.get(),
+                             handlerFailures.get(),
+                             lastReceiveLsn.get(),
+                             lastAckedLsn.get(),
+                             lastMessagePreview.get(),
+                             e);
+
+                    try {
+                        sleepBackoffWithJitter(backoffMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.debug("[{}] CDC interrupted during backoff, shutting down", slotName);
+                        return;
+                    }
+
+                    backoffMs = (long) Math.min(wal2JsonTailerProperties.getMaxPollBackoffInterval().toMillis(), backoffMs * wal2JsonTailerProperties.getBackOffFactor());
+                }
             }
+        } finally {
+            transitionToStoppedState("stopped");
         }
+    }
+
+    private void transitionToStoppedState(String reason) {
+        slotLockAcquired.set(false);
+        availability.inactive(slotName, reason);
+        started.set(false);
+        log.info("[{}] 🛑 Stopped Essentials Wal2JsonTailer", slotName);
     }
 
     private void streamOnce() throws SQLException, InterruptedException {
@@ -435,6 +442,7 @@ public class Wal2JsonTailer implements Lifecycle {
         } catch (Exception e) {
             availability.failed(slotName, e.getMessage());
             Wal2JsonTailerErrorHandler.Decision decision = errorHandler.onStreamError(slotName, e);
+
             log.warn("[{}] CDC stream error (decision={}): '{}'", slotName, decision, e.getMessage(), e);
 
             switch (decision) {

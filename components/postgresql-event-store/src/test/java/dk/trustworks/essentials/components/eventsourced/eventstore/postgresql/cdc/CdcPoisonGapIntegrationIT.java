@@ -37,6 +37,7 @@ import reactor.test.StepVerifier;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
@@ -304,6 +305,175 @@ public class CdcPoisonGapIntegrationIT extends AbstractWal2JsonPostgresIT {
         StepVerifier.create(flux2.skip(2).take(1))
                     .assertNext(e -> assertThat(e.globalEventOrder().longValue()).isEqualTo(4))
                     .verifyComplete();
+    }
+
+    @Test
+    void dispatcher_quarantines_poison_and_dispatches_following_valid_row_from_same_batch() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var walGlobalOrdersExtractor = new JacksonWalGlobalOrdersExtractor(jacksonJSONSerializer, resolver);
+        var poisonNotifier = new RecordingPoisonNotifier();
+        var dispatched = new CopyOnWriteArrayList<PersistedEvent>();
+
+        var dispatcherProps = CdcDispatcherProperties.defaults();
+        dispatcherProps.setBatchSize(10);
+        dispatcherProps.setPollInterval(Duration.ofMillis(25));
+        dispatcherProps.setPoisonPolicy(PoisonPolicy.QUARANTINE_AND_CONTINUE);
+
+        var availability = new CdcAvailability();
+        availability.active(slotName);
+        var dispatcher = new CdcDispatcher(
+                inboxRepository,
+                unitOfWorkFactory,
+                gapHandler,
+                converter,
+                walGlobalOrdersExtractor,
+                Optional.of(poisonNotifier),
+                dispatched::addAll,
+                slotName,
+                dispatcherProps,
+                availability
+        );
+
+        // Same batch: first row is poison, second row is valid.
+        inboxRepository.insertRaw(slotName, "0/POISON-1", poisonWalForGlobalOrder(41L), "RECEIVED");
+        inboxRepository.insertRaw(slotName, "0/VALID-1", validWalForGlobalOrder(42L), "RECEIVED");
+
+        dispatcher.start();
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(10))
+                  .pollInterval(Duration.ofMillis(50))
+                  .untilAsserted(() -> {
+                      assertThat(inboxRepository.statusForLsn(slotName, "0/POISON-1")).contains("POISON");
+                      assertThat(inboxRepository.statusForLsn(slotName, "0/VALID-1")).contains("DISPATCHED");
+
+                      assertThat(dispatched).hasSize(1);
+                      assertThat(dispatched.getFirst().globalEventOrder().longValue()).isEqualTo(42L);
+
+                      assertThat(poisonNotifier.calls).hasSize(1);
+                      assertThat(poisonNotifier.calls.getFirst().gaps()).containsExactly(GlobalEventOrder.of(41L));
+                  });
+
+        dispatcher.stop();
+    }
+
+    @Test
+    void dispatcher_stop_policy_stops_on_poison_and_leaves_following_rows_received() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var walGlobalOrdersExtractor = new JacksonWalGlobalOrdersExtractor(jacksonJSONSerializer, resolver);
+        var poisonNotifier = new RecordingPoisonNotifier();
+        var dispatchedCount = new AtomicInteger(0);
+
+        var dispatcherProps = CdcDispatcherProperties.defaults();
+        dispatcherProps.setBatchSize(10);
+        dispatcherProps.setPollInterval(Duration.ofMillis(25));
+        dispatcherProps.setPoisonPolicy(PoisonPolicy.STOP);
+
+        var availability = new CdcAvailability();
+        availability.active(slotName);
+        var dispatcher = new CdcDispatcher(
+                inboxRepository,
+                unitOfWorkFactory,
+                gapHandler,
+                converter,
+                walGlobalOrdersExtractor,
+                Optional.of(poisonNotifier),
+                events -> dispatchedCount.addAndGet(events.size()),
+                slotName,
+                dispatcherProps,
+                availability
+        );
+
+        // Same batch: first row is poison, second row is valid.
+        inboxRepository.insertRaw(slotName, "0/POISON-STOP", poisonWalForGlobalOrder(51L), "RECEIVED");
+        inboxRepository.insertRaw(slotName, "0/VALID-AFTER-STOP", validWalForGlobalOrder(52L), "RECEIVED");
+
+        dispatcher.start();
+
+        Awaitility.await()
+                  .during(Duration.ofSeconds(2))
+                  .atMost(Duration.ofSeconds(3))
+                  .pollInterval(Duration.ofMillis(50))
+                  .untilAsserted(() -> {
+                      assertThat(inboxRepository.statusForLsn(slotName, "0/POISON-STOP")).contains("RECEIVED");
+                      assertThat(inboxRepository.statusForLsn(slotName, "0/VALID-AFTER-STOP")).contains("RECEIVED");
+                      assertThat(dispatchedCount.get()).isEqualTo(0);
+                      assertThat(poisonNotifier.calls).isEmpty();
+                  });
+
+        dispatcher.stop();
+    }
+
+    private static String poisonWalForGlobalOrder(long globalOrder) {
+        return """
+               {
+                 "xid": 999,
+                 "nextlsn": "0/0",
+                 "timestamp": "2026-01-27 15:38:10.735471+01",
+                 "change": [
+                   {
+                     "kind": "insert",
+                     "schema": "public",
+                     "table": "orders_events",
+                     "columnnames": ["global_order","aggregate_id","event_order","event_id","caused_by_event_id","correlation_id","event_type","event_revision","timestamp","event_payload","event_metadata","tenant"],
+                     "columntypes":  ["bigint","text","bigint","text","text","text","text","text","timestamp with time zone","jsonb","jsonb","text"],
+                     "columnvalues": [
+                       %d,
+                       "beed77fb-1115-1115-9c48-03ed5bfe8f89",
+                       1,
+                       "00000000-0000-0000-0000-000000000002",
+                       null,
+                       null,
+                       "FQCN:dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderEvent$ProductAddedToOrder",
+                       "not-an-int",
+                       "2026-01-27 15:38:10.67955+01",
+                       {"orderId":"beed77fb-1115-1115-9c48-03ed5bfe8f89","productId":"P1","quantity":2},
+                       {},
+                       null
+                     ]
+                   }
+                 ]
+               }
+               """.formatted(globalOrder);
+    }
+
+    private static String validWalForGlobalOrder(long globalOrder) {
+        return """
+               {
+                 "xid": 1000,
+                 "nextlsn": "0/0",
+                 "timestamp": "2026-01-27 15:38:11.735471+01",
+                 "change": [
+                   {
+                     "kind": "insert",
+                     "schema": "public",
+                     "table": "orders_events",
+                     "columnnames": ["global_order","aggregate_id","event_order","event_id","caused_by_event_id","correlation_id","event_type","event_revision","timestamp","event_payload","event_metadata","tenant"],
+                     "columntypes":  ["bigint","text","bigint","text","text","text","text","text","timestamp with time zone","jsonb","jsonb","text"],
+                     "columnvalues": [
+                       %d,
+                       "beed77fb-1115-1115-9c48-03ed5bfe8f89",
+                       2,
+                       "00000000-0000-0000-0000-000000000003",
+                       null,
+                       null,
+                       "FQCN:dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderEvent$ProductAddedToOrder",
+                       "1",
+                       "2026-01-27 15:38:11.67955+01",
+                       {"orderId":"beed77fb-1115-1115-9c48-03ed5bfe8f89","productId":"P2","quantity":1},
+                       {},
+                       null
+                     ]
+                   }
+                 ]
+               }
+               """.formatted(globalOrder);
     }
 
 }

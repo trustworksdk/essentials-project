@@ -140,6 +140,42 @@ public class CronScheduleConfigurationTest {
     }
 
     @Test
+    void testDailyCronPatternWithSpecificMinute() {
+        CronScheduleConfiguration config = new CronScheduleConfiguration(
+                CronExpression.of("30 0 * * *"),
+                Optional.empty()
+        );
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
+        FixedDelay fd = fdc.fixedDelay();
+
+        long expectedPeriod = Duration.ofDays(1).toMillis();
+        assertThat(fd.unit()).as("time unit").isEqualTo(TimeUnit.MILLISECONDS);
+        assertThat(fd.period()).as("period").isEqualTo(expectedPeriod);
+        assertThat(fd.initialDelay())
+                .as("initial delay should be within (0, period]")
+                .isGreaterThan(0)
+                .isLessThanOrEqualTo(expectedPeriod);
+    }
+
+    @Test
+    void testHourlyCronPatternWithSpecificMinute() {
+        CronScheduleConfiguration config = new CronScheduleConfiguration(
+                CronExpression.of("30 * * * *"),
+                Optional.empty()
+        );
+        FixedDelayScheduleConfiguration fdc = config.toFixedDelayConfiguration();
+        FixedDelay fd = fdc.fixedDelay();
+
+        long expectedPeriod = Duration.ofHours(1).toMillis();
+        assertThat(fd.unit()).as("time unit").isEqualTo(TimeUnit.MILLISECONDS);
+        assertThat(fd.period()).as("period").isEqualTo(expectedPeriod);
+        assertThat(fd.initialDelay())
+                .as("initial delay should be within (0, period]")
+                .isGreaterThan(0)
+                .isLessThanOrEqualTo(expectedPeriod);
+    }
+
+    @Test
     void testInvalidPatternThrows() {
         CronScheduleConfiguration config = new CronScheduleConfiguration(
                 CronExpression.of("invalid"),

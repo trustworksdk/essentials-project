@@ -128,7 +128,7 @@ You control which versions of Jackson, Spring, and other frameworks your applica
 ### ✅ Production-Ready Infrastructure Components
 
 For distributed applications, Essentials Components provide:
-- **Event Store** with subscriptions and processors (PostgreSQL)
+- **Event Store** with subscriptions, processors, and optional Hybrid CDC (`wal2json`) fallback-to-polling (PostgreSQL)
 - **Event Sourcing** with `AggregateRoot`s, `Decider`, `Evolver`, `Repositories`, `Snapshot Repositories` (PostgreSQL)
 - **Distributed Fenced Locks** for leader election and singleton workers
 - **Durable Queues** with retry, DLQ, and ordered delivery
@@ -438,7 +438,7 @@ Components [LLM Documentation](LLM/LLM-components.md)
 
 | Module | Purpose                                                       | LLM Documentation |
 |--------|---------------------------------------------------------------|-------------------|
-| [postgresql-event-store](components/postgresql-event-store/README.md) | Full-featured Event Store with subscriptions and gap handling | [LLM](LLM/LLM-postgresql-event-store.md) |
+| [postgresql-event-store](components/postgresql-event-store/README.md) | Full-featured Event Store with subscriptions, gap handling, and optional Hybrid CDC (`wal2json`) | [LLM](LLM/LLM-postgresql-event-store.md) |
 | [eventsourced-aggregates](components/eventsourced-aggregates/README.md) | AggregateRoot, Decider, Evolver patterns for DDD              | [LLM](LLM/LLM-eventsourced-aggregates.md) |
 | [postgresql-distributed-fenced-lock](components/postgresql-distributed-fenced-lock/README.md) | PostgreSQL distributed locking with fence tokens              | [LLM](LLM/LLM-postgresql-distributed-fenced-lock.md) |
 | [postgresql-queue](components/postgresql-queue/README.md) | PostgreSQL durable message queues with retry and DLQ          | [LLM](LLM/LLM-postgresql-queue.md) |

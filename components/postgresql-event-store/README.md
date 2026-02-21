@@ -23,6 +23,7 @@ Full-featured Event Store for PostgreSQL with durable subscriptions, gap handlin
 - [In-Memory Projections](#in-memory-projections)
 - [Gap Handling](#gap-handling)
 - [Event Polling](#event-polling)
+- [Hybrid CDC (wal2json)](#hybrid-cdc-wal2json)
 - [EventStoreSubscriptionObserver](#eventstoresubscriptionobserver)
 - [Advanced Configuration](#advanced-configuration)
 - [Related Modules](#related-modules)
@@ -2197,6 +2198,35 @@ var observer = new MeasurementEventStoreSubscriptionObserver(
 - New Relic
 - CloudWatch
 - Any Micrometer-supported backend
+
+---
+
+## Hybrid CDC (wal2json)
+
+Hybrid CDC is available through the CDC package and Spring Boot starter integration.
+
+What it adds:
+
+- low-latency live ingestion from PostgreSQL logical replication (`wal2json`)
+- durable inbox/dispatcher pipeline with poison handling and permanent gap registration
+- ordered `backfill + live` merge (`BackfillThenLiveOrdered`)
+- automatic fallback to classic polling when CDC is unavailable in `auto` mode
+
+Startup semantics:
+
+- `cdc.enabled` controls whether tailer/dispatcher are started
+- `cdc.mode=require` fails startup if CDC cannot become active
+- `cdc.mode=auto` marks CDC as failed/inactive and continues with polling fallback
+
+Slot ownership and safety:
+
+- one active tailer per slot is coordinated with PostgreSQL advisory lock
+- slot validation includes slot type/plugin/database compatibility (`PgSlotMode` governs lifecycle)
+- `slotLockAcquired` and CDC availability are exposed via status/metrics
+
+Design details:
+
+- [Hybrid CDC design](src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/hybrid-cdc-eventstore.md)
 
 ---
 

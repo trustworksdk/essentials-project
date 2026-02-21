@@ -24,6 +24,9 @@ public class CdcProperties {
     private CdcMode mode                           = CdcMode.AUTO;
     private int     cdcEventStoreBackfillBatchSize = 1000;
 
+    private String inboxTableName   = "eventstore_cdc_inbox";
+    private long   inboxTtlDuration = 90L;
+
     private final Wal2JsonTailerProperties wal2JsonTailer = new Wal2JsonTailerProperties();
     private final CdcDispatcherProperties  cdcDispatcher  = new CdcDispatcherProperties();
     private final CdcSlotProperties        slot           = new CdcSlotProperties();
@@ -84,6 +87,42 @@ public class CdcProperties {
      */
     public void setCdcEventStoreBackfillBatchSize(int cdcEventStoreBackfillBatchSize) {
         this.cdcEventStoreBackfillBatchSize = cdcEventStoreBackfillBatchSize;
+    }
+
+    /**
+     * Retrieves the name of the database table used for the Change Data Capture (CDC) inbox.
+     *
+     * @return the name of the CDC inbox table as a {@code String}
+     */
+    public String getInboxTableName() {
+        return inboxTableName;
+    }
+
+    /**
+     * Sets the name of the database table used for the Change Data Capture (CDC) inbox.
+     *
+     * @param inboxTableName the name of the CDC inbox table as a {@code String}
+     */
+    public void setInboxTableName(String inboxTableName) {
+        this.inboxTableName = inboxTableName;
+    }
+
+    /**
+     * Retrieves the Time-To-Live (TTL) duration for inbox entries in the CDC configuration.
+     *
+     * @return the duration representing the TTL for inbox entries as a {@code Long} object
+     */
+    public long getInboxTtlDuration() {
+        return inboxTtlDuration;
+    }
+
+    /**
+     * Sets the Time-To-Live (TTL) duration for inbox entries in the Change Data Capture (CDC) configuration.
+     *
+     * @param inboxTtlDuration the duration representing the TTL for inbox entries as a {@code Long} object
+     */
+    public void setInboxTtlDuration(long inboxTtlDuration) {
+        this.inboxTtlDuration = inboxTtlDuration;
     }
 
     /**
@@ -495,26 +534,65 @@ public class CdcProperties {
         private PgSlotMode mode = PgSlotMode.CREATE_IF_MISSING;
         private String     name;
 
+        /**
+         * Returns the logical WAL consumer group associated with the configuration.
+         * The group determines the logical replication slot's ownership semantics.
+         *
+         * @return the name of the logical WAL consumer group
+         */
         public String getGroup() {
             return group;
         }
 
+        /**
+         * Sets the logical WAL consumer group for the replication slot configuration.
+         *
+         * @param group the name of the logical WAL consumer group. This determines
+         *              the ownership semantics of the replication slot (e.g., "default", "orders", "billing").
+         */
         public void setGroup(String group) {
             this.group = group;
         }
 
+        /**
+         * Retrieves the name associated with the current configuration.
+         *
+         * @return the name of the logical replication slot or null if not set
+         */
         public String getName() {
             return name;
         }
 
+        /**
+         * Sets the name associated with the logical replication slot configuration.
+         *
+         * @param name the name of the logical replication slot
+         */
         public void setName(String name) {
             this.name = name;
         }
 
+        /**
+         * Retrieves the current slot mode configuration for managing PostgreSQL replication slots
+         * in the context of Change Data Capture (CDC) operations.
+         *
+         * @return the slot mode, which determines how replication slots are created, managed, or validated.
+         */
         public PgSlotMode getMode() {
             return mode;
         }
 
+        /**
+         * Configures the slot mode for PostgreSQL replication slot management in the
+         * context of Change Data Capture (CDC) operations.
+         *
+         * @param mode the mode to set for managing replication slots. This determines
+         *             how replication slots are created, validated, or handled. The possible values are:
+         *             - {@link PgSlotMode#CREATE_IF_MISSING}: Create the slot if it doesn't exist.
+         *             - {@link PgSlotMode#REQUIRE_EXISTING}: Expect the slot to already exist, fail if missing.
+         *             - {@link PgSlotMode#RECREATE}: Always drop and recreate the slot at startup.
+         *             - {@link PgSlotMode#EXTERNAL}: Assume the slot is managed externally, no creation or management.
+         */
         public void setMode(PgSlotMode mode) {
             this.mode = mode;
         }

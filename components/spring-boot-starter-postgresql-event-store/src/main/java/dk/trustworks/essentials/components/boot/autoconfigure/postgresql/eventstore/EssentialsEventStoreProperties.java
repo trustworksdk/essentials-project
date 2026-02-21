@@ -19,7 +19,6 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
@@ -55,13 +54,13 @@ import java.time.Duration;
 @Configuration
 @ConfigurationProperties(prefix = "essentials.eventstore")
 public class EssentialsEventStoreProperties {
-    private IdentifierColumnType                             identifierColumnType                  = IdentifierColumnType.TEXT;
-    private JSONColumnType                                   jsonColumnType                        = JSONColumnType.JSONB;
-    private boolean                                          useEventStreamGapHandler              = true;
-    private boolean                                          verboseTracing                        = false;
-    private boolean                                          addAnnotationBasedInMemoryProjector   = true;
+    private IdentifierColumnType                             identifierColumnType                   = IdentifierColumnType.TEXT;
+    private JSONColumnType                                   jsonColumnType                         = JSONColumnType.JSONB;
+    private boolean                                          useEventStreamGapHandler               = true;
+    private boolean                                          verboseTracing                         = false;
+    private boolean                                          addAnnotationBasedInMemoryProjector    = true;
     private boolean                                          autoFlushAndPublishAfterAppendToStream = false;
-    private EssentialsComponentsProperties.MetricsProperties metrics                               = new EssentialsComponentsProperties.MetricsProperties();
+    private EssentialsComponentsProperties.MetricsProperties metrics                                = new EssentialsComponentsProperties.MetricsProperties();
 
     private final EventStoreSubscriptionManagerProperties subscriptionManager = new EventStoreSubscriptionManagerProperties();
 

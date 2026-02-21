@@ -3,233 +3,120 @@
 
 ## Overview
 
-This document describes the **Hybrid CDC EventStore architecture** that combines:
+Hybrid CDC combines:
 
-- **PostgreSQL logical replication (wal2json)** for near‑real‑time ingestion
-- **Inbox + Dispatcher** for durability, backpressure, and poison isolation
-- **EventStore polling** for deterministic backfill and subscriber recovery
-- **Gap handling** (transient + permanent) to guarantee forward progress
-- **Strict ordering guarantees** between backfill and live streams
-- **Subscription reset‑after‑poison semantics**
-- **Multi‑node correctness** (exclusive vs non‑exclusive subscriptions)
-- **Performance characteristics vs pure polling**
+- PostgreSQL logical replication (`wal2json`) for low-latency live ingestion
+- `eventstore_cdc_inbox` + `CdcDispatcher` for durable, idempotent fan-out
+- EventStore polling for deterministic backfill and fallback
+- gap handling + poison reset semantics for forward progress
 
-This design allows CDC to accelerate fan‑out and reduce DB load **without sacrificing correctness**.
+This keeps EventStore correctness guarantees while reducing polling amplification.
 
----
-
-## High‑level Architecture
+## Architecture
 
 ```
-┌────────────┐
-│ PostgreSQL │
-│ WAL        │
-└─────┬──────┘
-      │ wal2json
-      ▼
-┌──────────────┐
-│ Wal2Json     │
-│ Tailer       │
-└─────┬────────┘
-      │ filtered inserts only
-      ▼
-┌──────────────┐
-│ CDC Inbox    │◄─── durable, idempotent
-│ (RECEIVED)  │
-└─────┬────────┘
-      │ batch fetch
-      ▼
-┌──────────────┐
-│ CDC          │
-│ Dispatcher   │
-├──────────────┤
-│ convert WAL  │
-│ detect poison│
-│ extract gaps │
-└─────┬────────┘
-      │
-      ├── valid events ─────► CdcEventBus (live)
-      │
-      └── poison
-          │
-          ├─ mark POISON
-          ├─ register permanent gaps
-          └─ notify subscriptions (reset‑after‑poison)
+PostgreSQL WAL
+  -> wal2json replication stream
+  -> Wal2JsonTailer (writes CDC inbox)
+  -> CdcDispatcher (converts + publishes)
+  -> CdcEventBus (live stream)
+  -> CdcEventStore (BackfillThenLiveOrdered)
+  -> subscriptions
 ```
 
----
+## Replication Slot Ownership
 
-## Core Invariants
+One tailer can run per slot at a time, and ownership is coordinated with a PostgreSQL advisory lock.
 
-1. **GlobalEventOrder is the source of truth**
-2. **At‑least‑once delivery into the Inbox**
-3. **Exactly‑once processing via idempotency**
-4. **Subscribers must never stall**
-5. **Poison must not block progress**
-6. **Ordering must be preserved across backfill + live**
+- lock key: deterministic hash of `slotName`
+- acquisition: `pg_try_advisory_lock(...)`
+- lifetime: held while tailer is running
+- release: explicit on stop, implicit on connection loss
 
----
+`Wal2JsonTailer` exposes this via status/metrics:
 
-## CDC Inbox
+- `slotLockAcquired` (boolean)
+- `streaming` (boolean)
+- `lastReceivedLsn`, `lastMessageAt`, `lastError`
 
-- Table: `eventstore_cdc_inbox`
-- Idempotent insert on `(slot_name, lsn)`
-- Status lifecycle:
+The slot itself is still validated (`logical`, plugin, DB, activity), but `active_pid` is only diagnostic and not treated as ownership.
 
-| Status     | Meaning |
-|-----------|--------|
-| RECEIVED  | Ready for dispatch |
-| DISPATCHED| Successfully emitted |
-| POISON    | Failed conversion |
+## CDC Modes and Startup Semantics
 
----
+Key settings:
 
-## Poison Handling
+- `cdc.enabled`
+- `cdc.mode = auto | require`
+- slot mode (`PgSlotMode`): `CREATE_IF_MISSING | REQUIRE_EXISTING | RECREATE | EXTERNAL`
 
-A WAL row is considered **poison** when:
-- JSON is valid
-- WAL insert targets an event table
-- Conversion to `PersistedEvent` fails
+Behavior:
 
-### On Poison:
-1. Inbox row marked `POISON`
-2. Extract global orders via `WalGlobalOrdersExtractor`
-3. Register **permanent gaps**
-4. Notify subscriptions via `CdcPoisonNotifier`
+- `mode=require`: CDC startup failures fail application startup.
+- `mode=auto`: CDC startup failures degrade to polling fallback.
 
----
+Common failure reasons:
 
-## Gap Handling Model
+- missing `wal2json` plugin
+- replication permissions/configuration
+- slot conflicts or slot validation failures
 
-### Transient Gaps
-- Detected during polling/backfill
-- Stored per subscriber
-- Included opportunistically in queries
-- Promoted if unresolved long enough
+## Availability and Fallback
 
-### Permanent Gaps
-- Shared across all subscribers
-- Represent **known missing global orders**
-- Never block progress
+`CdcAvailability` state:
 
-```
-1   2   3   4   5
-✔   ✖   ✔   ✔   ✔
-    ↑
-  permanent gap
-```
+- `ACTIVE`
+- `INACTIVE`
+- `FAILED`
 
----
+`CdcEventStore.pollEvents(...)` behavior:
 
-## Subscription Reset‑After‑Poison
+- `ACTIVE`: hybrid backfill + live stream
+- otherwise: delegate to classic polling
 
-Implemented via `SubscriptionResetOnPoisonNotifier`.
+This allows safe operation in `auto` mode even when CDC cannot start.
 
-### Rules
-- Only affects **active subscriptions**
-- Skipped for **in‑transaction subscriptions**
-- Reset point = `min(poison gaps)`
-- Resume point is **never moved forward**
-- Durable resume saved immediately
+## Inbox and Poison Handling
 
-### Result
-Subscribers:
-- Restart cleanly
-- Skip poison gap
-- Continue deterministically
+Inbox table: `eventstore_cdc_inbox` with idempotent insert on `(slot_name, lsn)`.
 
----
+Lifecycle:
 
-## Backfill + Live Ordering
+- `RECEIVED`
+- `DISPATCHED`
+- `POISON`
 
-CDC provides **live events**, polling provides **backfill**.
+When conversion fails:
 
-### Problem
-Live events may arrive **before backfill completes**.
+1. mark row `POISON`
+2. extract global orders from WAL payload
+3. register permanent gaps
+4. notify `CdcPoisonNotifier` (e.g. `SubscriptionResetOnPoisonNotifier`)
 
-### Solution: `BackfillThenLiveOrdered`
+Resume points are never moved forward due to poison.
 
-Guarantees:
-- Live subscribed immediately
-- Live buffered by global order
-- Live emissions gated until backfill completes
-- Strict monotonic ordering
+## Ordering Guarantees
 
-```
-Backfill: 1 2 3
-Live:          4 5
-Output: 1 2 3 4 5
-```
+`BackfillThenLiveOrdered` guarantees ordered output:
 
----
+1. snapshot head global order
+2. backfill `[resume .. head]`
+3. subscribe live `> head`
+4. buffer/gate live emissions until backfill completes
 
-## Hybrid pollEvents Flow
+Result: monotonic ordered stream across backfill + live.
 
-1. Resolve resume point
-2. Snapshot head (highest persisted GO)
-3. Backfill `[resume .. head]`
-4. Subscribe to CDC live `> head`
-5. Merge using ordered gate
+## Multi-Node Behavior
 
----
+- CDC tailer: single active tailer per slot via advisory lock
+- exclusive subscriptions: fenced lock ensures one active subscription handler
+- non-exclusive subscriptions: duplicates can occur by design; idempotent handlers required
 
-## Multi‑Node Correctness
+## Observability
 
-### Exclusive Subscriptions
-- Use fenced locks
-- Only one active consumer
-- Strong ordering
+`CdcAvailability` metrics:
 
-### Non‑Exclusive Subscriptions
-- Multiple consumers
-- Gap handler ensures eventual consistency
-- Permanent gaps prevent deadlock
+- `essentials.cdc.active` (gauge)
+- `essentials.cdc.fallback_total` (counter)
+- `essentials.cdc.start_failures_total` (counter, incl. reason tag)
 
----
-
-## Performance Characteristics
-
-### Pure Polling
-- O(N subscribers × polling rate)
-- High DB read amplification
-- Latency bound by polling interval
-
-### CDC Hybrid
-- O(1) DB write → many subscribers
-- Near‑real‑time delivery
-- Polling only for backfill/recovery
-
-| Metric | Polling | CDC Hybrid |
-|------|--------|-----------|
-| DB Reads | High | Low |
-| Latency | 10–100ms | ~1–5ms |
-| Fan‑out | Poor | Excellent |
-| Recovery | OK | Excellent |
-
----
-
-## Failure Scenarios Covered
-
-| Scenario | Outcome |
-|--------|--------|
-| Poison WAL | Gap registered, no stall |
-| Node crash | Resume from durable point |
-| CDC outage | Polling still works |
-| Duplicate WAL | Inbox idempotency |
-| Gap + live race | Ordered merge |
-
----
-
-## Summary
-
-This hybrid CDC design:
-
-- Preserves **EventStore semantics**
-- Eliminates polling fan‑out cost
-- Guarantees ordering and progress
-- Handles poison safely
-- Scales across nodes
-- Is fully testable end‑to‑end
-
-**CDC accelerates. Polling guarantees. Gaps heal.**
-
+Tailer status includes `slotLockAcquired` and streaming diagnostics for operators.

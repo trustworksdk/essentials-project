@@ -41,7 +41,9 @@ public class DefaultCdcSlotNameProvider implements CdcSlotNameProvider {
     @Override
     public String slotName(CdcConsumerGroup group) {
         var name = group.name().replace("-", "_");
-        return ("essentials_" + name + "_" + databaseNameOrAlias).toLowerCase();
+        var slotName = ("essentials_" + name + "_" + databaseNameOrAlias).toLowerCase();
+        PostgresqlUtil.checkIsValidTableOrColumnName(slotName, "CDC replication slot name");
+        return slotName;
     }
 
 }

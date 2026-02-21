@@ -364,15 +364,26 @@ class BatchedPersistedEventSubscriber_IT {
         var lastProductEvent = productEventsReceived.get(totalNumberOfProductEvents - 1);
 
         assertThat(ordersSubscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()); // When the subscriber is stopped we store the next global event order
-        var ordersSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(ordersSubscription.subscriberId(), ordersSubscription.aggregateType());
-        assertThat(ordersSubscriptionResumePoint).isPresent();
-        Awaitility.waitAtMost(Duration.ofSeconds(40))
-                .untilAsserted(() -> assertThat(ordersSubscriptionResumePoint.get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()));  // When the subscriber is stopped we store the next global event order));
+        Awaitility.waitAtMost(Duration.ofSeconds(50))
+                .untilAsserted(() -> {
+                    var ordersSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(
+                            ordersSubscription.subscriberId(),
+                            ordersSubscription.aggregateType());
+                    assertThat(ordersSubscriptionResumePoint).isPresent();
+                    assertThat(ordersSubscriptionResumePoint.get().getResumeFromAndIncluding())
+                            .isEqualTo(lastEventOrder.globalEventOrder().increment());
+                });  // When the subscriber is stopped we store the next global event order
 
         assertThat(productsSubscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastProductEvent.globalEventOrder().increment()); // // When the subscriber is stopped we store the next global event order
-        var productsSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(productsSubscription.subscriberId(), productsSubscription.aggregateType());
-        assertThat(productsSubscriptionResumePoint).isPresent();
-        assertThat(productsSubscriptionResumePoint.get().getResumeFromAndIncluding()).isEqualTo(lastProductEvent.globalEventOrder().increment());// When the subscriber is stopped we store the next global event order
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> {
+                    var productsSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(
+                            productsSubscription.subscriberId(),
+                            productsSubscription.aggregateType());
+                    assertThat(productsSubscriptionResumePoint).isPresent();
+                    assertThat(productsSubscriptionResumePoint.get().getResumeFromAndIncluding())
+                            .isEqualTo(lastProductEvent.globalEventOrder().increment());
+                }); // When the subscriber is stopped we store the next global event order
     }
 
     @Test

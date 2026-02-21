@@ -24,13 +24,14 @@ import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.BeforeEach;
 import org.postgresql.ds.PGSimpleDataSource;
+import org.postgresql.util.PSQLException;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.ImageFromDockerfile;
 import org.testcontainers.junit.jupiter.*;
 
 import javax.sql.DataSource;
-import java.sql.SQLException;
+import java.sql.*;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -84,6 +85,7 @@ public class AbstractWal2JsonPostgresIT {
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
 
         replicationDataSource = replicationDataSource(host, port, db, user, pass);
+        waitForPrimaryConnectionsReady();
 
         // Fail-fast sanity checks (match tailer startup semantics)
         unitOfWorkFactory.usingUnitOfWork(uow -> {
@@ -93,6 +95,44 @@ public class AbstractWal2JsonPostgresIT {
             boolean usable = PostgresqlUtil.isOutputPluginUsable(uow.handle(), "wal2json");
             if (!usable) throw new IllegalStateException("wal2json output plugin not usable");
         });
+    }
+
+    private void waitForPrimaryConnectionsReady() throws SQLException {
+        SQLException last = null;
+        long deadlineMs = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < deadlineMs) {
+            try (var connection = DriverManager.getConnection(jdbcUrl, user, pass);
+                 var statement = connection.createStatement()) {
+                statement.execute("select 1");
+                return;
+            } catch (SQLException e) {
+                last = e;
+                if (!isDatabaseStartingUp(e)) {
+                    throw e;
+                }
+                try {
+                    Thread.sleep(250);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new SQLException("Interrupted while waiting for PostgreSQL to become ready", interrupted);
+                }
+            }
+        }
+        throw new SQLException("Timed out waiting for PostgreSQL to accept primary connections", last);
+    }
+
+    private static boolean isDatabaseStartingUp(SQLException e) {
+        if (e instanceof PSQLException psqle && "57P03".equals(psqle.getSQLState())) {
+            return true;
+        }
+        Throwable cause = e.getCause();
+        while (cause != null) {
+            if (cause instanceof PSQLException psqle && "57P03".equals(psqle.getSQLState())) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 
     protected static DataSource replicationDataSource(String host, int port, String db, String user, String pass) throws SQLException {

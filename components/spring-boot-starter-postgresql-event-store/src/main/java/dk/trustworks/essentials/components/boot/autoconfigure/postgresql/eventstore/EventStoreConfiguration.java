@@ -245,12 +245,13 @@ public class EventStoreConfiguration {
                                                                                                 EventStoreEventBus eventStoreLocalEventBus,
                                                                                                 EssentialsEventStoreProperties essentialsComponentsProperties,
                                                                                                 List<EventStoreInterceptor> eventStoreInterceptors,
-                                                                                                EventStoreSubscriptionObserver eventStoreSubscriptionObserver) {
+                                                                                                EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
+                                                                                                EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler) {
         var configurableEventStore = new PostgresqlEventStore<>(eventStoreUnitOfWorkFactory,
                                                                 persistenceStrategy,
                                                                 Optional.of(eventStoreLocalEventBus),
                                                                 eventStore -> essentialsComponentsProperties.isUseEventStreamGapHandler() ?
-                                                                              new PostgresqlEventStreamGapHandler<>(eventStoreUnitOfWorkFactory) :
+                                                                              eventStreamGapHandler :
                                                                               new NoEventStreamGapHandler<>(),
                                                                 eventStoreSubscriptionObserver);
         configurableEventStore.addEventStoreInterceptors(eventStoreInterceptors);
@@ -278,13 +279,7 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
-        return new PostgresqlEventStreamGapHandler<>(eventStoreUnitOfWorkFactory);
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
-        return new PostgresqlEventStreamGapHandler<>(eventStoreUnitOfWorkFactory);
+        return new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(eventStoreUnitOfWorkFactory);
     }
 
     @Bean
@@ -601,15 +596,16 @@ public class EventStoreConfiguration {
     public CdcSlotNameProvider cdcSlotNameProvider(DataSourceProperties dsProps) {
         // best-effort db name extraction; you can improve this later
         String url = dsProps.getUrl();
-        String db = null;
+        String db  = null;
         if (url != null) {
             try {
-                URI uri = URI.create(url.replace("jdbc:", ""));
+                URI    uri  = URI.create(url.replace("jdbc:", ""));
                 String path = uri.getPath();
                 if (path != null && path.length() > 1) {
                     db = path.substring(1);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         return new DefaultCdcSlotNameProvider(db);
     }
@@ -617,7 +613,7 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public Wal2JsonTailer wal2JsonTailer(@Qualifier("essentialsReplicationDataSource")  DataSource replicationDataSource,
+    public Wal2JsonTailer wal2JsonTailer(@Qualifier("essentialsReplicationDataSource") DataSource replicationDataSource,
                                          Jdbi jdbi,
                                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                          CdcInboxRepository cdcInboxRepository,

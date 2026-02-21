@@ -259,6 +259,333 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
     }
 
     @Test
+    void continues_after_message_error_when_handler_returns_continue() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        AtomicInteger failuresLeft = new AtomicInteger(1);
+        AtomicInteger messageErrors = new AtomicInteger(0);
+
+        CdcInboxRepository flakyInbox = new CdcInboxRepository(unitOfWorkFactory) {
+            @Override
+            public boolean insertIfAbsent(String slot, String lsn, String payloadJson) {
+                if (failuresLeft.getAndDecrement() > 0) {
+                    throw new RuntimeException("Simulated inbox write failure");
+                }
+                return inboxRepository.insertIfAbsent(slot, lsn, payloadJson);
+            }
+        };
+
+        var handler = new Wal2JsonTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                messageErrors.incrementAndGet();
+                return Decision.CONTINUE;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                return Decision.RETRY_CONNECTION;
+            }
+        };
+
+        var availability = new CdcAvailability();
+        var tailer = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                flakyInbox,
+                Wal2JsonTailerProperties.defaults(
+                        Duration.ofMillis(20),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(2),
+                        Duration.ofMillis(100)
+                ),
+                PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
+                Optional.empty(),
+                Optional.of(handler)
+        );
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+
+        String payload = "payload-continue-" + UUID.randomUUID();
+        jdbi.useHandle(h -> h.execute("insert into " + TEST_TABLE + "(payload) values(?)", payload));
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(10))
+                  .pollInterval(Duration.ofMillis(100))
+                  .untilAsserted(() -> {
+                      assertThat(messageErrors.get()).isGreaterThanOrEqualTo(1);
+                      assertThat(tailer.isStarted()).isTrue();
+                  });
+
+        Awaitility.await()
+                  .during(Duration.ofSeconds(2))
+                  .atMost(Duration.ofSeconds(3))
+                  .untilAsserted(() -> assertThat(anyInboxPayloadContains(slotName, payload)).isFalse());
+
+        tailer.stop();
+    }
+
+    @Test
+    void stops_after_message_error_when_handler_returns_stop() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        AtomicInteger messageErrors = new AtomicInteger(0);
+
+        CdcInboxRepository alwaysFailingInbox = new CdcInboxRepository(unitOfWorkFactory) {
+            @Override
+            public boolean insertIfAbsent(String slot, String lsn, String payloadJson) {
+                throw new RuntimeException("Simulated fatal inbox write failure");
+            }
+        };
+
+        var handler = new Wal2JsonTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                messageErrors.incrementAndGet();
+                return Decision.STOP;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                return Decision.STOP;
+            }
+        };
+
+        var availability = new CdcAvailability();
+        var tailer = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                alwaysFailingInbox,
+                Wal2JsonTailerProperties.defaults(
+                        Duration.ofMillis(20),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(2),
+                        Duration.ofMillis(100)
+                ),
+                PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                availability,
+                Optional.empty(),
+                Optional.of(handler)
+        );
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+
+        String payload = "payload-stop-" + UUID.randomUUID();
+        jdbi.useHandle(h -> h.execute("insert into " + TEST_TABLE + "(payload) values(?)", payload));
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(10))
+                  .pollInterval(Duration.ofMillis(100))
+                  .untilAsserted(() -> assertThat(messageErrors.get()).isGreaterThanOrEqualTo(1));
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(5))
+                  .pollInterval(Duration.ofMillis(100))
+                  .untilAsserted(() -> assertThat(tailer.getStatus().slotLockAcquired()).isFalse());
+
+        Awaitility.await()
+                  .during(Duration.ofSeconds(2))
+                  .atMost(Duration.ofSeconds(3))
+                  .untilAsserted(() -> assertThat(anyInboxPayloadContains(slotName, payload)).isFalse());
+
+        tailer.stop();
+        assertThat(tailer.isStarted()).isFalse();
+    }
+
+    @Test
+    void stream_error_continue_keeps_loop_alive_until_slot_appears() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        AtomicInteger streamErrors = new AtomicInteger(0);
+
+        var handler = new Wal2JsonTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                return Decision.RETRY_CONNECTION;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                streamErrors.incrementAndGet();
+                return Decision.CONTINUE;
+            }
+        };
+
+        var availability = new CdcAvailability();
+        var tailer = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                Wal2JsonTailerProperties.defaults(
+                        Duration.ofMillis(20),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(50)
+                ),
+                PgSlotMode.REQUIRE_EXISTING,
+                CdcMode.AUTO,
+                availability,
+                Optional.empty(),
+                Optional.of(handler)
+        );
+
+        tailer.start();
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(5))
+                  .pollInterval(Duration.ofMillis(100))
+                  .untilAsserted(() -> assertThat(streamErrors.get()).isGreaterThanOrEqualTo(2));
+
+        jdbi.useHandle(h -> h.execute("select * from pg_create_logical_replication_slot(?, 'wal2json')", slotName));
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+        String payload = "payload-stream-continue-" + UUID.randomUUID();
+        jdbi.useHandle(h -> h.execute("insert into " + TEST_TABLE + "(payload) values(?)", payload));
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(anyInboxPayloadContains(slotName, payload)).isTrue());
+
+        tailer.stop();
+    }
+
+    @Test
+    void stream_error_retry_connection_recovers_when_slot_is_created() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        AtomicInteger streamErrors = new AtomicInteger(0);
+
+        var handler = new Wal2JsonTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                return Decision.RETRY_CONNECTION;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                streamErrors.incrementAndGet();
+                return Decision.RETRY_CONNECTION;
+            }
+        };
+
+        var availability = new CdcAvailability();
+        var tailer = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                Wal2JsonTailerProperties.defaults(
+                        Duration.ofMillis(20),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(50)
+                ),
+                PgSlotMode.REQUIRE_EXISTING,
+                CdcMode.AUTO,
+                availability,
+                Optional.empty(),
+                Optional.of(handler)
+        );
+
+        tailer.start();
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(5))
+                  .pollInterval(Duration.ofMillis(100))
+                  .untilAsserted(() -> assertThat(streamErrors.get()).isGreaterThanOrEqualTo(1));
+
+        jdbi.useHandle(h -> h.execute("select * from pg_create_logical_replication_slot(?, 'wal2json')", slotName));
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+        String payload = "payload-stream-retry-" + UUID.randomUUID();
+        jdbi.useHandle(h -> h.execute("insert into " + TEST_TABLE + "(payload) values(?)", payload));
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(anyInboxPayloadContains(slotName, payload)).isTrue());
+
+        tailer.stop();
+    }
+
+    @Test
+    void stream_error_stop_prevents_processing_until_manual_restart() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        AtomicInteger streamErrors = new AtomicInteger(0);
+
+        var handler = new Wal2JsonTailerErrorHandler() {
+            @Override
+            public Decision onMessageError(String slot, String json, Exception error) {
+                return Decision.STOP;
+            }
+
+            @Override
+            public Decision onStreamError(String slot, Exception error) {
+                streamErrors.incrementAndGet();
+                return Decision.STOP;
+            }
+        };
+
+        var availability = new CdcAvailability();
+        var tailer = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                Wal2JsonTailerProperties.defaults(
+                        Duration.ofMillis(20),
+                        Duration.ofMillis(50),
+                        Duration.ofSeconds(1),
+                        Duration.ofMillis(50)
+                ),
+                PgSlotMode.REQUIRE_EXISTING,
+                CdcMode.AUTO,
+                availability,
+                Optional.empty(),
+                Optional.of(handler)
+        );
+
+        tailer.start();
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(5))
+                  .pollInterval(Duration.ofMillis(100))
+                  .untilAsserted(() -> assertThat(streamErrors.get()).isGreaterThanOrEqualTo(1));
+
+        jdbi.useHandle(h -> h.execute("select * from pg_create_logical_replication_slot(?, 'wal2json')", slotName));
+
+        String payloadBeforeRestart = "payload-stream-stop-" + UUID.randomUUID();
+        jdbi.useHandle(h -> h.execute("insert into " + TEST_TABLE + "(payload) values(?)", payloadBeforeRestart));
+
+        Awaitility.await()
+                  .during(Duration.ofSeconds(2))
+                  .atMost(Duration.ofSeconds(3))
+                  .untilAsserted(() -> assertThat(anyInboxPayloadContains(slotName, payloadBeforeRestart)).isFalse());
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+
+        String payloadAfterRestart = "payload-stream-stop-restart-" + UUID.randomUUID();
+        jdbi.useHandle(h -> h.execute("insert into " + TEST_TABLE + "(payload) values(?)", payloadAfterRestart));
+
+        Awaitility.await()
+                  .atMost(Duration.ofSeconds(10))
+                  .untilAsserted(() -> assertThat(anyInboxPayloadContains(slotName, payloadAfterRestart)).isTrue());
+
+        tailer.stop();
+    }
+
+    @Test
     void exposes_slot_lock_status_and_metric() {
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
         var registry = new SimpleMeterRegistry();
