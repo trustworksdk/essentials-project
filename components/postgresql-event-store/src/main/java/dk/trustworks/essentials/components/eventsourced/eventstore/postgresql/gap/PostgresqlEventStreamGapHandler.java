@@ -417,12 +417,16 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
 
         private void addNewTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> newTransientGapsToAdd) {
             if (newTransientGapsToAdd.isEmpty()) return;
+            var distinctTransientGapsToAdd = newTransientGapsToAdd.stream()
+                                                                  .distinct()
+                                                                  .collect(Collectors.toList());
+            if (distinctTransientGapsToAdd.isEmpty()) return;
 
             var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
             var now        = now();
 
             var gaps = internalGetTransientGapsFor(aggregateType);
-            gaps.addAll(newTransientGapsToAdd.stream()
+            gaps.addAll(distinctTransientGapsToAdd.stream()
                                              .map(globalEventOrder -> Pair.of(globalEventOrder,
                                                                               now))
                                              .collect(Collectors.toList()));
@@ -431,7 +435,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                                          "(subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
                                                                          "VALUES (:subscriber_id, :aggregate_type, :gap_global_event_order, :first_discovered) " +
                                                                          "ON CONFLICT DO NOTHING");
-            for (var transientGap : newTransientGapsToAdd) {
+            for (var transientGap : distinctTransientGapsToAdd) {
                 preparedBatch
                         .bind("subscriber_id", subscriberId)
                         .bind("aggregate_type", aggregateType)
@@ -441,60 +445,83 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             }
             var rowsUpdated = Arrays.stream(preparedBatch.execute())
                                     .reduce(Integer::sum).orElse(0);
-            if (rowsUpdated == newTransientGapsToAdd.size()) {
+            if (rowsUpdated == distinctTransientGapsToAdd.size()) {
                 log.debug("[{}] Added {} New Transient '{}' Gaps {}\nAll Transient '{}' Gaps: {}",
                           subscriberId,
-                          newTransientGapsToAdd.size(),
+                          distinctTransientGapsToAdd.size(),
                           aggregateType,
-                          newTransientGapsToAdd,
+                          distinctTransientGapsToAdd,
                           aggregateType,
                           allTransientGaps);
-            } else {
-                log.warn("[{}] Added {} out of {} new Transient '{}' Gaps. " +
-                                 "Do you have multiple instances of the same subscriber '{}' running without using exclusive subscriptions?\n" +
+            } else if (rowsUpdated > distinctTransientGapsToAdd.size()) {
+                log.warn("[{}] Added {} out of {} new Transient '{}' Gaps.\n" +
+                                 "This indicates unexpected row-count behavior for subscriber '{}'.\n" +
                                  "New Transient Gaps to add: {}",
                          subscriberId,
                          rowsUpdated,
-                         newTransientGapsToAdd.size(),
+                         distinctTransientGapsToAdd.size(),
                          aggregateType,
                          subscriberId,
-                         allTransientGaps);
+                         distinctTransientGapsToAdd);
+            } else {
+                log.debug("[{}] Added {} out of {} new Transient '{}' Gaps.\n" +
+                                 "This can happen under non-exclusive subscriptions where transient gaps are reconciled concurrently.\n" +
+                                 "New Transient Gaps to add: {}",
+                         subscriberId,
+                         rowsUpdated,
+                         distinctTransientGapsToAdd.size(),
+                         aggregateType,
+                         distinctTransientGapsToAdd);
             }
         }
 
         private void deleteTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> resolvedTransientGaps) {
             if (resolvedTransientGaps.isEmpty()) return;
+            var distinctResolvedTransientGaps = resolvedTransientGaps.stream()
+                                                                     .distinct()
+                                                                     .collect(Collectors.toList());
+            if (distinctResolvedTransientGaps.isEmpty()) return;
 
             var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
             var gaps       = internalGetTransientGapsFor(aggregateType);
             allTransientGaps.put(aggregateType,
                                  gaps.stream()
-                                     .filter(gap -> !resolvedTransientGaps.contains(gap._1))
+                                     .filter(gap -> !distinctResolvedTransientGaps.contains(gap._1))
                                      .collect(Collectors.toList()));
 
             var numOfRowsChanges = unitOfWork.handle().createUpdate("DELETE FROM " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "\n" +
-                                                                            "    WHERE aggregate_type = :aggregate_type and gap_global_event_order IN (<resolveTransientGaps>)")
+                                                                            "    WHERE aggregate_type = :aggregate_type and subscriber_id = :subscriber_id and gap_global_event_order IN (<resolveTransientGaps>)")
                                              .bind("aggregate_type", requireNonNull(aggregateType, "No aggregateType provided"))
-                                             .bindList("resolveTransientGaps", resolvedTransientGaps)
+                                             .bind("subscriber_id", subscriberId)
+                                             .bindList("resolveTransientGaps", distinctResolvedTransientGaps)
                                              .execute();
-            if (numOfRowsChanges != resolvedTransientGaps.size()) {
+            if (numOfRowsChanges > distinctResolvedTransientGaps.size()) {
                 log.warn("[{}] Wanted to delete {} resolved Transient '{}' gaps, but was only able to delete {} transient gaps.\n" +
-                                 "Do you have multiple instances of the same subscriber '{}' running without using exclusive subscriptions?\n" +
+                                 "This indicates unexpected row-count behavior for subscriber '{}'.\n" +
                                  "Resolved Transient Gaps to delete: {}",
                          subscriberId,
-                         resolvedTransientGaps.size(),
+                         distinctResolvedTransientGaps.size(),
                          aggregateType,
                          numOfRowsChanges,
                          subscriberId,
-                         resolvedTransientGaps);
+                         distinctResolvedTransientGaps);
+            } else if (numOfRowsChanges < distinctResolvedTransientGaps.size()) {
+                log.debug("[{}] Deleted {} out of {} resolved Transient '{}' gaps.\n" +
+                                  "This can happen under non-exclusive subscriptions where transient gaps are reconciled concurrently.\n" +
+                                  "Resolved Transient Gaps to delete: {}",
+                          subscriberId,
+                          numOfRowsChanges,
+                          distinctResolvedTransientGaps.size(),
+                          aggregateType,
+                          distinctResolvedTransientGaps);
             } else {
                 log.debug("[{}] Deleted {} resolved Transient '{}' gaps. " +
                                   "Resolved Transient Gaps deleted: {}\n" +
                                   "All Transient '{}' Gaps: {}",
                           subscriberId,
-                          resolvedTransientGaps.size(),
+                          distinctResolvedTransientGaps.size(),
                           aggregateType,
-                          resolvedTransientGaps,
+                          distinctResolvedTransientGaps,
                           aggregateType,
                           allTransientGaps);
             }

@@ -66,7 +66,7 @@ public class BackfillThenLiveOrderedTest {
         Flux<PersistedEvent> live = cdcBus.fluxForAggregate(AggregateType.of("Orders"));
 
         // head=3 => live should start at 4, but we'll publish 5 then 4 before backfill completes
-        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.ordered(backfill, live, 3);
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(backfill, live, 3);
 
         StepVerifier.create(ordered.take(5))
                     .then(() -> {
@@ -96,7 +96,7 @@ public class BackfillThenLiveOrderedTest {
         Flux<PersistedEvent> live = Flux.just(pe(6), pe(4), pe(5));
 
         Flux<PersistedEvent> ordered =
-                CdcEventStore.BackfillThenLiveOrdered.ordered(backfill, live, 3);
+                CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(backfill, live, 3);
 
         StepVerifier.create(ordered)
                     .expectNextMatches(e -> e.globalEventOrder().longValue() == 1L)
@@ -122,7 +122,7 @@ public class BackfillThenLiveOrderedTest {
         Flux<PersistedEvent> live = liveSink.asFlux();
 
         Flux<PersistedEvent> ordered =
-                CdcEventStore.BackfillThenLiveOrdered.ordered(backfill, live, 3);
+                CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(backfill, live, 3);
 
         StepVerifier.create(ordered.take(4))
                     .expectNextMatches(e -> e.globalEventOrder().longValue() == 1L)

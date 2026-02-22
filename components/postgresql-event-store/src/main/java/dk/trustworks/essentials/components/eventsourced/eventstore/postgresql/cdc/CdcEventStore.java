@@ -25,15 +25,17 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.op
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.*;
+import io.micrometer.core.instrument.*;
 import dk.trustworks.essentials.reactive.EventBus;
 import dk.trustworks.essentials.types.LongRange;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.*;
 import reactor.core.Disposable;
 import reactor.core.publisher.*;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.*;
 import java.util.stream.Stream;
@@ -50,6 +52,13 @@ public class CdcEventStore<CONFIG> implements EventStore {
     private final CdcEventBus                                                 cdcBus;
     private final int                                                         backfillBatchSize;
     private final CdcAvailability                                             availability;
+    private final MeterRegistry                                               meterRegistry;
+    private final Counter                                                     fallbackPollCounter;
+    private final DistributionSummary                                         backfillLoadedSummary;
+    private final DistributionSummary                                         backfillQueryRangeSummary;
+    private final Counter                                                     liveEventsCounter;
+    private final Timer                                                       backfillPageTimer;
+    private final Timer                                                       backfillToLiveTransitionTimer;
 
     public CdcEventStore(EventStore delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
@@ -57,6 +66,16 @@ public class CdcEventStore<CONFIG> implements EventStore {
                          CdcEventBus cdcBus,
                          CdcProperties cdcProperties,
                          CdcAvailability availability) {
+        this(delegate, unitOfWorkFactory, eventStreamGapHandler, cdcBus, cdcProperties, availability, Optional.empty());
+    }
+
+    public CdcEventStore(EventStore delegate,
+                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                         EventStreamGapHandler<?> eventStreamGapHandler,
+                         CdcEventBus cdcBus,
+                         CdcProperties cdcProperties,
+                         CdcAvailability availability,
+                         Optional<MeterRegistry> meterRegistry) {
         this.eventStore = requireNonNull(delegate, "delegate eventStore must not be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
         this.eventStreamGapHandler = requireNonNull(eventStreamGapHandler, "eventStreamGapHandler must not be null");
@@ -65,6 +84,24 @@ public class CdcEventStore<CONFIG> implements EventStore {
         this.availability = requireNonNull(availability, "availability must not be null");
         requireTrue(cdcProperties.getCdcEventStoreBackfillBatchSize() >= 1, "backfillBatchSize must be >= 1");
         this.backfillBatchSize = cdcProperties.getCdcEventStoreBackfillBatchSize();
+        this.meterRegistry = meterRegistry.orElse(null);
+        if (this.meterRegistry != null) {
+            fallbackPollCounter = Counter.builder("essentials.cdc.eventstore.fallback.poll.count").register(this.meterRegistry);
+            backfillLoadedSummary = DistributionSummary.builder("essentials.cdc.eventstore.backfill.loaded").register(this.meterRegistry);
+            backfillQueryRangeSummary = DistributionSummary.builder("essentials.cdc.eventstore.backfill.query_range").register(this.meterRegistry);
+            liveEventsCounter = Counter.builder("essentials.cdc.eventstore.live.events").register(this.meterRegistry);
+            backfillPageTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.eventstore.backfill.page.latency")
+                                                                   .register(this.meterRegistry);
+            backfillToLiveTransitionTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.eventstore.backfill_to_live.transition.latency")
+                                                                               .register(this.meterRegistry);
+        } else {
+            fallbackPollCounter = null;
+            backfillLoadedSummary = null;
+            backfillQueryRangeSummary = null;
+            liveEventsCounter = null;
+            backfillPageTimer = null;
+            backfillToLiveTransitionTimer = null;
+        }
     }
 
     @Override
@@ -77,6 +114,7 @@ public class CdcEventStore<CONFIG> implements EventStore {
                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory) {
         if (!availability.isActive()) {
             availability.fallbackUsed();
+            if (fallbackPollCounter != null) fallbackPollCounter.increment();
             return eventStore.pollEvents(aggregateType,
                                          fromInclusiveGlobalOrder,
                                          loadEventsByGlobalOrderBatchSize,
@@ -110,17 +148,20 @@ public class CdcEventStore<CONFIG> implements EventStore {
 
         Flux<PersistedEvent> live = cdcBus.fluxForAggregate(aggregateType)
                                           .filter(e -> e.globalEventOrder().longValue() > head.longValue())
+                                          .doOnNext(e -> {
+                                              if (liveEventsCounter != null) liveEventsCounter.increment();
+                                          })
                                           .filter(e -> onlyIncludeEventIfItBelongsToTenant
                                                   .map(t -> e.tenant()
                                                              .map(tt -> tt.toString().equals(t.toString()))
                                                              .orElse(false))
                                                   .orElse(true));
 
-        return BackfillThenLiveOrdered.ordered(
+        return new BackfillThenLiveOrdered(backfillToLiveTransitionTimer).ordered(
                 backfill,
                 live,
                 head.longValue()
-                                              );
+                                                    );
     }
 
     private Flux<PersistedEvent> backfillFlux(
@@ -192,6 +233,7 @@ public class CdcEventStore<CONFIG> implements EventStore {
                                                  ) {
         long toInclusive = Math.min(headInclusive, fromInclusive + pageSize - 1);
         var  range       = LongRange.between(fromInclusive, toInclusive);
+        long startNs     = System.nanoTime();
 
         List<PersistedEvent> loaded =
                 unitOfWorkFactory.withUnitOfWork(uow -> {
@@ -210,6 +252,9 @@ public class CdcEventStore<CONFIG> implements EventStore {
                     gapHandler.ifPresent(h -> h.reconcileGaps(aggregateType, range, events, transientGaps));
                     return events;
                 });
+        if (backfillPageTimer != null) backfillPageTimer.record(System.nanoTime() - startNs, TimeUnit.NANOSECONDS);
+        if (backfillLoadedSummary != null) backfillLoadedSummary.record(loaded.size());
+        if (backfillQueryRangeSummary != null) backfillQueryRangeSummary.record(toInclusive - fromInclusive + 1);
         log.debug("[{}] Backfill loaded '{}' events", aggregateType, loaded.size());
 
         loaded.forEach(emit);
@@ -312,13 +357,24 @@ public class CdcEventStore<CONFIG> implements EventStore {
      * Do NOT simplify buffering, gating, or drain logic.
      * See: cdc/cdc-eventstore.md
      */
-    final class BackfillThenLiveOrdered {
+    static final class BackfillThenLiveOrdered {
+        private final Timer backfillToLiveTransitionTimer;
 
-        static Flux<PersistedEvent> ordered(
+        private BackfillThenLiveOrdered(Timer backfillToLiveTransitionTimer) {
+            this.backfillToLiveTransitionTimer = backfillToLiveTransitionTimer;
+        }
+
+        static Flux<PersistedEvent> orderedWithoutMetrics(Flux<PersistedEvent> backfill,
+                                                          Flux<PersistedEvent> live,
+                                                          long headInclusive) {
+            return new BackfillThenLiveOrdered(null).ordered(backfill, live, headInclusive);
+        }
+
+        Flux<PersistedEvent> ordered(
                 Flux<PersistedEvent> backfill,
                 Flux<PersistedEvent> live,
                 long headInclusive
-                                           ) {
+                                    ) {
             requireNonNull(backfill, "backfill");
             requireNonNull(live, "live");
 
@@ -326,9 +382,11 @@ public class CdcEventStore<CONFIG> implements EventStore {
                 // Buffers live events by global order while backfill is running
                 NavigableMap<Long, PersistedEvent> buffer = new ConcurrentSkipListMap<>();
 
-                AtomicLong    expectedNext = new AtomicLong(headInclusive + 1);
-                AtomicBoolean backfillDone = new AtomicBoolean(false);
-                AtomicBoolean liveDone     = new AtomicBoolean(false);
+                AtomicLong    expectedNext          = new AtomicLong(headInclusive + 1);
+                AtomicBoolean backfillDone          = new AtomicBoolean(false);
+                AtomicBoolean liveDone              = new AtomicBoolean(false);
+                long          backfillToLiveStartNs = System.nanoTime();
+                AtomicBoolean transitionRecorded    = new AtomicBoolean(false);
 
                 // Do NOT use replay().all() here (unbounded memory). We only start emitting after backfill is done.
                 Sinks.Many<PersistedEvent> orderedLiveSink = Sinks.many().unicast().onBackpressureBuffer();
@@ -379,6 +437,9 @@ public class CdcEventStore<CONFIG> implements EventStore {
                         backfill.doOnComplete(() -> {
                             backfillDone.set(true);
                             drain.run(); // may also complete sink if liveDone
+                            if (backfillToLiveTransitionTimer != null && transitionRecorded.compareAndSet(false, true)) {
+                                backfillToLiveTransitionTimer.record(System.nanoTime() - backfillToLiveStartNs, java.util.concurrent.TimeUnit.NANOSECONDS);
+                            }
                         });
 
                 Flux<PersistedEvent> orderedLiveFlux = orderedLiveSink.asFlux();
@@ -392,8 +453,6 @@ public class CdcEventStore<CONFIG> implements EventStore {
             });
         }
 
-        private BackfillThenLiveOrdered() {
-        }
     }
 
     public CdcEventBus getCdcBus() {

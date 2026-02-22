@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
+import io.micrometer.core.instrument.*;
 import org.slf4j.*;
 
 import java.util.*;
@@ -40,10 +41,47 @@ public class CdcInboxRepository {
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final CdcSql                                                        cdcSql;
+    private final MeterRegistry                                                 meterRegistry;
+    private final io.micrometer.core.instrument.Timer                           insertLatencyTimer;
+    private final io.micrometer.core.instrument.Timer                           markPoisonLatencyTimer;
+    private final io.micrometer.core.instrument.Timer                           markDispatchedLatencyTimer;
+    private final io.micrometer.core.instrument.Timer                           fetchNextBatchLatencyTimer;
+    private final DistributionSummary                                           fetchNextBatchSizeSummary;
+    private final Counter                                                       insertSuccessCounter;
+    private final Counter                                                       insertDuplicateCounter;
+    private final Counter                                                       markPoisonCounter;
+    private final Counter                                                       markDispatchedCounter;
 
     public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this(unitOfWorkFactory, Optional.empty());
+    }
+
+    public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                              Optional<MeterRegistry> meterRegistry) {
         this.unitOfWorkFactory = unitOfWorkFactory;
+        this.meterRegistry = meterRegistry.orElse(null);
         this.cdcSql = new CdcSql(CdcSql.DEFAULT_CDC_TABLE_NAME);
+        if (this.meterRegistry != null) {
+            insertLatencyTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.inbox.insert.latency").register(this.meterRegistry);
+            markPoisonLatencyTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.inbox.mark_poison.latency").register(this.meterRegistry);
+            markDispatchedLatencyTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.inbox.mark_dispatched.latency").register(this.meterRegistry);
+            fetchNextBatchLatencyTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.inbox.fetch_next_batch.latency").register(this.meterRegistry);
+            fetchNextBatchSizeSummary = DistributionSummary.builder("essentials.cdc.inbox.fetch_next_batch.size").register(this.meterRegistry);
+            insertSuccessCounter = Counter.builder("essentials.cdc.inbox.insert.success").register(this.meterRegistry);
+            insertDuplicateCounter = Counter.builder("essentials.cdc.inbox.insert.duplicate").register(this.meterRegistry);
+            markPoisonCounter = Counter.builder("essentials.cdc.inbox.mark_poison.count").register(this.meterRegistry);
+            markDispatchedCounter = Counter.builder("essentials.cdc.inbox.mark_dispatched.count").register(this.meterRegistry);
+        } else {
+            insertLatencyTimer = null;
+            markPoisonLatencyTimer = null;
+            markDispatchedLatencyTimer = null;
+            fetchNextBatchLatencyTimer = null;
+            fetchNextBatchSizeSummary = null;
+            insertSuccessCounter = null;
+            insertDuplicateCounter = null;
+            markPoisonCounter = null;
+            markDispatchedCounter = null;
+        }
         createTableAndIndexes();
     }
 
@@ -60,7 +98,8 @@ public class CdcInboxRepository {
      * idempotent insert; returns true if inserted, false if already existed
      */
     public boolean insertIfAbsent(String slotName, String lsn, String payloadJson) {
-        return unitOfWorkFactory.withUnitOfWork(uow -> {
+        long startNs = System.nanoTime();
+        boolean inserted = unitOfWorkFactory.withUnitOfWork(uow -> {
             int updated = uow.handle().createUpdate("""
                                                     insert into eventstore_cdc_inbox(slot_name, lsn, payload_json, status)
                                                     values (:slot, :lsn, :payload, 'RECEIVED')
@@ -72,6 +111,15 @@ public class CdcInboxRepository {
                              .execute();
             return updated == 1;
         });
+        if (meterRegistry != null) {
+            insertLatencyTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS);
+            if (inserted) {
+                insertSuccessCounter.increment();
+            } else {
+                insertDuplicateCounter.increment();
+            }
+        }
+        return inserted;
     }
 
     /**
@@ -82,6 +130,7 @@ public class CdcInboxRepository {
      * @param error a description of the error that caused the event to be marked as "POISON"
      */
     public void markPoison(String slotName, String lsn, String error) {
+        long startNs = System.nanoTime();
         unitOfWorkFactory.usingUnitOfWork(uowh -> uowh.handle().createUpdate("""
                                                                              update eventstore_cdc_inbox
                                                                              set status='POISON', error=:err
@@ -91,6 +140,10 @@ public class CdcInboxRepository {
                                                       .bind("lsn", lsn)
                                                       .bind("err", error)
                                                       .execute());
+        if (meterRegistry != null) {
+            markPoisonLatencyTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS);
+            markPoisonCounter.increment();
+        }
     }
 
     /**
@@ -99,6 +152,7 @@ public class CdcInboxRepository {
      * @param inboxId the unique identifier of the inbox event to be marked as dispatched
      */
     public void markDispatched(long inboxId) {
+        long startNs = System.nanoTime();
         unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
                                                                            update eventstore_cdc_inbox
                                                                            set status='DISPATCHED'
@@ -106,6 +160,10 @@ public class CdcInboxRepository {
                                                                            """)
                                                     .bind("id", inboxId)
                                                     .execute());
+        if (meterRegistry != null) {
+            markDispatchedLatencyTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS);
+            markDispatchedCounter.increment();
+        }
     }
 
     /**
@@ -117,7 +175,8 @@ public class CdcInboxRepository {
      * @return a list of {@link InboxRow} objects representing the events in the requested batch
      */
     public List<InboxRow> fetchNextBatch(String slotName, int batchSize) {
-        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
+        long startNs = System.nanoTime();
+        var rows = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
                                                                                 SELECT inbox_id, slot_name, lsn, received_at, payload_json, status, error
                                                                                             FROM eventstore_cdc_inbox
                                                                                             WHERE slot_name = :slot
@@ -134,6 +193,11 @@ public class CdcInboxRepository {
                                                                   rs.getString("payload_json")
                                                           ))
                                                           .list());
+        if (meterRegistry != null) {
+            fetchNextBatchLatencyTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS);
+            fetchNextBatchSizeSummary.record(rows.size());
+        }
+        return rows;
     }
 
     /**
@@ -204,4 +268,3 @@ public class CdcInboxRepository {
         RECEIVED, POISON, DISPATCHED
     }
 }
-

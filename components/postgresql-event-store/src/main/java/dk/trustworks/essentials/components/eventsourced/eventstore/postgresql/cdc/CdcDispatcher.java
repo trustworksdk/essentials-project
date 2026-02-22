@@ -22,7 +22,9 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import io.micrometer.core.instrument.*;
 import dk.trustworks.essentials.shared.*;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.*;
 
 import java.time.Duration;
@@ -48,12 +50,22 @@ public class CdcDispatcher implements Lifecycle {
     private final int                                                           batchSize;
     private final PoisonPolicy                                                  poisonPolicy;
     private final CdcAvailability                                               availability;
+    private final MeterRegistry                                                 meterRegistry;
 
     private final AtomicBoolean started  = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
 
     private ScheduledExecutorService executor;
     private Future<?>                tickFuture;
+
+    private Counter             ticksCounter;
+    private Counter             conversionFailuresCounter;
+    private Counter             poisonRowsCounter;
+    private Counter                             publishedEventsCounter;
+    private Timer                               pollTimer;
+    private Timer convertTimer;
+    private Timer publishTimer;
+    private DistributionSummary fetchedBatchSizeSummary;
 
     public CdcDispatcher(CdcInboxRepository inbox,
                          HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
@@ -65,6 +77,30 @@ public class CdcDispatcher implements Lifecycle {
                          String slotName,
                          CdcDispatcherProperties cdcDispatcherProperties,
                          CdcAvailability availability) {
+        this(inbox,
+             unitOfWorkFactory,
+             eventStreamGapHandler,
+             converter,
+             walGlobalOrdersExtractor,
+             cdcPoisonNotifier,
+             onEvents,
+             slotName,
+             cdcDispatcherProperties,
+             availability,
+             Optional.empty());
+    }
+
+    public CdcDispatcher(CdcInboxRepository inbox,
+                         HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                         EventStreamGapHandler<?> eventStreamGapHandler,
+                         Wal2JsonToPersistedEventConverter converter,
+                         WalGlobalOrdersExtractor walGlobalOrdersExtractor,
+                         Optional<CdcPoisonNotifier> cdcPoisonNotifier,
+                         Consumer<List<PersistedEvent>> onEvents,
+                         String slotName,
+                         CdcDispatcherProperties cdcDispatcherProperties,
+                         CdcAvailability availability,
+                         Optional<MeterRegistry> meterRegistry) {
         this.inbox = requireNonNull(inbox, "inbox cannot be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
         this.eventStreamGapHandler = requireNonNull(eventStreamGapHandler, "eventStreamGapHandler cannot be null");
@@ -79,6 +115,36 @@ public class CdcDispatcher implements Lifecycle {
         this.batchSize = cdcDispatcherProperties.getBatchSize();
         this.poisonPolicy = requireNonNull(cdcDispatcherProperties.getPoisonPolicy(), "poisonPolicy cannot be null");
         this.availability = requireNonNull(availability, "availability cannot be null");
+        this.meterRegistry = meterRegistry.orElse(null);
+        initMetrics();
+    }
+
+    private void initMetrics() {
+        if (meterRegistry == null) return;
+        ticksCounter = Counter.builder("essentials.cdc.dispatcher.ticks")
+                              .tag("slot", slotName)
+                              .register(meterRegistry);
+        conversionFailuresCounter = Counter.builder("essentials.cdc.dispatcher.conversion.failures")
+                                           .tag("slot", slotName)
+                                           .register(meterRegistry);
+        poisonRowsCounter = Counter.builder("essentials.cdc.dispatcher.poison.rows")
+                                   .tag("slot", slotName)
+                                   .register(meterRegistry);
+        publishedEventsCounter = Counter.builder("essentials.cdc.dispatcher.published.events")
+                                        .tag("slot", slotName)
+                                        .register(meterRegistry);
+        pollTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.dispatcher.poll.latency")
+                         .tag("slot", slotName)
+                         .register(meterRegistry);
+        convertTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.dispatcher.convert.latency")
+                            .tag("slot", slotName)
+                            .register(meterRegistry);
+        publishTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.dispatcher.publish.latency")
+                            .tag("slot", slotName)
+                            .register(meterRegistry);
+        fetchedBatchSizeSummary = DistributionSummary.builder("essentials.cdc.dispatcher.poll.batch_size")
+                                                     .tag("slot", slotName)
+                                                     .register(meterRegistry);
     }
 
     @Override
@@ -106,8 +172,12 @@ public class CdcDispatcher implements Lifecycle {
 
     private void tick() {
         if (stopping.get()) return;
+        if (ticksCounter != null) ticksCounter.increment();
 
+        long pollStartNs = System.nanoTime();
         var batch = inbox.fetchNextBatch(slotName, batchSize);
+        if (pollTimer != null) pollTimer.record(System.nanoTime() - pollStartNs, TimeUnit.NANOSECONDS);
+        if (fetchedBatchSizeSummary != null) fetchedBatchSizeSummary.record(batch.size());
         if (log.isTraceEnabled()) {
             log.trace("[{}] CDC dispatcher fetched batch of '{}' rows", slotName, batch.size());
         }
@@ -117,12 +187,18 @@ public class CdcDispatcher implements Lifecycle {
             if (stopping.get()) return;
 
             try {
+                long convertStartNs = System.nanoTime();
                 var events = converter.convert(row.payloadJson());
+                if (convertTimer != null) convertTimer.record(System.nanoTime() - convertStartNs, TimeUnit.NANOSECONDS);
                 if (!events.isEmpty()) {
+                    long publishStartNs = System.nanoTime();
                     onEvents.accept(events);
+                    if (publishTimer != null) publishTimer.record(System.nanoTime() - publishStartNs, TimeUnit.NANOSECONDS);
+                    if (publishedEventsCounter != null) publishedEventsCounter.increment(events.size());
                 }
                 inbox.markDispatched(row.inboxId());
             } catch (Exception e) {
+                if (conversionFailuresCounter != null) conversionFailuresCounter.increment();
                 log.warn("[{}] CDC conversion failed for inboxId={} lsn={} policy={}: {}",
                          slotName, row.inboxId(), row.lsn(), poisonPolicy, e.getMessage(), e);
 
@@ -130,6 +206,7 @@ public class CdcDispatcher implements Lifecycle {
                     unitOfWorkFactory.usingUnitOfWork(uow -> {
                         log.warn("[{}] Poisoning inboxId={} lsn={}", slotName, row.inboxId(), row.lsn());
                         inbox.markPoison(slotName, row.lsn(), abbreviateExceptionMessage(e));
+                        if (poisonRowsCounter != null) poisonRowsCounter.increment();
 
                         // IMPORTANT: prevent subscribers stalling on this missing global_order
                         // Extract (aggregateType, global_order list) from the WAL JSON without full conversion

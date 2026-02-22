@@ -17,6 +17,9 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler;
 
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
+import org.postgresql.util.PSQLException;
+
+import java.util.Locale;
 
 public class DefaultWal2JsonTailerErrorHandler implements Wal2JsonTailerErrorHandler {
 
@@ -34,7 +37,28 @@ public class DefaultWal2JsonTailerErrorHandler implements Wal2JsonTailerErrorHan
 
     @Override
     public Decision onStreamError(String slotName, Exception error) {
+        if (isTerminalReplicationProtocolError(error)) return Decision.STOP;
         if (IOExceptionUtil.isIOException(error)) return Decision.RETRY_CONNECTION;
         return Decision.RETRY_CONNECTION;
+    }
+
+    private boolean isTerminalReplicationProtocolError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof PSQLException psql) {
+                String sqlState = psql.getSQLState();
+                String msg = psql.getMessage() == null ? "" : psql.getMessage().toLowerCase(Locale.ROOT);
+
+                boolean startReplicationSyntaxError = "42601".equals(sqlState) && msg.contains("start_replication");
+                boolean replicationModeMismatch = msg.contains("not in replication mode");
+                boolean genericStartReplicationFailure = msg.contains("start_replication") && msg.contains("syntax error");
+
+                if (startReplicationSyntaxError || replicationModeMismatch || genericStartReplicationFailure) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 }
