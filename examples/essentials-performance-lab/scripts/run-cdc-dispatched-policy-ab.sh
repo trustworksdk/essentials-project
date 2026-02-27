@@ -13,6 +13,11 @@ AGGREGATE_CARDINALITY="${AGGREGATE_CARDINALITY:-5000}"
 SEED="${SEED:-42}"
 WAL_PARSER_MODE="${WAL_PARSER_MODE:-BYTES}"
 REPEATS="${REPEATS:-3}"
+AUTO_CLEANUP_INACTIVE_SLOTS="${AUTO_CLEANUP_INACTIVE_SLOTS:-true}"
+SLOT_PREFIX="${SLOT_PREFIX:-lab_}"
+SLOT_CLEANUP_CONTAINER="${SLOT_CLEANUP_CONTAINER:-essentials-perf-lab-postgres}"
+PG_DB="${PG_DB:-essentials_lab}"
+PG_USER="${PG_USER:-essentials}"
 
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="$LAB_DIR/target/cdc-dispatched-policy-ab/$RUN_ID"
@@ -22,7 +27,32 @@ echo "############# [perf-lab] CDC dispatched policy A/B start #############"
 echo "[perf-lab] run_id=$RUN_ID"
 echo "[perf-lab] profile=$PROFILE warmup=$WARMUP duration=$DURATION repeats=$REPEATS"
 echo "[perf-lab] producer_threads=$PRODUCER_THREADS subscribers=$SUBSCRIBER_COUNT card=$AGGREGATE_CARDINALITY seed=$SEED wal_parser_mode=$WAL_PARSER_MODE"
+echo "[perf-lab] cleanup_inactive_slots=$AUTO_CLEANUP_INACTIVE_SLOTS slot_prefix=$SLOT_PREFIX container=$SLOT_CLEANUP_CONTAINER"
 echo "[perf-lab] output_dir=$OUT_DIR"
+
+show_slot_state() {
+  docker exec "$SLOT_CLEANUP_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -Atqc \
+    "select (select setting from pg_settings where name='max_replication_slots') || ',' || (select count(*) from pg_replication_slots) || ',' || (select count(*) from pg_replication_slots where active);"
+}
+
+cleanup_inactive_slots() {
+  docker exec "$SLOT_CLEANUP_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -Atqc \
+    "do \$\$ declare r record; begin for r in select slot_name from pg_replication_slots where active = false and slot_name like '${SLOT_PREFIX}%' loop perform pg_drop_replication_slot(r.slot_name); end loop; end \$\$;"
+}
+
+if [[ "$AUTO_CLEANUP_INACTIVE_SLOTS" == "true" ]]; then
+  if docker ps --format '{{.Names}}' | grep -qx "$SLOT_CLEANUP_CONTAINER"; then
+    echo "[perf-lab] cleaning inactive replication slots with prefix '${SLOT_PREFIX}'"
+    cleanup_inactive_slots || true
+    state="$(show_slot_state || true)"
+    if [[ -n "$state" ]]; then
+      IFS=',' read -r max_slots total_slots active_slots <<< "$state"
+      echo "[perf-lab] slots max=$max_slots total=$total_slots active=$active_slots"
+    fi
+  else
+    echo "[perf-lab] WARNING: container '$SLOT_CLEANUP_CONTAINER' not running; skipping slot cleanup"
+  fi
+fi
 
 run_case() {
   local policy="$1"
@@ -42,7 +72,13 @@ run_case() {
 
 for ((i=1; i<=REPEATS; i++)); do
   run_seed=$((SEED + i * 1000))
+  if [[ "$AUTO_CLEANUP_INACTIVE_SLOTS" == "true" ]] && docker ps --format '{{.Names}}' | grep -qx "$SLOT_CLEANUP_CONTAINER"; then
+    cleanup_inactive_slots || true
+  fi
   run_case "mark-dispatched" "$i" "$run_seed"
+  if [[ "$AUTO_CLEANUP_INACTIVE_SLOTS" == "true" ]] && docker ps --format '{{.Names}}' | grep -qx "$SLOT_CLEANUP_CONTAINER"; then
+    cleanup_inactive_slots || true
+  fi
   run_case "delete" "$i" "$run_seed"
 done
 
@@ -76,6 +112,22 @@ def valid_compare(d):
     direct_state = str((d.get("cdcDirect", {}).get("cdc") or {}).get("state", ""))
     return inbox_mode == "cdc-active" and direct_mode == "cdc-active" and inbox_state in ("", "ACTIVE") and direct_state in ("", "ACTIVE")
 
+def reason_for(d):
+    reasons = []
+    inbox = d.get("cdcInbox", {})
+    direct = d.get("cdcDirect", {})
+    if str(inbox.get("mode", "")) != "cdc-active":
+        reasons.append(f"cdcInbox mode={inbox.get('mode')}")
+    if str(direct.get("mode", "")) != "cdc-active":
+        reasons.append(f"cdcDirect mode={direct.get('mode')}")
+    inbox_cdc = inbox.get("cdc") or {}
+    direct_cdc = direct.get("cdc") or {}
+    if str(inbox_cdc.get("state", "ACTIVE")) != "ACTIVE":
+        reasons.append(f"cdcInbox state={inbox_cdc.get('state')} reason={inbox_cdc.get('reason')}")
+    if str(direct_cdc.get("state", "ACTIVE")) != "ACTIVE":
+        reasons.append(f"cdcDirect state={direct_cdc.get('state')} reason={direct_cdc.get('reason')}")
+    return reasons
+
 rows = []
 for p in sorted(out_dir.glob("*.json")):
     d = json.loads(p.read_text())
@@ -86,6 +138,7 @@ for p in sorted(out_dir.glob("*.json")):
         "policy": policy,
         "run": int(run),
         "valid": valid_compare(d),
+        "invalid_reasons": reason_for(d),
         "cdc_inbox_delivery_eps": num(d, "cdcInbox", "deliveredEventsPerSecond"),
         "cdc_inbox_append_eps": num(d, "cdcInbox", "appendEventsPerSecond"),
         "cdc_inbox_p95_ms": num(d, "cdcInbox", "p95LatencyMs"),
@@ -136,6 +189,25 @@ summary_md.write_text("\n".join(lines) + "\n")
 
 print("[perf-lab] wrote", summary_json)
 print("[perf-lab] wrote", summary_md)
+print("############# [perf-lab] A/B median summary #############")
+for policy in ("mark-dispatched", "delete"):
+    s = summary[policy]
+    print(
+        f"[perf-lab] {policy:<16} valid={s['runs_valid']}/{s['runs_total']} "
+        f"delivery_eps={f(s['median_cdc_inbox_delivery_eps'])} "
+        f"append_eps={f(s['median_cdc_inbox_append_eps'])} "
+        f"p95_ms={f(s['median_cdc_inbox_p95_ms'])} "
+        f"completion_pct={f(s['median_cdc_inbox_completion_pct'])} "
+        f"lag_end={f(s['median_cdc_inbox_lag_end'], 0)} "
+        f"catchup_ms={f(s['median_cdc_inbox_catchup_ms'], 0)}"
+    )
+if any(summary[p]["runs_valid"] < summary[p]["runs_total"] for p in ("mark-dispatched", "delete")):
+    print("[perf-lab] WARNING: some runs were invalid and excluded from medians")
+    for r in rows:
+        if not r["valid"]:
+            reasons = "; ".join(r["invalid_reasons"]) if r["invalid_reasons"] else "unknown"
+            print(f"[perf-lab] invalid policy={r['policy']} run={r['run']} reason={reasons}")
+print("############# [perf-lab] ################################")
 PY
 
 echo "############# [perf-lab] CDC dispatched policy A/B done #############"

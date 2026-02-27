@@ -183,10 +183,87 @@ REPEATS=3 WARMUP=PT20S DURATION=PT120S \
 examples/essentials-performance-lab/scripts/run-cdc-dispatched-policy-ab.sh
 ```
 
+Optional slot hygiene toggles for compose runs:
+
+```bash
+AUTO_CLEANUP_INACTIVE_SLOTS=true
+SLOT_PREFIX=lab_
+SLOT_CLEANUP_CONTAINER=essentials-perf-lab-postgres
+```
+
+The script now prints invalid-run reasons (e.g. CDC fallback/failed state) and excludes invalid runs from medians.
+
 Outputs are written per run to:
 
 - `examples/essentials-performance-lab/target/cdc-dispatched-policy-ab/<run-id>/summary.json`
 - `examples/essentials-performance-lab/target/cdc-dispatched-policy-ab/<run-id>/summary.md`
+
+## Benchmark Command Cookbook
+
+Use these exact commands from repository root (copy/paste friendly):
+
+### 0) Long 3-way compare with default CDC tuning (polling vs cdcInbox vs cdcDirect)
+
+```bash
+mvn -q -pl examples/essentials-performance-lab -DskipTests -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="--essentials.lab.scenario=baseline-polling-vs-cdc-compare --essentials.lab.warmup=PT20S --essentials.lab.duration=PT120S --essentials.eventstore.cdc.wal-parser-mode=BYTES --essentials.eventstore.cdc.cdc-event-store-backfill-batch-size=1000 --essentials.eventstore.cdc.cdc-dispatcher.batch-size=200 --essentials.eventstore.cdc.cdc-dispatcher.poll-interval=PT0.05S --essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S --essentials.lab.metrics-output-file=./target/baseline-compare-defaults-long.json" \
+  spring-boot:run
+```
+
+Summarize:
+
+```bash
+examples/essentials-performance-lab/scripts/summarize-compare.sh \
+  examples/essentials-performance-lab/target/baseline-compare-defaults-long.json
+```
+
+### 1) A/B policy compare (mark-dispatched vs delete), base shape
+
+```bash
+REPEATS=3 WARMUP=PT20S DURATION=PT120S \
+PRODUCER_THREADS=4 SUBSCRIBER_COUNT=2 AGGREGATE_CARDINALITY=5000 \
+WAL_PARSER_MODE=BYTES \
+examples/essentials-performance-lab/scripts/run-cdc-dispatched-policy-ab.sh
+```
+
+### 2) A/B policy compare, subscriber pressure (subs=5)
+
+```bash
+REPEATS=3 WARMUP=PT20S DURATION=PT120S \
+PRODUCER_THREADS=4 SUBSCRIBER_COUNT=5 AGGREGATE_CARDINALITY=5000 \
+WAL_PARSER_MODE=BYTES \
+examples/essentials-performance-lab/scripts/run-cdc-dispatched-policy-ab.sh
+```
+
+### 3) A/B policy compare, hot aggregates (cardinality=50)
+
+```bash
+REPEATS=3 WARMUP=PT20S DURATION=PT120S \
+PRODUCER_THREADS=4 SUBSCRIBER_COUNT=2 AGGREGATE_CARDINALITY=50 \
+WAL_PARSER_MODE=BYTES \
+examples/essentials-performance-lab/scripts/run-cdc-dispatched-policy-ab.sh
+```
+
+### 4) A/B policy compare, combined stress (subs=5, card=50)
+
+```bash
+REPEATS=3 WARMUP=PT20S DURATION=PT120S \
+PRODUCER_THREADS=4 SUBSCRIBER_COUNT=5 AGGREGATE_CARDINALITY=50 \
+WAL_PARSER_MODE=BYTES \
+examples/essentials-performance-lab/scripts/run-cdc-dispatched-policy-ab.sh
+```
+
+View latest A/B summary:
+
+```bash
+LATEST="$(ls -td examples/essentials-performance-lab/target/cdc-dispatched-policy-ab/* | head -n 1)"
+cat "$LATEST/summary.md"
+```
+
+Notes:
+
+- Keep machine awake during long runs (sleep will skew results).
+- A/B script excludes invalid runs from medians and prints reasons.
 
 ## Next planned scenarios
 
