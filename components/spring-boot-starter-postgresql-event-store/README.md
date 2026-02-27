@@ -14,6 +14,7 @@ Spring Boot auto-configuration for the PostgreSQL Event Store and all PostgreSQL
 - [Auto-Configured Beans](#auto-configured-beans)
 - [Configuration Properties](#configuration-properties)
   - [Event Store Configuration](#event-store-configuration)
+  - [CDC Configuration (Hybrid wal2json)](#cdc-configuration-hybrid-wal2json)
   - [Subscription Manager Configuration](#subscription-manager-configuration)
   - [Subscription Monitor Configuration](#subscription-monitor-configuration)
   - [Event Store Metrics Configuration](#event-store-metrics-configuration)
@@ -181,6 +182,41 @@ Controls *when* in-transaction subscribers receive events. See [postgresql-event
 |---------|----------|
 | `false` (default) | Events published at `BeforeCommit` and `AfterCommit`. Subscribers receive all events from a transaction together, just before it commits |
 | `true` | Events *also* published immediately after each `appendToStream()` call. Use this when subscribers need to react to each event individually within the same transaction (e.g., saga coordination) |
+
+### CDC Configuration (Hybrid wal2json)
+
+Hybrid CDC can run in durable inbox mode (`INBOX`) or direct publish mode (`DIRECT`):
+
+```properties
+essentials.eventstore.cdc.enabled=true
+essentials.eventstore.cdc.mode=auto
+essentials.eventstore.cdc.delivery-mode=inbox
+essentials.eventstore.cdc.wal-parser-mode=bytes
+```
+
+Wal filtering defaults to: only `kind=insert` changes where `table` is one of the configured aggregate event stream tables.
+
+Tuning baseline (good starting point from perf-lab runs):
+
+```properties
+essentials.eventstore.cdc.cdc-event-store-backfill-batch-size=1000
+essentials.eventstore.cdc.cdc-dispatcher.batch-size=200
+essentials.eventstore.cdc.cdc-dispatcher.poll-interval=PT0.05S
+essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S
+```
+
+| Property | Default | What It Controls |
+|----------|---------|------------------|
+| `essentials.eventstore.cdc.enabled` | `true` | Enables CDC beans (`Wal2JsonTailer`, `CdcDispatcher`, `CdcEventStore`) |
+| `essentials.eventstore.cdc.mode` | `auto` | `auto`: fallback to polling if CDC cannot start. `require`: fail startup if CDC cannot start |
+| `essentials.eventstore.cdc.delivery-mode` | `inbox` | `inbox`: durable inbox + dispatcher. `direct`: tailer converts and publishes directly (no inbox persistence, dispatcher idle) |
+| `essentials.eventstore.cdc.wal-parser-mode` | `string` | `string` or `bytes` parser path for wal2json payloads (recommend `bytes`) |
+| `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy` | `mark-dispatched` | `mark-dispatched`: keep row for TTL cleanup. `delete`: remove row immediately after successful dispatch |
+| `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` | `8192` | DIRECT-mode CDC bus buffer size |
+| `essentials.eventstore.cdc.event-bus.non-serialized-max-retries` | `16` | Retries for `FAIL_NON_SERIALIZED` emit races |
+| `essentials.eventstore.cdc.event-bus.overflow-max-retries` | `20` | Retries for `FAIL_OVERFLOW` before applying overflow policy |
+| `essentials.eventstore.cdc.event-bus.overflow-policy` | `fail-fast` | `fail-fast` throws on irrecoverable emit failures, `log-and-drop` logs and drops |
+| `essentials.eventstore.cdc.event-bus.queued-task-cap-factor` | `1.5` | Reserved for parity with `LocalEventBus`; currently informational for `CdcEventBus` |
 
 ### Subscription Manager Configuration
 

@@ -127,6 +127,7 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 cdcPersistedEvents::addAll,
                 slotName,
                 CdcDispatcherProperties.defaults(),
+                CdcProperties.WalParserMode.STRING,
                 availability
         );
 
@@ -207,6 +208,7 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 cdcPersistedEvents::addAll,
                 slotName,
                 CdcDispatcherProperties.defaults(),
+                CdcProperties.WalParserMode.STRING,
                 availability
         );
 
@@ -239,6 +241,69 @@ public class Wal2JsonWithEssentialsAggregateIT extends AbstractWal2JsonPostgresI
                 });
 
         dispatcher.stop();
+        tailer.stop();
+    }
+
+    @Test
+    void direct_delivery_mode_publishes_without_inbox_writes() {
+        String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
+
+        AggregateTypeResolver resolver = table -> {
+            if ("orders_events".equalsIgnoreCase(table)) return ORDERS;
+            return null;
+        };
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
+
+        var cfg = Wal2JsonTailerProperties.defaults(
+                Duration.ofMillis(10),
+                Duration.ofMillis(50),
+                Duration.ofSeconds(2),
+                Duration.ofMillis(250)
+        );
+
+        var availability = new CdcAvailability();
+        var tailer = new Wal2JsonTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                cfg,
+                PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                CdcDeliveryMode.DIRECT,
+                CdcProperties.WalParserMode.BYTES,
+                Optional.of(converter),
+                Optional.of(cdcPersistedEvents::addAll),
+                availability,
+                Optional.empty(),
+                Optional.empty()
+        );
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+
+        var orderId = OrderId.of("beed77fb-1115-1115-9c48-03ed5bfe8f89");
+        var persistableEvents = List.of(
+                new OrderEvent.OrderAdded(orderId, CustomerId.of("Test-Customer-Id-15"), 1234),
+                new OrderEvent.ProductAddedToOrder(orderId, ProductId.of("ProductId-1"), 2),
+                new OrderEvent.ProductRemovedFromOrder(orderId, ProductId.of("ProductId-1"))
+        );
+
+        var uow = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+        eventStore.appendToStream(ORDERS, orderId, persistableEvents);
+        uow.commit();
+
+        await()
+                .atMost(Duration.ofSeconds(20))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> {
+                    assertThat(cdcPersistedEvents).hasSizeGreaterThanOrEqualTo(3);
+                    assertThat(inboxRepository.countByStatus(slotName, "RECEIVED")).isZero();
+                    assertThat(inboxRepository.countByStatus(slotName, "POISON")).isZero();
+                    assertThat(inboxRepository.countByStatus(slotName, "DISPATCHED")).isZero();
+                });
+
         tailer.stop();
     }
 

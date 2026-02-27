@@ -2208,7 +2208,9 @@ Hybrid CDC is available through the CDC package and Spring Boot starter integrat
 What it adds:
 
 - low-latency live ingestion from PostgreSQL logical replication (`wal2json`)
-- durable inbox/dispatcher pipeline with poison handling and permanent gap registration
+- configurable delivery pipeline:
+  - `INBOX` (default): durable inbox/dispatcher with poison handling and permanent gap registration
+  - `DIRECT`: tailer converts and publishes directly to CDC bus (no inbox persistence, no dispatcher)
 - ordered `backfill + live` merge (`BackfillThenLiveOrdered`)
 - automatic fallback to classic polling when CDC is unavailable in `auto` mode
 
@@ -2217,6 +2219,9 @@ Startup semantics:
 - `cdc.enabled` controls whether tailer/dispatcher are started
 - `cdc.mode=require` fails startup if CDC cannot become active
 - `cdc.mode=auto` marks CDC as failed/inactive and continues with polling fallback
+- `cdc.delivery-mode=inbox|direct` controls whether CDC uses durable inbox or direct publish mode
+- `cdc.cdc-dispatcher.dispatched-row-policy=mark-dispatched|delete` controls whether dispatched inbox rows are retained for TTL cleanup or deleted immediately
+- WAL filtering only persists `kind=insert` changes for configured aggregate event stream tables
 
 Slot ownership and safety:
 
@@ -2227,6 +2232,36 @@ Slot ownership and safety:
 Design details:
 
 - [Hybrid CDC design](src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/hybrid-cdc-eventstore.md)
+
+Recommended defaults:
+
+```properties
+essentials.eventstore.cdc.enabled=true
+essentials.eventstore.cdc.mode=auto
+essentials.eventstore.cdc.delivery-mode=inbox
+essentials.eventstore.cdc.wal-parser-mode=bytes
+```
+
+Tuning baseline (good starting point from perf-lab runs):
+
+```properties
+essentials.eventstore.cdc.cdc-event-store-backfill-batch-size=1000
+essentials.eventstore.cdc.cdc-dispatcher.batch-size=200
+essentials.eventstore.cdc.cdc-dispatcher.poll-interval=PT0.05S
+essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S
+```
+
+Direct CDC bus tuning:
+
+```properties
+essentials.eventstore.cdc.event-bus.backpressure-buffer-size=8192
+essentials.eventstore.cdc.event-bus.non-serialized-max-retries=16
+essentials.eventstore.cdc.event-bus.overflow-max-retries=20
+essentials.eventstore.cdc.event-bus.overflow-policy=fail-fast
+```
+
+Notes:
+- `queued-task-cap-factor` exists for parity with `LocalEventBus` settings but is currently informational for `CdcEventBus`.
 
 ---
 

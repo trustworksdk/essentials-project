@@ -48,7 +48,7 @@ public class CdcSql {
                       slot_name     TEXT NOT NULL,
                       lsn           TEXT NOT NULL,
                       received_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-                      payload_json  TEXT NOT NULL,
+                      payload_bytes BYTEA NOT NULL,
                       status        TEXT NOT NULL, -- RECEIVED | POISON | DISPATCHED
                       error         TEXT NULL,
                     

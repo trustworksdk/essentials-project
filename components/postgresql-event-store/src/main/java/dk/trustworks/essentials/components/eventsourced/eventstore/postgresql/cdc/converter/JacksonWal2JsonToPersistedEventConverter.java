@@ -16,7 +16,6 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
@@ -27,6 +26,7 @@ import dk.trustworks.essentials.components.foundation.json.JSONSerializationExce
 import dk.trustworks.essentials.components.foundation.types.*;
 import org.slf4j.*;
 
+import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.time.format.*;
 import java.time.temporal.ChronoField;
@@ -94,12 +94,32 @@ public final class JacksonWal2JsonToPersistedEventConverter implements Wal2JsonT
                       wal2jsonMessage.length() > 500 ? wal2jsonMessage.substring(0, 500) + "..." : wal2jsonMessage);
         }
 
-        JsonNode root = null;
+        JsonNode root;
         try {
             root = jacksonJSONSerializer.getObjectMapper().readTree(wal2jsonMessage);
-        } catch (JsonProcessingException e) {
+        } catch (IOException e) {
             throw new JSONSerializationException("Failed to deserialize wal2json message to PersistedEvent", e);
         }
+        return convertRoot(root);
+    }
+
+    @Override
+    public List<PersistedEvent> convert(byte[] wal2jsonMessageBytes) {
+        if (wal2jsonMessageBytes == null || wal2jsonMessageBytes.length == 0) {
+            log.debug("Wal2json message bytes were null or empty");
+            return List.of();
+        }
+
+        JsonNode root;
+        try {
+            root = jacksonJSONSerializer.getObjectMapper().readTree(wal2jsonMessageBytes);
+        } catch (IOException e) {
+            throw new JSONSerializationException("Failed to deserialize wal2json bytes to PersistedEvent", e);
+        }
+        return convertRoot(root);
+    }
+
+    private List<PersistedEvent> convertRoot(JsonNode root) {
         JsonNode changeNode = root.get("change");
         if (!(changeNode instanceof ArrayNode changes)) {
             log.trace("wal2json root had no 'change' array. keys={}", root.fieldNames().hasNext() ? "present" : "none");

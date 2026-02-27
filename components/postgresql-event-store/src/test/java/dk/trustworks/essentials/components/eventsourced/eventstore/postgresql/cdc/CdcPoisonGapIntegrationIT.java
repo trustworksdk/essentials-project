@@ -122,6 +122,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractWal2JsonPostgresIT {
                 cdcBus::addAll,
                 slotName,
                 CdcDispatcherProperties.defaults(),
+                CdcProperties.WalParserMode.STRING,
                 availability
         );
 
@@ -334,6 +335,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractWal2JsonPostgresIT {
                 dispatched::addAll,
                 slotName,
                 dispatcherProps,
+                CdcProperties.WalParserMode.STRING,
                 availability
         );
 
@@ -387,6 +389,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractWal2JsonPostgresIT {
                 events -> dispatchedCount.addAndGet(events.size()),
                 slotName,
                 dispatcherProps,
+                CdcProperties.WalParserMode.STRING,
                 availability
         );
 

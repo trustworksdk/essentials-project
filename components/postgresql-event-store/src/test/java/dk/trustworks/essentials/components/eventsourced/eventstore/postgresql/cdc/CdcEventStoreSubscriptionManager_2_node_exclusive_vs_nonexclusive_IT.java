@@ -359,6 +359,7 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
                     cdcBus::publish,
                     slotName,
                     CdcDispatcherProperties.defaults(),
+                    CdcProperties.WalParserMode.STRING,
                     availability
             );
 

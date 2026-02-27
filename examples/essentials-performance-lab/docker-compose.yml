@@ -1,0 +1,27 @@
+services:
+  postgres-wal2json:
+    build:
+      context: .
+      dockerfile: docker/postgresql-wal2json/Dockerfile
+    image: essentials/perf-lab-postgres-wal2json:17
+    container_name: essentials-perf-lab-postgres
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+    environment:
+      POSTGRES_DB: essentials_lab
+      POSTGRES_USER: essentials
+      POSTGRES_PASSWORD: essentials
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"  # Faster startup
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U essentials -d essentials_lab"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

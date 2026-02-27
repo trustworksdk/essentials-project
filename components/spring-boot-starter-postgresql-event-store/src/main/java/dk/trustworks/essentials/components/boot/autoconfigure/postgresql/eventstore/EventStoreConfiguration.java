@@ -31,6 +31,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ap
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.Wal2JsonTailerErrorHandler;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.health.CdcHealthIndicator;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
@@ -545,6 +546,8 @@ public class EventStoreConfiguration {
                                  cdcEventBus::publish,
                                  slotName,
                                  essentialsProperties.getCdc().getCdcDispatcher(),
+                                 essentialsProperties.getCdc().getWalParserMode(),
+                                 essentialsProperties.getCdc().getDeliveryMode(),
                                  availability,
                                  meterRegistry
         );
@@ -561,8 +564,8 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public CdcEventBus cdcEventBus() {
-        return new CdcEventBus();
+    public CdcEventBus cdcEventBus(EssentialsEventStoreProperties properties) {
+        return new CdcEventBus(properties.getCdc().getEventBus());
     }
 
     @Bean
@@ -586,6 +589,16 @@ public class EventStoreConfiguration {
         var postgresqlEventStore           = (PostgresqlEventStore<?>) eventStore;
         var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates();
         return new DefaultAggregateTypeResolver(aggregateEventStreamTableNames);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public WalMessageFilter walMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
+                                             @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        var postgresqlEventStore = (PostgresqlEventStore<?>) eventStore;
+        var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates();
+        return new DefaultWalMessageFilter(jacksonJSONSerializer, aggregateEventStreamTableNames);
     }
 
     @Bean
@@ -626,6 +639,9 @@ public class EventStoreConfiguration {
                                          CdcConsumerGroup group,
                                          CdcSlotNameProvider slotNameProvider,
                                          CdcAvailability availability,
+                                         Wal2JsonToPersistedEventConverter converter,
+                                         WalMessageFilter walMessageFilter,
+                                         CdcEventBus cdcEventBus,
                                          Optional<MeterRegistry> meterRegistry,
                                          Optional<Wal2JsonTailerErrorHandler> errorHandler) throws SQLException {
 
@@ -643,6 +659,11 @@ public class EventStoreConfiguration {
                                   properties.getCdc().getWal2JsonTailer(),
                                   properties.getCdc().getSlot().getMode(),
                                   properties.getCdc().getMode(),
+                                  properties.getCdc().getDeliveryMode(),
+                                  properties.getCdc().getWalParserMode(),
+                                  Optional.of(converter),
+                                  Optional.of(cdcEventBus::publish),
+                                  Optional.of(walMessageFilter),
                                   availability,
                                   meterRegistry,
                                   errorHandler);

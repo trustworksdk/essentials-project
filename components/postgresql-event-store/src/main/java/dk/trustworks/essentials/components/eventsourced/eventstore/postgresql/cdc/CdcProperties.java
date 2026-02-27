@@ -20,15 +20,18 @@ import java.time.Duration;
 
 public class CdcProperties {
 
-    private boolean enabled                        = true;
-    private CdcMode mode                           = CdcMode.AUTO;
-    private int     cdcEventStoreBackfillBatchSize = 1000;
+    private boolean       enabled                        = true;
+    private CdcMode       mode                           = CdcMode.AUTO;
+    private int           cdcEventStoreBackfillBatchSize = 1000;
+    private WalParserMode walParserMode                  = WalParserMode.STRING;
+    private CdcDeliveryMode deliveryMode                 = CdcDeliveryMode.INBOX;
 
     private String inboxTableName   = "eventstore_cdc_inbox";
     private long   inboxTtlDuration = 90L;
 
     private final Wal2JsonTailerProperties wal2JsonTailer = new Wal2JsonTailerProperties();
     private final CdcDispatcherProperties  cdcDispatcher  = new CdcDispatcherProperties();
+    private final CdcEventBusProperties    eventBus       = new CdcEventBusProperties();
     private final CdcSlotProperties        slot           = new CdcSlotProperties();
 
     /**
@@ -90,6 +93,33 @@ public class CdcProperties {
     }
 
     /**
+     * Determines how wal2json payloads should be parsed.
+     * <p>
+     * - {@code STRING}: parse from String payloads
+     * - {@code BYTES}: parse directly from UTF-8 bytes
+     */
+    public WalParserMode getWalParserMode() {
+        return walParserMode;
+    }
+
+    public void setWalParserMode(WalParserMode walParserMode) {
+        this.walParserMode = walParserMode;
+    }
+
+    /**
+     * CDC delivery mode:
+     * - {@code INBOX}: WAL -> inbox table -> dispatcher -> bus
+     * - {@code DIRECT}: WAL -> converter -> bus (no inbox persistence)
+     */
+    public CdcDeliveryMode getDeliveryMode() {
+        return deliveryMode;
+    }
+
+    public void setDeliveryMode(CdcDeliveryMode deliveryMode) {
+        this.deliveryMode = deliveryMode;
+    }
+
+    /**
      * Retrieves the name of the database table used for the Change Data Capture (CDC) inbox.
      *
      * @return the name of the CDC inbox table as a {@code String}
@@ -147,12 +177,37 @@ public class CdcProperties {
     }
 
     /**
+     * Retrieves the configuration properties for the CDC in-memory event bus.
+     *
+     * @return an instance of CdcEventBusProperties containing event bus backpressure
+     * and emit retry behavior
+     */
+    public CdcEventBusProperties getEventBus() {
+        return eventBus;
+    }
+
+    /**
      * Retrieves the configuration properties for a PostgreSQL replication slot.
      *
      * @return an instance of PgSlotProperties containing the configuration for the PostgreSQL replication slot
      */
     public CdcSlotProperties getSlot() {
         return slot;
+    }
+
+    public enum WalParserMode {
+        STRING,
+        BYTES
+    }
+
+    public enum CdcDeliveryMode {
+        INBOX,
+        DIRECT
+    }
+
+    public enum DispatchedRowPolicy {
+        MARK_DISPATCHED,
+        DELETE
     }
 
     /**
@@ -445,6 +500,7 @@ public class CdcProperties {
         private Duration     pollInterval = Duration.ofMillis(20);
         private int          batchSize    = 500;
         private PoisonPolicy poisonPolicy = PoisonPolicy.QUARANTINE_AND_CONTINUE;
+        private DispatchedRowPolicy dispatchedRowPolicy = DispatchedRowPolicy.MARK_DISPATCHED;
 
         public static CdcDispatcherProperties defaults() {
             return new CdcDispatcherProperties();
@@ -519,6 +575,74 @@ public class CdcProperties {
         public void setPoisonPolicy(PoisonPolicy poisonPolicy) {
             this.poisonPolicy = poisonPolicy;
         }
+
+        public DispatchedRowPolicy getDispatchedRowPolicy() {
+            return dispatchedRowPolicy;
+        }
+
+        public void setDispatchedRowPolicy(DispatchedRowPolicy dispatchedRowPolicy) {
+            this.dispatchedRowPolicy = dispatchedRowPolicy;
+        }
+    }
+
+    /**
+     * Configuration properties for the in-memory CDC event bus used by DIRECT delivery mode.
+     */
+    public static class CdcEventBusProperties {
+        private int                backpressureBufferSize = 8192;
+        private int                nonSerializedMaxRetries = 16;
+        private int                overflowMaxRetries      = 20;
+        private double             queuedTaskCapFactor     = 1.5d;
+        private CdcOverflowPolicy  overflowPolicy          = CdcOverflowPolicy.FAIL_FAST;
+
+        public int getBackpressureBufferSize() {
+            return backpressureBufferSize;
+        }
+
+        public void setBackpressureBufferSize(int backpressureBufferSize) {
+            this.backpressureBufferSize = backpressureBufferSize;
+        }
+
+        public int getNonSerializedMaxRetries() {
+            return nonSerializedMaxRetries;
+        }
+
+        public void setNonSerializedMaxRetries(int nonSerializedMaxRetries) {
+            this.nonSerializedMaxRetries = nonSerializedMaxRetries;
+        }
+
+        public int getOverflowMaxRetries() {
+            return overflowMaxRetries;
+        }
+
+        public void setOverflowMaxRetries(int overflowMaxRetries) {
+            this.overflowMaxRetries = overflowMaxRetries;
+        }
+
+        /**
+         * Placeholder for parity with LocalEventBus tuning.
+         * CdcEventBus does not use a boundedElastic scheduler queue, so this value is currently informational.
+         */
+        public double getQueuedTaskCapFactor() {
+            return queuedTaskCapFactor;
+        }
+
+        public void setQueuedTaskCapFactor(double queuedTaskCapFactor) {
+            this.queuedTaskCapFactor = queuedTaskCapFactor;
+        }
+
+        public CdcOverflowPolicy getOverflowPolicy() {
+            return overflowPolicy;
+        }
+
+        public void setOverflowPolicy(CdcOverflowPolicy overflowPolicy) {
+            this.overflowPolicy = overflowPolicy;
+        }
+    }
+
+    public enum CdcOverflowPolicy {
+        FAIL_FAST,
+        LOG_AND_DROP
     }
 
     public static class CdcSlotProperties {

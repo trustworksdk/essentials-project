@@ -16,7 +16,14 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter;
 
+import java.nio.charset.StandardCharsets;
+
 @FunctionalInterface
 public interface WalMessageFilter {
     boolean shouldPersist(String walJson);
+
+    default boolean shouldPersist(byte[] walJsonBytes) {
+        if (walJsonBytes == null || walJsonBytes.length == 0) return false;
+        return shouldPersist(new String(walJsonBytes, StandardCharsets.UTF_8));
+    }
 }

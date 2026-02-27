@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import io.micrometer.core.instrument.*;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.*;
 
 import java.util.*;
@@ -42,15 +43,16 @@ public class CdcInboxRepository {
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final CdcSql                                                        cdcSql;
     private final MeterRegistry                                                 meterRegistry;
-    private final io.micrometer.core.instrument.Timer                           insertLatencyTimer;
-    private final io.micrometer.core.instrument.Timer                           markPoisonLatencyTimer;
-    private final io.micrometer.core.instrument.Timer                           markDispatchedLatencyTimer;
-    private final io.micrometer.core.instrument.Timer                           fetchNextBatchLatencyTimer;
+    private final Timer                                                         insertLatencyTimer;
+    private final Timer                                                         markPoisonLatencyTimer;
+    private final Timer                                                         markDispatchedLatencyTimer;
+    private final Timer                                                         fetchNextBatchLatencyTimer;
     private final DistributionSummary                                           fetchNextBatchSizeSummary;
     private final Counter                                                       insertSuccessCounter;
     private final Counter                                                       insertDuplicateCounter;
     private final Counter                                                       markPoisonCounter;
     private final Counter                                                       markDispatchedCounter;
+    private final Counter                                                       deleteDispatchedCounter;
 
     public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         this(unitOfWorkFactory, Optional.empty());
@@ -71,6 +73,7 @@ public class CdcInboxRepository {
             insertDuplicateCounter = Counter.builder("essentials.cdc.inbox.insert.duplicate").register(this.meterRegistry);
             markPoisonCounter = Counter.builder("essentials.cdc.inbox.mark_poison.count").register(this.meterRegistry);
             markDispatchedCounter = Counter.builder("essentials.cdc.inbox.mark_dispatched.count").register(this.meterRegistry);
+            deleteDispatchedCounter = Counter.builder("essentials.cdc.inbox.delete_dispatched.count").register(this.meterRegistry);
         } else {
             insertLatencyTimer = null;
             markPoisonLatencyTimer = null;
@@ -81,6 +84,7 @@ public class CdcInboxRepository {
             insertDuplicateCounter = null;
             markPoisonCounter = null;
             markDispatchedCounter = null;
+            deleteDispatchedCounter = null;
         }
         createTableAndIndexes();
     }
@@ -98,16 +102,23 @@ public class CdcInboxRepository {
      * idempotent insert; returns true if inserted, false if already existed
      */
     public boolean insertIfAbsent(String slotName, String lsn, String payloadJson) {
+        return insertIfAbsent(slotName, lsn, payloadJson == null ? null : payloadJson.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /**
+     * idempotent insert; returns true if inserted, false if already existed
+     */
+    public boolean insertIfAbsent(String slotName, String lsn, byte[] payloadBytes) {
         long startNs = System.nanoTime();
         boolean inserted = unitOfWorkFactory.withUnitOfWork(uow -> {
             int updated = uow.handle().createUpdate("""
-                                                    insert into eventstore_cdc_inbox(slot_name, lsn, payload_json, status)
-                                                    values (:slot, :lsn, :payload, 'RECEIVED')
+                                                    insert into eventstore_cdc_inbox(slot_name, lsn, payload_bytes, status)
+                                                    values (:slot, :lsn, :payloadBytes, 'RECEIVED')
                                                     on conflict (slot_name, lsn) do nothing
                                                     """)
                              .bind("slot", slotName)
                              .bind("lsn", lsn)
-                             .bind("payload", payloadJson)
+                             .bind("payloadBytes", payloadBytes)
                              .execute();
             return updated == 1;
         });
@@ -126,8 +137,8 @@ public class CdcInboxRepository {
      * Marks an event as "POISON" in the CDC inbox table by updating its status and recording the associated error.
      *
      * @param slotName the name of the slot associated with the event
-     * @param lsn the Log Sequence Number (LSN) identifying the event
-     * @param error a description of the error that caused the event to be marked as "POISON"
+     * @param lsn      the Log Sequence Number (LSN) identifying the event
+     * @param error    a description of the error that caused the event to be marked as "POISON"
      */
     public void markPoison(String slotName, String lsn, String error) {
         long startNs = System.nanoTime();
@@ -167,32 +178,53 @@ public class CdcInboxRepository {
     }
 
     /**
+     * Deletes an already dispatched row from the CDC inbox.
+     */
+    public void deleteDispatched(long inboxId) {
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                           delete from eventstore_cdc_inbox
+                                                                           where inbox_id=:id
+                                                                           """)
+                                                    .bind("id", inboxId)
+                                                    .execute());
+        if (meterRegistry != null) {
+            deleteDispatchedCounter.increment();
+        }
+    }
+
+    /**
      * Fetches the next batch of events from the CDC inbox table based on the specified slot name and batch size.
      * The events are filtered by their "RECEIVED" status and are locked using "FOR UPDATE SKIP LOCKED" for concurrent processing.
      *
-     * @param slotName the name of the slot whose events are to be fetched
+     * @param slotName  the name of the slot whose events are to be fetched
      * @param batchSize the maximum number of events to include in the fetched batch
      * @return a list of {@link InboxRow} objects representing the events in the requested batch
      */
     public List<InboxRow> fetchNextBatch(String slotName, int batchSize) {
         long startNs = System.nanoTime();
         var rows = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
-                                                                                SELECT inbox_id, slot_name, lsn, received_at, payload_json, status, error
-                                                                                            FROM eventstore_cdc_inbox
-                                                                                            WHERE slot_name = :slot
-                                                                                              AND status = 'RECEIVED'
-                                                                                            ORDER BY inbox_id
-                                                                                            limit :limit
-                                                                                            FOR UPDATE skip locked
-                                                                                """)
-                                                          .bind("slot", slotName)
-                                                          .bind("limit", batchSize)
-                                                          .map((rs, ctx) -> new InboxRow(
-                                                                  rs.getLong("inbox_id"),
-                                                                  rs.getString("lsn"),
-                                                                  rs.getString("payload_json")
-                                                          ))
-                                                          .list());
+                                                                                    SELECT inbox_id,
+                                                                                           slot_name,
+                                                                                           lsn,
+                                                                                           received_at,
+                                                                                           payload_bytes,
+                                                                                           status,
+                                                                                           error
+                                                                                                FROM eventstore_cdc_inbox
+                                                                                                WHERE slot_name = :slot
+                                                                                                  AND status = 'RECEIVED'
+                                                                                                ORDER BY inbox_id
+                                                                                                limit :limit
+                                                                                                FOR UPDATE skip locked
+                                                                                    """)
+                                                              .bind("slot", slotName)
+                                                              .bind("limit", batchSize)
+                                                              .map((rs, ctx) -> new InboxRow(
+                                                                      rs.getLong("inbox_id"),
+                                                                      rs.getString("lsn"),
+                                                                      rs.getBytes("payload_bytes")
+                                                              ))
+                                                              .list());
         if (meterRegistry != null) {
             fetchNextBatchLatencyTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS);
             fetchNextBatchSizeSummary.record(rows.size());
@@ -204,8 +236,9 @@ public class CdcInboxRepository {
      * Counts the number of entries in the CDC inbox table with the specified slot name and status.
      * <p>
      * For testing purposes.
+     *
      * @param slotName the name of the slot used to filter records
-     * @param status the status value used to filter records
+     * @param status   the status value used to filter records
      * @return the count of entries matching the specified slot name and status
      */
     public long countByStatus(String slotName, String status) {
@@ -223,8 +256,9 @@ public class CdcInboxRepository {
      * Retrieves the status of a specific event in the CDC inbox table based on the provided slot name and Log Sequence Number (LSN).
      * <p>
      * For testing purposes.
+     *
      * @param slotName the name of the slot associated with the event
-     * @param lsn the Log Sequence Number (LSN) identifying the event
+     * @param lsn      the Log Sequence Number (LSN) identifying the event
      * @return an {@code Optional<String>} containing the status if the event exists, or an empty {@code Optional} if not found
      */
     public Optional<String> statusForLsn(String slotName, String lsn) {
@@ -243,25 +277,26 @@ public class CdcInboxRepository {
      * and Log Sequence Number (LSN) already exists, the insertion is ignored.
      * <p>
      * For testing purposes.
-     * @param slotName the name of the slot associated with the event
-     * @param lsn the Log Sequence Number (LSN) uniquely identifying the event
+     *
+     * @param slotName    the name of the slot associated with the event
+     * @param lsn         the Log Sequence Number (LSN) uniquely identifying the event
      * @param payloadJson the JSON payload of the event to be stored
-     * @param status the status of the event to be recorded in the table
+     * @param status      the status of the event to be recorded in the table
      */
     public void insertRaw(String slotName, String lsn, String payloadJson, String status) {
         unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
-                                                                           insert into eventstore_cdc_inbox(slot_name, lsn, payload_json, status)
-                                                                           values (:slot, :lsn, :payload, :status)
+                                                                           insert into eventstore_cdc_inbox(slot_name, lsn, payload_bytes, status)
+                                                                           values (:slot, :lsn, :payloadBytes, :status)
                                                                            on conflict (slot_name, lsn) do nothing
                                                                            """)
                                                     .bind("slot", slotName)
                                                     .bind("lsn", lsn)
-                                                    .bind("payload", payloadJson)
+                                                    .bind("payloadBytes", payloadJson.getBytes(java.nio.charset.StandardCharsets.UTF_8))
                                                     .bind("status", status)
                                                     .execute());
     }
 
-    public record InboxRow(long inboxId, String lsn, String payloadJson) {
+    public record InboxRow(long inboxId, String lsn, byte[] payloadJsonBytes) {
     }
 
     public enum InboxStatus {

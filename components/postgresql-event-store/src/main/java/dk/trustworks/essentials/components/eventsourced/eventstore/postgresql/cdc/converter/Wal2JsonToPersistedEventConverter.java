@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -36,4 +37,9 @@ public interface Wal2JsonToPersistedEventConverter {
      * Return empty list if the message is not relevant.
      */
     List<PersistedEvent> convert(String wal2jsonMessage);
+
+    default List<PersistedEvent> convert(byte[] wal2jsonMessageBytes) {
+        if (wal2jsonMessageBytes == null || wal2jsonMessageBytes.length == 0) return List.of();
+        return convert(new String(wal2jsonMessageBytes, StandardCharsets.UTF_8));
+    }
 }

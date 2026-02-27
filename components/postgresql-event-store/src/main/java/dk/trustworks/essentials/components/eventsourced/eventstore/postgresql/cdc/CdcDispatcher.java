@@ -17,6 +17,9 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.CdcDispatcherProperties;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.CdcDeliveryMode;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.DispatchedRowPolicy;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalParserMode;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler;
@@ -27,6 +30,7 @@ import dk.trustworks.essentials.shared.*;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.*;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -49,6 +53,9 @@ public class CdcDispatcher implements Lifecycle {
     private final Duration                                                      pollInterval;
     private final int                                                           batchSize;
     private final PoisonPolicy                                                  poisonPolicy;
+    private final DispatchedRowPolicy                                           dispatchedRowPolicy;
+    private final WalParserMode                                                 walParserMode;
+    private final CdcDeliveryMode                                               deliveryMode;
     private final CdcAvailability                                               availability;
     private final MeterRegistry                                                 meterRegistry;
 
@@ -61,10 +68,10 @@ public class CdcDispatcher implements Lifecycle {
     private Counter             ticksCounter;
     private Counter             conversionFailuresCounter;
     private Counter             poisonRowsCounter;
-    private Counter                             publishedEventsCounter;
-    private Timer                               pollTimer;
-    private Timer convertTimer;
-    private Timer publishTimer;
+    private Counter             publishedEventsCounter;
+    private Timer               pollTimer;
+    private Timer               convertTimer;
+    private Timer               publishTimer;
     private DistributionSummary fetchedBatchSizeSummary;
 
     public CdcDispatcher(CdcInboxRepository inbox,
@@ -76,6 +83,7 @@ public class CdcDispatcher implements Lifecycle {
                          Consumer<List<PersistedEvent>> onEvents,
                          String slotName,
                          CdcDispatcherProperties cdcDispatcherProperties,
+                         WalParserMode walParserMode,
                          CdcAvailability availability) {
         this(inbox,
              unitOfWorkFactory,
@@ -86,6 +94,8 @@ public class CdcDispatcher implements Lifecycle {
              onEvents,
              slotName,
              cdcDispatcherProperties,
+             walParserMode,
+             CdcDeliveryMode.INBOX,
              availability,
              Optional.empty());
     }
@@ -99,6 +109,8 @@ public class CdcDispatcher implements Lifecycle {
                          Consumer<List<PersistedEvent>> onEvents,
                          String slotName,
                          CdcDispatcherProperties cdcDispatcherProperties,
+                         WalParserMode walParserMode,
+                         CdcDeliveryMode deliveryMode,
                          CdcAvailability availability,
                          Optional<MeterRegistry> meterRegistry) {
         this.inbox = requireNonNull(inbox, "inbox cannot be null");
@@ -114,6 +126,9 @@ public class CdcDispatcher implements Lifecycle {
         requireTrue(cdcDispatcherProperties.getBatchSize() >= 1, "batchSize has to be 1 or greater");
         this.batchSize = cdcDispatcherProperties.getBatchSize();
         this.poisonPolicy = requireNonNull(cdcDispatcherProperties.getPoisonPolicy(), "poisonPolicy cannot be null");
+        this.dispatchedRowPolicy = requireNonNull(cdcDispatcherProperties.getDispatchedRowPolicy(), "dispatchedRowPolicy cannot be null");
+        this.walParserMode = requireNonNull(walParserMode, "walParserMode cannot be null");
+        this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
         this.availability = requireNonNull(availability, "availability cannot be null");
         this.meterRegistry = meterRegistry.orElse(null);
         initMetrics();
@@ -134,14 +149,14 @@ public class CdcDispatcher implements Lifecycle {
                                         .tag("slot", slotName)
                                         .register(meterRegistry);
         pollTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.dispatcher.poll.latency")
-                         .tag("slot", slotName)
-                         .register(meterRegistry);
+                                                       .tag("slot", slotName)
+                                                       .register(meterRegistry);
         convertTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.dispatcher.convert.latency")
-                            .tag("slot", slotName)
-                            .register(meterRegistry);
+                                                          .tag("slot", slotName)
+                                                          .register(meterRegistry);
         publishTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.dispatcher.publish.latency")
-                            .tag("slot", slotName)
-                            .register(meterRegistry);
+                                                          .tag("slot", slotName)
+                                                          .register(meterRegistry);
         fetchedBatchSizeSummary = DistributionSummary.builder("essentials.cdc.dispatcher.poll.batch_size")
                                                      .tag("slot", slotName)
                                                      .register(meterRegistry);
@@ -151,13 +166,21 @@ public class CdcDispatcher implements Lifecycle {
     public void start() {
         if (!started.compareAndSet(false, true)) return;
 
+        if (deliveryMode == CdcDeliveryMode.DIRECT) {
+            started.set(false);
+            log.info("[{}] CDC dispatcher not started because deliveryMode is DIRECT", slotName);
+            return;
+        }
+
         if (!availability.isActive()) {
             started.set(false);
             log.info("[{}] CDC dispatcher not started because CDC is not active (state={})", slotName, availability.getState());
             return;
         }
 
-        log.info("[{}] ⚙️ Starting CDC dispatcher, polling every '{}' ms, batch size '{}' and poison policy '{}'", slotName, pollInterval.toMillis(), batchSize, poisonPolicy);
+        log.info("[{}] ⚙️ Starting CDC dispatcher, polling every '{}' ms, batch size '{}', poison policy '{}', walParserMode '{}'",
+                 slotName, pollInterval.toMillis(), batchSize, poisonPolicy, walParserMode);
+        log.info("[{}] CDC dispatcher dispatched-row policy: {}", slotName, dispatchedRowPolicy);
 
         stopping.set(false);
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -175,7 +198,7 @@ public class CdcDispatcher implements Lifecycle {
         if (ticksCounter != null) ticksCounter.increment();
 
         long pollStartNs = System.nanoTime();
-        var batch = inbox.fetchNextBatch(slotName, batchSize);
+        var  batch       = inbox.fetchNextBatch(slotName, batchSize);
         if (pollTimer != null) pollTimer.record(System.nanoTime() - pollStartNs, TimeUnit.NANOSECONDS);
         if (fetchedBatchSizeSummary != null) fetchedBatchSizeSummary.record(batch.size());
         if (log.isTraceEnabled()) {
@@ -185,10 +208,13 @@ public class CdcDispatcher implements Lifecycle {
 
         for (var row : batch) {
             if (stopping.get()) return;
+            var payloadBytes = row.payloadJsonBytes();
 
             try {
                 long convertStartNs = System.nanoTime();
-                var events = converter.convert(row.payloadJson());
+                var events = walParserMode == WalParserMode.BYTES
+                             ? converter.convert(payloadBytes)
+                             : converter.convert(payloadBytes == null ? null : new String(payloadBytes, StandardCharsets.UTF_8));
                 if (convertTimer != null) convertTimer.record(System.nanoTime() - convertStartNs, TimeUnit.NANOSECONDS);
                 if (!events.isEmpty()) {
                     long publishStartNs = System.nanoTime();
@@ -196,7 +222,7 @@ public class CdcDispatcher implements Lifecycle {
                     if (publishTimer != null) publishTimer.record(System.nanoTime() - publishStartNs, TimeUnit.NANOSECONDS);
                     if (publishedEventsCounter != null) publishedEventsCounter.increment(events.size());
                 }
-                inbox.markDispatched(row.inboxId());
+                acknowledgeDispatchedRow(row.inboxId());
             } catch (Exception e) {
                 if (conversionFailuresCounter != null) conversionFailuresCounter.increment();
                 log.warn("[{}] CDC conversion failed for inboxId={} lsn={} policy={}: {}",
@@ -210,7 +236,9 @@ public class CdcDispatcher implements Lifecycle {
 
                         // IMPORTANT: prevent subscribers stalling on this missing global_order
                         // Extract (aggregateType, global_order list) from the WAL JSON without full conversion
-                        var gaps = walGlobalOrdersExtractor.extract(row.payloadJson());
+                        var gaps = walParserMode == WalParserMode.BYTES
+                                   ? walGlobalOrdersExtractor.extract(payloadBytes)
+                                   : walGlobalOrdersExtractor.extract(payloadBytes == null ? null : new String(payloadBytes, StandardCharsets.UTF_8));
                         if (!gaps.isEmpty()) {
                             for (var gap : gaps) {
                                 if (log.isDebugEnabled()) {
@@ -240,6 +268,14 @@ public class CdcDispatcher implements Lifecycle {
             msg = e.getClass().getName();
         }
         return msg.length() > 2000 ? msg.substring(0, 2000) : msg;
+    }
+
+    private void acknowledgeDispatchedRow(long inboxId) {
+        if (dispatchedRowPolicy == DispatchedRowPolicy.DELETE) {
+            inbox.deleteDispatched(inboxId);
+        } else {
+            inbox.markDispatched(inboxId);
+        }
     }
 
     @Override

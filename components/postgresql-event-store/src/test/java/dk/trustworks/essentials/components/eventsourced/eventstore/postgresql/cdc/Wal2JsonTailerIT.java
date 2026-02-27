@@ -188,11 +188,11 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
 
         CdcInboxRepository flakyInbox = new CdcInboxRepository(unitOfWorkFactory) {
             @Override
-            public boolean insertIfAbsent(String slot, String lsn, String payloadJson) {
+            public boolean insertIfAbsent(String slot, String lsn, byte[] payloadBytes) {
                 if (failuresLeft.getAndDecrement() > 0) {
                     throw new RuntimeException("Simulated inbox write failure");
                 }
-                return inboxRepository.insertIfAbsent(slot, lsn, payloadJson);
+                return inboxRepository.insertIfAbsent(slot, lsn, payloadBytes);
             }
 
             @Override
@@ -267,11 +267,11 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
 
         CdcInboxRepository flakyInbox = new CdcInboxRepository(unitOfWorkFactory) {
             @Override
-            public boolean insertIfAbsent(String slot, String lsn, String payloadJson) {
+            public boolean insertIfAbsent(String slot, String lsn, byte[] payloadBytes) {
                 if (failuresLeft.getAndDecrement() > 0) {
                     throw new RuntimeException("Simulated inbox write failure");
                 }
-                return inboxRepository.insertIfAbsent(slot, lsn, payloadJson);
+                return inboxRepository.insertIfAbsent(slot, lsn, payloadBytes);
             }
         };
 
@@ -337,7 +337,7 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
 
         CdcInboxRepository alwaysFailingInbox = new CdcInboxRepository(unitOfWorkFactory) {
             @Override
-            public boolean insertIfAbsent(String slot, String lsn, String payloadJson) {
+            public boolean insertIfAbsent(String slot, String lsn, byte[] payloadBytes) {
                 throw new RuntimeException("Simulated fatal inbox write failure");
             }
         };
@@ -747,7 +747,7 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
         double seconds    = (endNs - startNs) / 1_000_000_000.0;
         double throughput = totalRows / seconds;
 
-        // Compute latency by scanning all inbox payload_json for ts=...
+        // Compute latency by scanning all inbox payload bytes decoded as UTF-8 text for ts=...
         long now = System.currentTimeMillis();
         for (String walJson : listInboxPayloads(slotName)) {
             var ts = TS_IN_PAYLOAD.matcher(walJson);
@@ -798,7 +798,7 @@ public class Wal2JsonTailerIT extends AbstractWal2JsonPostgresIT {
     private List<String> listInboxPayloads(String slotName) {
         return jdbi.withHandle(h ->
                                        h.createQuery(bind("""
-                                                          select payload_json
+                                                          select convert_from(payload_bytes, 'UTF8') as payload_text
                                                           from {:tableName}
                                                           where slot_name = :slot
                                                             and status = :status

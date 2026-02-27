@@ -22,6 +22,10 @@ import reactor.core.publisher.*;
 
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.LockSupport;
+
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.CdcOverflowPolicy;
+import static dk.trustworks.essentials.shared.FailFast.*;
 
 /**
  * The CdcEventBus class is responsible for publishing and managing persisted events
@@ -40,15 +44,87 @@ public class CdcEventBus {
 
     private static final Logger log = LoggerFactory.getLogger(CdcEventBus.class);
 
+    private final int backpressureBufferSize;
+    private final int nonSerializedMaxRetries;
+    private final int overflowMaxRetries;
+    private final CdcOverflowPolicy overflowPolicy;
     private final ConcurrentMap<AggregateType, Sinks.Many<PersistedEvent>> sinks = new ConcurrentHashMap<>();
+
+    public CdcEventBus() {
+        this(new CdcProperties.CdcEventBusProperties());
+    }
+
+    public CdcEventBus(CdcProperties.CdcEventBusProperties properties) {
+        requireNonNull(properties, "properties is required");
+        requireTrue(properties.getBackpressureBufferSize() > 0, "backpressureBufferSize must be > 0");
+        requireTrue(properties.getNonSerializedMaxRetries() > 0, "nonSerializedMaxRetries must be > 0");
+        requireTrue(properties.getOverflowMaxRetries() >= 0, "overflowMaxRetries must be >= 0");
+
+        this.backpressureBufferSize = properties.getBackpressureBufferSize();
+        this.nonSerializedMaxRetries = properties.getNonSerializedMaxRetries();
+        this.overflowMaxRetries = properties.getOverflowMaxRetries();
+        this.overflowPolicy = requireNonNull(properties.getOverflowPolicy(), "overflowPolicy is required");
+    }
 
     public void publish(List<PersistedEvent> events) {
         if (log.isTraceEnabled()) {
             log.trace("Publishing '{}' persisted events", events.size());
         }
         for (var e : events) {
-            sink(e.aggregateType()).tryEmitNext(e);
+            emitOrFail(e);
         }
+    }
+
+    private void emitOrFail(PersistedEvent event) {
+        var sink = sink(event.aggregateType());
+
+        int overflowAttempt = 0;
+        for (int attempt = 1; attempt <= nonSerializedMaxRetries; attempt++) {
+            Sinks.EmitResult result = sink.tryEmitNext(event);
+            if (result == Sinks.EmitResult.OK) {
+                return;
+            }
+            if (result == Sinks.EmitResult.FAIL_NON_SERIALIZED) {
+                if (attempt < nonSerializedMaxRetries) {
+                    Thread.onSpinWait();
+                    continue;
+                }
+                handleFailure(event, result, "CDC bus non-serialized emit retries exhausted");
+                return;
+            }
+            if (result == Sinks.EmitResult.FAIL_ZERO_SUBSCRIBER) {
+                log.debug("Dropping CDC event with globalOrder={} because no CDC subscriber is active for aggregate '{}'",
+                          event.globalEventOrder(),
+                          event.aggregateType());
+                return;
+            }
+            if (result == Sinks.EmitResult.FAIL_OVERFLOW) {
+                if (overflowAttempt < overflowMaxRetries) {
+                    overflowAttempt++;
+                    long delayMs = Math.min(1L << Math.min(overflowAttempt - 1, 8), 250L);
+                    LockSupport.parkNanos(delayMs * 1_000_000L);
+                    continue;
+                }
+                handleFailure(event, result, "CDC bus overflow retries exhausted");
+                return;
+            }
+            if (result == Sinks.EmitResult.FAIL_TERMINATED || result == Sinks.EmitResult.FAIL_CANCELLED) {
+                handleFailure(event, result, "CDC bus sink unavailable");
+                return;
+            }
+            // Any future EmitResult values should fail closed rather than silently drop.
+            handleFailure(event, result, "CDC bus emit failed");
+            return;
+        }
+    }
+
+    private void handleFailure(PersistedEvent event, Sinks.EmitResult result, String message) {
+        String fullMessage = message + " (emitResult=" + result + ", globalOrder=" + event.globalEventOrder() + ", aggregateType=" + event.aggregateType() + ")";
+        if (overflowPolicy == CdcOverflowPolicy.LOG_AND_DROP) {
+            log.warn(fullMessage);
+            return;
+        }
+        throw new IllegalStateException(fullMessage);
     }
 
     public Flux<PersistedEvent> fluxForAggregate(AggregateType aggregateType) {
@@ -58,7 +134,7 @@ public class CdcEventBus {
     private Sinks.Many<PersistedEvent> sink(AggregateType aggregateType) {
         return sinks.computeIfAbsent(aggregateType, at ->
                                              // multicast for many subscribers; buffer for slow consumers
-                                             Sinks.many().multicast().onBackpressureBuffer()
+                                             Sinks.many().multicast().onBackpressureBuffer(backpressureBufferSize, false)
                                     );
     }
 

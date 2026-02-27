@@ -56,6 +56,24 @@ public class JacksonWalGlobalOrdersExtractor implements WalGlobalOrdersExtractor
             return List.of();
         }
 
+        return extractFromRoot(root, wal2jsonMessage);
+    }
+
+    @Override
+    public List<Gap> extract(byte[] wal2jsonMessageBytes) {
+        if (wal2jsonMessageBytes == null || wal2jsonMessageBytes.length == 0) return List.of();
+
+        final JsonNode root;
+        try {
+            root = jacksonJSONSerializer.getObjectMapper().readTree(wal2jsonMessageBytes);
+        } catch (Exception e) {
+            log.debug("walGlobalOrdersExtractor failed to parse wal2json bytes: '{}'", e.getMessage());
+            return List.of();
+        }
+        return extractFromRoot(root, null);
+    }
+
+    private List<Gap> extractFromRoot(JsonNode root, String wal2jsonMessageForTrace) {
         JsonNode changeNode = root.get("change");
         if (!(changeNode instanceof ArrayNode changes) || changes.isEmpty()) return List.of();
 
@@ -86,7 +104,11 @@ public class JacksonWalGlobalOrdersExtractor implements WalGlobalOrdersExtractor
         }
 
         if(log.isTraceEnabled()) {
-            log.trace("Extracted {} gaps from wal2json message: {}", gaps.size(), wal2jsonMessage);
+            if (wal2jsonMessageForTrace != null) {
+                log.trace("Extracted {} gaps from wal2json message: {}", gaps.size(), wal2jsonMessageForTrace);
+            } else {
+                log.trace("Extracted {} gaps from wal2json message bytes", gaps.size());
+            }
         }
 
         return gaps;

@@ -17,8 +17,12 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.Wal2JsonTailerProperties;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.CdcDeliveryMode;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalParserMode;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.Wal2JsonToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.Lifecycle;
@@ -34,9 +38,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.*;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -57,6 +63,10 @@ public class Wal2JsonTailer implements Lifecycle {
     private final PgSlotMode                                                    pgSlotMode;
     private final CdcMode                                                       cdcMode;
     private final CdcAvailability                                               availability;
+    private final CdcDeliveryMode                                               deliveryMode;
+    private final WalParserMode                                                 walParserMode;
+    private final Wal2JsonToPersistedEventConverter                             directConverter;
+    private final Consumer<List<PersistedEvent>>                                directOnEvents;
 
     private ExecutorService executor;
     private Future<?>       loopFuture;
@@ -101,6 +111,41 @@ public class Wal2JsonTailer implements Lifecycle {
             CdcAvailability availability,
             Optional<MeterRegistry> meterRegistry,
             Optional<Wal2JsonTailerErrorHandler> errorHandler) {
+        this(replicationDataSource,
+             jdbi,
+             unitOfWorkFactory,
+             slotName,
+             inboxRepository,
+             wal2JsonTailerProperties,
+             pgSlotMode,
+             cdcMode,
+             CdcDeliveryMode.INBOX,
+             WalParserMode.STRING,
+             Optional.empty(),
+             Optional.empty(),
+             Optional.empty(),
+             availability,
+             meterRegistry,
+             errorHandler);
+    }
+
+    public Wal2JsonTailer(
+            DataSource replicationDataSource,
+            Jdbi jdbi,
+            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+            String slotName,
+            CdcInboxRepository inboxRepository,
+            Wal2JsonTailerProperties wal2JsonTailerProperties,
+            PgSlotMode pgSlotMode,
+            CdcMode cdcMode,
+            CdcDeliveryMode deliveryMode,
+            WalParserMode walParserMode,
+            Optional<Wal2JsonToPersistedEventConverter> directConverter,
+            Optional<Consumer<List<PersistedEvent>>> directOnEvents,
+            Optional<WalMessageFilter> walMessageFilter,
+            CdcAvailability availability,
+            Optional<MeterRegistry> meterRegistry,
+            Optional<Wal2JsonTailerErrorHandler> errorHandler) {
         this.replicationDataSource = requireNonNull(replicationDataSource, "replicationDataSource cannot be null");
         this.jdbi = requireNonNull(jdbi, "jdbi cannot be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
@@ -110,7 +155,15 @@ public class Wal2JsonTailer implements Lifecycle {
         this.wal2JsonTailerProperties = requireNonNull(wal2JsonTailerProperties, "properties cannot be null");
         this.pgSlotMode = requireNonNull(pgSlotMode, "pgSlotMode cannot be null");
         this.cdcMode = requireNonNull(cdcMode, "cdcMode cannot be null");
+        this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
+        this.walParserMode = requireNonNull(walParserMode, "walParserMode cannot be null");
+        this.directConverter = directConverter.orElse(null);
+        this.directOnEvents = directOnEvents.orElse(null);
         this.availability = requireNonNull(availability, "availability cannot be null");
+        if (this.deliveryMode == CdcDeliveryMode.DIRECT) {
+            requireNonNull(this.directConverter, "directConverter cannot be null in DIRECT delivery mode");
+            requireNonNull(this.directOnEvents, "directOnEvents cannot be null in DIRECT delivery mode");
+        }
         requireNonNull(wal2JsonTailerProperties.getPollInterval(), "pollInterval cannot be null");
         requireNonNull(wal2JsonTailerProperties.getPollBackoffInterval(), "pollBackoffInterval cannot be null");
         requireNonNull(wal2JsonTailerProperties.getMaxPollBackoffInterval(), "maxPollBackInterval cannot be null");
@@ -119,9 +172,45 @@ public class Wal2JsonTailer implements Lifecycle {
         requireTrue(wal2JsonTailerProperties.getBackOffFactor() > 1, "backOffFactor must be > 1");
         this.meterRegistry = meterRegistry.orElse(null);
         this.errorHandler = errorHandler.orElseGet(DefaultWal2JsonTailerErrorHandler::new);
-        this.walMessageFilter = new Wal2JsonEventTableInsertFilter();
+        this.walMessageFilter = walMessageFilter.orElseGet(RegexWalMessageFilter::new);
         initMetrics();
-        unitOfWorkFactory.usingUnitOfWork(inboxRepository::createTableAndIndexes);
+        if (deliveryMode == CdcDeliveryMode.INBOX) {
+            unitOfWorkFactory.usingUnitOfWork(inboxRepository::createTableAndIndexes);
+        }
+    }
+
+    public Wal2JsonTailer(
+            DataSource replicationDataSource,
+            Jdbi jdbi,
+            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+            String slotName,
+            CdcInboxRepository inboxRepository,
+            Wal2JsonTailerProperties wal2JsonTailerProperties,
+            PgSlotMode pgSlotMode,
+            CdcMode cdcMode,
+            CdcDeliveryMode deliveryMode,
+            WalParserMode walParserMode,
+            Optional<Wal2JsonToPersistedEventConverter> directConverter,
+            Optional<Consumer<List<PersistedEvent>>> directOnEvents,
+            CdcAvailability availability,
+            Optional<MeterRegistry> meterRegistry,
+            Optional<Wal2JsonTailerErrorHandler> errorHandler) {
+        this(replicationDataSource,
+             jdbi,
+             unitOfWorkFactory,
+             slotName,
+             inboxRepository,
+             wal2JsonTailerProperties,
+             pgSlotMode,
+             cdcMode,
+             deliveryMode,
+             walParserMode,
+             directConverter,
+             directOnEvents,
+             Optional.empty(),
+             availability,
+             meterRegistry,
+             errorHandler);
     }
 
     private void initMetrics() {
@@ -351,15 +440,17 @@ public class Wal2JsonTailer implements Lifecycle {
                         continue;
                     }
 
-                    String json = StandardCharsets.UTF_8.decode(msg).toString();
+                    byte[] jsonBytes = new byte[msg.remaining()];
+                    msg.get(jsonBytes);
 
                     var    lsn    = stream.getLastReceiveLSN();
                     String lsnStr = (lsn != null ? lsn.asString() : null);
 
-                    if (!walMessageFilter.shouldPersist(json)) {
+                    if (!walMessageFilter.shouldPersist(jsonBytes)) {
                         if (log.isTraceEnabled()) {
+                            String filteredPayload = new String(jsonBytes, StandardCharsets.UTF_8);
                             log.trace("[{}] WAL message filtered out (slot='{}', lsn='{}', bytes='{}', payload='{}')", slotName, slotName, lsnStr,
-                                      json.length(), json.length() > 800 ? json.substring(0, 800) + "..." : json);
+                                      jsonBytes.length, filteredPayload.length() > 800 ? filteredPayload.substring(0, 800) + "..." : filteredPayload);
                         }
                         // still ACK so we don't clog the slot with irrelevant WAL
                         if (lsn != null) {
@@ -376,15 +467,16 @@ public class Wal2JsonTailer implements Lifecycle {
                     if (messagesReceivedCounter != null) messagesReceivedCounter.increment();
                     lastMessageEpochMs.set(System.currentTimeMillis());
 
+                    String json = new String(jsonBytes, StandardCharsets.UTF_8);
                     lastMessagePreview.set(json.length() > 300 ? json.substring(0, 300) + "..." : json);
 
                     if (log.isTraceEnabled()) {
                         log.trace("[{}] WAL message #{} lsn='{}' bytes='{}' payload='{}'",
-                                  slotName, m, lastReceiveLsn.get(), json.length(),
+                                  slotName, m, lastReceiveLsn.get(), jsonBytes.length,
                                   json.length() > 800 ? json.substring(0, 800) + "..." : json);
                     } else if (m == 1) {
                         log.info("[{}] First WAL message received lsn='{}' bytes='{}' preview='{}'",
-                                 slotName, lastReceiveLsn.get(), json.length(), lastMessagePreview.get());
+                                 slotName, lastReceiveLsn.get(), jsonBytes.length, lastMessagePreview.get());
                     }
 
                     boolean inserted;
@@ -393,7 +485,17 @@ public class Wal2JsonTailer implements Lifecycle {
                             throw new IllegalStateException("PGReplicationStream returned null LSN for received message");
                         }
 
-                        inserted = inboxRepository.insertIfAbsent(slotName, lsnStr, json);
+                        if (deliveryMode == CdcDeliveryMode.DIRECT) {
+                            var events = walParserMode == WalParserMode.BYTES
+                                         ? directConverter.convert(jsonBytes)
+                                         : directConverter.convert(json);
+                            if (!events.isEmpty()) {
+                                directOnEvents.accept(events);
+                            }
+                            inserted = true;
+                        } else {
+                            inserted = inboxRepository.insertIfAbsent(slotName, lsnStr, jsonBytes);
+                        }
 
                         if (inserted) {
                             inboxWrites.incrementAndGet();

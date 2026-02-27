@@ -140,6 +140,7 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgre
                 cdcEventStore.getCdcBus()::publish, // publish converted events
                 slotName,
                 CdcDispatcherProperties.defaults(),
+                CdcProperties.WalParserMode.STRING,
                 availability
         );
 
