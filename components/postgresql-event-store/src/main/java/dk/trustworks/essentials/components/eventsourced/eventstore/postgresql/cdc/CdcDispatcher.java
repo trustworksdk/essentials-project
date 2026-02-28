@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021-2025 the original author or authors.
+ *  Copyright 2021-2026 the original author or authors.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -39,7 +39,20 @@ import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
-public class CdcDispatcher implements Lifecycle {
+/**
+ * CdcDispatcher is responsible for orchestrating the Change Data Capture (CDC) lifecycle,
+ * including polling WAL (Write Ahead Log), converting events, handling dispatch mechanisms,
+ * and managing metrics for tracking system performance.
+ * <p>
+ * Fields involved in the operational lifecycle include:
+ * - Definitions related to processing state (e.g., log, started, stopping, tickFuture).
+ * - Metrics management such as timers and counters (e.g., ticksCounter, poisonRowsCounter).
+ * - Dependencies injected during construction (e.g., inbox, unitOfWorkFactory, eventStreamGapHandler).
+ * <p>
+ * This class implements the {@link Lifecycle} interface, which
+ * defines methods for starting and stopping the CDC dispatcher.
+ */
+public final class CdcDispatcher implements Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(CdcDispatcher.class);
 
     private final CdcInboxRepository                                            inbox;
@@ -74,6 +87,21 @@ public class CdcDispatcher implements Lifecycle {
     private Timer               publishTimer;
     private DistributionSummary fetchedBatchSizeSummary;
 
+    /**
+     * Constructs a new instance of the CdcDispatcher class.
+     *
+     * @param inbox the repository handling CDC inbox operations
+     * @param unitOfWorkFactory the factory for creating unit of work instances
+     * @param eventStreamGapHandler the handler for addressing gaps in the event stream
+     * @param converter the converter for transforming WAL2JSON to persisted events
+     * @param walGlobalOrdersExtractor the extractor for WAL global orders
+     * @param cdcPoisonNotifier optional notifier for handling poisoned messages
+     * @param onEvents the consumer to handle lists of persisted events
+     * @param slotName the logical decoding replication slot name
+     * @param cdcDispatcherProperties properties and configuration for the CDC dispatcher
+     * @param walParserMode the mode for parsing WAL logs
+     * @param availability the availability handler for the dispatcher
+     */
     public CdcDispatcher(CdcInboxRepository inbox,
                          HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
@@ -100,6 +128,23 @@ public class CdcDispatcher implements Lifecycle {
              Optional.empty());
     }
 
+    /**
+     * Constructs a new instance of the CdcDispatcher class.
+     *
+     * @param inbox the repository handling CDC inbox operations
+     * @param unitOfWorkFactory the factory for creating unit of work instances
+     * @param eventStreamGapHandler the handler for addressing gaps in the event stream
+     * @param converter the converter for transforming WAL2JSON to persisted events
+     * @param walGlobalOrdersExtractor the extractor for WAL global orders
+     * @param cdcPoisonNotifier optional notifier for handling poisoned messages
+     * @param onEvents the consumer to handle lists of persisted events
+     * @param slotName the logical decoding replication slot name
+     * @param cdcDispatcherProperties properties and configuration for the CDC dispatcher
+     * @param walParserMode the mode for parsing WAL logs
+     * @param deliveryMode the delivery mode for event dispatching
+     * @param availability the availability handler for the dispatcher
+     * @param meterRegistry optional metrics registry
+     */
     public CdcDispatcher(CdcInboxRepository inbox,
                          HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,

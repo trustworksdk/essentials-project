@@ -29,6 +29,20 @@ import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The SubscriptionResetOnPoisonNotifier is an implementation of the CdcPoisonNotifier interface
+ * that handles poison events by resetting subscriptions in an event-sourcing system. Poison events
+ * signify critical issues such as data inconsistencies, gaps, or errors identified during
+ * Change Data Capture (CDC) processing.
+ * <p>
+ * This class ensures that affected subscriptions are reset from an appropriate point in the event
+ * stream, thereby enabling continued processing while minimizing potential data inconsistencies.
+ * <p>
+ * Responsibilities:
+ * - Detect active subscriptions matching the affected aggregate type.
+ * - Determine the appropriate reset point for each subscription based on the identified poison event.
+ * - Reset subscriptions to mitigate the impact of poison events, ensuring eventual consistency.
+ */
 public class SubscriptionResetOnPoisonNotifier implements CdcPoisonNotifier {
 
     private static final Logger log = LoggerFactory.getLogger(SubscriptionResetOnPoisonNotifier.class);

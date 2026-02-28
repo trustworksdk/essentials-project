@@ -47,7 +47,15 @@ import java.util.function.Consumer;
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
-public class Wal2JsonTailer implements Lifecycle {
+/**
+ * The {@code Wal2JsonTailer} class is responsible for tailing PostgreSQL's Write-Ahead Log (WAL)
+ * using the `wal2json` logical decoding plugin. It extracts changes from the replication stream,
+ * applies optional filtering, and processes them for delivery to an inbox repository or other downstream systems.
+ * <p>
+ * This class implements the {@link Lifecycle} interface to provide
+ * lifecycle management methods for starting and stopping the tailer.
+ */
+public final class Wal2JsonTailer implements Lifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(Wal2JsonTailer.class);
 
@@ -98,7 +106,21 @@ public class Wal2JsonTailer implements Lifecycle {
     private       Counter                 inboxWriteFailuresCounter;
     private       Counter                 handlerFailuresCounter;
 
-
+    /**
+     * Constructs a new instance of the Wal2JsonTailer class.
+     *
+     * @param replicationDataSource The {@link DataSource} used for replication connection.
+     * @param jdbi The {@link Jdbi} instance for database interaction.
+     * @param unitOfWorkFactory The factory responsible for creating {@link HandleAwareUnitOfWork} instances.
+     * @param slotName The name of the replication slot used for listening to WAL changes.
+     * @param inboxRepository The repository for handling CDC inbox operations.
+     * @param wal2JsonTailerProperties The configuration properties for the WAL2JSON tailer.
+     * @param pgSlotMode The PostgreSQL slot mode to be used.
+     * @param cdcMode The mode of change data capture (CDC) being employed.
+     * @param availability The mechanism for checking CDC availability.
+     * @param meterRegistry The optional {@link MeterRegistry} for collecting metrics.
+     * @param errorHandler The optional {@link Wal2JsonTailerErrorHandler} for handling errors.
+     */
     public Wal2JsonTailer(
             DataSource replicationDataSource,
             Jdbi jdbi,
@@ -129,6 +151,27 @@ public class Wal2JsonTailer implements Lifecycle {
              errorHandler);
     }
 
+    /**
+     * Constructs a new instance of Wal2JsonTailer, which processes WAL (Write-Ahead Log) entries in JSON format
+     * for change data capture (CDC) and manages the handling of events based on the specified configurations.
+     *
+     * @param replicationDataSource the DataSource used for PostgreSQL replication; must not be null.
+     * @param jdbi the Jdbi database access object; must not be null.
+     * @param unitOfWorkFactory the factory for creating unit of work instances; must not be null.
+     * @param slotName the name of the logical replication slot to use; must not be null and must be a valid name.
+     * @param inboxRepository the repository for persisting events; must not be null.
+     * @param wal2JsonTailerProperties configuration properties for the WAL tailer; must not be null.
+     * @param pgSlotMode the mode of handling logical replication slots in PostgreSQL; must not be null.
+     * @param cdcMode the mode of change data capture; must not be null.
+     * @param deliveryMode the delivery mode for processed events (e.g., DIRECT or INBOX); must not be null.
+     * @param walParserMode the mode for parsing WAL entries; must not be null.
+     * @param directConverter an optional converter to transform WAL entries into persisted events; required if delivery mode is DIRECT.
+     * @param directOnEvents an optional consumer for processed events; required if delivery mode is DIRECT.
+     * @param walMessageFilter an optional filter for filtering WAL messages; if absent, a default filter is used.
+     * @param availability an object that manages availability checks; must not be null.
+     * @param meterRegistry an optional registry for recording metrics.
+     * @param errorHandler an optional error handler for processing errors during WAL tailing; a default handler is used if absent.
+     */
     public Wal2JsonTailer(
             DataSource replicationDataSource,
             Jdbi jdbi,
@@ -179,6 +222,27 @@ public class Wal2JsonTailer implements Lifecycle {
         }
     }
 
+    /**
+     * Constructs an instance of the Wal2JsonTailer class, which processes
+     * PostgreSQL Write-Ahead Log (WAL) entries in JSON format for Change Data Capture (CDC)
+     * and coordinates event handling based on the provided configuration settings.
+     *
+     * @param replicationDataSource The DataSource used to establish a replication connection; must not be null.
+     * @param jdbi The Jdbi instance for database operations; must not be null.
+     * @param unitOfWorkFactory The factory for creating instances of HandleAwareUnitOfWork; must not be null.
+     * @param slotName The name of the logical replication slot to connect to; must not be null.
+     * @param inboxRepository The repository for managing persisted CDC inbox events; must not be null.
+     * @param wal2JsonTailerProperties The configuration properties specific to the WAL2JSON tailer; must not be null.
+     * @param pgSlotMode The mode used to manage logical replication slots in PostgreSQL; must not be null.
+     * @param cdcMode The Change Data Capture (CDC) mode being used (e.g., incremental, full); must not be null.
+     * @param deliveryMode The delivery mode for processing events (e.g., DIRECT or INBOX); must not be null.
+     * @param walParserMode The mode used for parsing the WAL entries; must not be null.
+     * @param directConverter A converter to translate WAL entries into persisted events, required when delivery mode is DIRECT; can be empty.
+     * @param directOnEvents A consumer for managing processed events when delivery mode is DIRECT; can be empty.
+     * @param availability The component responsible for monitoring CDC availability and readiness; must not be null.
+     * @param meterRegistry A registry for collecting and managing metrics; can be empty.
+     * @param errorHandler An optional error handler to manage errors during WAL tailing; can be empty.
+     */
     public Wal2JsonTailer(
             DataSource replicationDataSource,
             Jdbi jdbi,

@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021-2025 the original author or authors.
+ *  Copyright 2021-2026 the original author or authors.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -18,6 +18,13 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 
+/**
+ * Represents a functional interface for resolving aggregate IDs based on a given
+ * aggregate type and aggregate ID string.
+ * <p>
+ * Designed to work with {@code AggregateType} to provide a context for the resolution
+ * and utilizes the provided {@code aggregateId} string to determine the resolved ID value.
+ */
 @FunctionalInterface
 public interface AggregateIdResolver {
     Object resolve(AggregateType aggregateType, String aggregateId);

@@ -22,6 +22,34 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.atomic.*;
 
+/**
+ * The CdcAvailability class is responsible for tracking and reporting the state
+ * of Change Data Capture (CDC) availability. It provides methods to update and
+ * retrieve the state, as well as mechanisms to track related metrics and statistics.
+ * <p>
+ * The class maintains an internal state represented by the {@code State} enum,
+ * which defines the following possible states:
+ * <ul>
+ * - {@code ACTIVE}: The CDC is currently active.
+ * - {@code INACTIVE}: The CDC is currently inactive.
+ * - {@code FAILED}: The CDC has encountered a failure.
+ * </ul>
+ *
+ * It also supports integration with an optional {@code MeterRegistry} for reporting
+ * metrics such as fallback occurrences, start failure counts, and active state status.
+ * These metrics can be integrated with monitoring systems for observability.
+ * <p>
+ * Thread-safe operations are ensured using {@code AtomicReference} and {@code AtomicLong}.
+ * The following state-related details are tracked:
+ * - {@code state}: The current state of the CDC (e.g., ACTIVE, INACTIVE, FAILED).
+ * - {@code slotName}: The name of the replication slot being monitored.
+ * - {@code reason}: The reason for the current state transition, if applicable.
+ * - {@code lastChangedEpochMs}: Timestamp (epoch milliseconds) of the last state change.
+ * - {@code fallbackCount}: The number of times the fallback mechanism has been triggered.
+ * <p>
+ * Additionally, this class supports taking a snapshot of the current state using the
+ * {@code Snapshot} record.
+ */
 public final class CdcAvailability {
 
     public enum State {

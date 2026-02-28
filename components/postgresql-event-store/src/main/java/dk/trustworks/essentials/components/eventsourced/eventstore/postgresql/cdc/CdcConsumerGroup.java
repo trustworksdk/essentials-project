@@ -18,6 +18,15 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Represents a consumer group for Change Data Capture (CDC) operations.
+ * <p>
+ * This class is used to encapsulate the name of a CDC consumer group and provides
+ * methods to create and access the group name. Consumer groups are typically
+ * utilized to organize and manage consumers that process change events.
+ * <p>
+ * Instances of this class are immutable.
+ */
 public final class CdcConsumerGroup {
 
     private final String name;

@@ -16,6 +16,13 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+/**
+ * Interface for providing PostgreSQL replication slot names used in Change Data Capture (CDC) operations.
+ * <p>
+ * Implementations of this interface are responsible for generating unique and valid slot names
+ * that adhere to PostgreSQL naming conventions. Slot names are typically derived based on
+ * the provided {@link CdcConsumerGroup}.
+ */
 public interface CdcSlotNameProvider {
     String slotName(CdcConsumerGroup group);
 }

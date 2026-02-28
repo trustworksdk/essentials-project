@@ -40,7 +40,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * It utilizes Reactor's {@link Sinks.Many} to maintain event streams for each aggregate type
  * and handles backpressure by buffering events for slow consumers.
  */
-public class CdcEventBus {
+public final class CdcEventBus {
 
     private static final Logger log = LoggerFactory.getLogger(CdcEventBus.class);
 

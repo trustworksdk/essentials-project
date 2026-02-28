@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021-2025 the original author or authors.
+ *  Copyright 2021-2026 the original author or authors.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -22,6 +22,12 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 
+/**
+ * WalGlobalOrdersExtractor is an interface designed for extracting {@code Gap} objects
+ * from a given logical replication message in JSON format.
+ * This interface supports multiple methods to handle input data, allowing implementations
+ * to parse and interpret the message and extract relevant details about global event ordering.
+ */
 public interface WalGlobalOrdersExtractor {
     List<Gap> extract(String wal2jsonMessage);
 

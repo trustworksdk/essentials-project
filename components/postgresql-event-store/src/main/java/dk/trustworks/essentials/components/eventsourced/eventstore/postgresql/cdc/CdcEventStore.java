@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021-2025 the original author or authors.
+ *  Copyright 2021-2026 the original author or authors.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -42,7 +42,43 @@ import java.util.stream.Stream;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
-public class CdcEventStore<CONFIG> implements EventStore {
+/**
+ * The CdcEventStore class is responsible for managing the event sourcing mechanics
+ * while incorporating Change Data Capture (CDC) functionalities. It serves as a decorator
+ * over the base EventStore implementation, adding support for backfills, event gap handling,
+ * and advanced features for capturing data changes.
+ * <p>
+ * Public Constructors:
+ * - CdcEventStore(EventStore delegate, EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+ *   EventStreamGapHandler<?> eventStreamGapHandler, CdcEventBus cdcBus, CdcProperties cdcProperties,
+ *   CdcAvailability availability)
+ * - CdcEventStore(EventStore delegate, EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+ *   EventStreamGapHandler<?> eventStreamGapHandler, CdcEventBus cdcBus, CdcProperties cdcProperties,
+ *   CdcAvailability availability, Optional<MeterRegistry> meterRegistry)
+ * <p>
+ * Public Methods:
+ * - pollEvents: Polls a stream of persisted events based on the provided aggregate type and filtering criteria.
+ * - findHighestGlobalEventOrderPersisted: Finds the highest global event order that has been persisted for a given aggregate type.
+ * - findLowestGlobalEventOrderPersisted: Finds the lowest global event order that has been persisted for a given aggregate type.
+ * - getUnitOfWorkFactory: Retrieves the factory for creating event store units of work.
+ * - localEventBus: Returns a local event bus instance for handling in-memory event operations.
+ * - getEventStoreSubscriptionObserver: Retrieves the subscription observer for monitoring event store activities.
+ * - getEventStoreInterceptors: Provides a list of configured interceptors for the event store.
+ * - appendToStream: Appends a batch of events to a specific stream identified by the aggregate type and ID.
+ * - loadLastPersistedEventRelatedTo: Loads the last persisted event related to a specific aggregate ID.
+ * - loadEvent: Loads a specific event based on the provided criteria.
+ * - loadEvents: Loads multiple events based on provided query parameters.
+ * - fetchStream: Fetches an aggregate event stream based on the provided fetch operation.
+ * - inMemoryProjection: Computes an in-memory projection based on the specified aggregate type, ID, and projection type.
+ * - loadEventsByGlobalOrder: Loads a stream of events ordered globally based on specified criteria.
+ * - unboundedPollForEvents: Polls for events without any bounded stopping condition, with optional filters and polling intervals.
+ * - getCdcBus: Retrieves the CDC event bus associated with this store.
+ * <p>
+ * Additional Private and Overridable Methods:
+ * - backfillFlux: Generates a flux of events during backfill, supporting pagination and optional gap handling.
+ * - backfillOnePageAndEmit: Processes a single page of backfill operations, with support for emitting events to a consumer.
+ */
+public class CdcEventStore implements EventStore {
 
     private static final Logger log = LoggerFactory.getLogger(CdcEventStore.class);
 

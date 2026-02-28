@@ -21,8 +21,25 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 
 import java.util.List;
 
+/**
+ * CdcPoisonNotifier is an interface that defines a mechanism for handling poison events
+ * encountered in a Change Data Capture (CDC) system. Poison events typically signify
+ * inconsistencies, errors, or gaps in event processing that need to be acted upon.
+ * <p>
+ * Implementations of this interface can define specific behaviors, such as logging the incident,
+ * resetting subscribers, or recording the poison details for analysis.
+ */
 public interface CdcPoisonNotifier {
 
+    /**
+     * Handles a poison event encountered during processing in a Change Data Capture (CDC) system.
+     * A poison event indicates a critical issue, such as inconsistencies, errors, or gaps in the
+     * processing of data.
+     *
+     * @param aggregateType Represents the aggregate type that encountered the poison event.
+     * @param gaps A list of global event orders identifying gaps or inconsistencies in data processing.
+     * @param reason A diagnostic message explaining the cause or nature of the poison event.
+     */
     void onPoison(AggregateType aggregateType,
                   List<GlobalEventOrder> gaps,
                   String reason);

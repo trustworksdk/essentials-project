@@ -18,6 +18,26 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import java.time.Duration;
 
+/**
+ * The {@code CdcProperties} class represents the configuration properties for
+ * enabling and managing Change Data Capture (CDC) functionality in an application.
+ * It provides various options to configure the CDC process, including operational
+ * modes, event store batch sizes, data delivery preferences, and database-specific
+ * settings.
+ * <p>
+ * Fields:
+ * - {@code enabled}: Determines if CDC is enabled or disabled.
+ * - {@code mode}: Defines the CDC operational mode (e.g., AUTO, REQUIRE).
+ * - {@code cdcEventStoreBackfillBatchSize}: Configuration for batch size in event store backfill.
+ * - {@code walParserMode}: Mode specifying how WAL payloads are parsed (e.g., STRING, BYTES).
+ * - {@code deliveryMode}: Configures CDC delivery pipeline (e.g., INBOX, DIRECT).
+ * - {@code inboxTableName}: The name of the database table used as the inbox for CDC.
+ * - {@code inboxTtlDuration}: Time-To-Live (TTL) duration for inbox entries.
+ * - {@code wal2JsonTailer}: Stores properties for Wal2Json tailer configuration.
+ * - {@code cdcDispatcher}: Stores properties for the CDC event dispatcher configuration.
+ * - {@code eventBus}: Stores properties for the in-memory CDC event bus.
+ * - {@code slot}: Configuration properties for PostgreSQL replication slot.
+ */
 public class CdcProperties {
 
     private boolean       enabled                        = true;

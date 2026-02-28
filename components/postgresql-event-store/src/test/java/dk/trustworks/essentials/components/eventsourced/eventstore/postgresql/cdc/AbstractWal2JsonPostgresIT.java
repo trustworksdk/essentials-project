@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021-2025 the original author or authors.
+ *  Copyright 2021-2026 the original author or authors.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -36,6 +36,39 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+/**
+ * Abstract test class providing an integration testing framework for PostgreSQL databases
+ * configured with logical replication and the wal2json output plugin.
+ * <p>
+ * This class utilizes Testcontainers to manage a PostgreSQL Docker container instance
+ * with appropriate configurations to enable logical decoding and wal2json functionality for testing.
+ * It is designed to be extended by specific integration test implementations that validate
+ * behavior related to Change Data Capture (CDC) or event sourcing systems.
+ * <p>
+ * Responsibilities:
+ * - Sets up and manages a PostgreSQL container with configurations needed for logical replication.
+ * - Provides utilities to create and configure JDBI and PostgreSQL data source instances.
+ * - Includes mechanisms to verify the readiness of the database and logical decoding capabilities.
+ * - Offers helper methods and nested classes for testing CDC behavior, including poison notification handling.
+ * <p>
+ * Key Components:
+ * - {@code @Testcontainers}: Annotation marking this class to leverage the Testcontainers framework.
+ * - {@code GenericContainer<?> postgres}: A Testcontainers-managed PostgreSQL container pre-configured for testing.
+ * - {@code Jdbi jdbi}: JDBI instance configured for interaction with the PostgreSQL database.
+ * - {@code DataSource replicationDataSource}: Data source configured for replication purposes.
+ * - {@code EventStoreManagedUnitOfWorkFactory unitOfWorkFactory}: Factory for creating managed unit-of-work instances.
+ * <p>
+ * Utility Methods:
+ * - {@code baseSetup()}: Prepares database connection properties, initializes JDBI, and verifies logical decoding.
+ * - {@code waitForPrimaryConnectionsReady()}: Waits for the PostgreSQL instance to be ready to accept connections.
+ * - {@code replicationDataSource(String host, int port, String db, String user, String pass)}: Creates a data source instance with replication capabilities.
+ * - {@code isDatabaseStartingUp(SQLException e)}: Determines if a database is in the process of starting up based on exception details.
+ * <p>
+ * Extension Guidelines:
+ * - Extend this class and implement specific test cases for validating CDC scenarios or event-driven operations.
+ * - Use {@code @BeforeEach} and {@code @AfterEach} annotations to set up test-specific configurations or cleanups.
+ * - Leverage helper methods and utilities provided by this class to focus tests on application logic rather than infrastructure setup.
+ */
 @Testcontainers
 public class AbstractWal2JsonPostgresIT {
 

@@ -68,7 +68,7 @@ class CdcEventStoreFallbackIT extends AbstractWal2JsonPostgresIT {
     @Test
     void pollEvents_falls_back_to_polling_when_cdc_inactive() {
         var availability = new CdcAvailability();
-        var cdcEventStore = new CdcEventStore<>(
+        var cdcEventStore = new CdcEventStore(
                 eventStore,
                 unitOfWorkFactory,
                 gapHandler,
@@ -116,7 +116,7 @@ class CdcEventStoreFallbackIT extends AbstractWal2JsonPostgresIT {
         var availability = new CdcAvailability();
         availability.failed("slot-test", "wal2json plugin not usable");
 
-        var cdcEventStore = new CdcEventStore<>(
+        var cdcEventStore = new CdcEventStore(
                 eventStore,
                 unitOfWorkFactory,
                 gapHandler,

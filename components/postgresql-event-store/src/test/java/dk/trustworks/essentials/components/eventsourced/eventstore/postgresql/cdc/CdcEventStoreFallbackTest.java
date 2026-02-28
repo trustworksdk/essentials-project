@@ -43,7 +43,7 @@ class CdcEventStoreFallbackTest {
         EventStreamGapHandler<?> gapHandler = mock(EventStreamGapHandler.class);
 
         var availability = new CdcAvailability();
-        var cdcEventStore = new CdcEventStore<>(
+        var cdcEventStore = new CdcEventStore(
                 delegate,
                 unitOfWorkFactory,
                 gapHandler,

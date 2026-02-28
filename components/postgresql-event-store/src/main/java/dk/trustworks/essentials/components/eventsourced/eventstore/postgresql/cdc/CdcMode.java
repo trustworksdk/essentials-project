@@ -16,6 +16,11 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+/**
+ * Enumeration representing the Change Data Capture (CDC) operational modes.
+ * Defines the strategies that can be used for controlling how CDC is applied
+ * in the system.
+ */
 public enum CdcMode {
     AUTO,
     REQUIRE

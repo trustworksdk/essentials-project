@@ -45,9 +45,6 @@ import java.util.regex.*;
  * JSON serialization/deserialization and {@link AggregateTypeResolver} for resolving the
  * aggregate type of events based on the table name.
  * <p>
- * Log levels such as DEBUG and TRACE help trace the process and provide detailed diagnostic
- * information for troubleshooting and insight into the transformation logic.
- * <p>
  * Key aspects of the conversion process include:
  * - Filtering only "insert" operations from changes in the WAL2JSON message.
  * - Mapping tables that match a specific naming convention (e.g., *_events).

@@ -22,7 +22,6 @@ import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.zaxxer.hikari.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
 import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
@@ -75,7 +74,6 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.util.StringUtils;
 
 import javax.sql.DataSource;
 import java.net.URI;
@@ -498,7 +496,7 @@ public class EventStoreConfiguration {
                                     EssentialsEventStoreProperties essentialsProperties,
                                     CdcAvailability availability,
                                     Optional<MeterRegistry> meterRegistry) {
-        return new CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration>(
+        return new CdcEventStore(
                 eventStore,
                 eventStoreUnitOfWorkFactory,
                 eventStreamGapHandler,

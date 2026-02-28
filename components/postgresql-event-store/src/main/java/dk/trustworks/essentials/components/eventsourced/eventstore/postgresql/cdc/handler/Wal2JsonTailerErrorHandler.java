@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021-2025 the original author or authors.
+ *  Copyright 2021-2026 the original author or authors.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -16,6 +16,11 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler;
 
+/**
+ * Interface for handling errors occurring during the processing of a PostgreSQL streaming replication slot
+ * using the wal2json output plugin. Implementations of this interface are expected to provide logic for
+ * handling two types of errors: message-level errors and stream-level errors.
+ */
 public interface Wal2JsonTailerErrorHandler {
     enum Decision {
         CONTINUE,          // swallow and keep streaming

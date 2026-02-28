@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021-2025 the original author or authors.
+ *  Copyright 2021-2026 the original author or authors.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -18,6 +18,27 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import java.util.regex.Pattern;
 
+/**
+ * Filters Write-Ahead Log (WAL) messages based on specified criteria using pattern matching
+ * and byte array processing. This class implements the {@code WalMessageFilter} interface
+ * and determines whether a WAL message should be persisted based on its content.
+ * <p>
+ * The criteria checks involve:
+ * - The presence of a specific "kind" field with a value of "insert".
+ * - The presence of a "table" field and its adherence to a naming convention (ending with "_events").
+ * <p>
+ * Regex-based filtering is applied for text-based JSON messages, and byte array processing is
+ * utilized for optimization.
+ * <p>
+ * Criteria Breakdown:
+ * - For text-based JSON: Regex patterns are used to locate and validate fields.
+ * - For byte arrays: Direct parsing is employed to find and validate fields and their values
+ *   without relying on conversion to intermediate String objects.
+ * <p>
+ * This class allows detecting and filtering WAL messages that match the following:
+ * - The "kind" field must exist and be a case-insensitive match for "insert".
+ * - The "table" field must exist and be a case-insensitive match for names ending with "_events".
+ */
 public class RegexWalMessageFilter implements WalMessageFilter {
     private static final Pattern INSERT_KIND = Pattern.compile("\"kind\"\\s*:\\s*\"insert\"", Pattern.CASE_INSENSITIVE);
     private static final Pattern TABLE       = Pattern.compile("\"table\"\\s*:\\s*\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
