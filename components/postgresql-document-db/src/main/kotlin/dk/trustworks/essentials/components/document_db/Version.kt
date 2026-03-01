@@ -36,8 +36,34 @@ value class Version(override val value: Long) : LongValueType<Version> {
         return Version(value - 1)
     }
 
+    /**
+     * Java-friendly primitive variant of [increment].
+     */
+    fun incrementValue(): Long {
+        return value + 1
+    }
+
+    /**
+     * Java-friendly primitive variant of [decrement].
+     */
+    fun decrementValue(): Long {
+        return value - 1
+    }
+
     companion object {
         val ZERO = Version(0)
         val NOT_SAVED_YET = Version(-1)
+
+        @JvmField
+        val ZERO_VALUE: Long = 0
+
+        @JvmField
+        val NOT_SAVED_YET_VALUE: Long = -1
+
+        @JvmStatic
+        fun zeroValue(): Long = ZERO_VALUE
+
+        @JvmStatic
+        fun notSavedYetValue(): Long = NOT_SAVED_YET_VALUE
     }
 }

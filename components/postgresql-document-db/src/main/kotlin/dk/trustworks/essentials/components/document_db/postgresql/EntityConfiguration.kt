@@ -29,10 +29,11 @@ import java.time.ZonedDateTime
 import kotlin.reflect.KClass
 import kotlin.reflect.KMutableProperty1
 import kotlin.reflect.KProperty1
-import kotlin.reflect.full.declaredMemberProperties
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
+import kotlin.reflect.jvm.javaField
+import kotlin.reflect.jvm.javaGetter
 import kotlin.reflect.jvm.jvmErasure
 
 const val VERSION_PROPERTY_NAME = "version"
@@ -143,16 +144,28 @@ class EntityConfiguration<ID, T : VersionedEntity<ID, T>>(private val entityClas
                 config.tableName(it.tableName)
             }
             val context = listOf(entityClass.simpleName!!)
-            entityClass.declaredMemberProperties.forEach { property ->
+            entityClass.memberProperties.forEach { property ->
                 when {
-                    property.findAnnotation<Id>() != null -> config.idProperty(property as KProperty1<T, ID>)
+                    hasIdAnnotation(property) -> config.idProperty(property as KProperty1<T, ID>)
                     property.name == VERSION_PROPERTY_NAME -> config.versionProperty(property as KProperty1<T, Version>)
                     property.name == LAST_UPDATED_PROPERTY_NAME -> config.lastUpdatedProperty(property as KProperty1<T, ZonedDateTime>)
-                    property.findAnnotation<Indexed>() != null -> config.addIndexedProperty(property)
+                    hasIndexedAnnotation(property) -> config.addIndexedProperty(property)
                 }
                 checkPropertyNames(property, context)
             }
             return config.build()
+        }
+
+        private fun hasIdAnnotation(property: KProperty1<*, *>): Boolean {
+            return property.findAnnotation<Id>() != null ||
+                property.javaField?.isAnnotationPresent(Id::class.java) == true ||
+                property.javaGetter?.isAnnotationPresent(Id::class.java) == true
+        }
+
+        private fun hasIndexedAnnotation(property: KProperty1<*, *>): Boolean {
+            return property.findAnnotation<Indexed>() != null ||
+                property.javaField?.isAnnotationPresent(Indexed::class.java) == true ||
+                property.javaGetter?.isAnnotationPresent(Indexed::class.java) == true
         }
 
         /**
