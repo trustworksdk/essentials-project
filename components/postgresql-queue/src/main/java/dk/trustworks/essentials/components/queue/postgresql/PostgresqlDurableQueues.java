@@ -77,6 +77,8 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
 public final class PostgresqlDurableQueues implements BatchMessageFetchingCapableDurableQueues {
     private static final Logger log                               = LoggerFactory.getLogger(PostgresqlDurableQueues.class);
     public static final  String DEFAULT_DURABLE_QUEUES_TABLE_NAME = "durable_queues";
+    public static final  int    DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD = 5000;
+    public static final  double DEFAULT_BATCHED_FETCH_WARN_DEDUP_RATIO_THRESHOLD = 1.5d;
     private static final Object NO_PAYLOAD                        = new Object();
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>           unitOfWorkFactory;
@@ -96,6 +98,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     private final boolean                                                                 useCentralizedMessageFetcher;
     private final boolean                                                                 useOrderedUnorderedQuery;
+    private final int                                                                     centralizedBatchedFetchSwitchThreshold;
+    private final int                                                                     batchedFetchWarnRowsThreshold;
+    private final double                                                                  batchedFetchWarnDedupRatioThreshold;
 
     private final DurableQueuesSql           durableQueuesSql;
     private final DurableQueuesSerialization durableQueuesSerialization;
@@ -302,7 +307,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              true,  // Use centralized message fetcher by default
              Duration.ofMillis(20), // With a 20ms polling interval by default
              null,
-             true);
+             true,
+             CentralizedMessageFetcher.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
+             DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD,
+             DEFAULT_BATCHED_FETCH_WARN_DEDUP_RATIO_THRESHOLD);
     }
 
     /**
@@ -368,13 +376,22 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                    boolean useCentralizedMessageFetcher,
                                    Duration centralizedMessageFetcherPollingInterval,
                                    Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
-                                   boolean useOrderedUnorderedQuery) {
+                                   boolean useOrderedUnorderedQuery,
+                                   int centralizedBatchedFetchSwitchThreshold,
+                                   int batchedFetchWarnRowsThreshold,
+                                   double batchedFetchWarnDedupRatioThreshold) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer");
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
         this.useCentralizedMessageFetcher = useCentralizedMessageFetcher;
         this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
+        requireTrue(centralizedBatchedFetchSwitchThreshold >= 0, "centralizedBatchedFetchSwitchThreshold must be >= 0");
+        requireTrue(batchedFetchWarnRowsThreshold >= 0, "batchedFetchWarnRowsThreshold must be >= 0");
+        requireTrue(batchedFetchWarnDedupRatioThreshold >= 1.0d, "batchedFetchWarnDedupRatioThreshold must be >= 1.0");
+        this.centralizedBatchedFetchSwitchThreshold = centralizedBatchedFetchSwitchThreshold;
+        this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
+        this.batchedFetchWarnDedupRatioThreshold = batchedFetchWarnDedupRatioThreshold;
 
         // Initialize helper classes
         this.durableQueuesSql = new DurableQueuesSql(sharedQueueTableName);
@@ -394,7 +411,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         if (useCentralizedMessageFetcher) {
             this.centralizedMessageFetcher = new CentralizedMessageFetcher(this,
                                                                            requireNonNull(centralizedMessageFetcherPollingInterval, "No centralizedMessageFetcherPollingInterval provided").toMillis(),
-                                                                           interceptors);
+                                                                           interceptors,
+                                                                           this.centralizedBatchedFetchSwitchThreshold);
             this.centralizedQueuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory != null ? centralizedQueuePollingOptimizerFactory : this::createCentralizedQueuePollingOptimizerFor;
         }
 
@@ -1639,11 +1657,24 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 }
                 
                 var mappingResult = mapQueryResultsWithExceptionHandling(query);
-                var messages = mappingResult.successfulMessages();
+                var rawMessages = mappingResult.successfulMessages();
                 Set<QueueEntryId> seenQueueEntryIds = new HashSet<>();
-                messages = messages.stream()
-                                   .filter(m -> seenQueueEntryIds.add(m.getId()))
-                                   .toList();
+                var messages = rawMessages.stream()
+                                          .filter(m -> seenQueueEntryIds.add(m.getId()))
+                                          .toList();
+                int rawRowCount = rawMessages.size();
+                int uniqueRowCount = messages.size();
+                double dedupRatio = uniqueRowCount == 0 ? 1.0d : (double) rawRowCount / (double) uniqueRowCount;
+
+                if (rawRowCount > batchedFetchWarnRowsThreshold || dedupRatio > batchedFetchWarnDedupRatioThreshold) {
+                    log.warn("Batched fetch produced high result volume: activeQueues={}, rawRows={}, uniqueRows={}, dedupRatio={}, warnRowsThreshold={}, warnDedupRatioThreshold={}",
+                             activeQueues.size(),
+                             rawRowCount,
+                             uniqueRowCount,
+                             String.format(Locale.ROOT, "%.3f", dedupRatio),
+                             batchedFetchWarnRowsThreshold,
+                             batchedFetchWarnDedupRatioThreshold);
+                }
                 
                 // Log failed mappings for monitoring purposes
                 if (!mappingResult.failedMappings().isEmpty()) {

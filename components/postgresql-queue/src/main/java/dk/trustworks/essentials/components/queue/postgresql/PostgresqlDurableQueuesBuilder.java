@@ -63,6 +63,9 @@ public final class PostgresqlDurableQueuesBuilder {
     private boolean                                    useCentralizedMessageFetcher             = true;
     private Duration                                   centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
     private Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory  = null;
+    private int                                        centralizedBatchedFetchSwitchThreshold   = CentralizedMessageFetcher.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
+    private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
+    private double                                     batchedFetchWarnDedupRatioThreshold      = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_DEDUP_RATIO_THRESHOLD;
 
     private boolean useOrderedUnorderedQuery;
 
@@ -196,6 +199,41 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
+     * Set the active queue-count threshold for switching from per-queue fetch to batched fetch
+     * in the {@link CentralizedMessageFetcher}.<br>
+     * Default value is {@value dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedMessageFetcher#DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD}.
+     *
+     * @param centralizedBatchedFetchSwitchThreshold threshold: per-queue fetch for queue counts <= threshold, batched fetch above threshold
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setCentralizedBatchedFetchSwitchThreshold(int centralizedBatchedFetchSwitchThreshold) {
+        this.centralizedBatchedFetchSwitchThreshold = centralizedBatchedFetchSwitchThreshold;
+        return this;
+    }
+
+    /**
+     * Set warning threshold for batched fetch raw result size.
+     *
+     * @param batchedFetchWarnRowsThreshold warning threshold for raw rows returned from batched fetch
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setBatchedFetchWarnRowsThreshold(int batchedFetchWarnRowsThreshold) {
+        this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
+        return this;
+    }
+
+    /**
+     * Set warning threshold for batched fetch dedup ratio (rawRows/uniqueRows).
+     *
+     * @param batchedFetchWarnDedupRatioThreshold warning threshold for dedup ratio
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setBatchedFetchWarnDedupRatioThreshold(double batchedFetchWarnDedupRatioThreshold) {
+        this.batchedFetchWarnDedupRatioThreshold = batchedFetchWarnDedupRatioThreshold;
+        return this;
+    }
+
+    /**
      * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
      * performance for mixed, ordered and unordered message processing scenarios
      *
@@ -218,6 +256,9 @@ public final class PostgresqlDurableQueuesBuilder {
                                            useCentralizedMessageFetcher,
                                            centralizedMessageFetcherPollingInterval,
                                            centralizedQueuePollingOptimizerFactory,
-                                           useOrderedUnorderedQuery);
+                                           useOrderedUnorderedQuery,
+                                           centralizedBatchedFetchSwitchThreshold,
+                                           batchedFetchWarnRowsThreshold,
+                                           batchedFetchWarnDedupRatioThreshold);
     }
 }

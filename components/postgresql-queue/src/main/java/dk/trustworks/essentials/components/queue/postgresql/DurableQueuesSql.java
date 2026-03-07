@@ -248,7 +248,7 @@ public class DurableQueuesSql {
             if (i > 0) values.append(",\n    ");
             values.append("(:queueName").append(i).append(", ")
                   .append(availableWorkerSlotsForThisQueue).append(", ")
-                  .append(excludedKeysForThisQueue.isEmpty() ? "ARRAY[]::text[]" : ":excludeKeys" + i)
+                  .append(excludedKeysForThisQueue.isEmpty() ? "ARRAY[]::text[]" : "ARRAY[<excludeKeys" + i + ">]::text[]")
                   .append(")");
         }
 

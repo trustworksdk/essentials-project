@@ -288,6 +288,9 @@ public class EssentialsComponentsProperties {
         private boolean           useCentralizedMessageFetcher             = true;
         private Duration          centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
         private Double            centralizedPollingDelayBackOffFactor     = 1.5d;
+        private int               centralizedBatchedFetchSwitchThreshold   = CentralizedMessageFetcher.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
+        private int               batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
+        private double            batchedFetchWarnDedupRatioThreshold      = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_DEDUP_RATIO_THRESHOLD;
 
         private boolean verboseTracing = false;
 
@@ -647,6 +650,49 @@ public class EssentialsComponentsProperties {
          */
         public void setCentralizedPollingDelayBackOffFactor(Double centralizedPollingDelayBackOffFactor) {
             this.centralizedPollingDelayBackOffFactor = centralizedPollingDelayBackOffFactor;
+        }
+
+        /**
+         * Get the active queue-count threshold for switching between per-queue fetch and batched fetch in the centralized message fetcher.
+         * Per-queue fetch is used for queue counts <= threshold, batched fetch for higher counts.
+         */
+        public int getCentralizedBatchedFetchSwitchThreshold() {
+            return centralizedBatchedFetchSwitchThreshold;
+        }
+
+        /**
+         * Set the active queue-count threshold for switching between per-queue fetch and batched fetch in the centralized message fetcher.
+         */
+        public void setCentralizedBatchedFetchSwitchThreshold(int centralizedBatchedFetchSwitchThreshold) {
+            this.centralizedBatchedFetchSwitchThreshold = centralizedBatchedFetchSwitchThreshold;
+        }
+
+        /**
+         * Get warning threshold for raw rows returned by batched fetch.
+         */
+        public int getBatchedFetchWarnRowsThreshold() {
+            return batchedFetchWarnRowsThreshold;
+        }
+
+        /**
+         * Set warning threshold for raw rows returned by batched fetch.
+         */
+        public void setBatchedFetchWarnRowsThreshold(int batchedFetchWarnRowsThreshold) {
+            this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
+        }
+
+        /**
+         * Get warning threshold for batched fetch dedup ratio (rawRows/uniqueRows).
+         */
+        public double getBatchedFetchWarnDedupRatioThreshold() {
+            return batchedFetchWarnDedupRatioThreshold;
+        }
+
+        /**
+         * Set warning threshold for batched fetch dedup ratio (rawRows/uniqueRows).
+         */
+        public void setBatchedFetchWarnDedupRatioThreshold(double batchedFetchWarnDedupRatioThreshold) {
+            this.batchedFetchWarnDedupRatioThreshold = batchedFetchWarnDedupRatioThreshold;
         }
 
         /**

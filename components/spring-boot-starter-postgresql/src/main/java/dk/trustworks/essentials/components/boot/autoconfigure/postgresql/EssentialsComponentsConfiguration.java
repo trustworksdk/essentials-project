@@ -284,6 +284,9 @@ public class EssentialsComponentsConfiguration {
                                                    .setMultiTableChangeListener(optionalMultiTableChangeListener.orElse(null))
                                                    .setUseCentralizedMessageFetcher(properties.getDurableQueues().isUseCentralizedMessageFetcher())
                                                    .setCentralizedMessageFetcherPollingInterval(properties.getDurableQueues().getCentralizedMessageFetcherPollingInterval())
+                                                   .setCentralizedBatchedFetchSwitchThreshold(properties.getDurableQueues().getCentralizedBatchedFetchSwitchThreshold())
+                                                   .setBatchedFetchWarnRowsThreshold(properties.getDurableQueues().getBatchedFetchWarnRowsThreshold())
+                                                   .setBatchedFetchWarnDedupRatioThreshold(properties.getDurableQueues().getBatchedFetchWarnDedupRatioThreshold())
                                                    .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue,
                                                                                                                                         (long) (consumeFromQueue.getPollingInterval().toMillis() *
                                                                                                                                                                       properties.getDurableQueues()

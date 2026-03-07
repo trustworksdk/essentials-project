@@ -43,13 +43,14 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  */
 public class CentralizedMessageFetcher implements Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(CentralizedMessageFetcher.class);
-    public static final int NUMBER_OF_ACTIVE_QUEUES_THRESHOLD = 10;
+    public static final int DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD = 4;
 
     private final DurableQueues                                              durableQueues;
     private final ScheduledExecutorService                                   scheduler;
     private final ConcurrentMap<QueueName, DurableQueueConsumerRegistration> consumerRegistrations;
     private final AtomicBoolean                                              started;
     private final long                                                       pollingIntervalMs;
+    private final int                                                        batchedFetchSwitchThreshold;
     private final List<DurableQueuesInterceptor>                             interceptors;
 
     /**
@@ -67,9 +68,26 @@ public class CentralizedMessageFetcher implements Lifecycle {
     public CentralizedMessageFetcher(DurableQueues durableQueues,
                                      long pollingIntervalMs,
                                      List<DurableQueuesInterceptor> interceptors) {
+        this(durableQueues, pollingIntervalMs, interceptors, DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD);
+    }
+
+    /**
+     * Create a new CentralizedMessageFetcher
+     *
+     * @param durableQueues                the DurableQueues instance to work with
+     * @param pollingIntervalMs            the polling interval in milliseconds
+     * @param batchedFetchSwitchThreshold  fetch strategy switch threshold:
+     *                                     use per-queue fetch for queue counts <= threshold, use batched fetch above threshold
+     */
+    public CentralizedMessageFetcher(DurableQueues durableQueues,
+                                     long pollingIntervalMs,
+                                     List<DurableQueuesInterceptor> interceptors,
+                                     int batchedFetchSwitchThreshold) {
         this.durableQueues = requireNonNull(durableQueues, "No durableQueues provided");
         this.pollingIntervalMs = pollingIntervalMs;
         this.interceptors = requireNonNull(interceptors, "interceptors is missing");
+        requireTrue(batchedFetchSwitchThreshold >= 0, "batchedFetchSwitchThreshold must be >= 0");
+        this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
         this.consumerRegistrations = new ConcurrentHashMap<>();
         this.inProcessOrderedKeys = new ConcurrentHashMap<>();
         this.scheduler = Executors.newScheduledThreadPool(1, r -> {
@@ -204,21 +222,19 @@ public class CentralizedMessageFetcher implements Lifecycle {
         try {
             // Ask the DurableQueues implementation if it supports batch fetching
             if (durableQueues instanceof BatchMessageFetchingCapableDurableQueues batchCapableDurableQueues) {
-                // Use batch fetching for better efficiency
                 List<QueuedMessage> messages;
                 var queueNames = availableWorkerSlotsPerQueue.keySet();
-// Don't use fetchNextBatchOfMessagesBatched until it properly handles competing consumers
-//                if (queueNames.size() > NUMBER_OF_ACTIVE_QUEUES_THRESHOLD) {
+                if (queueNames.size() > batchedFetchSwitchThreshold) {
                     messages = batchCapableDurableQueues.fetchNextBatchOfMessagesBatched(
                             queueNames,
                             excludeKeysPerQueue,
                             availableWorkerSlotsPerQueue);
-//                } else {
-//                    messages = batchCapableDurableQueues.fetchNextBatchOfMessages(
-//                            queueNames,
-//                            excludeKeysPerQueue,
-//                            availableWorkerSlotsPerQueue);
-//                }
+                } else {
+                    messages = batchCapableDurableQueues.fetchNextBatchOfMessages(
+                            queueNames,
+                            excludeKeysPerQueue,
+                            availableWorkerSlotsPerQueue);
+                }
 
                 // Debug logging when using batch fetching
                 if (log.isDebugEnabled()) {
