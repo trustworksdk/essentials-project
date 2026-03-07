@@ -530,10 +530,7 @@ public class EventStoreConfiguration {
                                        CdcAvailability availability,
                                        Optional<MeterRegistry> meterRegistry) {
 
-        var slotProps = essentialsProperties.getCdc().getSlot();
-        String slotName = slotProps.getName() != null && !slotProps.getName().isBlank()
-                          ? slotProps.getName()
-                          : slotNameProvider.slotName(group);
+        String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
 
         return new CdcDispatcher(cdcInboxRepository,
                                  eventStoreUnitOfWorkFactory,
@@ -549,6 +546,13 @@ public class EventStoreConfiguration {
                                  availability,
                                  meterRegistry
         );
+    }
+
+    private static String getCdcSlotName(EssentialsEventStoreProperties essentialsProperties, CdcConsumerGroup group, CdcSlotNameProvider slotNameProvider) {
+        var slotProps = essentialsProperties.getCdc().getSlot();
+        return slotProps.getName() != null && !slotProps.getName().isBlank()
+                          ? slotProps.getName()
+                          : slotNameProvider.slotName(group);
     }
 
     @Bean
@@ -610,7 +614,6 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcSlotNameProvider cdcSlotNameProvider(DataSourceProperties dsProps) {
-        // best-effort db name extraction; you can improve this later
         String url = dsProps.getUrl();
         String db  = null;
         if (url != null) {
@@ -643,10 +646,7 @@ public class EventStoreConfiguration {
                                          Optional<MeterRegistry> meterRegistry,
                                          Optional<Wal2JsonTailerErrorHandler> errorHandler) throws SQLException {
 
-        var slotProps = properties.getCdc().getSlot();
-        String slotName = slotProps.getName() != null && !slotProps.getName().isBlank()
-                          ? slotProps.getName()
-                          : slotNameProvider.slotName(group);
+        String     slotName              = getCdcSlotName(properties, group, slotNameProvider);
         DataSource replicationDataSource = createReplicationDataSource(dataSourceProperties);
 
         return new Wal2JsonTailer(replicationDataSource,
