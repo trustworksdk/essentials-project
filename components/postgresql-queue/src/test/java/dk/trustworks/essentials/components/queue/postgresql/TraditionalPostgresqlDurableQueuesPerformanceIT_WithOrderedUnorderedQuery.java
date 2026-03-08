@@ -16,8 +16,11 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+
 import java.time.Duration;
 
+@EnabledIfSystemProperty(named = "benchmark.run", matches = "true")
 public class TraditionalPostgresqlDurableQueuesPerformanceIT_WithOrderedUnorderedQuery extends PostgresqlDurableQueuesPerformanceIT {
     @Override
     protected boolean useCentralizedMessageFetcher() {

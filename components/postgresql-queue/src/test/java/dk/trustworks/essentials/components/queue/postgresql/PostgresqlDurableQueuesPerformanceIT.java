@@ -32,6 +32,7 @@ import dk.trustworks.essentials.reactive.LocalEventBus;
 import dk.trustworks.essentials.shared.time.StopWatch;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
@@ -46,6 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.waitAtMost;
 
 @Testcontainers
+@EnabledIfSystemProperty(named = "benchmark.run", matches = "true")
 public abstract class PostgresqlDurableQueuesPerformanceIT extends DurableQueuesLoadIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
 
     public static final int TOTAL_MESSAGES = 100000;
