@@ -49,6 +49,18 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>jdbc-queue-base</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>jdbc-queue-base</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>foundation-test</artifactId>
             <scope>test</scope>
             <version>${project.version}</version>

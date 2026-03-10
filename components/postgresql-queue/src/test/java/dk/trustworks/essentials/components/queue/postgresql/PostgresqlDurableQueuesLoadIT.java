@@ -16,29 +16,18 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
-import dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer;
-import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
-import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesLoadIT;
-import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
-import dk.trustworks.essentials.reactive.LocalEventBus;
+import dk.trustworks.essentials.components.queue.jdbc.test.AbstractCentralizedToggleDurableQueuesLoadIT;
+import dk.trustworks.essentials.components.queue.jdbc.test.DurableQueuesTestSupport;
 import org.jdbi.v3.core.Jdbi;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
-
-import java.time.Duration;
-
-import static dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule.createObjectMapper;
 
 /**
  * Base class for load testing PostgreSQL durable queues
  */
 @Testcontainers
-abstract class PostgresqlDurableQueuesLoadIT extends DurableQueuesLoadIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
+abstract class PostgresqlDurableQueuesLoadIT extends AbstractCentralizedToggleDurableQueuesLoadIT<PostgresqlDurableQueues> {
     @Container
     protected final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
             .withDatabaseName("queue-db")
@@ -52,21 +41,13 @@ abstract class PostgresqlDurableQueuesLoadIT extends DurableQueuesLoadIT<Postgre
     protected abstract boolean useCentralizedMessageFetcher();
 
     @Override
-    protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory) {
+    protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory,
+                                                          boolean useCentralizedMessageFetcher) {
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
-                                      .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue, 100, 1000))
-                                      .setMultiTableChangeListener(new MultiTableChangeListener<>(unitOfWorkFactory.getJdbi(),
-                                                                                                  Duration.ofMillis(100),
-                                                                                                  new JacksonJSONSerializer(
-                                                                                                          createObjectMapper(
-                                                                                                                  new Jdk8Module(),
-                                                                                                                  new JavaTimeModule(),
-                                                                                                                  new EssentialTypesJacksonModule())
-                                                                                                  ),
-                                                                                                  LocalEventBus.builder().build(),
-                                                                                                  true))
-                                      .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
+                                      .setQueuePollingOptimizerFactory(DurableQueuesTestSupport.defaultQueuePollingOptimizerFactory())
+                                      .setMultiTableChangeListener(DurableQueuesTestSupport.defaultMultiTableChangeListener(unitOfWorkFactory.getJdbi()))
+                                      .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher)
                                       .build();
     }
 
@@ -79,6 +60,6 @@ abstract class PostgresqlDurableQueuesLoadIT extends DurableQueuesLoadIT<Postgre
 
     @Override
     protected void resetQueueStorage(JdbiUnitOfWorkFactory unitOfWorkFactory) {
-        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("DROP TABLE IF EXISTS " + PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME));
+        DurableQueuesTestSupport.dropQueueTable(unitOfWorkFactory, PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME);
     }
 }

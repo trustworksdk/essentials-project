@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
+import dk.trustworks.essentials.components.queue.jdbc.JdbcDurableQueuesSql;
 
 import java.util.*;
 
@@ -28,8 +28,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.bind;
  * Helper class for SQL statements used by PostgresqlDurableQueues.
  * This class contains methods for building SQL statements for various queue operations.
  */
-public class DurableQueuesSql {
-    private final String sharedQueueTableName;
+public class DurableQueuesSql extends JdbcDurableQueuesSql {
 
     /**
      * Creates a new DurableQueuesSql instance.
@@ -37,8 +36,22 @@ public class DurableQueuesSql {
      * @param sharedQueueTableName the name of the table that will contain all messages
      */
     public DurableQueuesSql(String sharedQueueTableName) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
-        this.sharedQueueTableName = sharedQueueTableName;
+        super(sharedQueueTableName);
+    }
+
+    @Override
+    protected String getGetQueuedMessagesPaginationSql() {
+        return "LIMIT :pageSize\nOFFSET :offset";
+    }
+
+    @Override
+    protected String getDeadLetterTrueSqlValue() {
+        return "TRUE";
+    }
+
+    @Override
+    protected String getDeadLetterFalseSqlValue() {
+        return "FALSE";
     }
 
     /**

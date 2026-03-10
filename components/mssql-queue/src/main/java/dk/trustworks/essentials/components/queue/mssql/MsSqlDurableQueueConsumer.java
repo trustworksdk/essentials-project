@@ -18,14 +18,14 @@ package dk.trustworks.essentials.components.queue.mssql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.queue.jdbc.JdbcDurableQueueConsumer;
 
 import java.util.List;
 import java.util.function.Consumer;
 
 @SuppressWarnings("unchecked")
-public final class MsSqlDurableQueueConsumer extends DefaultDurableQueueConsumer<MsSqlDurableQueues, HandleAwareUnitOfWork, UnitOfWorkFactory<HandleAwareUnitOfWork>> {
+public final class MsSqlDurableQueueConsumer extends JdbcDurableQueueConsumer<MsSqlDurableQueues> {
 
     @SuppressWarnings("rawtypes")
     public MsSqlDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,

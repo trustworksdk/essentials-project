@@ -17,74 +17,10 @@ package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.shared.functional.*;
-import org.jdbi.v3.core.mapper.RowMapper;
-import org.jdbi.v3.core.statement.StatementContext;
 
-import java.sql.*;
-import java.time.OffsetDateTime;
-
-import static dk.trustworks.essentials.shared.MessageFormatter.msg;
-
-/**
- * JDBI Row mapper for {@link QueuedMessage} objects.
- * Extracted to be reusable between single message and batch operations.
- */
-public class QueuedMessageRowMapper implements RowMapper<QueuedMessage> {
-    private final TripleFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer;
-    private final QuadFunction<QueueName, QueueEntryId, String, String, Object>    payloadDeserializer;
-
-    /**
-     * Create a new mapper with the provided deserializers
-     *
-     * @param payloadDeserializer  function to deserialize message payloads
-     * @param metadataDeserializer function to deserialize message metadata
-     */
+public class QueuedMessageRowMapper extends dk.trustworks.essentials.components.queue.jdbc.QueuedMessageRowMapper {
     public QueuedMessageRowMapper(QuadFunction<QueueName, QueueEntryId, String, String, Object> payloadDeserializer,
                                   TripleFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer) {
-        this.payloadDeserializer = payloadDeserializer;
-        this.metadataDeserializer = metadataDeserializer;
-    }
-
-    @Override
-    public QueuedMessage map(ResultSet rs, StatementContext ctx) throws SQLException {
-        var queueName      = QueueName.of(rs.getString("queue_name"));
-        var queueEntryId   = QueueEntryId.of(rs.getString("id"));
-        var messagePayload = payloadDeserializer.apply(queueName, queueEntryId, rs.getString("message_payload"), rs.getString("message_payload_type"));
-
-        MessageMetaData messageMetaData     = null;
-        var             metaDataColumnValue = rs.getString("meta_data");
-        if (metaDataColumnValue != null) {
-            messageMetaData = metadataDeserializer.apply(queueName, queueEntryId, metaDataColumnValue);
-        } else {
-            messageMetaData = new MessageMetaData();
-        }
-
-        var     deliveryMode = QueuedMessage.DeliveryMode.valueOf(rs.getString("delivery_mode"));
-        Message message      = null;
-        switch (deliveryMode) {
-            case NORMAL:
-                message = new Message(messagePayload, messageMetaData);
-                break;
-            case IN_ORDER:
-                message = new OrderedMessage(messagePayload,
-                                             rs.getString("key"),
-                                             rs.getLong("key_order"),
-                                             messageMetaData);
-                break;
-            default:
-                throw new IllegalStateException(msg("Unsupported deliveryMode '{}'", deliveryMode));
-        }
-
-        return new DefaultQueuedMessage(queueEntryId,
-                                        queueName,
-                                        message,
-                                        rs.getObject("added_ts", OffsetDateTime.class),
-                                        rs.getObject("next_delivery_ts", OffsetDateTime.class),
-                                        rs.getObject("delivery_ts", OffsetDateTime.class),
-                                        rs.getString("last_delivery_error"),
-                                        rs.getInt("total_attempts"),
-                                        rs.getInt("redelivery_attempts"),
-                                        rs.getBoolean("is_dead_letter_message"),
-                                        rs.getBoolean("is_being_delivered"));
+        super(payloadDeserializer, metadataDeserializer);
     }
 }

@@ -151,6 +151,7 @@
         <module>components/spring-boot-starter-mongodb</module>
         <module>components/postgresql-distributed-fenced-lock</module>
         <module>components/postgresql-event-store</module>
+        <module>components/jdbc-queue-base</module>
         <module>components/postgresql-queue</module>
         <module>components/spring-postgresql-event-store</module>
         <module>components/springdata-mongo-distributed-fenced-lock</module>

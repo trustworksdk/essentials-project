@@ -49,6 +49,18 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>jdbc-queue-base</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>jdbc-queue-base</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>foundation-test</artifactId>
             <scope>test</scope>
             <version>${project.version}</version>
@@ -77,17 +89,23 @@
         <dependency>
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
-            <version>12.10.1.jre11</version>
+            <version>13.2.1.jre11</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgresql.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>mssqlserver</artifactId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-mssqlserver</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -141,7 +159,7 @@
                     <configuration>
                         <archive>
                             <manifestEntries>
-                                <Automatic-Module-Name>dk.trustworks.essentials.components.queue.postgresql</Automatic-Module-Name>
+                                <Automatic-Module-Name>dk.trustworks.essentials.components.queue.mssql</Automatic-Module-Name>
                             </manifestEntries>
                         </archive>
                     </configuration>

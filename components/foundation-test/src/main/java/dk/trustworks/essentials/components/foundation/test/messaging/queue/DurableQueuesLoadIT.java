@@ -70,16 +70,9 @@ public abstract class DurableQueuesLoadIT<DURABLE_QUEUES extends DurableQueues, 
     void queue_a_large_number_of_messages() {
         // Given
         var queueName = QueueName.of("TestQueue");
-        var now       = Instant.now();
+        var now = Instant.now();
 
         var msgHandler = new RecordingQueuedMessageHandler();
-        consumer = durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
-                                                                  .setQueueName(queueName)
-                                                                  .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 0))
-                                                                  .setParallelConsumers(1)
-                                                                  .setConsumerName("TestConsumer")
-                                                                  .setQueueMessageHandler(msgHandler)
-                                                                  .build());
 
         var count     = 20000;
         var stopwatch = StopWatch.start();
@@ -93,11 +86,20 @@ public abstract class DurableQueuesLoadIT<DURABLE_QUEUES extends DurableQueues, 
         });
         System.out.println(msg("Queueing {} messages took {}", count, stopwatch.stop()));
 
-        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(count);
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(count));
         var nextMessages = durableQueues.queryForMessagesSoonReadyForDelivery(queueName,
                                                                               now,
                                                                               10);
         assertThat(nextMessages).hasSize(10);
+
+        consumer = durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
+                                                                  .setQueueName(queueName)
+                                                                  .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(100), 0))
+                                                                  .setParallelConsumers(1)
+                                                                  .setConsumerName("TestConsumer")
+                                                                  .setQueueMessageHandler(msgHandler)
+                                                                  .build());
 
         // Verify that a large number of messages added within a single UnitOfWork doesn't delay message consumption
         Awaitility.waitAtMost(Duration.ofSeconds(5))

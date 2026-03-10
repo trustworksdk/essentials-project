@@ -17,30 +17,18 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
-import dk.trustworks.essentials.shared.FailFast;
+import dk.trustworks.essentials.components.queue.jdbc.JdbcMessageMappingResult;
 
 import java.util.List;
 
-/**
- * Result of mapping database rows to QueuedMessage objects, containing both
- * successfully mapped messages and failed mappings with their exceptions.
- */
-public record MessageMappingResult(List<QueuedMessage> successfulMessages, List<FailedMessageMapping> failedMappings) {
-    
-    public MessageMappingResult {
-        FailFast.requireNonNull(successfulMessages, "No successfulMessages provided");
-        FailFast.requireNonNull(failedMappings, "No failedMappings provided");
+public class MessageMappingResult extends JdbcMessageMappingResult<MessageMappingResult.FailedMessageMapping> {
+    public MessageMappingResult(List<QueuedMessage> successfulMessages, List<FailedMessageMapping> failedMappings) {
+        super(successfulMessages, failedMappings);
     }
 
-    /**
-     * Represents a failed message mapping with the QueueName, QueueEntryId and the exception that caused the failure.
-     */
-    public record FailedMessageMapping(QueueName queueName, QueueEntryId queueEntryId, Exception mappingException) {
-        
-        public FailedMessageMapping {
-            FailFast.requireNonNull(queueName, "No queueName provided");
-            FailFast.requireNonNull(queueEntryId, "No queueEntryId provided");
-            FailFast.requireNonNull(mappingException, "No mappingException provided");
+    public static class FailedMessageMapping extends JdbcMessageMappingResult.FailedMessageMapping {
+        public FailedMessageMapping(QueueName queueName, QueueEntryId queueEntryId, Exception mappingException) {
+            super(queueName, queueEntryId, mappingException);
         }
     }
 }

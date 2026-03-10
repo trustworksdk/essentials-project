@@ -23,13 +23,11 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
-import dk.trustworks.essentials.components.queue.mssql.jdbi.*;
+import dk.trustworks.essentials.components.queue.jdbc.*;
+import dk.trustworks.essentials.components.queue.jdbc.jdbi.*;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.collections.Lists;
-import org.jdbi.v3.core.Handle;
-import org.jdbi.v3.core.mapper.RowMapper;
-import org.jdbi.v3.core.statement.StatementContext;
 import org.slf4j.*;
 
 import java.sql.*;
@@ -116,6 +114,24 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
 
     public static MsSqlDurableQueuesBuilder builder() {
         return new MsSqlDurableQueuesBuilder();
+    }
+
+    private static OffsetDateTime asUtcOffsetDateTime(Instant instant) {
+        return instant == null ? null : OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
+    }
+
+    private static OffsetDateTime normalizeFromDbToUtc(OffsetDateTime dateTime) {
+        if (dateTime == null) {
+            return null;
+        }
+        var systemOffset = ZoneId.systemDefault().getRules().getOffset(Instant.now());
+        if (dateTime.getOffset().equals(ZoneOffset.UTC) && !systemOffset.equals(ZoneOffset.UTC)) {
+            return dateTime.toLocalDateTime()
+                           .atZone(ZoneId.systemDefault())
+                           .toOffsetDateTime()
+                           .withOffsetSameInstant(ZoneOffset.UTC);
+        }
+        return dateTime.withOffsetSameInstant(ZoneOffset.UTC);
     }
 
     /**
@@ -419,18 +435,12 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                                                   );
             log.info("Ensured Durable Queues table '{}' exists", sharedQueueTableName);
 
-            createIndex(durableQueuesSql.getCreateOrderedMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateNextMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateNextReadyMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateOrderedMessageReadyIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateUnorderedMessageReadyIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateOrderedMessageHeadIndexSql(),
-                        handleAwareUnitOfWork.handle());
+            JdbcSqlExecutionSupport.executeTableNameSql(sharedQueueTableName, durableQueuesSql.getCreateOrderedMessageIndexSql(), handleAwareUnitOfWork.handle());
+            JdbcSqlExecutionSupport.executeTableNameSql(sharedQueueTableName, durableQueuesSql.getCreateNextMessageIndexSql(), handleAwareUnitOfWork.handle());
+            JdbcSqlExecutionSupport.executeTableNameSql(sharedQueueTableName, durableQueuesSql.getCreateNextReadyMessageIndexSql(), handleAwareUnitOfWork.handle());
+            JdbcSqlExecutionSupport.executeTableNameSql(sharedQueueTableName, durableQueuesSql.getCreateOrderedMessageReadyIndexSql(), handleAwareUnitOfWork.handle());
+            JdbcSqlExecutionSupport.executeTableNameSql(sharedQueueTableName, durableQueuesSql.getCreateUnorderedMessageReadyIndexSql(), handleAwareUnitOfWork.handle());
+            JdbcSqlExecutionSupport.executeTableNameSql(sharedQueueTableName, durableQueuesSql.getCreateOrderedMessageHeadIndexSql(), handleAwareUnitOfWork.handle());
 
             multiTableChangeListener.ifPresent(listener -> {
                 ListenNotify.addChangeNotificationTriggerToTable(handleAwareUnitOfWork.handle(),
@@ -439,20 +449,6 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                                                                  "id", "queue_name", "added_ts", "next_delivery_ts", "delivery_ts", "is_dead_letter_message", "is_being_delivered");
             });
         });
-    }
-
-    private void createIndex(String indexStatement, Handle handle) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
-        handle.execute(bind(indexStatement,
-                            arg("tableName", sharedQueueTableName))
-                      );
-    }
-
-    private void dropIndex(String indexStatement, Handle handle) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
-        handle.execute(bind(indexStatement,
-                            arg("tableName", sharedQueueTableName))
-                      );
     }
 
     /**
@@ -883,10 +879,10 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                                    .bind("queueName", queueName)
                                    .bind("message_payload", jsonPayload)
                                    .bind("message_payload_type", message.getPayload().getClass().getName())
-                                   .bind("addedTimestamp", addedTimestamp)
+                                   .bind("addedTimestamp", asUtcOffsetDateTime(addedTimestamp))
                                    .bind("isDeadLetterMessage", isDeadLetterMessage);
             if (nextDeliveryTimestamp != null) {
-                update.bind("nextDeliveryTimestamp", nextDeliveryTimestamp);
+                update.bind("nextDeliveryTimestamp", asUtcOffsetDateTime(nextDeliveryTimestamp));
             } else {
                 update.bindBySqlType("nextDeliveryTimestamp", null, TIMESTAMP);
             }
@@ -961,8 +957,8 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                                                             .bind("queueName", queueName)
                                                             .bind("message_payload", jsonPayload)
                                                             .bind("message_payload_type", message.getPayload().getClass().getName())
-                                                            .bind("addedTimestamp", addedTimestamp)
-                                                            .bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
+                                                            .bind("addedTimestamp", asUtcOffsetDateTime(addedTimestamp))
+                                                            .bind("nextDeliveryTimestamp", asUtcOffsetDateTime(nextDeliveryTimestamp))
                                                             .bind("isDeadLetterMessage", false)
                                                             .bind("isBeingDelivered", false)
                                                             .bindNull("lastDeliveryError", Types.VARCHAR);
@@ -1018,7 +1014,7 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                                                () -> {
                                                    var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
                                                    var result = unitOfWorkFactory.getRequiredUnitOfWork().handle().createQuery(durableQueuesSql.getRetryMessageSql())
-                                                                                 .bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
+                                                                                 .bind("nextDeliveryTimestamp", asUtcOffsetDateTime(nextDeliveryTimestamp))
                                                                                  .bind("lastDeliveryError", operation.getCauseForRetry() != null ? Exceptions.getStackTrace(operation.getCauseForRetry()) : RetryMessage.MANUALLY_REQUESTED_REDELIVERY)
                                                                                  .bind("id", operation.queueEntryId)
                                                                                  .map(queuedMessageMapper)
@@ -1058,6 +1054,29 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
     }
 
     @Override
+    public boolean markAsDeadLetterMessageDirect(MarkAsDeadLetterMessageDirect operation) {
+        requireNonNull(operation, "You must provide a MarkAsDeadLetterMessageDirect instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var rowsUpdated = unitOfWorkFactory.getRequiredUnitOfWork().handle()
+                                                           .createUpdate(durableQueuesSql.getMarkAsDeadLetterMessageDirectSql())
+                                                           .bind("lastDeliveryError", operation.getCauseForBeingMarkedAsDeadLetter())
+                                                           .bind("id", operation.queueEntryId)
+                                                           .execute();
+                                                   if (rowsUpdated > 0) {
+                                                       log.debug("Marked message with id '{}' as Dead Letter Message (direct, no return)", operation.queueEntryId);
+                                                       return true;
+                                                   } else {
+                                                       log.error("Failed to Mark message with id '{}' as Dead Letter Message (direct)", operation.queueEntryId);
+                                                       return false;
+                                                   }
+                                               }).proceed();
+    }
+
+    @Override
     public Optional<QueuedMessage> resurrectDeadLetterMessage(ResurrectDeadLetterMessage operation) {
         requireNonNull(operation, "You must provide a ResurrectDeadLetterMessage instance");
         operation.validate();
@@ -1067,7 +1086,7 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                                                () -> {
                                                    var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
                                                    var result = unitOfWorkFactory.getRequiredUnitOfWork().handle().createQuery(durableQueuesSql.getResurrectDeadLetterMessageSql())
-                                                                                 .bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
+                                                                                 .bind("nextDeliveryTimestamp", asUtcOffsetDateTime(nextDeliveryTimestamp))
                                                                                  .bind("id", operation.queueEntryId)
                                                                                  .map(queuedMessageMapper)
                                                                                  .findOne();
@@ -1171,7 +1190,7 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                                                        log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
                                                                          + "while deserializing message with id '{}'",
                                                                  operation.queueName, e.queueEntryId.get(), e);
-                                                       markAsDeadLetterMessage(e.queueEntryId.get(), e);
+                                                       markAsDeadLetterMessageDirect(e.queueEntryId.get(), e);
                                                        return Optional.<QueuedMessage>empty();
                                                    }
                                                }).proceed();
@@ -1186,7 +1205,7 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
 
         var orderedQuery = handle.createQuery(orderedSql)
                                  .bind("queueName", queueName)
-                                 .bind("now", now)
+                                 .bind("now", asUtcOffsetDateTime(now))
                                  .bind("limit", 1);
         if (hasExcludes) orderedQuery.bindList("excludeKeys", excludes);
 
@@ -1201,7 +1220,7 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
 
         return handle.createQuery(unorderedSql)
                      .bind("queueName", queueName)
-                     .bind("now", now)
+                     .bind("now", asUtcOffsetDateTime(now))
                      .bind("limit", 1)
                      .map(queuedMessageMapper)
                      .findOne();
@@ -1215,7 +1234,7 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                 .handle()
                 .createQuery(sql)
                 .bind("queueName", queueName)
-                .bind("now", now)
+                .bind("now", asUtcOffsetDateTime(now))
                 .bind("limit", 1);
 
         if (!excludes.isEmpty()) {
@@ -1235,28 +1254,13 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
      * @param queueName the queue for which we're looking for messages stuck being marked as {@link QueuedMessage#isBeingDelivered()}
      */
     void resetMessagesStuckBeingDelivered(QueueName queueName) {
-        // Reset stuck messages
-        if (transactionalMode == TransactionalMode.SingleOperationTransaction) {
-            var now                            = Instant.now();
-            var lastStuckMessageResetTimestamp = lastResetStuckMessagesCheckTimestamps.get(queueName);
-            if (lastStuckMessageResetTimestamp == null || Duration.between(now, lastStuckMessageResetTimestamp).abs().toMillis() > messageHandlingTimeoutMs) {
-                if (log.isDebugEnabled()) {
-                    log.debug("[{}] Looking for messages stuck marked as isBeingDelivered. Last check was performed: {}", queueName, lastStuckMessageResetTimestamp);
-                }
-
-                var numberOfChanges = unitOfWorkFactory.getRequiredUnitOfWork().handle().createUpdate(durableQueuesSql.getResetMessagesStuckBeingDeliveredSql())
-                                                       .bind("threshold", now.minusMillis(messageHandlingTimeoutMs))
-                                                       .bind("error", "Handler Processing of the Message was determined to have Timed Out")
-                                                       .bind("now", now)
-                                                       .execute();
-                if (numberOfChanges > 0) {
-                    log.debug("[{}] Reset {} messages stuck marked as isBeingDelivered", queueName, numberOfChanges);
-                } else {
-                    log.debug("[{}] Didn't find any messages being stuck marked as isBeingDelivered", queueName);
-                }
-                lastResetStuckMessagesCheckTimestamps.put(queueName, now);
-            }
-        }
+        JdbcStuckMessagesResetSupport.resetMessagesStuckBeingDelivered(queueName,
+                                                                       transactionalMode,
+                                                                       messageHandlingTimeoutMs,
+                                                                       lastResetStuckMessagesCheckTimestamps,
+                                                                       unitOfWorkFactory,
+                                                                       durableQueuesSql.getResetMessagesStuckBeingDeliveredSql(),
+                                                                       log);
     }
 
     @Override
@@ -1337,12 +1341,12 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
 
         return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(durableQueuesSql.getQueryForMessagesSoonReadyForDeliverySql())
                                                                                               .bind("queueName", requireNonNull(queueName, "No QueueName provided"))
-                                                                                              .bind("now", withNextDeliveryTimestampAfter)
+                                                                                              .bind("now", asUtcOffsetDateTime(withNextDeliveryTimestampAfter))
                                                                                               .bind("pageSize", maxNumberOfMessagesToReturn)
                                                                                               .map((rs, ctx) -> new NextQueuedMessage(QueueEntryId.of(rs.getString("id")),
                                                                                                                                       queueName,
-                                                                                                                                      rs.getObject("added_ts", OffsetDateTime.class).toInstant(),
-                                                                                                                                      rs.getObject("next_delivery_ts", OffsetDateTime.class).toInstant()))
+                                                                                                                                      normalizeFromDbToUtc(rs.getObject("added_ts", OffsetDateTime.class)).toInstant(),
+                                                                                                                                      normalizeFromDbToUtc(rs.getObject("next_delivery_ts", OffsetDateTime.class)).toInstant()))
                                                                                               .list());
     }
 
@@ -1352,7 +1356,7 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
-                                               () -> queryQueuedMessages(operation.queueName, operation.getQueueingSortOrder(), IncludeMessages.QUEUED_MESSAGES, operation.getStartIndex(), operation.getPageSize()))
+                                               () -> queryQueuedMessages(operation.queueName, operation.getQueueingSortOrder(), JdbcDurableQueuesSql.IncludeMessages.QUEUED_MESSAGES, operation.getStartIndex(), operation.getPageSize()))
                 .proceed();
     }
 
@@ -1362,46 +1366,20 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
         return newInterceptorChainForOperation(operation,
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
-                                               () -> queryQueuedMessages(operation.queueName, operation.getQueueingSortOrder(), IncludeMessages.DEAD_LETTER_MESSAGES, operation.getStartIndex(), operation.getPageSize()))
+                                               () -> queryQueuedMessages(operation.queueName, operation.getQueueingSortOrder(), JdbcDurableQueuesSql.IncludeMessages.DEAD_LETTER_MESSAGES, operation.getStartIndex(), operation.getPageSize()))
                 .proceed();
     }
 
-
-    protected enum IncludeMessages {
-        ALL, DEAD_LETTER_MESSAGES, QUEUED_MESSAGES
-    }
-
-    List<QueuedMessage> queryQueuedMessages(QueueName queueName, QueueingSortOrder queueingSortOrder, IncludeMessages includeMessages, long startIndex, long pageSize) {
+    List<QueuedMessage> queryQueuedMessages(QueueName queueName,
+                                            QueueingSortOrder queueingSortOrder,
+                                            JdbcDurableQueuesSql.IncludeMessages includeMessages,
+                                            long startIndex,
+                                            long pageSize) {
         requireNonNull(queueName, "No queueName provided");
         requireNonNull(queueingSortOrder, "No queueingOrder provided");
         requireNonNull(includeMessages, "No includeMessages provided");
 
-        Supplier<String> resolveIncludeMessagesSql = () -> {
-            switch (includeMessages) {
-                case ALL:
-                    return "";
-                case DEAD_LETTER_MESSAGES:
-                    return "AND is_dead_letter_message = 1\n";
-                case QUEUED_MESSAGES:
-                    return "AND is_dead_letter_message = 0\n";
-                default:
-                    throw new IllegalArgumentException("Unsupported IncludeMessages value: " + includeMessages);
-            }
-        };
-        String sql = bind("""
-                              SELECT *
-                              FROM {:tableName}
-                              WHERE queue_name = :queueName
-                              {:includeMessages}
-                              ORDER BY next_delivery_ts, id
-                              OFFSET :offset ROWS
-                              FETCH NEXT :pageSize ROWS ONLY
-                              """,
-                          arg("tableName", sharedQueueTableName),
-                          arg("includeMessages", resolveIncludeMessagesSql.get())
-                         );
-
-        return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(sql)
+        return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(durableQueuesSql.buildGetQueuedMessagesSql(includeMessages))
                                                                                               .bind("queueName", requireNonNull(queueName, "No QueueName provided"))
                                                                                               .bind("offset", startIndex)
                                                                                               .bind("pageSize", pageSize)
@@ -1486,69 +1464,53 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                 var allMessages = new ArrayList<QueuedMessage>();
 
                 for (var queueName : queueNames) {
+                    var optimizer = JdbcBatchFetchSupport.resolveQueuePollingOptimizer(queueName,
+                                                                                       availableWorkerSlotsPerQueue,
+                                                                                       qn -> {
+                                                                                           var consumer = durableQueueConsumers.get(qn);
+                                                                                           return consumer != null ? consumer.getQueuePollingOptimizer() : null;
+                                                                                       },
+                                                                                       log);
+                    if (optimizer.isEmpty()) {
+                        continue;
+                    }
                     var availableWorkerSlotsForThisQueue = availableWorkerSlotsPerQueue.get(queueName);
-                    if (availableWorkerSlotsForThisQueue == null || availableWorkerSlotsForThisQueue <= 0) {
-                        log.trace("[{}] Skipping queue as it has no available worker slots", queueName);
-                        continue;
-                    }
-                    var consumer = durableQueueConsumers.get(queueName);
-                    if (consumer == null) {
-                        log.trace("[{}] Skipping queue as it has no consumer", queueName);
-                        continue;
-                    }
-                    var optimizer = consumer.getQueuePollingOptimizer();
-                    if (optimizer.shouldSkipPolling()) {
-                        log.trace("[{}] skipping centralized polling", queueName);
-                        continue;
-                    }
 
                     var                 excluded = excludeKeysPerQueue.getOrDefault(queueName, Collections.emptySet());
-                    List<QueuedMessage> messagesForQueue;
-
-                    try {
-                        if (useOrderedUnorderedQuery) {
-                            var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
-                            var orderedQ = uow.handle().createQuery(orderedSql)
-                                              .bind("queueName", queueName)
-                                              .bind("now", now)
-                                              .bind("limit", availableWorkerSlotsForThisQueue);
-                            if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
-
-                            messagesForQueue = orderedQ.map(queuedMessageMapper).list();
-                            if (messagesForQueue.isEmpty()) {
+                    List<QueuedMessage> messagesForQueue = JdbcBatchFetchSupport.fetchMessagesForQueue(
+                            useOrderedUnorderedQuery,
+                            () -> {
+                                var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
+                                var orderedQ = uow.handle().createQuery(orderedSql)
+                                                  .bind("queueName", queueName)
+                                                  .bind("now", asUtcOffsetDateTime(now))
+                                                  .bind("limit", availableWorkerSlotsForThisQueue);
+                                if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
+                                return mapQueryResultsWithExceptionHandling(orderedQ);
+                            },
+                            () -> {
                                 var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
                                 var unorderedQ = uow.handle().createQuery(unorderedSql)
                                                     .bind("queueName", queueName)
-                                                    .bind("now", now)
+                                                    .bind("now", asUtcOffsetDateTime(now))
                                                     .bind("limit", availableWorkerSlotsForThisQueue);
-                                messagesForQueue = unorderedQ.map(queuedMessageMapper).list();
-                            }
-                        } else {
-                            var sql = durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excluded);
-                            var query = uow.handle().createQuery(sql)
-                                           .bind("queueName", queueName)
-                                           .bind("now", now)
-                                           .bind("limit", availableWorkerSlotsForThisQueue);
-                            if (!excluded.isEmpty()) query.bindList("excludedKeys", new ArrayList<>(excluded));
-                            messagesForQueue = query.map(queuedMessageMapper).list();
-                        }
+                                return mapQueryResultsWithExceptionHandling(unorderedQ);
+                            },
+                            () -> {
+                                var sql = durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excluded);
+                                var query = uow.handle().createQuery(sql)
+                                               .bind("queueName", queueName)
+                                               .bind("now", asUtcOffsetDateTime(now))
+                                               .bind("limit", availableWorkerSlotsForThisQueue);
+                                if (!excluded.isEmpty()) query.bindList("excludedKeys", new ArrayList<>(excluded));
+                                return mapQueryResultsWithExceptionHandling(query);
+                            },
+                            this::handleFailedMappings);
 
-                        log.debug("[{}] Batch fetched {} messages with {} slots available",
-                                  queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
-                        if (messagesForQueue.isEmpty()) {
-                            optimizer.queuePollingReturnedNoMessages();
-                            log.trace("[{}] No messages fetched for this queue", queueName);
-                        } else {
-                            optimizer.queuePollingReturnedMessages(messagesForQueue);
-                            log.trace("[{}] Fetched {} messages for this queue", queueName, messagesForQueue.size());
-                        }
-                        allMessages.addAll(messagesForQueue);
-
-                    } catch (DurableQueueDeserializationException e) {
-                        log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
-                                          + "while deserializing message with id '{}'", queueName, e.queueEntryId.get(), e);
-                        markAsDeadLetterMessage(e.queueEntryId.get(), e);
-                    }
+                    log.debug("[{}] Batch fetched {} messages with {} slots available",
+                              queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
+                    JdbcBatchFetchSupport.updateQueuePollingOptimizerAndLog(queueName, optimizer.get(), messagesForQueue, log);
+                    allMessages.addAll(messagesForQueue);
                 }
 
                 log.debug("Batch fetched {} messages for {} queues: {}",
@@ -1577,18 +1539,13 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
 
         // 1) Filter out queues with no slots or that should skip polling
         List<QueueName> activeQueues = queueNames.stream()
-                                                 .filter(queueName -> availableWorkerSlotsPerQueue.getOrDefault(queueName, 0) > 0)
-                                                 .filter(queueName -> {
-                                                     var durableQueueConsumer = durableQueueConsumers.get(queueName);
-                                                     if (durableQueueConsumer == null) {
-                                                         log.trace("[{}] Skipping queue as it has no consumer", queueName);
-                                                         return false;
-                                                     }
-                                                     var     queuePollingOptimizer = durableQueueConsumer.getQueuePollingOptimizer();
-                                                     boolean skip                  = queuePollingOptimizer.shouldSkipPolling();
-                                                     if (skip) log.trace("[{}] skipping due to backoff", queueName);
-                                                     return !skip;
-                                                 })
+                                                 .filter(queueName -> JdbcBatchFetchSupport.resolveQueuePollingOptimizer(queueName,
+                                                                                                                        availableWorkerSlotsPerQueue,
+                                                                                                                        qn -> {
+                                                                                                                            var consumer = durableQueueConsumers.get(qn);
+                                                                                                                            return consumer != null ? consumer.getQueuePollingOptimizer() : null;
+                                                                                                                        },
+                                                                                                                        log).isPresent())
                                                  .toList();
 
         if (activeQueues.isEmpty()) {
@@ -1603,61 +1560,35 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
                 var batchedSqlResult = durableQueuesSql.buildBatchedSqlStatement(excludeKeysPerQueue, availableWorkerSlotsPerQueue, activeQueues);
                 var query = uow.handle()
                                .createQuery(batchedSqlResult.getSql())
-                               .bind("now", now);
+                               .bind("now", asUtcOffsetDateTime(now));
 
-                // Bind single-value parameters (queue names)
-                for (var entry : batchedSqlResult.getSingleValueBindings().entrySet()) {
-                    query.bind(entry.getKey(), entry.getValue());
-                }
-
-                // Bind list parameters (exclude keys)
-                for (var entry : batchedSqlResult.getListBindings().entrySet()) {
-                    query.bindList(entry.getKey(), entry.getValue());
-                }
+                JdbcBatchFetchSupport.applyQueryBindings(query,
+                                                         batchedSqlResult.getSingleValueBindings(),
+                                                         batchedSqlResult.getListBindings());
 
                 var mappingResult = mapQueryResultsWithExceptionHandling(query);
                 var messages      = mappingResult.successfulMessages();
 
-                // Log failed mappings for monitoring purposes
+                JdbcBatchFetchSupport.logFailedMappingsSummary(mappingResult, log);
                 if (!mappingResult.failedMappings().isEmpty()) {
-                    log.warn("Failed to deserialize {} messages during batch fetch. Failed QueueEntryIds: {}",
-                             mappingResult.failedMappings().size(),
-                             mappingResult.failedMappings().stream()
-                                          .map(failed -> failed.queueEntryId().toString())
-                                          .collect(Collectors.joining(", ")));
-
-                    // Log individual failures for debugging
-                    for (var failedMapping : mappingResult.failedMappings()) {
-                        log.error("[{}] Marking Message as DeadLetterMessage due to issues "
-                                          + "while deserializing message with id '{}'",
-                                  failedMapping.queueName(), failedMapping.queueEntryId(), failedMapping.mappingException());
-                        markAsDeadLetterMessage(failedMapping.queueEntryId(), failedMapping.mappingException());
-                    }
+                    handleFailedMappings(mappingResult);
                 }
 
-                Map<QueueName, List<QueuedMessage>> byQueue = messages.stream()
-                                                                      .collect(Collectors.groupingBy(QueuedMessage::getQueueName));
-
-                for (var queueName : activeQueues) {
+                var byQueue = JdbcBatchFetchSupport.groupMessagesByQueue(messages);
+                JdbcBatchFetchSupport.forEachActiveQueueMessages(activeQueues, byQueue, (queueName, messagesForQueue) -> {
                     var durableQueueConsumer = durableQueueConsumers.get(queueName);
                     if (durableQueueConsumer == null) {
                         log.trace("[{}] Skipping queue as it has no consumer", queueName);
-                        continue;
+                        return;
                     }
                     var                 queuePollingOptimizer = durableQueueConsumer.getQueuePollingOptimizer();
-                    List<QueuedMessage> messagesForQueue      = byQueue.getOrDefault(queueName, Collections.emptyList());
-                    if (messagesForQueue.isEmpty()) {
-                        queuePollingOptimizer.queuePollingReturnedNoMessages();
-                    } else {
-                        queuePollingOptimizer.queuePollingReturnedMessages(messagesForQueue);
-                    }
-                }
+                    JdbcBatchFetchSupport.updateQueuePollingOptimizerAndLog(queueName, queuePollingOptimizer, messagesForQueue, log);
+                });
 
                 log.debug("Batch fetched {} messages across {} queues: {}",
                           messages.size(),
                           activeQueues.size(),
-                          byQueue.entrySet().stream()
-                                 .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().size())));
+                          JdbcBatchFetchSupport.queueSizes(byQueue));
 
                 return messages;
             });
@@ -1679,30 +1610,18 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
      * @return MessageMappingResult containing successful messages and failed mappings
      */
     private MessageMappingResult mapQueryResultsWithExceptionHandling(org.jdbi.v3.core.statement.Query query) {
-        List<QueuedMessage>                             successfulMessages = new ArrayList<>();
-        List<MessageMappingResult.FailedMessageMapping> failedMappings     = new ArrayList<>();
+        return JdbcMessageMappingSupport.mapQueryResultsWithExceptionHandling(query,
+                                                                              queuedMessageMapper,
+                                                                              failed -> new MessageMappingResult.FailedMessageMapping(failed.queueName(),
+                                                                                                                                     failed.queueEntryId(),
+                                                                                                                                     failed.mappingException()),
+                                                                              MessageMappingResult::new);
+    }
 
-        // Use a custom row mapper that handles exceptions
-        var customMapper = new RowMapper<QueuedMessage>() {
-            @Override
-            public QueuedMessage map(ResultSet rs, StatementContext ctx) throws java.sql.SQLException {
-                try {
-                    // Use the existing mapper to process the row
-                    return queuedMessageMapper.map(rs, ctx);
-                } catch (Exception e) {
-                    QueueName    queueName    = QueueName.of(rs.getString("queue_name"));
-                    QueueEntryId queueEntryId = QueueEntryId.of(rs.getString("id"));
-                    failedMappings.add(new MessageMappingResult.FailedMessageMapping(queueName, queueEntryId, e));
-                    return null;
-                }
-            }
-        };
-
-        // Execute the query and filter out null results
-        List<QueuedMessage> allResults = query.map(customMapper).list();
-        successfulMessages.addAll(allResults.stream().filter(Objects::nonNull).toList());
-
-        return new MessageMappingResult(successfulMessages, failedMappings);
+    private void handleFailedMappings(MessageMappingResult mappingResult) {
+        JdbcFailedMessageMappingHandler.handleFailedMappings(mappingResult,
+                                                             (queueEntryId, mappingException) -> markAsDeadLetterMessageDirect(queueEntryId, mappingException),
+                                                             log);
     }
 
     /**
@@ -1712,49 +1631,13 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
      * @param queueNames the queue names to check for stuck messages
      */
     private void resetMessagesStuckBeingDeliveredAcrossMultipleQueues(Collection<QueueName> queueNames) {
-        requireNonNull(queueNames, "No queueNames provided");
-        if (transactionalMode != TransactionalMode.SingleOperationTransaction || queueNames.isEmpty()) {
-            return;
-        }
-
-        log.trace("resetMultipleQueuesStuckBeingDelivered called for queues: {}", queueNames);
-        var now = Instant.now();
-        var queuesToReset = queueNames.stream()
-                                      .filter(queueName -> {
-                                          var lastReset = lastResetStuckMessagesCheckTimestamps.get(queueName);
-                                          return lastReset == null ||
-                                                  Duration.between(now, lastReset).abs().toMillis() > messageHandlingTimeoutMs;
-                                      })
-                                      .collect(Collectors.toList());
-
-        if (queuesToReset.isEmpty()) {
-            log.trace("No stuck messages to reset across multiple queues: {}", queueNames);
-            return;
-        }
-
-        log.debug("Looking for messages stuck marked as isBeingDelivered across queues: {}", queuesToReset);
-
-        var queueNamesForQuery = queuesToReset.stream()
-                                              .map(QueueName::toString)
-                                              .toList();
-
-        var numberOfChanges = unitOfWorkFactory.getRequiredUnitOfWork().handle().createUpdate(durableQueuesSql.getResetMessagesStuckBeingDeliveredAcrossMultipleQueuesSql())
-                                               .bind("threshold", now.minusMillis(messageHandlingTimeoutMs))
-                                               .bind("error", "Handler Processing of the Message was determined to have Timed Out")
-                                               .bind("now", now)
-                                               .bindList("queueNames", queueNamesForQuery)
-                                               .execute();
-
-        if (numberOfChanges > 0) {
-            log.debug("Reset {} messages stuck marked as isBeingDelivered across queues: {}",
-                      numberOfChanges,
-                      queuesToReset);
-        } else {
-            log.debug("No stuck messages found across queues: {}", queuesToReset);
-        }
-
-        // Update timestamps for all queues we checked
-        queuesToReset.forEach(queueName -> lastResetStuckMessagesCheckTimestamps.put(queueName, now));
+        JdbcStuckMessagesResetSupport.resetMessagesStuckBeingDeliveredAcrossMultipleQueues(queueNames,
+                                                                                            transactionalMode,
+                                                                                            messageHandlingTimeoutMs,
+                                                                                            lastResetStuckMessagesCheckTimestamps,
+                                                                                            unitOfWorkFactory,
+                                                                                            durableQueuesSql.getResetMessagesStuckBeingDeliveredAcrossMultipleQueuesSql(),
+                                                                                            log);
     }
 
     @Override
@@ -1768,10 +1651,7 @@ public final class MsSqlDurableQueues implements BatchMessageFetchingCapableDura
     }
 
     private Optional<QueuedMessage> getQueuedMessage(QueueEntryId queueEntryId, boolean isDeadLetterMessage) {
-        return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(bind("SELECT * FROM {:tableName} WHERE \n" +
-                                                                                                                                 " id = :id AND\n" +
-                                                                                                                                 " is_dead_letter_message = :isDeadLetterMessage",
-                                                                                                                         arg("tableName", sharedQueueTableName)))
+        return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(durableQueuesSql.getGetQueuedMessageSql())
                                                                                               .bind("id", requireNonNull(queueEntryId, "No queueEntryId provided"))
                                                                                               .bind("isDeadLetterMessage", isDeadLetterMessage)
                                                                                               .map(queuedMessageMapper)

@@ -16,47 +16,5 @@
 
 package dk.trustworks.essentials.components.queue.mssql;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
-import dk.trustworks.essentials.components.foundation.postgresql.*;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-
-import java.util.Optional;
-
-/**
- * Custom filter to extract the "queue_name" property from the Postgresql {@link Notification#getParameter()} JSON content.<br>
- * This filter is useful when dealing with multiple {@link org.postgresql.core.Notification}'s involving the same queue.<br>
- * Example: if 100 messages are queued for the same {@link QueueName} in the same {@link UnitOfWork}, then the {@link MultiTableChangeListener} will notify
- * the {@link MsSqlDurableQueues} with 100 {@link TableChangeNotification}'s. Using the {@link QueueNameDuplicationFilter} the {@link MsSqlDurableQueues}
- * will only receive a single {@link TableChangeNotification} for that specific {@link QueueName}. Filtering is only performed on Notifications
- * returned in a single database notification poll
- * @see QueueNameDuplicationFilter
- */
-public class QueueNameDuplicationFilter implements NotificationDuplicationFilter {
-
-    /**
-     * Extracts the "queue_name" field from the given JSON parameter, if it exists.<br>
-     * Example {@link Notification#getParameter()} content:
-     * <pre>{@code
-     * {
-     *   "table_name" : "durable_queues",
-     *   "sql_operation" : "INSERT",
-     *   "id" : "d897f4eb-ed90-4b10-9479-971bf9b26fd3",
-     *   "queue_name" : "TestQueue",
-     *   "added_ts" : "2024-11-26T17:09:41.279749+01:00",
-     *   "next_delivery_ts" : "2024-11-26T17:09:41.279749+01:00",
-     *   "delivery_ts" : null,
-     *   "is_dead_letter_message" : false,
-     *   "is_being_delivered" : false
-     * }
-     * }</pre>
-     *
-     * @param parameterJson a JsonNode representing the JSON structure of the notification parameter
-     * @return an Optional containing the queue name if it exists, otherwise an empty Optional
-     */
-    @Override
-    public Optional<String> extractDuplicationKey(JsonNode parameterJson) {
-        return Optional.ofNullable(parameterJson.has("queue_name") ? parameterJson.get("queue_name").asText() : null);
-    }
+public class QueueNameDuplicationFilter extends dk.trustworks.essentials.components.queue.jdbc.QueueNameDuplicationFilter {
 }
-

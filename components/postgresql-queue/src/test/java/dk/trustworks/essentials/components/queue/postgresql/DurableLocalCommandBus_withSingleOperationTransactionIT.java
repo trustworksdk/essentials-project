@@ -17,8 +17,8 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
-import dk.trustworks.essentials.components.foundation.test.reactive.command.AbstractDurableLocalCommandBusIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.queue.jdbc.test.AbstractSingleOperationTransactionDurableLocalCommandBusIT;
 import org.jdbi.v3.core.Jdbi;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
@@ -26,7 +26,7 @@ import org.testcontainers.junit.jupiter.*;
 import java.time.Duration;
 
 @Testcontainers
-public class DurableLocalCommandBus_withSingleOperationTransactionIT extends AbstractDurableLocalCommandBusIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
+public class DurableLocalCommandBus_withSingleOperationTransactionIT extends AbstractSingleOperationTransactionDurableLocalCommandBusIT<PostgresqlDurableQueues> {
     @Container
     private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
             .withDatabaseName("queue-db")
@@ -34,11 +34,13 @@ public class DurableLocalCommandBus_withSingleOperationTransactionIT extends Abs
             .withPassword("secret-password");
 
     @Override
-    protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory) {
+    protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory,
+                                                          TransactionalMode transactionalMode,
+                                                          Duration messageHandlingTimeout) {
         return PostgresqlDurableQueues.builder()
                                       .setUnitOfWorkFactory(unitOfWorkFactory)
-                                      .setMessageHandlingTimeout(Duration.ofSeconds(1))
-                                      .setTransactionalMode(TransactionalMode.SingleOperationTransaction)
+                                      .setMessageHandlingTimeout(messageHandlingTimeout)
+                                      .setTransactionalMode(transactionalMode)
                                       .build();
     }
 

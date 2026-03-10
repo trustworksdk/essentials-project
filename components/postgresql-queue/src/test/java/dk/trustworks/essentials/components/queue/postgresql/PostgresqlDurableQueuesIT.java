@@ -21,10 +21,10 @@ import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
-import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesIT;
-import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.types.CorrelationId;
+import dk.trustworks.essentials.components.queue.jdbc.test.DialectDurableQueuesITBase;
+import dk.trustworks.essentials.components.queue.jdbc.test.DurableQueuesTestSupport;
 import dk.trustworks.essentials.components.queue.postgresql.test_data.*;
 import org.assertj.core.api.AssertionsForClassTypes;
 import org.awaitility.Awaitility;
@@ -43,7 +43,7 @@ import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
  * Base test class for PostgresqlDurableQueues integration tests
  */
 @Testcontainers
-abstract class PostgresqlDurableQueuesIT extends DurableQueuesIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
+abstract class PostgresqlDurableQueuesIT extends DialectDurableQueuesITBase<PostgresqlDurableQueues> {
 
     protected DurableQueuesStatistics durableQueuesStatistics;
 
@@ -60,17 +60,18 @@ abstract class PostgresqlDurableQueuesIT extends DurableQueuesIT<PostgresqlDurab
     protected abstract boolean useCentralizedMessageFetcher();
 
     @Override
-    protected JSONSerializer createJSONSerializer() {
+    protected JSONSerializer createDialectJSONSerializer() {
         return new JacksonJSONSerializer(createDefaultObjectMapper());
     }
 
     @Override
-    protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory,
-                                                          JSONSerializer jsonSerializer) {
+    protected PostgresqlDurableQueues createDialectDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory,
+                                                                 JSONSerializer jsonSerializer,
+                                                                 boolean useCentralizedMessageFetcher) {
         PostgresqlDurableQueues durableQueues = PostgresqlDurableQueues.builder()
                 .setUnitOfWorkFactory(unitOfWorkFactory)
                 .setJsonSerializer(jsonSerializer)
-                .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
+                .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher)
                 .build();
         durableQueuesStatistics = new PostgresqlDurableQueuesStatistics(unitOfWorkFactory, durableQueues.getSharedQueueTableName());
         return durableQueues;
@@ -85,7 +86,7 @@ abstract class PostgresqlDurableQueuesIT extends DurableQueuesIT<PostgresqlDurab
 
     @Override
     protected void resetQueueStorage(JdbiUnitOfWorkFactory unitOfWorkFactory) {
-        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("DROP TABLE IF EXISTS " + PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME));
+        DurableQueuesTestSupport.dropQueueTable(unitOfWorkFactory, PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME);
     }
 
     @Test

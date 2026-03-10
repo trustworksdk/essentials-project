@@ -526,7 +526,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(messages.get(4)).usingRecursiveComparison().isEqualTo(message1);
         assertThat(messages.get(5)).usingRecursiveComparison().isEqualTo(message1);
 
-        assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0); // Dead letter messages is not counted
+        Awaitility.waitAtMost(Duration.ofSeconds(5))
+                  .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0)); // Dead letter messages is not counted
         var deadLetterMessage = withDurableQueue(() -> durableQueues.getDeadLetterMessage(message1Id));
         assertThat(deadLetterMessage).isPresent();
         assertThat(deadLetterMessage.get().getMessage()).usingRecursiveComparison().isEqualTo(message1);

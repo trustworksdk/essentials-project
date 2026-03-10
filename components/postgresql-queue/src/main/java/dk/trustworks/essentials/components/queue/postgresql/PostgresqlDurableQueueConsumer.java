@@ -18,14 +18,14 @@ package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
-import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.queue.jdbc.JdbcDurableQueueConsumer;
 
 import java.util.List;
 import java.util.function.Consumer;
 
 @SuppressWarnings("unchecked")
-public final class PostgresqlDurableQueueConsumer extends DefaultDurableQueueConsumer<PostgresqlDurableQueues, HandleAwareUnitOfWork, UnitOfWorkFactory<HandleAwareUnitOfWork>> {
+public final class PostgresqlDurableQueueConsumer extends JdbcDurableQueueConsumer<PostgresqlDurableQueues> {
 
     @SuppressWarnings("rawtypes")
     public PostgresqlDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,

@@ -21,28 +21,19 @@ import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.statement.StatementContext;
 
 import java.sql.*;
-import java.time.OffsetDateTime;
+import java.time.*;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
-/**
- * JDBI Row mapper for {@link QueuedMessage} objects.
- * Extracted to be reusable between single message and batch operations.
- */
 public class QueuedMessageRowMapper implements RowMapper<QueuedMessage> {
     private final TripleFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer;
     private final QuadFunction<QueueName, QueueEntryId, String, String, Object>    payloadDeserializer;
 
-    /**
-     * Create a new mapper with the provided deserializers
-     *
-     * @param payloadDeserializer  function to deserialize message payloads
-     * @param metadataDeserializer function to deserialize message metadata
-     */
     public QueuedMessageRowMapper(QuadFunction<QueueName, QueueEntryId, String, String, Object> payloadDeserializer,
                                   TripleFunction<QueueName, QueueEntryId, String, MessageMetaData> metadataDeserializer) {
-        this.payloadDeserializer = payloadDeserializer;
-        this.metadataDeserializer = metadataDeserializer;
+        this.payloadDeserializer = requireNonNull(payloadDeserializer, "No payloadDeserializer provided");
+        this.metadataDeserializer = requireNonNull(metadataDeserializer, "No metadataDeserializer provided");
     }
 
     @Override
@@ -51,16 +42,16 @@ public class QueuedMessageRowMapper implements RowMapper<QueuedMessage> {
         var queueEntryId   = QueueEntryId.of(rs.getString("id"));
         var messagePayload = payloadDeserializer.apply(queueName, queueEntryId, rs.getString("message_payload"), rs.getString("message_payload_type"));
 
-        MessageMetaData messageMetaData     = null;
-        var             metaDataColumnValue = rs.getString("meta_data");
+        MessageMetaData messageMetaData;
+        var metaDataColumnValue = rs.getString("meta_data");
         if (metaDataColumnValue != null) {
             messageMetaData = metadataDeserializer.apply(queueName, queueEntryId, metaDataColumnValue);
         } else {
             messageMetaData = new MessageMetaData();
         }
 
-        var     deliveryMode = QueuedMessage.DeliveryMode.valueOf(rs.getString("delivery_mode"));
-        Message message      = null;
+        var deliveryMode = QueuedMessage.DeliveryMode.valueOf(rs.getString("delivery_mode"));
+        Message message;
         switch (deliveryMode) {
             case NORMAL:
                 message = new Message(messagePayload, messageMetaData);
@@ -78,13 +69,31 @@ public class QueuedMessageRowMapper implements RowMapper<QueuedMessage> {
         return new DefaultQueuedMessage(queueEntryId,
                                         queueName,
                                         message,
-                                        rs.getObject("added_ts", OffsetDateTime.class),
-                                        rs.getObject("next_delivery_ts", OffsetDateTime.class),
-                                        rs.getObject("delivery_ts", OffsetDateTime.class),
+                                        normalizeToUtc(rs.getObject("added_ts", OffsetDateTime.class)),
+                                        normalizeToUtc(rs.getObject("next_delivery_ts", OffsetDateTime.class)),
+                                        normalizeToUtc(rs.getObject("delivery_ts", OffsetDateTime.class)),
                                         rs.getString("last_delivery_error"),
                                         rs.getInt("total_attempts"),
                                         rs.getInt("redelivery_attempts"),
                                         rs.getBoolean("is_dead_letter_message"),
                                         rs.getBoolean("is_being_delivered"));
+    }
+
+    private static OffsetDateTime normalizeToUtc(OffsetDateTime dateTime) {
+        if (dateTime == null) {
+            return null;
+        }
+
+        // SQL Server JDBC can return DATETIMEOFFSET values as UTC with local wall-clock time.
+        // Reinterpret UTC-offset values in local zone and normalize back to UTC.
+        var systemOffset = ZoneId.systemDefault().getRules().getOffset(Instant.now());
+        if (dateTime.getOffset().equals(ZoneOffset.UTC) && !systemOffset.equals(ZoneOffset.UTC)) {
+            return dateTime.toLocalDateTime()
+                           .atZone(ZoneId.systemDefault())
+                           .toOffsetDateTime()
+                           .withOffsetSameInstant(ZoneOffset.UTC);
+        }
+
+        return dateTime.withOffsetSameInstant(ZoneOffset.UTC);
     }
 }

@@ -17,8 +17,7 @@
 package dk.trustworks.essentials.components.queue.mssql;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
-import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
-import dk.trustworks.essentials.shared.MessageFormatter;
+import dk.trustworks.essentials.components.queue.jdbc.JdbcDurableQueuesSql;
 
 import java.util.*;
 
@@ -49,8 +48,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.bind;
  * - CREATE INDEX IX_ready_head       ON {table}(queue_name, key_order, next_delivery_ts) INCLUDE(id) WHERE key IS NOT NULL AND is_dead_letter_message = 0 AND is_being_delivered = 0;
  * - CREATE INDEX IX_next_msg         ON {table}(queue_name, is_dead_letter_message, is_being_delivered, next_delivery_ts);
  */
-public class DurableQueuesSql {
-    private final String sharedQueueTableName;
+public class DurableQueuesSql extends JdbcDurableQueuesSql {
 
     /**
      * Creates a new DurableQueuesSql instance.
@@ -58,8 +56,26 @@ public class DurableQueuesSql {
      * @param sharedQueueTableName the name of the table that will contain all messages
      */
     public DurableQueuesSql(String sharedQueueTableName) {
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
-        this.sharedQueueTableName = sharedQueueTableName;
+        super(sharedQueueTableName);
+    }
+
+    @Override
+    protected String getGetQueuedMessagesPaginationSql() {
+        return """
+               ORDER BY next_delivery_ts, id
+               OFFSET :offset ROWS
+               FETCH NEXT :pageSize ROWS ONLY
+               """;
+    }
+
+    @Override
+    protected String getDeadLetterTrueSqlValue() {
+        return "1";
+    }
+
+    @Override
+    protected String getDeadLetterFalseSqlValue() {
+        return "0";
     }
 
 
@@ -67,7 +83,7 @@ public class DurableQueuesSql {
     public String buildUnorderedSqlStatement() {
         return bind("""
             ;WITH cte_unordered AS (
-              SELECT TOP (@limit) id
+              SELECT TOP (:limit) id
               FROM {:tableName} WITH (READPAST, UPDLOCK, ROWLOCK)
               WHERE queue_name = :queueName
                 AND is_dead_letter_message = 0
@@ -92,7 +108,7 @@ public class DurableQueuesSql {
     public String buildOrderedSqlStatement(boolean hasExclusiveKeys) {
         return bind("""
             ;WITH cte_ordered AS (
-              SELECT TOP (@limit) id
+              SELECT TOP (:limit) id
               FROM {:tableName} q WITH (READPAST, UPDLOCK, ROWLOCK)
               WHERE queue_name = :queueName
                 AND is_dead_letter_message = 0
@@ -132,7 +148,7 @@ public class DurableQueuesSql {
 
         return bind("""
             ;WITH queued_message_ready_for_delivery AS (
-              SELECT TOP (@limit) q1.id
+              SELECT TOP (:limit) q1.id
               FROM {:tableName} q1 WITH (READPAST, UPDLOCK, ROWLOCK)
               WHERE q1.queue_name = :queueName
                 AND q1.is_dead_letter_message = 0
@@ -372,7 +388,7 @@ public class DurableQueuesSql {
 
     public String getQueryForMessagesSoonReadyForDeliverySql() {
         return bind("""
-            SELECT TOP (@pageSize) id, added_ts, next_delivery_ts
+            SELECT TOP (:pageSize) id, added_ts, next_delivery_ts
             FROM {:tableName}
             WHERE queue_name = :queueName
               AND is_dead_letter_message = 0
@@ -539,6 +555,18 @@ public class DurableQueuesSql {
                 is_being_delivered      = 0,
                 delivery_ts             = NULL
             OUTPUT inserted.*
+            WHERE id = :id AND is_dead_letter_message = 0;
+        """, arg("tableName", sharedQueueTableName));
+    }
+
+    public String getMarkAsDeadLetterMessageDirectSql() {
+        return bind("""
+            UPDATE {:tableName}
+            SET next_delivery_ts        = NULL,
+                last_delivery_error     = :lastDeliveryError,
+                is_dead_letter_message  = 1,
+                is_being_delivered      = 0,
+                delivery_ts             = NULL
             WHERE id = :id AND is_dead_letter_message = 0;
         """, arg("tableName", sharedQueueTableName));
     }
