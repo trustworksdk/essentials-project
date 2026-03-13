@@ -26,25 +26,30 @@
         <relativePath>../pom.xml</relativePath>
     </parent>
     <description>
-        This library contains the smallest set of supporting building blocks needed for other Essentials libraries, such as:
-        Tuples, Collections, Functional Interfaces, FailFast, SLF4J compatible Message formatter, High level Reflection API
+        This library focuses purely on providing tools.jackson serialization and deserialization support
+        for the types defined in the Essentials types library.
     </description>
 
-    <artifactId>shared</artifactId>
+    <artifactId>types-jackson3</artifactId>
     <packaging>jar</packaging>
-    <name>shared</name>
+    <name>types-jackson3</name>
 
     <dependencies>
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>${slf4j.version}</version>
+            <groupId>dk.trustworks.essentials</groupId>
+            <artifactId>types</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
             <scope>provided</scope>
         </dependency>
         <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-core</artifactId>
-            <optional>true</optional>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <scope>provided</scope>
         </dependency>
     </dependencies>
 
@@ -57,7 +62,7 @@
                     <configuration>
                         <archive>
                             <manifestEntries>
-                                <Automatic-Module-Name>dk.trustworks.essentials.shared</Automatic-Module-Name>
+                                <Automatic-Module-Name>dk.trustworks.essentials.types.jackson3</Automatic-Module-Name>
                             </manifestEntries>
                         </archive>
                     </configuration>
