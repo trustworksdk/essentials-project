@@ -16,15 +16,11 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesLoadIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.queue.postgresql.test_data.*;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
@@ -36,7 +32,6 @@ import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.*;
 
-import static dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule.createObjectMapper;
 import static dk.trustworks.essentials.shared.collections.Lists.partition;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -70,12 +65,7 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
                                       .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue, 100, 1000))
                                       .setMultiTableChangeListener(new MultiTableChangeListener<>(unitOfWorkFactory.getJdbi(),
                                                                                                   Duration.ofMillis(100),
-                                                                                                  new JacksonJSONSerializer(
-                                                                                                          createObjectMapper(
-                                                                                                                  new Jdk8Module(),
-                                                                                                                  new JavaTimeModule(),
-                                                                                                                  new EssentialTypesJacksonModule())
-                                                                                                  ),
+                                                                                                  DurableQueuesSerialization.createDefaultJSONSerializer(),
                                                                                                   LocalEventBus.builder().build(),
                                                                                                   true))
                                       .setUseCentralizedMessageFetcher(false)
@@ -530,4 +520,3 @@ public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoad
 
 
 }
-

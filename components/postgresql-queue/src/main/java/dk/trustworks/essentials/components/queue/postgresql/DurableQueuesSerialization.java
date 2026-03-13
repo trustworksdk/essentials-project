@@ -16,19 +16,25 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
- import com.fasterxml.jackson.annotation.JsonAutoDetect;
- import com.fasterxml.jackson.databind.*;
- import com.fasterxml.jackson.databind.json.JsonMapper;
- import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
- import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
- import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
- import dk.trustworks.essentials.components.foundation.messaging.queue.*;
- import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
- import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer;
+import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
+import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueDeserializationException;
+import dk.trustworks.essentials.components.foundation.messaging.queue.MessageMetaData;
+import dk.trustworks.essentials.components.foundation.messaging.queue.QueueEntryId;
+import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
 
- import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
- import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
- import static dk.trustworks.essentials.shared.MessageFormatter.msg;
+import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Helper class for serialization operations used by PostgresqlDurableQueues.
@@ -91,6 +97,15 @@ public class DurableQueuesSerialization {
     }
 
     /**
+     * Create default {@link JSONSerializer}. Uses Jackson 3 when the Jackson 3 Essentials modules are present,
+     * otherwise falls back to Jackson 2.
+     */
+    public static JSONSerializer createDefaultJSONSerializer() {
+        var jackson3Serializer = tryCreateJackson3JSONSerializer();
+        return jackson3Serializer != null ? jackson3Serializer : new JacksonJSONSerializer(createDefaultObjectMapper());
+    }
+
+    /**
      * Default {@link ObjectMapper} supporting {@link Jdk8Module}, {@link JavaTimeModule}, {@link EssentialTypesJacksonModule} and {@link EssentialsImmutableJacksonModule}, which
      * is used together with the {@link JSONSerializer}
      *
@@ -110,9 +125,9 @@ public class DurableQueuesSerialization {
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
                                      .build();
+        registerJackson2ModuleIfCompatible(objectMapper, "dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
+        registerJackson2ModuleIfCompatible(objectMapper, "dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule");
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
                                                .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
@@ -120,5 +135,44 @@ public class DurableQueuesSerialization {
                                                .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
                                                .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
         return objectMapper;
+    }
+
+    private static JSONSerializer tryCreateJackson3JSONSerializer() {
+        try {
+            // Only select Jackson 3 path when the essentials modules are the jackson3 variants
+            var moduleClass = Class.forName("dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
+            var superClassName = moduleClass.getSuperclass().getName();
+            if (!superClassName.startsWith("tools.jackson.")) {
+                return null;
+            }
+
+            var jsonMapperClass = Class.forName("tools.jackson.databind.json.JsonMapper");
+            var builder = jsonMapperClass.getMethod("builder").invoke(null);
+            var jacksonModuleClass = Class.forName("tools.jackson.databind.JacksonModule");
+            var essentialTypesModule = moduleClass.getDeclaredConstructor().newInstance();
+            var immutableModuleClass = Class.forName("dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule");
+            var immutableModule = immutableModuleClass.getDeclaredConstructor().newInstance();
+
+            builder.getClass().getMethod("addModule", jacksonModuleClass).invoke(builder, essentialTypesModule);
+            builder.getClass().getMethod("addModule", jacksonModuleClass).invoke(builder, immutableModule);
+            var mapper = builder.getClass().getMethod("build").invoke(builder);
+
+            var serializerClass = Class.forName("dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer");
+            return (JSONSerializer) serializerClass.getDeclaredConstructor(mapper.getClass()).newInstance(mapper);
+        } catch (Throwable ignore) {
+            return null;
+        }
+    }
+
+    private static void registerJackson2ModuleIfCompatible(ObjectMapper objectMapper, String moduleClassName) {
+        try {
+            var moduleClass = Class.forName(moduleClassName);
+            var module = moduleClass.getDeclaredConstructor().newInstance();
+            if (com.fasterxml.jackson.databind.Module.class.isAssignableFrom(moduleClass)) {
+                objectMapper.registerModule((com.fasterxml.jackson.databind.Module) module);
+            }
+        } catch (Throwable ignore) {
+            // ignore, fallback mapper still works without optional modules
+        }
     }
 }

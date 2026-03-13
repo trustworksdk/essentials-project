@@ -100,7 +100,7 @@ public class PostgresqlDurableQueuesStatistics implements DurableQueuesStatistic
     public PostgresqlDurableQueuesStatistics(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                              String durableQueueTableName) {
         this(unitOfWorkFactory,
-                new JacksonJSONSerializer(createDefaultObjectMapper()),
+                DurableQueuesSerialization.createDefaultJSONSerializer(),
                 durableQueueTableName,
                 DEFAULT_DURABLE_QUEUES_TABLE_NAME);
     }

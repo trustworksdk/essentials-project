@@ -16,23 +16,17 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.SimpleQueuePollingOptimizer;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesLoadIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import org.jdbi.v3.core.Jdbi;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.Duration;
-
-import static dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule.createObjectMapper;
 
 /**
  * Base class for load testing PostgreSQL durable queues
@@ -58,12 +52,7 @@ abstract class PostgresqlDurableQueuesLoadIT extends DurableQueuesLoadIT<Postgre
                                       .setQueuePollingOptimizerFactory(consumeFromQueue -> new SimpleQueuePollingOptimizer(consumeFromQueue, 100, 1000))
                                       .setMultiTableChangeListener(new MultiTableChangeListener<>(unitOfWorkFactory.getJdbi(),
                                                                                                   Duration.ofMillis(100),
-                                                                                                  new JacksonJSONSerializer(
-                                                                                                          createObjectMapper(
-                                                                                                                  new Jdk8Module(),
-                                                                                                                  new JavaTimeModule(),
-                                                                                                                  new EssentialTypesJacksonModule())
-                                                                                                  ),
+                                                                                                  DurableQueuesSerialization.createDefaultJSONSerializer(),
                                                                                                   LocalEventBus.builder().build(),
                                                                                                   true))
                                       .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher())
