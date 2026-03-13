@@ -33,7 +33,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -289,7 +288,7 @@ class OrderAggregateRootRepositoryIT {
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
+                                     .addModules(dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.optionalEssentialsModules())
                                      .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()

@@ -41,7 +41,7 @@ import java.time.*;
 import java.util.*;
 import java.util.stream.*;
 
-import static dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule.createObjectMapper;
+import static dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.createObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**

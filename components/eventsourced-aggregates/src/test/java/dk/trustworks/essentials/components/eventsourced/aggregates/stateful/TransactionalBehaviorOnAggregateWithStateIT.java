@@ -41,8 +41,6 @@ import dk.trustworks.essentials.components.foundation.reactive.command.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.jdbi.v3.core.Jdbi;
@@ -438,8 +436,7 @@ public class TransactionalBehaviorOnAggregateWithStateIT {
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
+                                     .addModules(dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.optionalEssentialsModules())
                                      .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
