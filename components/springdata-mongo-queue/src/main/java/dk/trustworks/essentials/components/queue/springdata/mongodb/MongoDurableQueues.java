@@ -31,8 +31,6 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.mongo.MongoUtil;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.functional.QuadFunction;
 import org.slf4j.*;
@@ -146,7 +144,7 @@ public final class MongoDurableQueues implements DurableQueues {
              mongoTemplate,
              null,
              messageHandlingTimeout,
-             new JacksonJSONSerializer(createDefaultObjectMapper()),
+             createDefaultJSONSerializer(),
              DEFAULT_DURABLE_QUEUES_COLLECTION_NAME,
              queuePollingOptimizerFactory);
     }
@@ -222,7 +220,7 @@ public final class MongoDurableQueues implements DurableQueues {
              mongoTemplate,
              unitOfWorkFactory,
              null,
-             new JacksonJSONSerializer(createDefaultObjectMapper()),
+             createDefaultJSONSerializer(),
              DEFAULT_DURABLE_QUEUES_COLLECTION_NAME,
              queuePollingOptimizerFactory);
     }
@@ -1569,6 +1567,15 @@ public final class MongoDurableQueues implements DurableQueues {
         }
     }
 
+    /**
+     * Create default {@link JSONSerializer}. Uses Jackson 3 when the Jackson 3 Essentials modules are present,
+     * otherwise falls back to Jackson 2.
+     */
+    public static JSONSerializer createDefaultJSONSerializer() {
+        var jackson3Serializer = tryCreateJackson3JSONSerializer();
+        return jackson3Serializer != null ? jackson3Serializer : new JacksonJSONSerializer(createDefaultObjectMapper());
+    }
+
     public static ObjectMapper createDefaultObjectMapper() {
         var objectMapper = JsonMapper.builder()
                                      .disable(MapperFeature.AUTO_DETECT_GETTERS)
@@ -1583,9 +1590,9 @@ public final class MongoDurableQueues implements DurableQueues {
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
                                      .build();
+        registerJackson2ModuleIfCompatible(objectMapper, "dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
+        registerJackson2ModuleIfCompatible(objectMapper, "dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule");
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
                                                .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
@@ -1593,6 +1600,45 @@ public final class MongoDurableQueues implements DurableQueues {
                                                .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
                                                .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
         return objectMapper;
+    }
+
+    private static JSONSerializer tryCreateJackson3JSONSerializer() {
+        try {
+            // Only select Jackson 3 path when the essentials modules are the jackson3 variants
+            var moduleClass = Class.forName("dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
+            var superClassName = moduleClass.getSuperclass().getName();
+            if (!superClassName.startsWith("tools.jackson.")) {
+                return null;
+            }
+
+            var jsonMapperClass = Class.forName("tools.jackson.databind.json.JsonMapper");
+            var builder = jsonMapperClass.getMethod("builder").invoke(null);
+            var jacksonModuleClass = Class.forName("tools.jackson.databind.JacksonModule");
+            var essentialTypesModule = moduleClass.getDeclaredConstructor().newInstance();
+            var immutableModuleClass = Class.forName("dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule");
+            var immutableModule = immutableModuleClass.getDeclaredConstructor().newInstance();
+
+            builder.getClass().getMethod("addModule", jacksonModuleClass).invoke(builder, essentialTypesModule);
+            builder.getClass().getMethod("addModule", jacksonModuleClass).invoke(builder, immutableModule);
+            var mapper = builder.getClass().getMethod("build").invoke(builder);
+
+            var serializerClass = Class.forName("dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer");
+            return (JSONSerializer) serializerClass.getDeclaredConstructor(mapper.getClass()).newInstance(mapper);
+        } catch (Throwable ignore) {
+            return null;
+        }
+    }
+
+    private static void registerJackson2ModuleIfCompatible(ObjectMapper objectMapper, String moduleClassName) {
+        try {
+            var moduleClass = Class.forName(moduleClassName);
+            var module = moduleClass.getDeclaredConstructor().newInstance();
+            if (com.fasterxml.jackson.databind.Module.class.isAssignableFrom(moduleClass)) {
+                objectMapper.registerModule((com.fasterxml.jackson.databind.Module) module);
+            }
+        } catch (Throwable ignore) {
+            // ignore, fallback mapper still works without optional modules
+        }
     }
 
     @Document

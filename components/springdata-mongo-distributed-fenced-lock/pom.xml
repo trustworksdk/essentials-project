@@ -67,7 +67,6 @@
         <dependency>
             <groupId>org.springframework.data</groupId>
             <artifactId>spring-data-mongodb</artifactId>
-            <version>${spring-data-mongodb.version}</version>
             <scope>provided</scope>
             <exclusions>
                 <exclusion>
@@ -98,7 +97,7 @@
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-mongodb</artifactId>
+            <artifactId>spring-boot-starter-data-mongodb-test</artifactId>
             <version>${spring-boot.version}</version>
             <scope>test</scope>
             <exclusions>
