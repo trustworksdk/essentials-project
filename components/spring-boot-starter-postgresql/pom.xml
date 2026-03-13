@@ -76,13 +76,11 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
-            <version>${micrometer.version}</version>
             <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing</artifactId>
-            <version>${micrometer-tracing.version}</version>
             <optional>true</optional>
         </dependency>
 
@@ -94,12 +92,12 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>types-jackson</artifactId>
+            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>immutable-jackson</artifactId>
+            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
