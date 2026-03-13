@@ -16,7 +16,6 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring;
 
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.jdbi.v3.core.Jdbi;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -28,7 +27,16 @@ import javax.sql.DataSource;
 class ApplicationTests {
     @Bean
     public com.fasterxml.jackson.databind.Module essentialJacksonModule() {
-        return new EssentialTypesJacksonModule();
+        try {
+            var moduleClass = Class.forName("dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
+            var module      = moduleClass.getDeclaredConstructor().newInstance();
+            if (module instanceof com.fasterxml.jackson.databind.Module jacksonModule) {
+                return jacksonModule;
+            }
+            throw new IllegalStateException("Essentials Jackson module is not a com.fasterxml.jackson.databind.Module");
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Couldn't instantiate Essentials Jackson module", e);
+        }
     }
 
     @Bean
