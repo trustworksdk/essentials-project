@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.types.*;
 import dk.trustworks.essentials.types.spring.web.model.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
@@ -29,7 +30,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = WebMvcSpringWebApplication.class,
+                webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@EnabledIfSystemProperty(named = "essentials.jackson.flavor", matches = "jackson2")
 public class WebFluxControllerIT {
     @Autowired
     private WebTestClient testClient;
