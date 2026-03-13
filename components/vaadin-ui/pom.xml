@@ -69,6 +69,11 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
             <artifactId>foundation</artifactId>
             <version>${project.version}</version>
@@ -90,6 +95,13 @@
             <artifactId>vaadin-spring-boot-starter</artifactId>
             <version>${vaadin.version}</version>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.vaadin</groupId>
+            <artifactId>vaadin-dev</artifactId>
+            <version>${vaadin.version}</version>
+            <scope>test</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
@@ -159,15 +171,19 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-actuator</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
-            <version>${micrometer.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing</artifactId>
-            <version>${micrometer-tracing.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -265,19 +281,16 @@
         <dependency>
             <groupId>org.apache.tomcat.embed</groupId>
             <artifactId>tomcat-embed-core</artifactId>
-            <version>${tomcat-embed.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.tomcat.embed</groupId>
             <artifactId>tomcat-embed-el</artifactId>
-            <version>${tomcat-embed.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.apache.tomcat.embed</groupId>
             <artifactId>tomcat-embed-websocket</artifactId>
-            <version>${tomcat-embed.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -319,7 +332,6 @@
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
-            <version>${spring.security.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

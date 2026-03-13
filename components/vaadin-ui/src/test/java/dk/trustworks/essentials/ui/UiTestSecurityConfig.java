@@ -16,12 +16,13 @@
 
 package dk.trustworks.essentials.ui;
 
-import com.vaadin.flow.spring.security.VaadinWebSecurity;
+import com.vaadin.flow.spring.security.VaadinSecurityConfigurer;
 import dk.trustworks.essentials.shared.security.*;
 import dk.trustworks.essentials.ui.view.AdminLoginView;
 import org.springframework.context.annotation.*;
-import org.springframework.security.config.annotation.web.builders.*;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.core.userdetails.*;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.provisioning.*;
@@ -31,25 +32,14 @@ import java.util.stream.Collectors;
 
 @Configuration
 @EnableWebSecurity
-public class UiTestSecurityConfig extends VaadinWebSecurity {
+public class UiTestSecurityConfig {
 
-    @Override
-    protected void configure(HttpSecurity http) throws Exception {
-        http
-                .authorizeHttpRequests(authorize -> authorize
-                                               .requestMatchers("/tasks").permitAll()
-                                      );
-
-        super.configure(http);
-
-        setLoginView(http, AdminLoginView.class);
-    }
-
-    @Override
-    public void configure(WebSecurity web) throws Exception {
-        web.ignoring()
-           .requestMatchers("/tasks/**");
-        super.configure(web);
+    @Bean
+    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http.authorizeHttpRequests(authorize -> authorize
+                .requestMatchers("/tasks", "/tasks/**").permitAll());
+        return http.with(VaadinSecurityConfigurer.vaadin(), configurer ->
+                configurer.loginView(AdminLoginView.class)).build();
     }
 
     @Bean
