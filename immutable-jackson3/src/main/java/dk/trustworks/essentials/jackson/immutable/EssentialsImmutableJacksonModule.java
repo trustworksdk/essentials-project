@@ -18,8 +18,7 @@ package dk.trustworks.essentials.jackson.immutable;
 
 import tools.jackson.databind.*;
 import tools.jackson.databind.JacksonModule;
-import tools.jackson.databind.deser.BeanDeserializerBuilder;
-import tools.jackson.databind.deser.ValueDeserializerModifier;
+import tools.jackson.databind.deser.*;
 import tools.jackson.databind.introspect.VisibilityChecker;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.module.SimpleModule;
@@ -35,7 +34,7 @@ import org.objenesis.Objenesis;
  * Property/Field values are set directly using reflection, even if the fields themselves are final.<br>
  * <br>
  * For this to work we require that opinionated defaults, such as <b>using FIELDS for serialization</b>, have been applied to the {@link ObjectMapper} instance.<br>
- * This can e.g. be accomplished by using the {@link EssentialsImmutableJacksonModule#createObjectMapper(Module...)} method
+ * This can e.g. be accomplished by using the {@link EssentialsImmutableJacksonModule#createObjectMapper(JacksonModule...)} method
  * <p>
  * The object creation/instantiation logic is as follows:<br>
  * <ul>
