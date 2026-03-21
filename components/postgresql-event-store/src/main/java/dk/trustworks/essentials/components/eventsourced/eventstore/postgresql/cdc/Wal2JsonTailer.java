@@ -506,15 +506,15 @@ public final class Wal2JsonTailer implements Lifecycle {
 
                     byte[] jsonBytes = new byte[msg.remaining()];
                     msg.get(jsonBytes);
+                    var payload = new WalPayload(jsonBytes);
 
                     var    lsn    = stream.getLastReceiveLSN();
                     String lsnStr = (lsn != null ? lsn.asString() : null);
 
                     if (!walMessageFilter.shouldPersist(jsonBytes)) {
                         if (log.isTraceEnabled()) {
-                            String filteredPayload = new String(jsonBytes, StandardCharsets.UTF_8);
                             log.trace("[{}] WAL message filtered out (slot='{}', lsn='{}', bytes='{}', payload='{}')", slotName, slotName, lsnStr,
-                                      jsonBytes.length, filteredPayload.length() > 800 ? filteredPayload.substring(0, 800) + "..." : filteredPayload);
+                                      jsonBytes.length, payload.preview(800));
                         }
                         // still ACK so we don't clog the slot with irrelevant WAL
                         if (lsn != null) {
@@ -530,17 +530,12 @@ public final class Wal2JsonTailer implements Lifecycle {
                     long m = messagesReceived.incrementAndGet();
                     if (messagesReceivedCounter != null) messagesReceivedCounter.increment();
                     lastMessageEpochMs.set(System.currentTimeMillis());
-
-                    String json = new String(jsonBytes, StandardCharsets.UTF_8);
-                    lastMessagePreview.set(json.length() > 300 ? json.substring(0, 300) + "..." : json);
+                    lastMessagePreview.set(payload.preview(300));
 
                     if (log.isTraceEnabled()) {
                         log.trace("[{}] WAL message #{} lsn='{}' bytes='{}' payload='{}'",
                                   slotName, m, lastReceiveLsn.get(), jsonBytes.length,
-                                  json.length() > 800 ? json.substring(0, 800) + "..." : json);
-                    } else if (m == 1) {
-                        log.info("[{}] First WAL message received lsn='{}' bytes='{}' preview='{}'",
-                                 slotName, lastReceiveLsn.get(), jsonBytes.length, lastMessagePreview.get());
+                                  payload.preview(800));
                     }
 
                     boolean inserted;
@@ -552,7 +547,7 @@ public final class Wal2JsonTailer implements Lifecycle {
                         if (deliveryMode == CdcDeliveryMode.DIRECT) {
                             var events = walParserMode == WalParserMode.BYTES
                                          ? directConverter.convert(jsonBytes)
-                                         : directConverter.convert(json);
+                                         : directConverter.convert(payload.asString());
                             if (!events.isEmpty()) {
                                 directOnEvents.accept(events);
                             }
@@ -579,7 +574,7 @@ public final class Wal2JsonTailer implements Lifecycle {
                         if (inboxWriteFailuresCounter != null) inboxWriteFailuresCounter.increment();
                         if (handlerFailuresCounter != null) handlerFailuresCounter.increment();
 
-                        var decision = errorHandler.onMessageError(slotName, json, inboxEx);
+                        var decision = errorHandler.onMessageError(slotName, payload.asString(), inboxEx);
                         log.warn("[{}] CDC inbox write failed (decision='{}', lsn='{}', msgPreview='{}'): '{}'",
                                  slotName, decision, lastReceiveLsn.get(), lastMessagePreview.get(),
                                  inboxEx.getMessage(), inboxEx);
@@ -688,6 +683,27 @@ public final class Wal2JsonTailer implements Lifecycle {
         try (var ps = c.prepareStatement("select pg_advisory_unlock(?)")) {
             ps.setLong(1, slotLockKey(slotName));
             ps.execute();
+        }
+    }
+
+    private static final class WalPayload {
+        private final byte[] bytes;
+        private String       decoded;
+
+        private WalPayload(byte[] bytes) {
+            this.bytes = bytes;
+        }
+
+        private String asString() {
+            if (decoded == null) {
+                decoded = new String(bytes, StandardCharsets.UTF_8);
+            }
+            return decoded;
+        }
+
+        private String preview(int maxLength) {
+            var text = asString();
+            return text.length() > maxLength ? text.substring(0, maxLength) + "..." : text;
         }
     }
 
