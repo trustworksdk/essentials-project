@@ -1,5 +1,5 @@
 /*
- *  Copyright 2021-2025 the original author or authors.
+ *  Copyright 2021-2026 the original author or authors.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -27,6 +27,16 @@ import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Implementation of the {@code WalGlobalOrdersExtractor} interface, responsible for
+ * extracting {@code Gap} objects from logical replication messages in JSON format.
+ * This implementation uses Jackson to parse the JSON data and extract key information
+ * such as aggregate type and global order values.
+ * <p>
+ * The class expects the logical replication messages to follow a specific format,
+ * containing an array of "change" events with details like the kind of operation,
+ * table name, and column values. Only "insert" operations are considered for gap extraction.
+ */
 public class JacksonWalGlobalOrdersExtractor implements WalGlobalOrdersExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(JacksonWalGlobalOrdersExtractor.class);

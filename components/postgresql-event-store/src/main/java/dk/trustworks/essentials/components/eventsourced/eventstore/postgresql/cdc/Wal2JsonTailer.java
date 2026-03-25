@@ -373,6 +373,28 @@ public final class Wal2JsonTailer implements Lifecycle {
         transitionToStoppedState("stopped");
     }
 
+    /**
+     * Runs the polling loop for the Change Data Capture (CDC) process. This method handles
+     * connection attempts, retries, backoff intervals, and error handling during the streaming
+     * process. It is designed to repeatedly attempt connecting to a data stream, process
+     * the retrieved messages, and gracefully handle termination or interruptions.
+     * <p>
+     * The loop will continue running until either the thread is interrupted or a stopping
+     * signal is received. In the event of connection failures or exceptions, the method
+     * implements an exponential backoff strategy with jitter to manage reconnection intervals.
+     * <p>
+     * Key operational logic includes:
+     *  - Incrementing connection attempt counters for tracking.
+     *  - Logging informative messages about connection attempts and execution outcomes.
+     *  - Restoring backoff intervals based on configured properties after successful attempts.
+     *  - Handling exceptions such as cancellations, interruptions, and streaming failures.
+     *  - Safely transitioning to a stopped state once the loop exits.
+     * <p>
+     * Backoff strategy:
+     *  - Uses configurable initial backoff interval, backoff factor, and maximum backoff
+     *    interval to determine the delay between retries.
+     *  - Implements jitter in the backoff process to avoid synchronized retry cycles.
+     */
     private void runPollLoop() {
         long backoffMs = wal2JsonTailerProperties.getPollBackoffInterval().toMillis();
 
@@ -449,6 +471,22 @@ public final class Wal2JsonTailer implements Lifecycle {
         log.info("[{}] 🛑 Stopped Essentials Wal2JsonTailer", slotName);
     }
 
+    /**
+     * Establishes and manages a Logical Replication Stream to continuously consume changes
+     * from a PostgreSQL replication slot. This method handles WAL (Write Ahead Log) messages
+     * and applies filtering, processing, and acknowledgment logic based on the given
+     * configurations and strategies.
+     * <p>
+     * Key functionality of the method includes:
+     * - Establishing a replication connection using the configured replication slot name.
+     * - Ensuring that another process does not already hold the slot lock.
+     * - Starting a logical replication stream and processing WAL messages.
+     * - Filtering and deciding whether or not to persist WAL messages.
+     * - Writing WAL message data to an inbox or directly handling events based on the delivery mode.
+     * - Acknowledging processed WAL messages by setting and flushing LSN (Log Sequence Numbers).
+     * - Handling intermittent errors and deciding whether to continue, stop, or retry the connection.
+     * - Maintaining metrics and logs to provide visibility into the replication behavior.
+     */
     private void streamOnce() throws SQLException, InterruptedException {
         log.info("[{}] Opening replication connection...", slotName);
 
@@ -530,7 +568,9 @@ public final class Wal2JsonTailer implements Lifecycle {
                     long m = messagesReceived.incrementAndGet();
                     if (messagesReceivedCounter != null) messagesReceivedCounter.increment();
                     lastMessageEpochMs.set(System.currentTimeMillis());
-                    lastMessagePreview.set(payload.preview(300));
+                    if (walParserMode == WalParserMode.STRING) {
+                        lastMessagePreview.set(payload.preview(300));
+                    }
 
                     if (log.isTraceEnabled()) {
                         log.trace("[{}] WAL message #{} lsn='{}' bytes='{}' payload='{}'",
@@ -686,6 +726,15 @@ public final class Wal2JsonTailer implements Lifecycle {
         }
     }
 
+    /**
+     * This class represents a write-ahead log (WAL) payload that encapsulates
+     * a byte array and provides utility methods for text-based interpretation
+     * of the payload data. The class supports lazy decoding of the byte array
+     * into a UTF-8 string and offers a way to preview the string content with
+     * optional truncation for brevity.
+     * <p>
+     * The class is designed to be immutable and is intended for internal use.
+     */
     private static final class WalPayload {
         private final byte[] bytes;
         private String       decoded;
@@ -694,6 +743,12 @@ public final class Wal2JsonTailer implements Lifecycle {
             this.bytes = bytes;
         }
 
+        /**
+         * Converts the byte array to its corresponding UTF-8 string representation.
+         * The conversion is performed lazily and cached for subsequent calls.
+         *
+         * @return the UTF-8 string representation of the byte array
+         */
         private String asString() {
             if (decoded == null) {
                 decoded = new String(bytes, StandardCharsets.UTF_8);
@@ -701,6 +756,15 @@ public final class Wal2JsonTailer implements Lifecycle {
             return decoded;
         }
 
+        /**
+         * Generates a preview of the text representation of the current object,
+         * truncating it to the specified maximum length and appending "..."
+         * if the text exceeds this length.
+         *
+         * @param maxLength the maximum number of characters allowed for the preview
+         * @return a truncated version of the text representation with "..." appended if the length exceeds {@code maxLength};
+         *         otherwise, the full text representation
+         */
         private String preview(int maxLength) {
             var text = asString();
             return text.length() > maxLength ? text.substring(0, maxLength) + "..." : text;
