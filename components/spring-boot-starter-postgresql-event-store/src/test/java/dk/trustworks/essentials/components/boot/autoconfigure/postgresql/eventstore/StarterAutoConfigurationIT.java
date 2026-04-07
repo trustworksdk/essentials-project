@@ -52,7 +52,10 @@ public class StarterAutoConfigurationIT {
                             DataSourceAutoConfiguration.class,
                             DataSourceTransactionManagerAutoConfiguration.class,
                             EssentialsComponentsConfiguration.class,
-                            EventStoreConfiguration.class
+                            EventStoreConfiguration.class,
+                            SnapshotConfiguration.class,
+                            ClosingBooksConfiguration.class,
+                            AggregateLifecycleApiConfiguration.class
                     ))
                     .withBean(EssentialsSecurityProvider.AllAccessSecurityProvider.class)
                     .withInitializer(ctx -> TestPropertyValues.of(
@@ -71,6 +74,9 @@ public class StarterAutoConfigurationIT {
             assertThat(ctx).hasSingleBean(PostgresqlEventStoreStatisticsApi.class);
             PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi = ctx.getBean(PostgresqlEventStoreStatisticsApi.class);
             assertThat(postgresqlEventStoreStatisticsApi.fetchTableActivityStatistics("principal")).isNotNull();
+
+            assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi.class);
+            assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleStatisticsApi.class);
         });
     }
 

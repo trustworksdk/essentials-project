@@ -120,6 +120,26 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
             ID,
             EVENT_TYPE,
             AGGREGATE_IMPL_TYPE extends StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>>
+    StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> fromUsingSnapshotRepositoryProvider(ConfigurableEventStore<CONFIG> eventStore,
+                                                                                                         CONFIG eventStreamConfiguration,
+                                                                                                         StatefulAggregateInstanceFactory aggregateRootInstanceFactory,
+                                                                                                         Class<AGGREGATE_IMPL_TYPE> aggregateImplementationType,
+                                                                                                         AggregateSnapshotRepositoryProvider aggregateSnapshotRepositoryProvider) {
+        requireNonNull(eventStreamConfiguration, "No eventStreamConfiguration provided");
+        requireNonNull(aggregateSnapshotRepositoryProvider, "No aggregateSnapshotRepositoryProvider provided");
+        return from(eventStore,
+                    eventStreamConfiguration,
+                    aggregateRootInstanceFactory,
+                    aggregateImplementationType,
+                    aggregateSnapshotRepositoryProvider.resolve(eventStreamConfiguration.aggregateType,
+                                                               aggregateImplementationType)
+                                                      .orElse(null));
+    }
+
+    static <CONFIG extends AggregateEventStreamConfiguration,
+            ID,
+            EVENT_TYPE,
+            AGGREGATE_IMPL_TYPE extends StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>>
     StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> from(ConfigurableEventStore<CONFIG> eventStore,
                                                                           CONFIG eventStreamConfiguration,
                                                                           StatefulAggregateInstanceFactory aggregateRootInstanceFactory,
@@ -185,6 +205,27 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
+    @SuppressWarnings("unchecked")
+    static <CONFIG extends AggregateEventStreamConfiguration,
+            ID,
+            EVENT_TYPE,
+            AGGREGATE_IMPL_TYPE extends StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>>
+    StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> fromUsingSnapshotRepositoryProvider(ConfigurableEventStore<CONFIG> eventStore,
+                                                                                                         AggregateType aggregateType,
+                                                                                                         StatefulAggregateInstanceFactory aggregateRootInstanceFactory,
+                                                                                                         Class<AGGREGATE_IMPL_TYPE> aggregateImplementationType,
+                                                                                                         AggregateSnapshotRepositoryProvider aggregateSnapshotRepositoryProvider) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(aggregateSnapshotRepositoryProvider, "No aggregateSnapshotRepositoryProvider provided");
+        return from(eventStore,
+                    aggregateType,
+                    aggregateRootInstanceFactory,
+                    aggregateImplementationType,
+                    aggregateSnapshotRepositoryProvider.resolve(aggregateType,
+                                                               aggregateImplementationType)
+                                                      .orElse(null));
+    }
+
     @SuppressWarnings("unchecked")
     static <CONFIG extends AggregateEventStreamConfiguration,
             ID,
@@ -250,6 +291,28 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
             ID,
             EVENT_TYPE,
             AGGREGATE_IMPL_TYPE extends StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>>
+    StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> fromUsingSnapshotRepositoryProvider(ConfigurableEventStore<CONFIG> eventStore,
+                                                                                                         CONFIG eventStreamConfiguration,
+                                                                                                         StatefulAggregateInstanceFactory aggregateRootInstanceFactory,
+                                                                                                         Class<ID> aggregateIdType,
+                                                                                                         Class<AGGREGATE_IMPL_TYPE> aggregateImplementationType,
+                                                                                                         AggregateSnapshotRepositoryProvider aggregateSnapshotRepositoryProvider) {
+        requireNonNull(eventStreamConfiguration, "No eventStreamConfiguration provided");
+        requireNonNull(aggregateSnapshotRepositoryProvider, "No aggregateSnapshotRepositoryProvider provided");
+        return from(eventStore,
+                    eventStreamConfiguration,
+                    aggregateRootInstanceFactory,
+                    aggregateIdType,
+                    aggregateImplementationType,
+                    aggregateSnapshotRepositoryProvider.resolve(eventStreamConfiguration.aggregateType,
+                                                               aggregateImplementationType)
+                                                      .orElse(null));
+    }
+
+    static <CONFIG extends AggregateEventStreamConfiguration,
+            ID,
+            EVENT_TYPE,
+            AGGREGATE_IMPL_TYPE extends StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>>
     StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> from(ConfigurableEventStore<CONFIG> eventStore,
                                                                           CONFIG eventStreamConfiguration,
                                                                           StatefulAggregateInstanceFactory aggregateRootInstanceFactory,
@@ -310,6 +373,28 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
      * @param aggregateSnapshotRepository  optional (may be null) {@link AggregateSnapshotRepository}
      * @return a repository instance that can be used load, add and query aggregates of type <code>aggregateType</code>
      */
+    static <CONFIG extends AggregateEventStreamConfiguration,
+            ID,
+            EVENT_TYPE,
+            AGGREGATE_IMPL_TYPE extends StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>>
+    StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> fromUsingSnapshotRepositoryProvider(ConfigurableEventStore<CONFIG> eventStore,
+                                                                                                         AggregateType aggregateType,
+                                                                                                         StatefulAggregateInstanceFactory aggregateRootInstanceFactory,
+                                                                                                         Class<ID> aggregateIdType,
+                                                                                                         Class<AGGREGATE_IMPL_TYPE> aggregateImplementationType,
+                                                                                                         AggregateSnapshotRepositoryProvider aggregateSnapshotRepositoryProvider) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(aggregateSnapshotRepositoryProvider, "No aggregateSnapshotRepositoryProvider provided");
+        return from(eventStore,
+                    aggregateType,
+                    aggregateRootInstanceFactory,
+                    aggregateIdType,
+                    aggregateImplementationType,
+                    aggregateSnapshotRepositoryProvider.resolve(aggregateType,
+                                                               aggregateImplementationType)
+                                                      .orElse(null));
+    }
+
     static <CONFIG extends AggregateEventStreamConfiguration,
             ID,
             EVENT_TYPE,
@@ -567,8 +652,10 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
                                                                   aggregateId,
                                                                   aggregateImplementationType,
                                                                   List.of(aggregateSnapshot.get().eventOrderOfLastIncludedEvent));
+                aggregateSnapshot = Optional.empty();
             }
-            long loadMoreEventsWithEventOrderFromAndIncluding = aggregateSnapshot.map(snapshot -> {
+            var usableAggregateSnapshot = aggregateSnapshot;
+            long loadMoreEventsWithEventOrderFromAndIncluding = usableAggregateSnapshot.map(snapshot -> {
                                                                                      var nextEventOrder = snapshot.eventOrderOfLastIncludedEvent.increment();
                                                                                      log.debug("[{}:{}] Using '{}' SNAPSHOT (globalEventOrderOfLastIncludedEvent + 1) as loadFromEventOrder: {}",
                                                                                                aggregateType, aggregateId, aggregateImplementationType.getName(), nextEventOrder);
@@ -580,16 +667,16 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
             var potentialPersistedEventStream = eventStore.fetchStream(aggregateType,
                                                                        aggregateId,
                                                                        LongRange.from(loadMoreEventsWithEventOrderFromAndIncluding));
-            if (aggregateSnapshot.isPresent() && potentialPersistedEventStream.isEmpty()) {
+            if (usableAggregateSnapshot.isPresent() && potentialPersistedEventStream.isEmpty()) {
                 log.debug("[{}:{}] Didn't find a any '{}' events persisted after eventOrder: {}. Has SNAPSHOT: {}",
-                          aggregateType, aggregateId, aggregateImplementationType.getName(), loadMoreEventsWithEventOrderFromAndIncluding, aggregateSnapshot.isPresent());
-                return aggregateSnapshot.map(snapshot -> {
+                          aggregateType, aggregateId, aggregateImplementationType.getName(), loadMoreEventsWithEventOrderFromAndIncluding, usableAggregateSnapshot.isPresent());
+                return usableAggregateSnapshot.map(snapshot -> {
                     log.debug("[{}:{}] Returning '{}' SNAPSHOT as it's up-to-date as of eventOrderOfLastIncludedEvent: {}",
-                              aggregateType, aggregateId, aggregateImplementationType.getName(), aggregateSnapshot.get().eventOrderOfLastIncludedEvent);
+                              aggregateType, aggregateId, aggregateImplementationType.getName(), snapshot.eventOrderOfLastIncludedEvent);
                     return unitOfWork.registerLifecycleCallbackForResource((AGGREGATE_IMPL_TYPE) snapshot.aggregateSnapshot,
                                                                            unitOfWorkCallback);
                 });
-            } else if (aggregateSnapshot.isEmpty() && potentialPersistedEventStream.isEmpty()) {
+            } else if (usableAggregateSnapshot.isEmpty() && potentialPersistedEventStream.isEmpty()) {
                 log.debug("[{}:{}] Didn't find any '{}' events using loadMoreEventsWithEventOrderFromAndIncluding: {}",
                           aggregateType, aggregateId, aggregateImplementationType.getName(), loadMoreEventsWithEventOrderFromAndIncluding);
                 return Optional.empty();
@@ -610,8 +697,8 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
                     }
                 }
                 log.debug("[{}:{}] Found '{}' with expectedLatestEventOrder: {}. Has SNAPSHOT: {}",
-                          aggregateIdType.getName(), aggregateId, aggregateImplementationType.getName(), expectedLatestEventOrder, aggregateSnapshot.isPresent());
-                AGGREGATE_IMPL_TYPE aggregate = aggregateSnapshot.map(snapshot -> (AGGREGATE_IMPL_TYPE) snapshot.aggregateSnapshot)
+                          aggregateIdType.getName(), aggregateId, aggregateImplementationType.getName(), expectedLatestEventOrder, usableAggregateSnapshot.isPresent());
+                AGGREGATE_IMPL_TYPE aggregate = usableAggregateSnapshot.map(snapshot -> (AGGREGATE_IMPL_TYPE) snapshot.aggregateSnapshot)
                                                                  .orElseGet(() -> aggregateRootInstanceFactory.create(aggregateId, aggregateImplementationType));
                 return Optional.of(unitOfWork.registerLifecycleCallbackForResource(aggregate.rehydrate(persistedEventsStream),
                                                                                    unitOfWorkCallback));

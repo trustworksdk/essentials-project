@@ -33,6 +33,7 @@ import static org.mockito.Mockito.*;
 class AnnotationBasedInMemoryProjectorTest {
 
     private static final AggregateType ORDERS = AggregateType.of("Orders");
+    private static final JSONEventSerializer JSON_SERIALIZER = mock(JSONEventSerializer.class);
 
     private final AnnotationBasedInMemoryProjector projector = new AnnotationBasedInMemoryProjector();
 
@@ -252,8 +253,11 @@ class AnnotationBasedInMemoryProjectorTest {
     // ================================= Helper Methods =================================
 
     private PersistedEvent createPersistedEvent(String aggregateId, long eventOrder, Object event) {
-        var eventJSON = mock(EventJSON.class);
-        when(eventJSON.deserialize()).thenReturn(event);
+        var eventJSON = new EventJSON(JSON_SERIALIZER,
+                                      event,
+                                      EventType.of(event.getClass()),
+                                      "{}");
+        var metaDataJSON = new EventMetaDataJSON(JSON_SERIALIZER, (String) null, "{}");
 
         return PersistedEvent.from(
                 EventId.random(),
@@ -263,7 +267,7 @@ class AnnotationBasedInMemoryProjectorTest {
                 EventOrder.of(eventOrder),
                 EventRevision.of(1),
                 GlobalEventOrder.of(eventOrder + 1),
-                mock(EventMetaDataJSON.class),
+                metaDataJSON,
                 OffsetDateTime.now(),
                 Optional.empty(),
                 Optional.of(CorrelationId.random()),

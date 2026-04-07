@@ -25,7 +25,7 @@ import org.junit.jupiter.api.*;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 class AggregateSnapshotDeletionStrategyTest {
     private static List<AggregateSnapshot<OrderId, Order>> NO_EXISTING_SNAPSHOTS;
@@ -88,6 +88,36 @@ class AggregateSnapshotDeletionStrategyTest {
         assertThat(strategy.resolveSnapshotsToDelete(ONE_EXISTING_SNAPSHOT).collect(Collectors.toList())).isEqualTo(ONE_EXISTING_SNAPSHOT);
         assertThat(strategy.resolveSnapshotsToDelete(THREE_EXISTING_SNAPSHOTS).collect(Collectors.toList())).isEqualTo(THREE_EXISTING_SNAPSHOTS);
         assertThat(strategy.resolveSnapshotsToDelete(FIVE_EXISTING_SNAPSHOTS).collect(Collectors.toList())).isEqualTo(FIVE_EXISTING_SNAPSHOTS);
+    }
+
+    @Test
+    void delete_all_historic_mode_maps_to_delete_all_strategy() {
+        var strategy = SnapshotDeletionMode.DELETE_ALL_HISTORIC.toDeletionStrategy();
+
+        assertThat(strategy)
+                .isInstanceOf(AggregateSnapshotDeletionStrategy.DeleteAllHistoricSnapshots.class);
+    }
+
+    @Test
+    void keep_last_n_mode_maps_to_limited_history_strategy() {
+        var strategy = SnapshotDeletionMode.KEEP_LAST_N.toDeletionStrategy(2);
+
+        assertThat(strategy)
+                .isEqualTo(AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(2));
+    }
+
+    @Test
+    void keep_last_n_mode_requires_keep_last_snapshots_value() {
+        assertThatThrownBy(SnapshotDeletionMode.KEEP_LAST_N::toDeletionStrategy)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("requires keepLastSnapshots");
+    }
+
+    @Test
+    void keep_last_n_mode_rejects_negative_keep_last_snapshots() {
+        assertThatThrownBy(() -> SnapshotDeletionMode.KEEP_LAST_N.toDeletionStrategy(-1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("keepLastSnapshots must be >= 0");
     }
 
 }

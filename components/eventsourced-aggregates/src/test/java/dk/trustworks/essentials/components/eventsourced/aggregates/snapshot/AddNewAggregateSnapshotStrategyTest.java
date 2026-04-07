@@ -163,6 +163,7 @@ class AddNewAggregateSnapshotStrategyTest {
 
 
     static class TestEventStreams {
+        private static final JSONEventSerializer JSON_SERIALIZER = mock(JSONEventSerializer.class);
         private final AggregateEventStream<OrderId> onePersistedEvent;
         private final AggregateEventStream<OrderId> twoPersistedEvents;
         private final AggregateEventStream<OrderId> threePersistedEvents;
@@ -206,11 +207,11 @@ class AddNewAggregateSnapshotStrategyTest {
             return PersistedEvent.from(EventId.random(),
                                        AggregateType.of("ORDERS"),
                                        ORDER_ID,
-                                       mock(EventJSON.class),
+                                       new EventJSON(JSON_SERIALIZER, EventName.of("TestEvent"), "{}"),
                                        EventOrder.of(eventOrder),
                                        EventRevision.of(1),
                                        GlobalEventOrder.of(100 + eventOrder),
-                                       mock(EventMetaDataJSON.class),
+                                       new EventMetaDataJSON(JSON_SERIALIZER, null, "{}"),
                                        OffsetDateTime.now(Clock.systemUTC()),
                                        Optional.empty(),
                                        Optional.empty(),

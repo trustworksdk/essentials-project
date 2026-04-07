@@ -149,6 +149,7 @@
         <module>components/spring-boot-starter-postgresql</module>
         <module>components/spring-boot-starter-postgresql-event-store</module>
         <module>components/spring-boot-starter-mongodb</module>
+        <module>examples/essentials-trading-demo</module>
         <module>components/postgresql-distributed-fenced-lock</module>
         <module>components/postgresql-event-store</module>
         <module>components/postgresql-queue</module>
