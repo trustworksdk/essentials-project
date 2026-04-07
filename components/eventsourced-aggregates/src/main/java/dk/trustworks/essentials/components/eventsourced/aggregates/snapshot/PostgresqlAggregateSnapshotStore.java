@@ -60,6 +60,7 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>       unitOfWorkFactory;
     private final String                                                              snapshotTableName;
     private final JSONEventSerializer                                                 jsonSerializer;
+    private final AggregateSnapshotStateAdapter                                       snapshotStateAdapter;
     private final AggregateSnapshotMeasurementSupport                                 measurementSupport;
     private final AggregateSnapshotRowMapper                                          aggregateSnapshotWithSnapshotPayloadRowMapper;
     private final AggregateSnapshotRowMapper                                          aggregateSnapshotWithoutSnapshotPayloadRowMapper;
@@ -93,7 +94,8 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
         this.snapshotTableName = requireNonNull(snapshotTableName, "No snapshotTableName provided")
                 .orElse(PostgresqlAggregateSnapshotRepository.DEFAULT_AGGREGATE_SNAPSHOTS_TABLE_NAME).toLowerCase();
-        this.jsonSerializer = AggregateSnapshotJSONSerializer.create(requireNonNull(jsonSerializer, "No jsonSerializer instance provided"));
+        this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer instance provided");
+        this.snapshotStateAdapter = new DefaultAggregateSnapshotStateAdapter(this.jsonSerializer);
         this.measurementSupport = new AggregateSnapshotMeasurementSupport(meterRegistryOptional);
         aggregateSnapshotWithSnapshotPayloadRowMapper = new AggregateSnapshotRowMapper(true);
         aggregateSnapshotWithoutSnapshotPayloadRowMapper = new AggregateSnapshotRowMapper(false);
@@ -364,7 +366,11 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
             var startedAt = System.nanoTime();
             var outcome   = "success";
             try {
-                return resultSetContainsSnapshotPayload ? jsonSerializer.deserialize(rs.getString("snapshot"), aggregateImplType) : null;
+                var eventOrderOfLastIncludedEvent = EventOrder.of(rs.getLong("last_included_event_order"));
+                return resultSetContainsSnapshotPayload ? snapshotStateAdapter.deserializeSnapshotState(rs.getString("snapshot"),
+                                                                                                        aggregateImplType,
+                                                                                                        aggregateId,
+                                                                                                        eventOrderOfLastIncludedEvent) : null;
             } catch (Exception e) {
                 outcome = "failure";
                 log.error(msg("Failed to deserialize '{}' with id '{}'", aggregateImplType, aggregateId), e);

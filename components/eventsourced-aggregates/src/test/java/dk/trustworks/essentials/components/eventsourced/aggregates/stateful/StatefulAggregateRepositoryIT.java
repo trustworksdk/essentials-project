@@ -152,8 +152,11 @@ class StatefulAggregateRepositoryIT {
         assertThat(snapshotOptional.get().eventOrderOfLastIncludedEvent).isEqualTo(EventOrder.of(1));
         assertThat(snapshotOptional.get().aggregateImplType).isEqualTo(Order.class);
         assertThat((CharSequence) snapshotOptional.get().aggregateType).isEqualTo(ORDERS);
+        assertThat(snapshotOptional.get().aggregateSnapshot.hasBeenRehydrated()).isTrue();
         assertThat(snapshotOptional.get().aggregateSnapshot).usingRecursiveComparison()
-                                                            .ignoringFieldsMatchingRegexes("invoker")
+                                                            .ignoringFieldsMatchingRegexes("invoker",
+                                                                                           "eventOrderOfLastRehydratedEvent",
+                                                                                           "hasBeenRehydrated")
                                                             .isEqualTo(order);
 
 

@@ -53,7 +53,7 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
     private final ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
     private final AggregateSnapshotStore                                              snapshotStore;
     private final AggregateSnapshotJobRepository                                      jobRepository;
-    private final JSONEventSerializer                                                 jsonSerializer;
+    private final AggregateSnapshotStateAdapter                                       snapshotStateAdapter;
     private final AggregateSnapshotMeasurementSupport                                 measurementSupport;
     private final AddNewAggregateSnapshotStrategy                                     addNewSnapshotStrategy;
     private final AggregateSnapshotDeletionStrategy                                   snapshotDeletionStrategy;
@@ -105,7 +105,7 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.snapshotStore = requireNonNull(snapshotStore, "No snapshotStore provided");
         this.jobRepository = requireNonNull(jobRepository, "No jobRepository provided");
-        this.jsonSerializer = AggregateSnapshotJSONSerializer.create(requireNonNull(jsonSerializer, "No jsonSerializer provided"));
+        this.snapshotStateAdapter = new DefaultAggregateSnapshotStateAdapter(requireNonNull(jsonSerializer, "No jsonSerializer provided"));
         this.measurementSupport = new AggregateSnapshotMeasurementSupport(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"));
         this.addNewSnapshotStrategy = requireNonNull(addNewSnapshotStrategy, "No addNewSnapshotStrategy provided");
         this.snapshotDeletionStrategy = requireNonNull(snapshotDeletionStrategy, "No snapshotDeletionStrategy provided");
@@ -154,7 +154,7 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
                                            lastAppliedEventOrder,
                                            measurementSupport.recordSerializeSnapshot(aggregateType,
                                                                                       aggregateImplType,
-                                                                                      () -> jsonSerializer.serialize(aggregate)),
+                                                                                      () -> snapshotStateAdapter.serializeSnapshotState(aggregate)),
                                            deleteAllExistingSnapshots,
                                            eventOrdersToDelete,
                                            OffsetDateTime.now(),

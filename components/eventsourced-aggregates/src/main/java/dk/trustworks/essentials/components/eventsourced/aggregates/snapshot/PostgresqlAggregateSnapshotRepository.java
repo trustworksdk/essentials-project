@@ -61,7 +61,7 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
     private static final Logger log                                    = LoggerFactory.getLogger(dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.PostgresqlAggregateSnapshotRepository.class);
     public static final  String DEFAULT_AGGREGATE_SNAPSHOTS_TABLE_NAME = "aggregate_snapshots";
 
-    private final JSONEventSerializer                                                 jsonSerializer;
+    private final AggregateSnapshotStateAdapter                                       snapshotStateAdapter;
     private final AggregateSnapshotStore                                               snapshotStore;
     private final AggregateSnapshotMeasurementSupport                                 measurementSupport;
     private final AddNewAggregateSnapshotStrategy                                     addNewSnapshotStrategy;
@@ -243,11 +243,11 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
                                                  AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
                                                  AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
                                                  Optional<MeterRegistry> meterRegistryOptional) {
-        this.jsonSerializer = AggregateSnapshotJSONSerializer.create(requireNonNull(jsonSerializer, "No jsonSerializer instance provided"));
+        this.snapshotStateAdapter = new DefaultAggregateSnapshotStateAdapter(requireNonNull(jsonSerializer, "No jsonSerializer instance provided"));
         this.snapshotStore = new PostgresqlAggregateSnapshotStore(eventStore,
                                                                   unitOfWorkFactory,
                                                                   snapshotTableName,
-                                                                  this.jsonSerializer,
+                                                                  jsonSerializer,
                                                                   meterRegistryOptional);
         this.measurementSupport = new AggregateSnapshotMeasurementSupport(meterRegistryOptional);
         this.addNewSnapshotStrategy = requireNonNull(addNewSnapshotStrategy, "No snapshotUpdateStrategy instance provided");
@@ -284,7 +284,7 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
                                        lastAppliedEventOrder,
                                        measurementSupport.recordSerializeSnapshot(aggregateType,
                                                                                   aggregateImplType,
-                                                                                  () -> jsonSerializer.serialize(aggregate)));
+                                                                                  () -> snapshotStateAdapter.serializeSnapshotState(aggregate)));
         }
     }
 

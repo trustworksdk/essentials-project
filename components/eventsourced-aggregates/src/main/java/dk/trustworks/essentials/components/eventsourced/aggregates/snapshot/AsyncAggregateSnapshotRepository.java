@@ -42,7 +42,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     private static final Logger log = LoggerFactory.getLogger(AsyncAggregateSnapshotRepository.class);
 
     private final AggregateSnapshotStore             snapshotStore;
-    private final JSONEventSerializer                jsonSerializer;
+    private final AggregateSnapshotStateAdapter      snapshotStateAdapter;
     private final AddNewAggregateSnapshotStrategy    addNewSnapshotStrategy;
     private final AggregateSnapshotDeletionStrategy  snapshotDeletionStrategy;
     private final AsyncAggregateSnapshotSettings     settings;
@@ -237,7 +237,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                                              Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory,
                                              Optional<MeterRegistry> meterRegistryOptional) {
         this.snapshotStore = requireNonNull(snapshotStore, "No snapshotStore provided");
-        this.jsonSerializer = AggregateSnapshotJSONSerializer.create(requireNonNull(jsonSerializer, "No jsonSerializer provided"));
+        this.snapshotStateAdapter = new DefaultAggregateSnapshotStateAdapter(requireNonNull(jsonSerializer, "No jsonSerializer provided"));
         this.addNewSnapshotStrategy = requireNonNull(addNewSnapshotStrategy, "No addNewSnapshotStrategy provided");
         this.snapshotDeletionStrategy = requireNonNull(snapshotDeletionStrategy, "No snapshotDeletionStrategy provided");
         this.settings = requireNonNull(settings, "No settings provided");
@@ -293,7 +293,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                                                                            aggregateImplType);
         var serializedSnapshot = measurementSupport.recordSerializeSnapshot(aggregateType,
                                                                            aggregateImplType,
-                                                                           () -> jsonSerializer.serialize(aggregate));
+                                                                           () -> snapshotStateAdapter.serializeSnapshotState(aggregate));
 
         Runnable persistenceTask = () -> {
             if (!deleteSnapshotEventOrders.isEmpty()) {
