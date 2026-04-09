@@ -73,6 +73,14 @@ public class StarterAutoConfigurationIT {
             EventStoreApi eventStoreApi = ctx.getBean(EventStoreApi.class);
             assertThat(eventStoreApi.findAllSubscriptions("principal")).isNotNull();
 
+            assertThat(ctx).hasSingleBean(CdcApi.class);
+            CdcApi cdcApi = ctx.getBean(CdcApi.class);
+            var cdcStatus = cdcApi.getStatus("principal");
+            assertThat(cdcStatus).isNotNull();
+            assertThat(cdcStatus.availability()).isNotNull();
+            assertThat(cdcStatus.configuration()).isNotNull();
+            assertThat(cdcStatus.configuration().enabled()).isTrue();
+
             assertThat(ctx).hasSingleBean(PostgresqlEventStoreStatisticsApi.class);
             PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi = ctx.getBean(PostgresqlEventStoreStatisticsApi.class);
             assertThat(postgresqlEventStoreStatisticsApi.fetchTableActivityStatistics("principal")).isNotNull();

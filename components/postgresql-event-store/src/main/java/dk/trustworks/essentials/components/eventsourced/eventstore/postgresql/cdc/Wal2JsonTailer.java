@@ -803,7 +803,12 @@ public final class Wal2JsonTailer implements Lifecycle {
                 started.get(),
                 lastReceiveLsn.get(),
                 lastAckedLsn.get(),
-                lastMessageEpochMs.get()
+                lastMessageEpochMs.get(),
+                messagesReceived.get(),
+                inboxWrites.get(),
+                inboxDuplicateWrites.get(),
+                inboxWriteFailures.get(),
+                handlerFailures.get()
         );
     }
 
@@ -813,7 +818,12 @@ public final class Wal2JsonTailer implements Lifecycle {
             boolean started,
             String lastReceiveLsn,
             String lastAckedLsn,
-            long lastMessageEpochMs
+            long lastMessageEpochMs,
+            long messagesReceived,
+            long inboxWrites,
+            long inboxDuplicateWrites,
+            long inboxWriteFailures,
+            long handlerFailures
     ) {
     }
 

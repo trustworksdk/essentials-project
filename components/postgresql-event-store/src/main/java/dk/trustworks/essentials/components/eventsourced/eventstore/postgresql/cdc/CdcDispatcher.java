@@ -34,7 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -74,6 +74,12 @@ public final class CdcDispatcher implements Lifecycle {
 
     private final AtomicBoolean started  = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
+    private final AtomicLong    tickCount = new AtomicLong(0);
+    private final AtomicLong    conversionFailureCount = new AtomicLong(0);
+    private final AtomicLong    poisonRowCount = new AtomicLong(0);
+    private final AtomicLong    publishedEventCount = new AtomicLong(0);
+    private final AtomicLong    lastBatchSize = new AtomicLong(0);
+    private final AtomicLong    lastTickEpochMs = new AtomicLong(0);
 
     private ScheduledExecutorService executor;
     private Future<?>                tickFuture;
@@ -240,10 +246,13 @@ public final class CdcDispatcher implements Lifecycle {
 
     private void tick() {
         if (stopping.get()) return;
+        tickCount.incrementAndGet();
+        lastTickEpochMs.set(System.currentTimeMillis());
         if (ticksCounter != null) ticksCounter.increment();
 
         long pollStartNs = System.nanoTime();
         var  batch       = inbox.fetchNextBatch(slotName, batchSize);
+        lastBatchSize.set(batch.size());
         if (pollTimer != null) pollTimer.record(System.nanoTime() - pollStartNs, TimeUnit.NANOSECONDS);
         if (fetchedBatchSizeSummary != null) fetchedBatchSizeSummary.record(batch.size());
         if (log.isTraceEnabled()) {
@@ -265,10 +274,12 @@ public final class CdcDispatcher implements Lifecycle {
                     long publishStartNs = System.nanoTime();
                     onEvents.accept(events);
                     if (publishTimer != null) publishTimer.record(System.nanoTime() - publishStartNs, TimeUnit.NANOSECONDS);
+                    publishedEventCount.addAndGet(events.size());
                     if (publishedEventsCounter != null) publishedEventsCounter.increment(events.size());
                 }
                 acknowledgeDispatchedRow(row.inboxId());
             } catch (Exception e) {
+                conversionFailureCount.incrementAndGet();
                 if (conversionFailuresCounter != null) conversionFailuresCounter.increment();
                 log.warn("[{}] CDC conversion failed for inboxId={} lsn={} policy={}: {}",
                          slotName, row.inboxId(), row.lsn(), poisonPolicy, e.getMessage(), e);
@@ -277,6 +288,7 @@ public final class CdcDispatcher implements Lifecycle {
                     unitOfWorkFactory.usingUnitOfWork(uow -> {
                         log.warn("[{}] Poisoning inboxId={} lsn={}", slotName, row.inboxId(), row.lsn());
                         inbox.markPoison(slotName, row.lsn(), abbreviateExceptionMessage(e));
+                        poisonRowCount.incrementAndGet();
                         if (poisonRowsCounter != null) poisonRowsCounter.increment();
 
                         // IMPORTANT: prevent subscribers stalling on this missing global_order
@@ -349,5 +361,32 @@ public final class CdcDispatcher implements Lifecycle {
     @Override
     public boolean isStarted() {
         return started.get();
+    }
+
+    public CdcDispatcherStatus getStatus() {
+        return new CdcDispatcherStatus(
+                slotName,
+                started.get(),
+                stopping.get(),
+                tickCount.get(),
+                conversionFailureCount.get(),
+                poisonRowCount.get(),
+                publishedEventCount.get(),
+                lastBatchSize.get(),
+                lastTickEpochMs.get()
+        );
+    }
+
+    public record CdcDispatcherStatus(
+            String slotName,
+            boolean started,
+            boolean stopping,
+            long ticks,
+            long conversionFailures,
+            long poisonRows,
+            long publishedEvents,
+            long lastBatchSize,
+            long lastTickEpochMs
+    ) {
     }
 }

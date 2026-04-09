@@ -2233,6 +2233,10 @@ Design details:
 
 - [Hybrid CDC design](src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/hybrid-cdc-eventstore.md)
 
+Operational API:
+
+- `CdcApi#getStatus(principal)` exposes CDC availability, effective configuration, tailer status, and dispatcher status for admin/support tooling.
+
 Recommended defaults:
 
 ```properties

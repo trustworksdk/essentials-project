@@ -236,6 +236,17 @@ essentials.eventstore.subscription-manager.snapshot-resume-points-every=10s
 | `max-event-store-polling-interval` | `2000ms` | Maximum wait between polls when no events are found (uses jittered backoff) |
 | `snapshot-resume-points-every` | `10s` | How often to save each subscriber's position. Lower = less re-processing after crash, but more database writes |
 
+### CDC Operational API
+
+When CDC is enabled, the starter also exposes a `CdcApi` bean alongside `EventStoreApi`.
+
+`CdcApi#getStatus(principal)` returns:
+
+- CDC availability state (`ACTIVE` / `INACTIVE` / `FAILED`)
+- effective CDC configuration values
+- tailer runtime diagnostics and counters
+- dispatcher runtime diagnostics and counters
+
 ### Subscription Monitor Configuration
 
 The monitor periodically checks subscription health (e.g., detecting stuck subscribers):

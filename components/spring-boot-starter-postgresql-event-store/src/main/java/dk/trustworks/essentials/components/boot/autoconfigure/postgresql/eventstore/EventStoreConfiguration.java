@@ -715,6 +715,25 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcApi cdcApi(EssentialsSecurityProvider securityProvider,
+                         EssentialsEventStoreProperties properties,
+                         CdcAvailability availability,
+                         CdcConsumerGroup group,
+                         CdcSlotNameProvider slotNameProvider,
+                         Optional<Wal2JsonTailer> tailer,
+                         Optional<CdcDispatcher> dispatcher) {
+        String slotName = getCdcSlotName(properties, group, slotNameProvider);
+        return new DefaultCdcApi(securityProvider,
+                                 availability,
+                                 properties.getCdc(),
+                                 slotName,
+                                 tailer,
+                                 dispatcher);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi(EssentialsSecurityProvider securityProvider,
                                                                                @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
         var postgresqlEventStore           = (PostgresqlEventStore<?>) eventStore;
