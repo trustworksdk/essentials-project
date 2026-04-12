@@ -85,15 +85,29 @@ public final class ClosingBooksTimeBoundaryCalculator {
         var now = LocalDate.now(clock.withZone(zoneId));
         return switch (timeBoundary) {
             case NONE -> new ClosingBooksTimeBoundaryEvaluation(currentPeriodId, 0);
-            case END_OF_DAY -> new ClosingBooksTimeBoundaryEvaluation(now.format(DAY_FORMATTER),
-                                                                      dayDistance(currentPeriodId, now));
-            case END_OF_WEEK -> new ClosingBooksTimeBoundaryEvaluation(formatIsoWeek(now),
-                                                                       weekDistance(currentPeriodId, now));
-            case END_OF_MONTH -> new ClosingBooksTimeBoundaryEvaluation(YearMonth.from(now).format(MONTH_FORMATTER),
-                                                                        monthDistance(currentPeriodId, now));
-            case END_OF_YEAR -> new ClosingBooksTimeBoundaryEvaluation(now.format(YEAR_FORMATTER),
-                                                                       yearDistance(currentPeriodId, now));
-            case EVERY_N_DAYS -> resolveFixedIntervalEvaluation(now, currentPeriodId, intervalDays);
+            case END_OF_DAY -> {
+                var validatedCurrentPeriodId = validateCurrentPeriodId(timeBoundary, currentPeriodId);
+                yield new ClosingBooksTimeBoundaryEvaluation(now.format(DAY_FORMATTER),
+                                                             dayDistance(validatedCurrentPeriodId, now));
+            }
+            case END_OF_WEEK -> {
+                var validatedCurrentPeriodId = validateCurrentPeriodId(timeBoundary, currentPeriodId);
+                yield new ClosingBooksTimeBoundaryEvaluation(formatIsoWeek(now),
+                                                             weekDistance(validatedCurrentPeriodId, now));
+            }
+            case END_OF_MONTH -> {
+                var validatedCurrentPeriodId = validateCurrentPeriodId(timeBoundary, currentPeriodId);
+                yield new ClosingBooksTimeBoundaryEvaluation(YearMonth.from(now).format(MONTH_FORMATTER),
+                                                             monthDistance(validatedCurrentPeriodId, now));
+            }
+            case END_OF_YEAR -> {
+                var validatedCurrentPeriodId = validateCurrentPeriodId(timeBoundary, currentPeriodId);
+                yield new ClosingBooksTimeBoundaryEvaluation(now.format(YEAR_FORMATTER),
+                                                             yearDistance(validatedCurrentPeriodId, now));
+            }
+            case EVERY_N_DAYS -> resolveFixedIntervalEvaluation(now,
+                                                                validateCurrentPeriodId(timeBoundary, currentPeriodId),
+                                                                intervalDays);
         };
     }
 
@@ -106,7 +120,9 @@ public final class ClosingBooksTimeBoundaryCalculator {
             throw new IllegalArgumentException("intervalDays must be > 0 for EVERY_N_DAYS");
         }
 
-        var anchor = parseIsoLocalDate(currentPeriodId).orElse(now);
+        var anchor = parseIsoLocalDate(currentPeriodId).orElseThrow(() -> invalidCurrentPeriodId(ClosingBooksTimeBoundary.EVERY_N_DAYS,
+                                                                                                  currentPeriodId,
+                                                                                                  "yyyy-MM-dd"));
         if (now.isBefore(anchor)) {
             return new ClosingBooksTimeBoundaryEvaluation(anchor.format(DAY_FORMATTER), 0);
         }
@@ -124,6 +140,45 @@ public final class ClosingBooksTimeBoundaryCalculator {
         return "%d-W%02d".formatted(weekBasedYear, week);
     }
 
+    private static String validateCurrentPeriodId(ClosingBooksTimeBoundary timeBoundary, String currentPeriodId) {
+        if (currentPeriodId == null || currentPeriodId.isBlank()) {
+            throw invalidCurrentPeriodId(timeBoundary, currentPeriodId, expectedPeriodIdFormat(timeBoundary));
+        }
+
+        return switch (timeBoundary) {
+            case NONE -> currentPeriodId;
+            case END_OF_DAY, EVERY_N_DAYS -> parseIsoLocalDate(currentPeriodId)
+                    .map(ignored -> currentPeriodId)
+                    .orElseThrow(() -> invalidCurrentPeriodId(timeBoundary, currentPeriodId, expectedPeriodIdFormat(timeBoundary)));
+            case END_OF_WEEK -> parseIsoWeekStart(currentPeriodId)
+                    .map(ignored -> currentPeriodId)
+                    .orElseThrow(() -> invalidCurrentPeriodId(timeBoundary, currentPeriodId, expectedPeriodIdFormat(timeBoundary)));
+            case END_OF_MONTH -> parseYearMonth(currentPeriodId)
+                    .map(ignored -> currentPeriodId)
+                    .orElseThrow(() -> invalidCurrentPeriodId(timeBoundary, currentPeriodId, expectedPeriodIdFormat(timeBoundary)));
+            case END_OF_YEAR -> parseYear(currentPeriodId)
+                    .map(ignored -> currentPeriodId)
+                    .orElseThrow(() -> invalidCurrentPeriodId(timeBoundary, currentPeriodId, expectedPeriodIdFormat(timeBoundary)));
+        };
+    }
+
+    private static String expectedPeriodIdFormat(ClosingBooksTimeBoundary timeBoundary) {
+        return switch (timeBoundary) {
+            case NONE -> "<any>";
+            case END_OF_DAY, EVERY_N_DAYS -> "yyyy-MM-dd";
+            case END_OF_WEEK -> "yyyy-Www";
+            case END_OF_MONTH -> "yyyy-MM";
+            case END_OF_YEAR -> "yyyy";
+        };
+    }
+
+    private static IllegalArgumentException invalidCurrentPeriodId(ClosingBooksTimeBoundary timeBoundary,
+                                                                   String currentPeriodId,
+                                                                   String expectedFormat) {
+        return new IllegalArgumentException("Invalid currentPeriodId '%s' for %s. Expected format: %s"
+                                                    .formatted(currentPeriodId, timeBoundary, expectedFormat));
+    }
+
     private static Optional<LocalDate> parseIsoLocalDate(String value) {
         if (value == null || value.isBlank()) {
             return Optional.empty();
@@ -136,6 +191,50 @@ public final class ClosingBooksTimeBoundaryCalculator {
         }
     }
 
+    private static Optional<LocalDate> parseIsoWeekStart(String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
+
+        try {
+            var pieces = value.split("-W");
+            if (pieces.length != 2) {
+                return Optional.empty();
+            }
+            var weekBasedYear = Integer.parseInt(pieces[0]);
+            var week = Integer.parseInt(pieces[1]);
+            return Optional.of(LocalDate.of(weekBasedYear, 1, 4)
+                                        .with(IsoFields.WEEK_OF_WEEK_BASED_YEAR, week)
+                                        .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)));
+        } catch (RuntimeException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private static Optional<YearMonth> parseYearMonth(String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
+
+        try {
+            return Optional.of(YearMonth.parse(value, MONTH_FORMATTER));
+        } catch (RuntimeException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private static Optional<Integer> parseYear(String value) {
+        if (value == null || value.isBlank()) {
+            return Optional.empty();
+        }
+
+        try {
+            return Optional.of(Integer.parseInt(value));
+        } catch (RuntimeException ignored) {
+            return Optional.empty();
+        }
+    }
+
     private static long dayDistance(String currentPeriodId, LocalDate now) {
         return parseIsoLocalDate(currentPeriodId)
                 .map(current -> Math.max(0, Duration.between(current.atStartOfDay(), now.atStartOfDay()).toDays()))
@@ -143,47 +242,18 @@ public final class ClosingBooksTimeBoundaryCalculator {
     }
 
     private static long weekDistance(String currentPeriodId, LocalDate now) {
-        if (currentPeriodId == null || currentPeriodId.isBlank()) {
-            return 0;
-        }
-        try {
-            var pieces = currentPeriodId.split("-W");
-            if (pieces.length != 2) {
-                return 0;
-            }
-            var weekBasedYear = Integer.parseInt(pieces[0]);
-            var week = Integer.parseInt(pieces[1]);
-            var currentWeekStart = LocalDate.of(weekBasedYear, 1, 4)
-                                            .with(IsoFields.WEEK_OF_WEEK_BASED_YEAR, week)
-                                            .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-            var nowWeekStart = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-            return Math.max(0, Duration.between(currentWeekStart.atStartOfDay(), nowWeekStart.atStartOfDay()).toDays() / 7);
-        } catch (RuntimeException ignored) {
-            return 0;
-        }
+        var currentWeekStart = parseIsoWeekStart(currentPeriodId).orElseThrow();
+        var nowWeekStart = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        return Math.max(0, Duration.between(currentWeekStart.atStartOfDay(), nowWeekStart.atStartOfDay()).toDays() / 7);
     }
 
     private static long monthDistance(String currentPeriodId, LocalDate now) {
-        if (currentPeriodId == null || currentPeriodId.isBlank()) {
-            return 0;
-        }
-        try {
-            var current = YearMonth.parse(currentPeriodId, MONTH_FORMATTER);
-            return Math.max(0, current.until(YearMonth.from(now), java.time.temporal.ChronoUnit.MONTHS));
-        } catch (RuntimeException ignored) {
-            return 0;
-        }
+        var current = parseYearMonth(currentPeriodId).orElseThrow();
+        return Math.max(0, current.until(YearMonth.from(now), java.time.temporal.ChronoUnit.MONTHS));
     }
 
     private static long yearDistance(String currentPeriodId, LocalDate now) {
-        if (currentPeriodId == null || currentPeriodId.isBlank()) {
-            return 0;
-        }
-        try {
-            var current = Integer.parseInt(currentPeriodId);
-            return Math.max(0, now.getYear() - current);
-        } catch (RuntimeException ignored) {
-            return 0;
-        }
+        var current = parseYear(currentPeriodId).orElseThrow();
+        return Math.max(0, now.getYear() - current);
     }
 }

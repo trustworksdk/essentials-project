@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import java.time.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ClosingBooksTimeBoundaryCalculatorTest {
     @Test
@@ -43,5 +44,46 @@ class ClosingBooksTimeBoundaryCalculatorTest {
                                                                              clock,
                                                                              "2026-04-01",
                                                                              7)).isEqualTo("2026-04-15");
+    }
+
+    @Test
+    void rejects_invalid_month_period_id() {
+        var clock = Clock.fixed(Instant.parse("2026-04-05T10:15:30Z"), ZoneOffset.UTC);
+
+        assertThatThrownBy(() -> ClosingBooksTimeBoundaryCalculator.resolveCurrentPeriodId(ClosingBooksTimeBoundary.END_OF_MONTH,
+                                                                                           ZoneId.of("UTC"),
+                                                                                           clock,
+                                                                                           "2026-4",
+                                                                                           null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid currentPeriodId '2026-4'")
+                .hasMessageContaining("Expected format: yyyy-MM");
+    }
+
+    @Test
+    void rejects_invalid_week_period_id() {
+        var clock = Clock.fixed(Instant.parse("2026-04-05T10:15:30Z"), ZoneOffset.UTC);
+
+        assertThatThrownBy(() -> ClosingBooksTimeBoundaryCalculator.resolveCurrentPeriodId(ClosingBooksTimeBoundary.END_OF_WEEK,
+                                                                                           ZoneId.of("UTC"),
+                                                                                           clock,
+                                                                                           "2026-W60",
+                                                                                           null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid currentPeriodId '2026-W60'")
+                .hasMessageContaining("Expected format: yyyy-Www");
+    }
+
+    @Test
+    void rejects_blank_fixed_interval_anchor_period_id() {
+        var clock = Clock.fixed(Instant.parse("2026-04-20T10:15:30Z"), ZoneOffset.UTC);
+
+        assertThatThrownBy(() -> ClosingBooksTimeBoundaryCalculator.resolveCurrentPeriodId(ClosingBooksTimeBoundary.EVERY_N_DAYS,
+                                                                                           ZoneId.of("UTC"),
+                                                                                           clock,
+                                                                                           " ",
+                                                                                           7))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Expected format: yyyy-MM-dd");
     }
 }

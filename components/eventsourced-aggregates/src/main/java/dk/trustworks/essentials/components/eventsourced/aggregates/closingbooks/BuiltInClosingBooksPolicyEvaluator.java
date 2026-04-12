@@ -59,6 +59,50 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
                                               Integer intervalDays,
                                               Clock clock,
                                               Optional<MeterRegistry> meterRegistry,
+                                              ToLongFunction<AGGREGATE> eventCountProvider) {
+        this(aggregateType,
+             defaultPolicy,
+             eventThreshold,
+             timeBoundary,
+             zoneId,
+             intervalDays,
+             clock,
+             meterRegistry,
+             eventCountProvider,
+             (Function<AGGREGATE, String>) null);
+    }
+
+    public <T extends HasClosingBooksPeriodId> BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
+                                                                                  ClosingBooksDefaultPolicyType defaultPolicy,
+                                                                                  long eventThreshold,
+                                                                                  ClosingBooksTimeBoundary timeBoundary,
+                                                                                  ZoneId zoneId,
+                                                                                  Integer intervalDays,
+                                                                                  Clock clock,
+                                                                                  Optional<MeterRegistry> meterRegistry,
+                                                                                  ToLongFunction<AGGREGATE> eventCountProvider,
+                                                                                  Class<T> aggregateTypeWithPeriodId) {
+        this(aggregateType,
+             defaultPolicy,
+             eventThreshold,
+             timeBoundary,
+             zoneId,
+             intervalDays,
+             clock,
+             meterRegistry,
+             eventCountProvider,
+             aggregate -> ((HasClosingBooksPeriodId) aggregate).closingBooksPeriodId());
+        requireNonNull(aggregateTypeWithPeriodId, "No aggregateTypeWithPeriodId provided");
+    }
+
+    public BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
+                                              ClosingBooksDefaultPolicyType defaultPolicy,
+                                              long eventThreshold,
+                                              ClosingBooksTimeBoundary timeBoundary,
+                                              ZoneId zoneId,
+                                              Integer intervalDays,
+                                              Clock clock,
+                                              Optional<MeterRegistry> meterRegistry,
                                               ToLongFunction<AGGREGATE> eventCountProvider,
                                               Function<AGGREGATE, String> currentPeriodIdProvider) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
@@ -68,7 +112,9 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         this.clock = requireNonNull(clock, "No clock provided");
         this.meterRegistry = requireNonNull(meterRegistry, "No meterRegistry provided");
         this.eventCountProvider = requireNonNull(eventCountProvider, "No eventCountProvider provided");
-        this.currentPeriodIdProvider = requireNonNull(currentPeriodIdProvider, "No currentPeriodIdProvider provided");
+        this.currentPeriodIdProvider = requiresCurrentPeriodIdProvider(defaultPolicy)
+                ? requireNonNull(currentPeriodIdProvider, "No currentPeriodIdProvider provided for time-boundary closing-books policy")
+                : currentPeriodIdProvider;
         this.eventThreshold = eventThreshold;
         this.intervalDays = intervalDays;
     }
@@ -129,7 +175,22 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         return eventThreshold > 0 && eventCountProvider.applyAsLong(aggregate) >= eventThreshold;
     }
 
+    private static boolean requiresCurrentPeriodIdProvider(ClosingBooksDefaultPolicyType defaultPolicy) {
+        return switch (defaultPolicy) {
+            case TIME_BOUNDARY, EVENT_COUNT_OR_TIME_BOUNDARY -> true;
+            case MANUAL_ONLY, EVENT_COUNT, EXPLICIT_ONLY, UNSPECIFIED -> false;
+        };
+    }
+
+    private Function<AGGREGATE, String> currentPeriodIdProvider() {
+        if (currentPeriodIdProvider == null) {
+            throw new IllegalStateException("Current period id is only available when a time-boundary closing-books policy is configured with a currentPeriodIdProvider or aggregates implement HasClosingBooksPeriodId");
+        }
+        return currentPeriodIdProvider;
+    }
+
     private ClosingBooksTimeBoundaryEvaluation timeBoundaryEvaluation(AGGREGATE aggregate) {
+        var currentPeriodIdProvider = currentPeriodIdProvider();
         if (timeBoundary == ClosingBooksTimeBoundary.NONE) {
             return new ClosingBooksTimeBoundaryEvaluation(currentPeriodIdProvider.apply(aggregate), 0);
         }

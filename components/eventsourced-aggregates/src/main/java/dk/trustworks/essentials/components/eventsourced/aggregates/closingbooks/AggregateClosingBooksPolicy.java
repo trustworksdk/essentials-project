@@ -23,6 +23,15 @@ import java.lang.annotation.*;
  * <p>
  * The annotation is intended as a code-local default that can be overridden by external configuration,
  * for example Spring Boot properties keyed by {@code AggregateType}.
+ * <p>
+ * When {@link #defaultPolicy()} is {@link ClosingBooksDefaultPolicyType#TIME_BOUNDARY} or
+ * {@link ClosingBooksDefaultPolicyType#EVENT_COUNT_OR_TIME_BOUNDARY}, the aggregate must expose
+ * a persisted current period id through a provider or {@link HasClosingBooksPeriodId}. The stored
+ * period-id format must match the configured {@link #timeBoundary()}:
+ * {@link ClosingBooksTimeBoundary#END_OF_DAY} and {@link ClosingBooksTimeBoundary#EVERY_N_DAYS}
+ * use {@code yyyy-MM-dd}, {@link ClosingBooksTimeBoundary#END_OF_WEEK} uses {@code yyyy-Www},
+ * {@link ClosingBooksTimeBoundary#END_OF_MONTH} uses {@code yyyy-MM}, and
+ * {@link ClosingBooksTimeBoundary#END_OF_YEAR} uses {@code yyyy}.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
