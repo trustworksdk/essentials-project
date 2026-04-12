@@ -128,6 +128,8 @@
         <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
         <maven.docker.plugin.version>0.48.0</maven.docker.plugin.version>
         <central-publishing-maven-plugin.version>0.10.0</central-publishing-maven-plugin.version>
+        <essentials.postgres.base-image>postgres:17.5-bookworm</essentials.postgres.base-image>
+        <essentials.postgres.image>essentials-postgres:17.5</essentials.postgres.image>
     </properties>
 
     <modules>

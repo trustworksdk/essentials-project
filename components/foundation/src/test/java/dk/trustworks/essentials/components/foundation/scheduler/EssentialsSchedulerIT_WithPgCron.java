@@ -30,7 +30,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 
 
 /**
- * When running it locally set env variable PGCRON_IMAGE=lcramontw/postgres-with-pg-cron:latest
+ * When running it locally set env variable ESSENTIALS_POSTGRES_IMAGE=essentials-postgres:17.5
  */
 @Testcontainers
 public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedulerTest {
@@ -40,7 +40,8 @@ public class EssentialsSchedulerIT_WithPgCron extends AbstractEssentialsSchedule
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")
-            .withPassword("postgres");
+            .withPassword("postgres")
+            .withImagePullPolicy((ignored) -> false);
 
     @Override
     protected PostgreSQLContainer<?> getPostgreSQLContainer() {
