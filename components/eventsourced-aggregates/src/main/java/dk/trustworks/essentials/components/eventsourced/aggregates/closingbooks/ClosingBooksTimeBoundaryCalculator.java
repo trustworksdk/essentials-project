@@ -18,11 +18,11 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks
 
 import java.time.*;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.IsoFields;
-import java.time.temporal.TemporalAdjusters;
+import java.time.temporal.*;
 import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Resolves the current time-based closing-books period for a configured cadence.
@@ -33,9 +33,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * the period id derived from the current clock value.
  */
 public final class ClosingBooksTimeBoundaryCalculator {
-    private static final DateTimeFormatter DAY_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
+    private static final DateTimeFormatter DAY_FORMATTER   = DateTimeFormatter.ISO_LOCAL_DATE;
     private static final DateTimeFormatter MONTH_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM");
-    private static final DateTimeFormatter YEAR_FORMATTER = DateTimeFormatter.ofPattern("yyyy");
+    private static final DateTimeFormatter YEAR_FORMATTER  = DateTimeFormatter.ofPattern("yyyy");
 
     private ClosingBooksTimeBoundaryCalculator() {
     }
@@ -45,11 +45,11 @@ public final class ClosingBooksTimeBoundaryCalculator {
      * current period ID, and interval days. This method evaluates the time boundary
      * and determines the appropriate period ID for the current context.
      *
-     * @param timeBoundary the time boundary defining the rollover rules (e.g., end of day, week, month, etc.)
-     * @param zoneId the time zone to be used for calculations
-     * @param clock the clock representing the current time
+     * @param timeBoundary    the time boundary defining the rollover rules (e.g., end of day, week, month, etc.)
+     * @param zoneId          the time zone to be used for calculations
+     * @param clock           the clock representing the current time
      * @param currentPeriodId the ID of the current period being evaluated
-     * @param intervalDays the interval in days for fixed interval calculations (nullable, only used when timeBoundary is EVERY_N_DAYS)
+     * @param intervalDays    the interval in days for fixed interval calculations (nullable, only used when timeBoundary is EVERY_N_DAYS)
      * @return the resolved period ID based on the provided parameters
      */
     public static String resolveCurrentPeriodId(ClosingBooksTimeBoundary timeBoundary,
@@ -64,14 +64,14 @@ public final class ClosingBooksTimeBoundaryCalculator {
      * Evaluates the provided time boundary against the current clock time and determines the resulting
      * period ID and the number of advanced periods since the current period ID.
      *
-     * @param timeBoundary the time boundary defining the rollover rules (e.g., end of day, week, month, etc.)
-     * @param zoneId the time zone to use for date and time calculations
-     * @param clock the clock representing the current time
+     * @param timeBoundary    the time boundary defining the rollover rules (e.g., end of day, week, month, etc.)
+     * @param zoneId          the time zone to use for date and time calculations
+     * @param clock           the clock representing the current time
      * @param currentPeriodId the ID of the currently active period to evaluate against
-     * @param intervalDays the interval in days for fixed interval calculations;
-     *                     applicable only when the time boundary is set to EVERY_N_DAYS
+     * @param intervalDays    the interval in days for fixed interval calculations;
+     *                        applicable only when the time boundary is set to EVERY_N_DAYS
      * @return an instance of {@link ClosingBooksTimeBoundaryEvaluation} containing the resolved period ID
-     *         and the count of advanced periods relative to the current period ID
+     * and the count of advanced periods relative to the current period ID
      */
     public static ClosingBooksTimeBoundaryEvaluation evaluate(ClosingBooksTimeBoundary timeBoundary,
                                                               ZoneId zoneId,
@@ -121,22 +121,22 @@ public final class ClosingBooksTimeBoundaryCalculator {
         }
 
         var anchor = parseIsoLocalDate(currentPeriodId).orElseThrow(() -> invalidCurrentPeriodId(ClosingBooksTimeBoundary.EVERY_N_DAYS,
-                                                                                                  currentPeriodId,
-                                                                                                  "yyyy-MM-dd"));
+                                                                                                 currentPeriodId,
+                                                                                                 "yyyy-MM-dd"));
         if (now.isBefore(anchor)) {
             return new ClosingBooksTimeBoundaryEvaluation(anchor.format(DAY_FORMATTER), 0);
         }
 
-        var elapsedDays = Duration.between(anchor.atStartOfDay(), now.atStartOfDay()).toDays();
+        var elapsedDays  = Duration.between(anchor.atStartOfDay(), now.atStartOfDay()).toDays();
         var periodOffset = elapsedDays / intervalDays;
         return new ClosingBooksTimeBoundaryEvaluation(anchor.plusDays(periodOffset * intervalDays).format(DAY_FORMATTER),
                                                       periodOffset);
     }
 
     private static String formatIsoWeek(LocalDate date) {
-        var weekStart = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        var weekStart     = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         var weekBasedYear = weekStart.get(IsoFields.WEEK_BASED_YEAR);
-        var week = weekStart.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
+        var week          = weekStart.get(IsoFields.WEEK_OF_WEEK_BASED_YEAR);
         return "%d-W%02d".formatted(weekBasedYear, week);
     }
 
@@ -175,8 +175,8 @@ public final class ClosingBooksTimeBoundaryCalculator {
     private static IllegalArgumentException invalidCurrentPeriodId(ClosingBooksTimeBoundary timeBoundary,
                                                                    String currentPeriodId,
                                                                    String expectedFormat) {
-        return new IllegalArgumentException("Invalid currentPeriodId '%s' for %s. Expected format: %s"
-                                                    .formatted(currentPeriodId, timeBoundary, expectedFormat));
+        return new IllegalArgumentException(msg("Invalid currentPeriodId '{}' for '{}'. Expected format: '{}'"
+                , currentPeriodId, timeBoundary, expectedFormat));
     }
 
     private static Optional<LocalDate> parseIsoLocalDate(String value) {
@@ -202,7 +202,7 @@ public final class ClosingBooksTimeBoundaryCalculator {
                 return Optional.empty();
             }
             var weekBasedYear = Integer.parseInt(pieces[0]);
-            var week = Integer.parseInt(pieces[1]);
+            var week          = Integer.parseInt(pieces[1]);
             return Optional.of(LocalDate.of(weekBasedYear, 1, 4)
                                         .with(IsoFields.WEEK_OF_WEEK_BASED_YEAR, week)
                                         .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)));
@@ -243,7 +243,7 @@ public final class ClosingBooksTimeBoundaryCalculator {
 
     private static long weekDistance(String currentPeriodId, LocalDate now) {
         var currentWeekStart = parseIsoWeekStart(currentPeriodId).orElseThrow();
-        var nowWeekStart = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        var nowWeekStart     = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         return Math.max(0, Duration.between(currentWeekStart.atStartOfDay(), nowWeekStart.atStartOfDay()).toDays() / 7);
     }
 
