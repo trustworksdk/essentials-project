@@ -2,3 +2,4 @@ dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.Eve
 dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.SnapshotConfiguration
 dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.ClosingBooksConfiguration
 dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.AggregateLifecycleApiConfiguration
+dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.AggregateArchiveApiConfiguration

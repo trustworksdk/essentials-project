@@ -55,13 +55,15 @@ public class StarterAutoConfigurationIT {
                             EventStoreConfiguration.class,
                             SnapshotConfiguration.class,
                             ClosingBooksConfiguration.class,
-                            AggregateLifecycleApiConfiguration.class
+                            AggregateLifecycleApiConfiguration.class,
+                            AggregateArchiveApiConfiguration.class
                     ))
                     .withBean(EssentialsSecurityProvider.AllAccessSecurityProvider.class)
                     .withInitializer(ctx -> TestPropertyValues.of(
                             "spring.datasource.url=" + postgreSQLContainer.getJdbcUrl(),
                             "spring.datasource.username=" + postgreSQLContainer.getUsername(),
-                            "spring.datasource.password=" + postgreSQLContainer.getPassword()
+                            "spring.datasource.password=" + postgreSQLContainer.getPassword(),
+                            "essentials.eventstore.archives.enabled=true"
                     ).applyTo(ctx.getEnvironment())); // needed
 
     @Test
@@ -77,6 +79,11 @@ public class StarterAutoConfigurationIT {
 
             assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi.class);
             assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleStatisticsApi.class);
+            assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateArchiveApi.class);
+            assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateArchiveStatisticsApi.class);
+            assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.archive.AggregateArchiveExporter.class);
+            assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.archive.AggregateArchiveDestination.class);
+            assertThat(ctx).hasSingleBean(dk.trustworks.essentials.components.eventsourced.aggregates.archive.AggregateGenerationArchiver.class);
         });
     }
 

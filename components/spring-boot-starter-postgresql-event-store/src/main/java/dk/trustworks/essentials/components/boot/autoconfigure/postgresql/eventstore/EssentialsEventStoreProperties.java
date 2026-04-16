@@ -65,6 +65,7 @@ public class EssentialsEventStoreProperties {
     private       EssentialsComponentsProperties.MetricsProperties metrics                                = new EssentialsComponentsProperties.MetricsProperties();
     private final AggregateSnapshotProperties                      snapshots                              = new AggregateSnapshotProperties();
     private final AggregateClosingBooksProperties                  closingBooks                           = new AggregateClosingBooksProperties();
+    private final AggregateArchiveProperties                       archives                               = new AggregateArchiveProperties();
 
     private final EventStoreSubscriptionManagerProperties subscriptionManager = new EventStoreSubscriptionManagerProperties();
 
@@ -309,6 +310,10 @@ public class EssentialsEventStoreProperties {
 
     public AggregateClosingBooksProperties getClosingBooks() {
         return closingBooks;
+    }
+
+    public AggregateArchiveProperties getArchives() {
+        return archives;
     }
 
     /**
@@ -793,6 +798,27 @@ public class EssentialsEventStoreProperties {
 
         public void setIntervalDays(Integer intervalDays) {
             this.intervalDays = intervalDays;
+        }
+    }
+
+    public static class AggregateArchiveProperties {
+        private boolean enabled = false;
+        private String filesystemRootDirectory = System.getProperty("java.io.tmpdir") + "/essentials-aggregate-archives";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getFilesystemRootDirectory() {
+            return filesystemRootDirectory;
+        }
+
+        public void setFilesystemRootDirectory(String filesystemRootDirectory) {
+            this.filesystemRootDirectory = filesystemRootDirectory;
         }
     }
 }
