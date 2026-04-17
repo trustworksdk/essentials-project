@@ -79,12 +79,32 @@ public class StarterAutoConfigurationIT {
             assertThat(cdcStatus).isNotNull();
             assertThat(cdcStatus.availability()).isNotNull();
             assertThat(cdcStatus.configuration()).isNotNull();
+            assertThat(cdcStatus.slot()).isNotNull();
             assertThat(cdcStatus.configuration().enabled()).isTrue();
 
             assertThat(ctx).hasSingleBean(PostgresqlEventStoreStatisticsApi.class);
             PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi = ctx.getBean(PostgresqlEventStoreStatisticsApi.class);
             assertThat(postgresqlEventStoreStatisticsApi.fetchTableActivityStatistics("principal")).isNotNull();
         });
+    }
+
+    @Test
+    void configures_pgoutput_plugin_and_exposes_publication_in_cdc_api() {
+        contextRunner
+                .withPropertyValues(
+                        "essentials.eventstore.cdc.plugin=pgoutput",
+                        "essentials.eventstore.cdc.pg-output.publication-name=essentials_cdc_publication"
+                )
+                .run(ctx -> {
+                    assertThat(ctx).hasBean("configuredLogicalDecodingPlugin");
+                    var plugin = ctx.getBean("configuredLogicalDecodingPlugin", LogicalDecodingPlugin.class);
+                    assertThat(plugin).isInstanceOf(PgOutputLogicalDecodingPlugin.class);
+                    assertThat(plugin.pluginName()).isEqualTo(PgOutputLogicalDecodingPlugin.PLUGIN_NAME);
+
+                    var cdcStatus = ctx.getBean(CdcApi.class).getStatus("principal");
+                    assertThat(cdcStatus.configuration().plugin()).isEqualTo(PgOutputLogicalDecodingPlugin.PLUGIN_NAME);
+                    assertThat(cdcStatus.configuration().pgOutputPublicationName()).isEqualTo("essentials_cdc_publication");
+                });
     }
 
     @Test

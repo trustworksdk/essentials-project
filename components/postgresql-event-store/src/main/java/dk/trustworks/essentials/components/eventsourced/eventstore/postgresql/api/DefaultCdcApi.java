@@ -17,6 +17,8 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
 import java.util.Optional;
@@ -29,19 +31,22 @@ import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidat
 public class DefaultCdcApi implements CdcApi {
 
     private final EssentialsSecurityProvider securityProvider;
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
     private final CdcAvailability            availability;
     private final CdcProperties              properties;
     private final String                     configuredSlotName;
-    private final Optional<Wal2JsonTailer>   tailer;
+    private final Optional<WalReplicationTailer> tailer;
     private final Optional<CdcDispatcher>    dispatcher;
 
     public DefaultCdcApi(EssentialsSecurityProvider securityProvider,
+                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          CdcAvailability availability,
                          CdcProperties properties,
                          String configuredSlotName,
-                         Optional<Wal2JsonTailer> tailer,
+                         Optional<WalReplicationTailer> tailer,
                          Optional<CdcDispatcher> dispatcher) {
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
         this.availability = requireNonNull(availability, "availability must not be null");
         this.properties = requireNonNull(properties, "properties must not be null");
         this.configuredSlotName = requireNonNull(configuredSlotName, "configuredSlotName must not be null");
@@ -55,11 +60,18 @@ public class DefaultCdcApi implements CdcApi {
 
         var availabilitySnapshot = availability.snapshot();
         var effectiveSlotName = availabilitySnapshot.slotName() != null ? availabilitySnapshot.slotName() : configuredSlotName;
+        var slotStatus = unitOfWorkFactory.withUnitOfWork(uow -> {
+            var slot = PgReplicationSlots.findSlot(uow.handle().getConnection(), effectiveSlotName);
+            return slot != null
+                   ? ApiCdcSlotStatus.from(slot, properties.getSlot().getMode(), properties.getPlugin())
+                   : ApiCdcSlotStatus.missing(effectiveSlotName, properties.getSlot().getMode(), properties.getPlugin());
+        });
 
         return new ApiCdcStatus(
                 ApiCdcAvailability.from(availabilitySnapshot),
                 ApiCdcConfiguration.from(properties.isEnabled(), effectiveSlotName, properties),
-                tailer.map(Wal2JsonTailer::getStatus).map(ApiCdcTailerStatus::from).orElse(null),
+                slotStatus,
+                tailer.map(WalReplicationTailer::getStatus).map(ApiCdcTailerStatus::from).orElse(null),
                 dispatcher.map(CdcDispatcher::getStatus).map(ApiCdcDispatcherStatus::from).orElse(null)
         );
     }

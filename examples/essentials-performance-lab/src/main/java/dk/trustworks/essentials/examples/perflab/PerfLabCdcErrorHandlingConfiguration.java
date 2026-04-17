@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.examples.perflab;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.Wal2JsonTailerErrorHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.WalReplicationTailerErrorHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -26,8 +26,8 @@ import java.util.Locale;
 public class PerfLabCdcErrorHandlingConfiguration {
 
     @Bean
-    public Wal2JsonTailerErrorHandler perfLabWal2JsonTailerErrorHandler() {
-        return new Wal2JsonTailerErrorHandler() {
+    public WalReplicationTailerErrorHandler perfLabWalReplicationTailerErrorHandler() {
+        return new WalReplicationTailerErrorHandler() {
             @Override
             public Decision onMessageError(String slotName, String json, Exception error) {
                 return Decision.RETRY_CONNECTION;

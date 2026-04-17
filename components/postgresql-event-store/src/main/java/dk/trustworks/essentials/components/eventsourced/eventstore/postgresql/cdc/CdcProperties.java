@@ -43,13 +43,15 @@ public class CdcProperties {
     private boolean       enabled                        = true;
     private CdcMode       mode                           = CdcMode.AUTO;
     private int           cdcEventStoreBackfillBatchSize = 1000;
+    private String        plugin                         = PgOutputLogicalDecodingPlugin.PLUGIN_NAME;
     private WalParserMode walParserMode                  = WalParserMode.STRING;
     private CdcDeliveryMode deliveryMode                 = CdcDeliveryMode.INBOX;
 
     private String inboxTableName   = "eventstore_cdc_inbox";
     private long   inboxTtlDuration = 90L;
 
-    private final Wal2JsonTailerProperties wal2JsonTailer = new Wal2JsonTailerProperties();
+    private final WalReplicationTailerProperties walReplicationTailer = new WalReplicationTailerProperties();
+    private final PgOutputProperties       pgOutput       = new PgOutputProperties();
     private final CdcDispatcherProperties  cdcDispatcher  = new CdcDispatcherProperties();
     private final CdcEventBusProperties    eventBus       = new CdcEventBusProperties();
     private final CdcSlotProperties        slot           = new CdcSlotProperties();
@@ -110,6 +112,14 @@ public class CdcProperties {
      */
     public void setCdcEventStoreBackfillBatchSize(int cdcEventStoreBackfillBatchSize) {
         this.cdcEventStoreBackfillBatchSize = cdcEventStoreBackfillBatchSize;
+    }
+
+    public String getPlugin() {
+        return plugin;
+    }
+
+    public void setPlugin(String plugin) {
+        this.plugin = plugin;
     }
 
     /**
@@ -176,12 +186,16 @@ public class CdcProperties {
     }
 
     /**
-     * Retrieves the properties configuration for the Wal2Json tailer.
+     * Retrieves the properties configuration for the WAL replication tailer.
      *
-     * @return an instance of Wal2JsonTailerProperties containing the configuration for the Wal2Json tailer.
+     * @return the configuration for the WAL replication tailer.
      */
-    public Wal2JsonTailerProperties getWal2JsonTailer() {
-        return wal2JsonTailer;
+    public WalReplicationTailerProperties getWalReplicationTailer() {
+        return walReplicationTailer;
+    }
+
+    public PgOutputProperties getPgOutput() {
+        return pgOutput;
     }
 
     /**
@@ -231,7 +245,7 @@ public class CdcProperties {
     }
 
     /**
-     * Configuration properties for the Wal2JsonTailer, enabling control over various
+     * Configuration properties for the WAL replication tailer, enabling control over various
      * operational parameters like polling intervals, backoff strategies, and JSON output format.
      * <p>
      * This class provides settings to adjust how changes from a PostgreSQL Change Data Capture (CDC)
@@ -248,7 +262,7 @@ public class CdcProperties {
      * This class also provides methods to get and set these properties, as well as a static builder
      * method for creating a new instance with custom defaults.
      */
-    public static class Wal2JsonTailerProperties {
+    public static class WalReplicationTailerProperties {
 
         private Duration     pollInterval              = Duration.ofMillis(25);
         private Duration     pollBackoffInterval       = Duration.ofMillis(250);
@@ -263,11 +277,11 @@ public class CdcProperties {
         private PoisonPolicy poisonPolicy              = PoisonPolicy.QUARANTINE_AND_CONTINUE;
 
 
-        public static Wal2JsonTailerProperties defaults(Duration pollInterval,
+        public static WalReplicationTailerProperties defaults(Duration pollInterval,
                                                         Duration pollBackoffInterval,
                                                         Duration maxPollBackoffInterval,
                                                         Duration replicationStatusInterval) {
-            var tailer = new Wal2JsonTailerProperties();
+            var tailer = new WalReplicationTailerProperties();
             tailer.setPollInterval(pollInterval);
             tailer.setPollBackoffInterval(pollBackoffInterval);
             tailer.setMaxPollBackoffInterval(maxPollBackoffInterval);
@@ -500,6 +514,45 @@ public class CdcProperties {
          */
         public void setPoisonPolicy(PoisonPolicy poisonPolicy) {
             this.poisonPolicy = poisonPolicy;
+        }
+    }
+
+    public static class PgOutputProperties {
+        private String publicationName = "essentials_cdc_publication";
+        private int    protoVersion    = 1;
+        private boolean binary         = false;
+        private boolean messages       = false;
+
+        public String getPublicationName() {
+            return publicationName;
+        }
+
+        public void setPublicationName(String publicationName) {
+            this.publicationName = publicationName;
+        }
+
+        public int getProtoVersion() {
+            return protoVersion;
+        }
+
+        public void setProtoVersion(int protoVersion) {
+            this.protoVersion = protoVersion;
+        }
+
+        public boolean isBinary() {
+            return binary;
+        }
+
+        public void setBinary(boolean binary) {
+            this.binary = binary;
+        }
+
+        public boolean isMessages() {
+            return messages;
+        }
+
+        public void setMessages(boolean messages) {
+            this.messages = messages;
         }
     }
 

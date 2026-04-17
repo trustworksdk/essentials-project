@@ -25,4 +25,12 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 @FunctionalInterface
 public interface AggregateTypeResolver {
     AggregateType resolveFromEventTable(String tableName);
+
+    default java.util.Optional<AggregateType> tryResolveFromEventTable(String tableName) {
+        try {
+            return java.util.Optional.ofNullable(resolveFromEventTable(tableName));
+        } catch (IllegalArgumentException e) {
+            return java.util.Optional.empty();
+        }
+    }
 }

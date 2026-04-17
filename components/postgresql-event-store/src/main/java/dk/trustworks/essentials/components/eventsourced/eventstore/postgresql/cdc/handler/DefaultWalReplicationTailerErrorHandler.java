@@ -22,8 +22,8 @@ import org.postgresql.util.PSQLException;
 import java.util.Locale;
 
 /**
- * Default implementation of the {@link Wal2JsonTailerErrorHandler} interface that provides error handling
- * logic for message and stream errors in a wal2json-based tailer.
+ * Default implementation of the {@link WalReplicationTailerErrorHandler} interface that provides error handling
+ * logic for message and stream errors in a logical replication tailer.
  * <p>
  * This handler determines how to proceed when errors occur while processing messages or streams,
  * using the {@link Decision} enum to decide whether to continue, retry the connection, or stop.
@@ -31,7 +31,7 @@ import java.util.Locale;
  * The error handling logic considers various cases, such as validation errors, IO-related issues,
  * and terminal replication protocol errors, to make a decision.
  */
-public class DefaultWal2JsonTailerErrorHandler implements Wal2JsonTailerErrorHandler {
+public class DefaultWalReplicationTailerErrorHandler implements WalReplicationTailerErrorHandler {
 
     @Override
     public Decision onMessageError(String slotName, String json, Exception error) {

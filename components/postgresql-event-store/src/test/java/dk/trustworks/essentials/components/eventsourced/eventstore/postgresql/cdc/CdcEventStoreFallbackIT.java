@@ -41,7 +41,7 @@ import java.util.Optional;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
-class CdcEventStoreFallbackIT extends AbstractWal2JsonPostgresIT {
+class CdcEventStoreFallbackIT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<?> eventStore;
     private EventStreamGapHandler<?> gapHandler;

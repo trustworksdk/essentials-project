@@ -17,7 +17,7 @@ This keeps EventStore correctness guarantees while reducing polling amplificatio
 ```
 PostgreSQL WAL
   -> wal2json replication stream
-  -> Wal2JsonTailer (writes CDC inbox)
+  -> WalReplicationTailer (writes CDC inbox)
   -> CdcDispatcher (converts + publishes)
   -> CdcEventBus (live stream)
   -> CdcEventStore (BackfillThenLiveOrdered)
@@ -33,7 +33,7 @@ One tailer can run per slot at a time, and ownership is coordinated with a Postg
 - lifetime: held while tailer is running
 - release: explicit on stop, implicit on connection loss
 
-`Wal2JsonTailer` exposes this via status/metrics:
+`WalReplicationTailer` exposes this via status/metrics:
 
 - `slotLockAcquired` (boolean)
 - `streaming` (boolean)

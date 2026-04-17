@@ -44,7 +44,7 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
-public class CdcPoisonGapIntegrationIT extends AbstractWal2JsonPostgresIT {
+public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private CdcEventStore                                                           cdcEventStore;

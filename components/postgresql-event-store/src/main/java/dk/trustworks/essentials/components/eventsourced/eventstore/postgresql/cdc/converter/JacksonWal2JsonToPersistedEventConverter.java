@@ -55,7 +55,7 @@ import java.util.regex.*;
  * - Handling serialization and deserialization errors gracefully and ensuring invalid
  * data is logged and prevented from being processed further.
  */
-public final class JacksonWal2JsonToPersistedEventConverter implements Wal2JsonToPersistedEventConverter {
+public final class JacksonWal2JsonToPersistedEventConverter implements LogicalReplicationToPersistedEventConverter {
 
     private final static Logger log = LoggerFactory.getLogger(JacksonWal2JsonToPersistedEventConverter.class);
 

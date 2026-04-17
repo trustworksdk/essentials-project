@@ -21,5 +21,6 @@ FROM postgres:17.5-bookworm
 
 COPY --from=builder /usr/lib/postgresql/ /usr/lib/postgresql/
 COPY --from=builder /usr/share/postgresql/ /usr/share/postgresql/
+COPY docker/postgresql-wal2json/initdb/ /docker-entrypoint-initdb.d/
 
 EXPOSE 5432

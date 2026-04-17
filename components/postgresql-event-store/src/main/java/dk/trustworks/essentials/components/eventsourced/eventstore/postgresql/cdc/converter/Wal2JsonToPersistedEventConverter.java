@@ -16,30 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
-
-import java.nio.charset.StandardCharsets;
-import java.util.List;
-
 /**
- * Interface defining a contract for converting wal2json messages into persisted events.
- * Implementations of this interface take a single wal2json-formatted message, typically
- * containing one or more changes from a relational database, and transform it into a list
- * of {@link PersistedEvent} objects. These persisted events are the representation of the
- * changes in a format suitable for further processing or storage.
+ * @deprecated Use {@link LogicalReplicationToPersistedEventConverter} instead.
  */
-public interface Wal2JsonToPersistedEventConverter {
-
-    /**
-     * Convert a single wal2json message (which may include many changes)
-     * into zero or more PersistedEvent.
-     * <p>
-     * Return empty list if the message is not relevant.
-     */
-    List<PersistedEvent> convert(String wal2jsonMessage);
-
-    default List<PersistedEvent> convert(byte[] wal2jsonMessageBytes) {
-        if (wal2jsonMessageBytes == null || wal2jsonMessageBytes.length == 0) return List.of();
-        return convert(new String(wal2jsonMessageBytes, StandardCharsets.UTF_8));
-    }
+@Deprecated(forRemoval = false)
+public interface Wal2JsonToPersistedEventConverter extends LogicalReplicationToPersistedEventConverter {
 }

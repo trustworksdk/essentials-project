@@ -30,7 +30,7 @@ import reactor.test.StepVerifier;
 import java.time.*;
 import java.util.*;
 
-import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.Wal2JsonWithEssentialsAggregateIT.ORDERS;
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.WalReplicationWithEssentialsAggregateWal2JsonIT.ORDERS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class BackfillThenLiveOrderedTest {

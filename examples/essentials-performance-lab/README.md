@@ -31,20 +31,42 @@ mvn -pl examples/essentials-performance-lab -DskipTests \
   -Dspring-boot.run.arguments=--essentials.lab.scenario=baseline-polling-vs-cdc spring-boot:run
 ```
 
-## Local Postgres + wal2json (docker compose)
+## Local Postgres + CDC Plugins
 
-Start local Postgres with `wal2json` plugin:
+The local compose Postgres image includes:
+
+- `pgoutput` support via PostgreSQL itself
+- `wal2json` plugin for explicit comparison runs
+- a default `pgoutput` publication:
+  - `essentials_cdc_publication`
+
+Start local Postgres:
 
 ```bash
 docker compose -f examples/essentials-performance-lab/docker-compose.yml up -d --build
 ```
 
-Run the app against compose DB (port `55432`):
+The default CDC plugin is `pgoutput`, and the default publication name is already configured as:
+
+- `essentials.eventstore.cdc.pg-output.publication-name=essentials_cdc_publication`
+
+So a compose-backed run works out of the box with the default CDC plugin. In the EventStore CDC path, `pgoutput` only converts insert messages for configured aggregate event tables; non-insert replication messages are ignored.
+
+Run the app against compose DB (port `55432`) using the default `pgoutput` path:
 
 ```bash
 mvn -pl examples/essentials-performance-lab -DskipTests \
   -Dspring-boot.run.profiles=compose \
-  -Dspring-boot.run.arguments="--essentials.lab.scenario=baseline-polling-vs-cdc-compare --essentials.eventstore.cdc.enabled=false --essentials.lab.metrics-output-file=./target/baseline-compare.json" \
+  -Dspring-boot.run.arguments="--essentials.lab.scenario=baseline-polling-vs-cdc-compare --essentials.lab.metrics-output-file=./target/baseline-compare-pgoutput.json" \
+  spring-boot:run
+```
+
+If you want to force the old `wal2json` path for comparison, set:
+
+```bash
+mvn -pl examples/essentials-performance-lab -DskipTests \
+  -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="--essentials.lab.scenario=baseline-polling-vs-cdc-compare --essentials.eventstore.cdc.plugin=wal2json --essentials.lab.metrics-output-file=./target/baseline-compare-wal2json.json" \
   spring-boot:run
 ```
 
@@ -71,13 +93,31 @@ Main properties:
 
 CDC starter knobs are available as usual under `essentials.eventstore.cdc.*`.
 
+Important CDC plugin settings:
+
+- `essentials.eventstore.cdc.plugin=pgoutput|wal2json`
+- `essentials.eventstore.cdc.pg-output.publication-name`
+
+Defaults:
+
+- `essentials.eventstore.cdc.plugin=pgoutput`
+- `essentials.eventstore.cdc.pg-output.publication-name=essentials_cdc_publication`
+
 ## Baseline CDC vs polling runs
 
-Run with CDC enabled:
+Run with CDC enabled using the default `pgoutput` plugin:
 
 ```bash
 mvn -pl examples/essentials-performance-lab -DskipTests \
   -Dspring-boot.run.arguments="--essentials.lab.scenario=baseline-polling-vs-cdc --essentials.eventstore.cdc.enabled=true --essentials.lab.metrics-output-file=./target/baseline-cdc.json" \
+  spring-boot:run
+```
+
+Run with CDC enabled using `wal2json` explicitly:
+
+```bash
+mvn -pl examples/essentials-performance-lab -DskipTests \
+  -Dspring-boot.run.arguments="--essentials.lab.scenario=baseline-polling-vs-cdc --essentials.eventstore.cdc.enabled=true --essentials.eventstore.cdc.plugin=wal2json --essentials.lab.metrics-output-file=./target/baseline-cdc-wal2json.json" \
   spring-boot:run
 ```
 
@@ -139,7 +179,7 @@ There is a CI-friendly smoke test that runs the compare scenario with Testcontai
 mvn -pl examples/essentials-performance-lab -Dtest=BaselineComparisonScenarioSmokeIT test
 ```
 
-This smoke test does not require `wal2json` to be installed in the container; CDC path is exercised in `auto` fallback semantics for robustness.
+This smoke test does not require `wal2json`; CDC path is exercised in `auto` fallback semantics for robustness.
 
 ## Benchmark matrix scripts
 
@@ -208,6 +248,12 @@ Use these exact commands from repository root (copy/paste friendly):
 mvn -q -pl examples/essentials-performance-lab -DskipTests -Dspring-boot.run.profiles=compose \
   -Dspring-boot.run.arguments="--essentials.lab.scenario=baseline-polling-vs-cdc-compare --essentials.lab.warmup=PT20S --essentials.lab.duration=PT120S --essentials.eventstore.cdc.wal-parser-mode=BYTES --essentials.eventstore.cdc.cdc-event-store-backfill-batch-size=1000 --essentials.eventstore.cdc.cdc-dispatcher.batch-size=200 --essentials.eventstore.cdc.cdc-dispatcher.poll-interval=PT0.05S --essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S --essentials.lab.metrics-output-file=./target/baseline-compare-defaults-long.json" \
   spring-boot:run
+```
+
+To run the same compare with `wal2json` instead of the default `pgoutput`, add:
+
+```bash
+--essentials.eventstore.cdc.plugin=wal2json
 ```
 
 Summarize:

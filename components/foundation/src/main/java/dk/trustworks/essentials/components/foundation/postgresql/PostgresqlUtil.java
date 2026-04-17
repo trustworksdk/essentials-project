@@ -97,6 +97,21 @@ public final class PostgresqlUtil {
         return ("logical".equals(walLevel)) && maxSlots > 0 && maxSenders > 0;
     }
 
+    public static boolean isPublicationAvailable(Handle handle, String publicationName) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(publicationName, "No publicationName provided");
+        return handle.createQuery("""
+                                  SELECT exists(
+                                      SELECT 1
+                                      FROM pg_publication
+                                      WHERE pubname = :publicationName
+                                  )
+                                  """)
+                     .bind("publicationName", publicationName)
+                     .mapTo(Boolean.class)
+                     .first();
+    }
+
     public static boolean isOutputPluginUsable(Handle handle, String pluginName) {
         // Requires a role with sufficient privileges to create replication slots
         // (often needs REPLICATION role or superuser depending on setup).

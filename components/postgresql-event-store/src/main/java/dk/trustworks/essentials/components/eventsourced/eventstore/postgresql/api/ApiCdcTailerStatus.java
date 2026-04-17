@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.Wal2JsonTailer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.WalReplicationTailer;
 
 public record ApiCdcTailerStatus(
         String slotName,
@@ -31,7 +31,7 @@ public record ApiCdcTailerStatus(
         long inboxWriteFailures,
         long handlerFailures
 ) {
-    public static ApiCdcTailerStatus from(Wal2JsonTailer.Wal2JsonTailerStatus status) {
+    public static ApiCdcTailerStatus from(WalReplicationTailer.WalReplicationTailerStatus status) {
         return new ApiCdcTailerStatus(
                 status.slotName(),
                 status.slotLockAcquired(),

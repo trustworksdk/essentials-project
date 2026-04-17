@@ -45,7 +45,7 @@ import static dk.trustworks.essentials.components.eventsourced.eventstore.postgr
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-public class SubscriptionResetOnPoisonNotifierIT extends AbstractWal2JsonPostgresIT {
+public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private CdcEventStore                                                           cdcEventStore;

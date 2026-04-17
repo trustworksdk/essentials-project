@@ -183,7 +183,7 @@ Controls *when* in-transaction subscribers receive events. See [postgresql-event
 | `false` (default) | Events published at `BeforeCommit` and `AfterCommit`. Subscribers receive all events from a transaction together, just before it commits |
 | `true` | Events *also* published immediately after each `appendToStream()` call. Use this when subscribers need to react to each event individually within the same transaction (e.g., saga coordination) |
 
-### CDC Configuration (Hybrid wal2json)
+### CDC Configuration (Hybrid Logical Replication)
 
 Hybrid CDC can run in durable inbox mode (`INBOX`) or direct publish mode (`DIRECT`):
 
@@ -194,7 +194,10 @@ essentials.eventstore.cdc.delivery-mode=inbox
 essentials.eventstore.cdc.wal-parser-mode=bytes
 ```
 
-Wal filtering defaults to: only `kind=insert` changes where `table` is one of the configured aggregate event stream tables.
+CDC filtering defaults to EventStore inserts only:
+
+- `wal2json`: only `kind=insert` changes where `table` is one of the configured aggregate event stream tables
+- `pgoutput`: relation metadata is cached, only insert changes for configured aggregate event stream tables are converted, and non-insert messages are ignored
 
 Tuning baseline (good starting point from perf-lab runs):
 
@@ -207,9 +210,11 @@ essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S
 
 | Property | Default | What It Controls |
 |----------|---------|------------------|
-| `essentials.eventstore.cdc.enabled` | `true` | Enables CDC beans (`Wal2JsonTailer`, `CdcDispatcher`, `CdcEventStore`) |
+| `essentials.eventstore.cdc.enabled` | `true` | Enables CDC beans (`WalReplicationTailer`, `CdcDispatcher`, `CdcEventStore`) |
 | `essentials.eventstore.cdc.mode` | `auto` | `auto`: fallback to polling if CDC cannot start. `require`: fail startup if CDC cannot start |
 | `essentials.eventstore.cdc.delivery-mode` | `inbox` | `inbox`: durable inbox + dispatcher. `direct`: tailer converts and publishes directly (no inbox persistence, dispatcher idle) |
+| `essentials.eventstore.cdc.plugin` | `pgoutput` | Logical decoding plugin. `pgoutput` is the default; `wal2json` remains available for explicit use |
+| `essentials.eventstore.cdc.pg-output.publication-name` | `essentials_cdc_publication` | Publication used when `plugin=pgoutput` |
 | `essentials.eventstore.cdc.wal-parser-mode` | `string` | `string` or `bytes` parser path for wal2json payloads (recommend `bytes`) |
 | `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy` | `mark-dispatched` | `mark-dispatched`: keep row for TTL cleanup. `delete`: remove row immediately after successful dispatch |
 | `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` | `8192` | DIRECT-mode CDC bus buffer size |
@@ -244,6 +249,7 @@ When CDC is enabled, the starter also exposes a `CdcApi` bean alongside `EventSt
 
 - CDC availability state (`ACTIVE` / `INACTIVE` / `FAILED`)
 - effective CDC configuration values
+- replication slot snapshot from `pg_replication_slots`
 - tailer runtime diagnostics and counters
 - dispatcher runtime diagnostics and counters
 

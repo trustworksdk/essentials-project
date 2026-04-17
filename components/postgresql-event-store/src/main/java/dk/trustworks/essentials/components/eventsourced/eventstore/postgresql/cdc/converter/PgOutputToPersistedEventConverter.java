@@ -1,0 +1,230 @@
+/*
+ *  Copyright 2021-2026 the original author or authors.
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *       https://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.PgOutputRowChange;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSON;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventMetaDataJSON;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
+import dk.trustworks.essentials.components.foundation.json.JSONSerializationException;
+import dk.trustworks.essentials.components.foundation.types.CorrelationId;
+import dk.trustworks.essentials.components.foundation.types.EventId;
+import dk.trustworks.essentials.components.foundation.types.Tenant;
+import dk.trustworks.essentials.components.foundation.types.TenantId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
+import java.util.Map;
+import java.util.Optional;
+
+/**
+ * Converts canonical {@link PgOutputRowChange} inserts into {@link PersistedEvent}s.
+ */
+public final class PgOutputToPersistedEventConverter {
+    private static final Logger log = LoggerFactory.getLogger(PgOutputToPersistedEventConverter.class);
+
+    private static final DateTimeFormatter PG_TIMESTAMP =
+            new DateTimeFormatterBuilder()
+                    .appendPattern("yyyy-MM-dd HH:mm:ss")
+                    .optionalStart()
+                    .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true)
+                    .optionalEnd()
+                    .appendPattern("X")
+                    .toFormatter();
+
+    private final JacksonJSONEventSerializer jacksonJSONSerializer;
+    private final AggregateTypeResolver aggregateTypeResolver;
+
+    public PgOutputToPersistedEventConverter(JacksonJSONEventSerializer jacksonJSONSerializer,
+                                             AggregateTypeResolver aggregateTypeResolver) {
+        this.jacksonJSONSerializer = jacksonJSONSerializer;
+        this.aggregateTypeResolver = aggregateTypeResolver;
+    }
+
+    /**
+     * Convert the row change when it represents a relevant EventStore insert.
+     * Optional.empty() means the row was not relevant for EventStore processing, not that conversion failed.
+     */
+    public Optional<PersistedEvent> convertIfRelevant(PgOutputRowChange change) {
+        if (change == null) return Optional.empty();
+        if (!"insert".equalsIgnoreCase(change.kind())) return Optional.empty();
+
+        var aggregateType = aggregateTypeResolver.tryResolveFromEventTable(change.table())
+                .orElse(null);
+        if (aggregateType == null) return Optional.empty();
+
+        try {
+            return Optional.of(toPersistedEvent(aggregateType, change.values()));
+        } catch (Exception e) {
+            log.warn("Failed to convert pgoutput row for aggregateType='{}'. table='{}' keys={}",
+                     aggregateType, change.table(), change.values().keySet(), e);
+            throw new JSONSerializationException("Failed to convert pgoutput row change to PersistedEvent", e);
+        }
+    }
+
+    public Optional<WalGlobalOrdersExtractor.Gap> extractGap(PgOutputRowChange change) {
+        if (change == null) return Optional.empty();
+        if (!"insert".equalsIgnoreCase(change.kind())) return Optional.empty();
+
+        var aggregateType = aggregateTypeResolver.tryResolveFromEventTable(change.table())
+                .orElse(null);
+        if (aggregateType == null) return Optional.empty();
+
+        try {
+            return Optional.of(new WalGlobalOrdersExtractor.Gap(
+                    aggregateType,
+                    GlobalEventOrder.of(requiredLong(change.values(), "global_order"))
+            ));
+        } catch (Exception e) {
+            log.debug("Failed to extract pgoutput gap for aggregateType='{}', table='{}'", aggregateType, change.table(), e);
+            return Optional.empty();
+        }
+    }
+
+    private PersistedEvent toPersistedEvent(AggregateType aggregateType,
+                                            Map<String, PgOutputRowChange.PgOutputValue> values) {
+        var eventId = EventId.of(requiredText(values, "event_id"));
+        var aggregateId = requiredObject(values, "aggregate_id");
+        var eventOrder = EventOrder.of(requiredLong(values, "event_order"));
+        var eventRevision = EventRevision.of(Integer.parseInt(requiredText(values, "event_revision")));
+        var globalOrder = GlobalEventOrder.of(requiredLong(values, "global_order"));
+        var timestamp = parsePostgresTimestamp(requiredText(values, "timestamp"));
+
+        var eventTypeValue = requiredText(values, "event_type");
+        if (eventTypeValue.isBlank()) {
+            throw new IllegalStateException("event_type was blank");
+        }
+
+        var event = new EventJSON(
+                jacksonJSONSerializer,
+                EventType.of(eventTypeValue),
+                canonicalJson(requiredObject(values, "event_payload"))
+        );
+
+        var meta = new EventMetaDataJSON(
+                jacksonJSONSerializer,
+                EventMetaData.class.getName(),
+                canonicalJson(optionalObject(values, "event_metadata").orElse("{}"))
+        );
+
+        Optional<EventId> causedBy = optionalText(values, "caused_by_event_id")
+                .filter(s -> !s.isBlank())
+                .map(EventId::of);
+
+        Optional<CorrelationId> correlationId = optionalText(values, "correlation_id")
+                .filter(s -> !s.isBlank())
+                .map(CorrelationId::of);
+
+        Optional<Tenant> tenant = optionalText(values, "tenant")
+                .filter(s -> !s.isBlank())
+                .map(TenantId::of);
+
+        return PersistedEvent.from(
+                eventId,
+                aggregateType,
+                aggregateId,
+                event,
+                eventOrder,
+                eventRevision,
+                globalOrder,
+                meta,
+                timestamp,
+                causedBy,
+                correlationId,
+                tenant
+        );
+    }
+
+    private String canonicalJson(Object raw) {
+        try {
+            JsonNode node;
+            if (raw == null) return "null";
+            if (raw instanceof String stringValue) {
+                node = jacksonJSONSerializer.getObjectMapper().readTree(stringValue);
+            } else {
+                node = jacksonJSONSerializer.getObjectMapper().valueToTree(raw);
+            }
+            return jacksonJSONSerializer.getObjectMapper().writeValueAsString(node);
+        } catch (Exception e) {
+            throw new JSONSerializationException("Failed to canonicalize JSON", e);
+        }
+    }
+
+    private static OffsetDateTime parsePostgresTimestamp(String value) {
+        try {
+            return OffsetDateTime.parse(value, PG_TIMESTAMP);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to parse timestamp '" + value + "'", e);
+        }
+    }
+
+    private static String requiredText(Map<String, PgOutputRowChange.PgOutputValue> values, String key) {
+        var value = requiredValue(values, key);
+        return switch (value.kind()) {
+            case TEXT -> value.textValue();
+            case NULL -> throw new IllegalStateException("Column '" + key + "' was null");
+            case UNCHANGED_TOAST -> throw new IllegalStateException("Column '" + key + "' was unchanged toast");
+            case BINARY -> throw new IllegalStateException("Column '" + key + "' used binary pgoutput format which is not supported yet");
+        };
+    }
+
+    private static Object requiredObject(Map<String, PgOutputRowChange.PgOutputValue> values, String key) {
+        return optionalObject(values, key)
+                .orElseThrow(() -> new IllegalStateException("Missing column '" + key + "'"));
+    }
+
+    private static Optional<Object> optionalObject(Map<String, PgOutputRowChange.PgOutputValue> values, String key) {
+        var value = values.get(key);
+        if (value == null) return Optional.empty();
+        return switch (value.kind()) {
+            case NULL -> Optional.empty();
+            case UNCHANGED_TOAST -> Optional.empty();
+            case TEXT -> Optional.of(value.textValue());
+            case BINARY -> throw new IllegalStateException("Column '" + key + "' used binary pgoutput format which is not supported yet");
+        };
+    }
+
+    private static long requiredLong(Map<String, PgOutputRowChange.PgOutputValue> values, String key) {
+        return Long.parseLong(requiredText(values, key));
+    }
+
+    private static Optional<String> optionalText(Map<String, PgOutputRowChange.PgOutputValue> values, String key) {
+        var value = values.get(key);
+        if (value == null) return Optional.empty();
+        return switch (value.kind()) {
+            case NULL -> Optional.empty();
+            case UNCHANGED_TOAST -> Optional.empty();
+            case TEXT -> Optional.ofNullable(value.textValue());
+            case BINARY -> throw new IllegalStateException("Column '" + key + "' used binary pgoutput format which is not supported yet");
+        };
+    }
+
+    private static PgOutputRowChange.PgOutputValue requiredValue(Map<String, PgOutputRowChange.PgOutputValue> values, String key) {
+        var value = values.get(key);
+        if (value == null) throw new IllegalStateException("Missing column '" + key + "'");
+        return value;
+    }
+}

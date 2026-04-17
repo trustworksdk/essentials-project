@@ -22,28 +22,28 @@ import java.io.IOException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class DefaultWal2JsonTailerErrorHandlerTest {
+class DefaultWalReplicationTailerErrorHandlerTest {
 
-    private final DefaultWal2JsonTailerErrorHandler errorHandler = new DefaultWal2JsonTailerErrorHandler();
+    private final DefaultWalReplicationTailerErrorHandler errorHandler = new DefaultWalReplicationTailerErrorHandler();
 
     @Test
     void message_illegal_argument_returns_continue() {
         var decision = errorHandler.onMessageError("slot_a", "{}", new IllegalArgumentException("bad row"));
 
-        assertThat(decision).isEqualTo(Wal2JsonTailerErrorHandler.Decision.CONTINUE);
+        assertThat(decision).isEqualTo(WalReplicationTailerErrorHandler.Decision.CONTINUE);
     }
 
     @Test
     void message_io_returns_retry_connection() {
         var decision = errorHandler.onMessageError("slot_a", "{}", new IOException("connection dropped"));
 
-        assertThat(decision).isEqualTo(Wal2JsonTailerErrorHandler.Decision.RETRY_CONNECTION);
+        assertThat(decision).isEqualTo(WalReplicationTailerErrorHandler.Decision.RETRY_CONNECTION);
     }
 
     @Test
     void stream_error_returns_retry_connection() {
         var decision = errorHandler.onStreamError("slot_a", new RuntimeException("unexpected"));
 
-        assertThat(decision).isEqualTo(Wal2JsonTailerErrorHandler.Decision.RETRY_CONNECTION);
+        assertThat(decision).isEqualTo(WalReplicationTailerErrorHandler.Decision.RETRY_CONNECTION);
     }
 }

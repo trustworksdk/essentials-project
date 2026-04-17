@@ -18,10 +18,10 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 /**
  * Interface for handling errors occurring during the processing of a PostgreSQL streaming replication slot
- * using the wal2json output plugin. Implementations of this interface are expected to provide logic for
+ * using a logical replication slot. Implementations of this interface are expected to provide logic for
  * handling two types of errors: message-level errors and stream-level errors.
  */
-public interface Wal2JsonTailerErrorHandler {
+public interface WalReplicationTailerErrorHandler {
     enum Decision {
         CONTINUE,          // swallow and keep streaming
         RETRY_CONNECTION,  // throw to outer loop (reconnect/backoff)

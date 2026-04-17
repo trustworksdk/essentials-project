@@ -32,7 +32,7 @@
     <logger name="dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory" level="INFO"/>
     <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.JacksonWal2JsonToPersistedEventConverter" level="TRACE"/>
     <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.JacksonWalGlobalOrdersExtractor" level="TRACE"/>
-    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.Wal2JsonTailer" level="TRACE"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.WalReplicationTailer" level="TRACE"/>
     <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcDispatcher" level="TRACE"/>
     <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcInboxRepository" level="TRACE"/>
 

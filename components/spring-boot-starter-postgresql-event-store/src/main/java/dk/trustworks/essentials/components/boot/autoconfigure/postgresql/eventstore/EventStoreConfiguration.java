@@ -31,7 +31,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bu
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.Wal2JsonTailerErrorHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.WalReplicationTailerErrorHandler;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.health.CdcHealthIndicator;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
@@ -480,7 +480,7 @@ public class EventStoreConfiguration {
     @ConditionalOnEnabledHealthIndicator("cdc")
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public HealthIndicator cdcHealthIndicator(CdcAvailability availability,
-                                              Optional<Wal2JsonTailer> tailer,
+                                              Optional<WalReplicationTailer> tailer,
                                               Optional<CdcDispatcher> dispatcher,
                                               EssentialsEventStoreProperties properties) {
         return new CdcHealthIndicator(availability, tailer, dispatcher, properties);
@@ -520,7 +520,8 @@ public class EventStoreConfiguration {
     public CdcDispatcher cdcDispatcher(CdcInboxRepository cdcInboxRepository,
                                        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                        EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
-                                       Wal2JsonToPersistedEventConverter converter,
+                                       LogicalReplicationToPersistedEventConverter converter,
+                                       PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter,
                                        WalGlobalOrdersExtractor walGlobalOrdersExtractor,
                                        SubscriptionResetOnPoisonNotifier subscriptionResetOnPoisonNotifier,
                                        CdcEventBus cdcEventBus,
@@ -528,6 +529,7 @@ public class EventStoreConfiguration {
                                        CdcConsumerGroup group,
                                        CdcSlotNameProvider slotNameProvider,
                                        CdcAvailability availability,
+                                       @Qualifier("configuredLogicalDecodingPlugin") LogicalDecodingPlugin logicalDecodingPlugin,
                                        Optional<MeterRegistry> meterRegistry) {
 
         String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
@@ -536,6 +538,7 @@ public class EventStoreConfiguration {
                                  eventStoreUnitOfWorkFactory,
                                  eventStreamGapHandler,
                                  converter,
+                                 Optional.of(pgOutputToPersistedEventConverter),
                                  walGlobalOrdersExtractor,
                                  Optional.of(subscriptionResetOnPoisonNotifier),
                                  cdcEventBus::publish,
@@ -543,6 +546,7 @@ public class EventStoreConfiguration {
                                  essentialsProperties.getCdc().getCdcDispatcher(),
                                  essentialsProperties.getCdc().getWalParserMode(),
                                  essentialsProperties.getCdc().getDeliveryMode(),
+                                 Optional.of(logicalDecodingPlugin),
                                  availability,
                                  meterRegistry
         );
@@ -573,8 +577,24 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public Wal2JsonToPersistedEventConverter wal2JsonToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
+    public LogicalReplicationToPersistedEventConverter logicalReplicationToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
         return new JacksonWal2JsonToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer,
+                                                                               AggregateTypeResolver aggregateTypeResolver) {
+        return new PgOutputToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public DirectLogicalReplicationEventConverter directLogicalReplicationEventConverter(LogicalReplicationToPersistedEventConverter converter,
+                                                                                         PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter) {
+        return new DefaultDirectLogicalReplicationEventConverter(converter, pgOutputToPersistedEventConverter);
     }
 
     @Bean
@@ -611,6 +631,36 @@ public class EventStoreConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean(name = "wal2jsonLogicalDecodingPlugin")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public LogicalDecodingPlugin wal2jsonLogicalDecodingPlugin(EssentialsEventStoreProperties properties) {
+        return new Wal2JsonLogicalDecodingPlugin(properties.getCdc().getWalReplicationTailer());
+    }
+
+    @Bean("configuredLogicalDecodingPlugin")
+    @ConditionalOnMissingBean(name = "configuredLogicalDecodingPlugin")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public LogicalDecodingPlugin logicalDecodingPlugin(EssentialsEventStoreProperties properties,
+                                                       @Qualifier("wal2jsonLogicalDecodingPlugin") LogicalDecodingPlugin wal2jsonLogicalDecodingPlugin,
+                                                       @Qualifier("pgoutputLogicalDecodingPlugin") LogicalDecodingPlugin pgoutputLogicalDecodingPlugin) {
+        String configuredPlugin = properties.getCdc().getPlugin();
+        if (Wal2JsonLogicalDecodingPlugin.PLUGIN_NAME.equalsIgnoreCase(configuredPlugin)) {
+            return wal2jsonLogicalDecodingPlugin;
+        }
+        if (PgOutputLogicalDecodingPlugin.PLUGIN_NAME.equalsIgnoreCase(configuredPlugin)) {
+            return pgoutputLogicalDecodingPlugin;
+        }
+        throw new IllegalArgumentException("Unsupported CDC logical decoding plugin '" + configuredPlugin + "'");
+    }
+
+    @Bean("pgoutputLogicalDecodingPlugin")
+    @ConditionalOnMissingBean(name = "pgoutputLogicalDecodingPlugin")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public LogicalDecodingPlugin pgoutputLogicalDecodingPlugin(EssentialsEventStoreProperties properties) {
+        return new PgOutputLogicalDecodingPlugin(properties.getCdc().getPgOutput());
+    }
+
+    @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcSlotNameProvider cdcSlotNameProvider(DataSourceProperties dsProps) {
@@ -632,39 +682,41 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public Wal2JsonTailer wal2JsonTailer(DataSourceProperties dataSourceProperties,
-                                         Jdbi jdbi,
-                                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
-                                         CdcInboxRepository cdcInboxRepository,
-                                         EssentialsEventStoreProperties properties,
-                                         CdcConsumerGroup group,
-                                         CdcSlotNameProvider slotNameProvider,
-                                         CdcAvailability availability,
-                                         Wal2JsonToPersistedEventConverter converter,
-                                         WalMessageFilter walMessageFilter,
-                                         CdcEventBus cdcEventBus,
-                                         Optional<MeterRegistry> meterRegistry,
-                                         Optional<Wal2JsonTailerErrorHandler> errorHandler) throws SQLException {
+    public WalReplicationTailer walReplicationTailer(DataSourceProperties dataSourceProperties,
+                                                     Jdbi jdbi,
+                                                     EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                                     CdcInboxRepository cdcInboxRepository,
+                                                     EssentialsEventStoreProperties properties,
+                                                     CdcConsumerGroup group,
+                                                     CdcSlotNameProvider slotNameProvider,
+                                                     CdcAvailability availability,
+                                                     DirectLogicalReplicationEventConverter directLogicalReplicationEventConverter,
+                                                     WalMessageFilter walMessageFilter,
+                                                     CdcEventBus cdcEventBus,
+                                                     @Qualifier("configuredLogicalDecodingPlugin") LogicalDecodingPlugin logicalDecodingPlugin,
+                                                     Optional<MeterRegistry> meterRegistry,
+                                                     Optional<WalReplicationTailerErrorHandler> errorHandler) throws SQLException {
 
         String     slotName              = getCdcSlotName(properties, group, slotNameProvider);
         DataSource replicationDataSource = createReplicationDataSource(dataSourceProperties);
 
-        return new Wal2JsonTailer(replicationDataSource,
-                                  jdbi,
-                                  eventStoreUnitOfWorkFactory,
-                                  slotName,
-                                  cdcInboxRepository,
-                                  properties.getCdc().getWal2JsonTailer(),
-                                  properties.getCdc().getSlot().getMode(),
-                                  properties.getCdc().getMode(),
-                                  properties.getCdc().getDeliveryMode(),
-                                  properties.getCdc().getWalParserMode(),
-                                  Optional.of(converter),
-                                  Optional.of(cdcEventBus::publish),
-                                  Optional.of(walMessageFilter),
-                                  availability,
-                                  meterRegistry,
-                                  errorHandler);
+        return new WalReplicationTailer(replicationDataSource,
+                                        jdbi,
+                                        eventStoreUnitOfWorkFactory,
+                                        slotName,
+                                        cdcInboxRepository,
+                                        properties.getCdc().getWalReplicationTailer(),
+                                        properties.getCdc().getSlot().getMode(),
+                                        properties.getCdc().getMode(),
+                                        properties.getCdc().getDeliveryMode(),
+                                        properties.getCdc().getWalParserMode(),
+                                        Optional.of(directLogicalReplicationEventConverter),
+                                        Optional.of(cdcEventBus::publish),
+                                        Optional.of(walMessageFilter),
+                                        Optional.of(logicalDecodingPlugin),
+                                        availability,
+                                        meterRegistry,
+                                        errorHandler);
     }
 
     @Bean
@@ -717,14 +769,16 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcApi cdcApi(EssentialsSecurityProvider securityProvider,
+                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                          EssentialsEventStoreProperties properties,
                          CdcAvailability availability,
                          CdcConsumerGroup group,
                          CdcSlotNameProvider slotNameProvider,
-                         Optional<Wal2JsonTailer> tailer,
+                         Optional<WalReplicationTailer> tailer,
                          Optional<CdcDispatcher> dispatcher) {
         String slotName = getCdcSlotName(properties, group, slotNameProvider);
         return new DefaultCdcApi(securityProvider,
+                                 eventStoreUnitOfWorkFactory,
                                  availability,
                                  properties.getCdc(),
                                  slotName,

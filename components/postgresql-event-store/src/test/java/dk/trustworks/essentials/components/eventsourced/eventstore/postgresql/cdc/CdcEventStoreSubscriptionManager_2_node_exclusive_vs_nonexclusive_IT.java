@@ -45,7 +45,7 @@ import java.util.stream.IntStream;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
-public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_IT extends AbstractWal2JsonPostgresIT {
+public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_IT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private EventProcessorIT.TestPersistableEventMapper                             eventMapper;

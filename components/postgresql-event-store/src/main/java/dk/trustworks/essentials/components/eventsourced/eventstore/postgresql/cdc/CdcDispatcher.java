@@ -57,7 +57,8 @@ public final class CdcDispatcher implements Lifecycle {
 
     private final CdcInboxRepository                                            inbox;
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
-    private final Wal2JsonToPersistedEventConverter                             converter;
+    private final LogicalReplicationToPersistedEventConverter                             converter;
+    private final PgOutputToPersistedEventConverter                             pgOutputConverter;
     private final EventStreamGapHandler<?>                                      eventStreamGapHandler;
     private final WalGlobalOrdersExtractor                                      walGlobalOrdersExtractor;
     private final CdcPoisonNotifier                                             cdcPoisonNotifier;
@@ -71,6 +72,9 @@ public final class CdcDispatcher implements Lifecycle {
     private final CdcDeliveryMode                                               deliveryMode;
     private final CdcAvailability                                               availability;
     private final MeterRegistry                                                 meterRegistry;
+    private final LogicalDecodingPlugin                                         logicalDecodingPlugin;
+    private final PgOutputMessageDecoder                                        pgOutputMessageDecoder;
+    private final PgOutputRowChangeDecoder                                      pgOutputRowChangeDecoder;
 
     private final AtomicBoolean started  = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
@@ -111,7 +115,7 @@ public final class CdcDispatcher implements Lifecycle {
     public CdcDispatcher(CdcInboxRepository inbox,
                          HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
-                         Wal2JsonToPersistedEventConverter converter,
+                         LogicalReplicationToPersistedEventConverter converter,
                          WalGlobalOrdersExtractor walGlobalOrdersExtractor,
                          Optional<CdcPoisonNotifier> cdcPoisonNotifier,
                          Consumer<List<PersistedEvent>> onEvents,
@@ -123,6 +127,7 @@ public final class CdcDispatcher implements Lifecycle {
              unitOfWorkFactory,
              eventStreamGapHandler,
              converter,
+             Optional.empty(),
              walGlobalOrdersExtractor,
              cdcPoisonNotifier,
              onEvents,
@@ -130,6 +135,7 @@ public final class CdcDispatcher implements Lifecycle {
              cdcDispatcherProperties,
              walParserMode,
              CdcDeliveryMode.INBOX,
+             Optional.empty(),
              availability,
              Optional.empty());
     }
@@ -154,7 +160,8 @@ public final class CdcDispatcher implements Lifecycle {
     public CdcDispatcher(CdcInboxRepository inbox,
                          HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
-                         Wal2JsonToPersistedEventConverter converter,
+                         LogicalReplicationToPersistedEventConverter converter,
+                         Optional<PgOutputToPersistedEventConverter> pgOutputConverter,
                          WalGlobalOrdersExtractor walGlobalOrdersExtractor,
                          Optional<CdcPoisonNotifier> cdcPoisonNotifier,
                          Consumer<List<PersistedEvent>> onEvents,
@@ -162,12 +169,14 @@ public final class CdcDispatcher implements Lifecycle {
                          CdcDispatcherProperties cdcDispatcherProperties,
                          WalParserMode walParserMode,
                          CdcDeliveryMode deliveryMode,
+                         Optional<LogicalDecodingPlugin> logicalDecodingPlugin,
                          CdcAvailability availability,
                          Optional<MeterRegistry> meterRegistry) {
         this.inbox = requireNonNull(inbox, "inbox cannot be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
         this.eventStreamGapHandler = requireNonNull(eventStreamGapHandler, "eventStreamGapHandler cannot be null");
         this.converter = requireNonNull(converter, "converter cannot be null");
+        this.pgOutputConverter = pgOutputConverter.orElse(null);
         this.walGlobalOrdersExtractor = requireNonNull(walGlobalOrdersExtractor, "walGlobalOrdersExtract cannot be null");
         this.cdcPoisonNotifier = requireNonNull(cdcPoisonNotifier.orElse(new CdcPoisonNotifier.NoOpCdcPoisonNotifier()), "cdcPoisonNotifier cannot be null");
         this.onEvents = requireNonNull(onEvents, "onEvents cannot be null");
@@ -182,7 +191,42 @@ public final class CdcDispatcher implements Lifecycle {
         this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
         this.availability = requireNonNull(availability, "availability cannot be null");
         this.meterRegistry = meterRegistry.orElse(null);
+        this.logicalDecodingPlugin = logicalDecodingPlugin.orElseGet(() -> new Wal2JsonLogicalDecodingPlugin(CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(250), Duration.ofSeconds(5), Duration.ofSeconds(1))));
+        this.pgOutputMessageDecoder = this.logicalDecodingPlugin instanceof PgOutputLogicalDecodingPlugin plugin
+                                      ? new PgOutputMessageDecoder(plugin.protocolVersion())
+                                      : null;
+        this.pgOutputRowChangeDecoder = pgOutputMessageDecoder != null ? new PgOutputRowChangeDecoder() : null;
         initMetrics();
+    }
+
+    public CdcDispatcher(CdcInboxRepository inbox,
+                         HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                         EventStreamGapHandler<?> eventStreamGapHandler,
+                         LogicalReplicationToPersistedEventConverter converter,
+                         WalGlobalOrdersExtractor walGlobalOrdersExtractor,
+                         Optional<CdcPoisonNotifier> cdcPoisonNotifier,
+                         Consumer<List<PersistedEvent>> onEvents,
+                         String slotName,
+                         CdcDispatcherProperties cdcDispatcherProperties,
+                         WalParserMode walParserMode,
+                         CdcDeliveryMode deliveryMode,
+                         CdcAvailability availability,
+                         Optional<MeterRegistry> meterRegistry) {
+        this(inbox,
+             unitOfWorkFactory,
+             eventStreamGapHandler,
+             converter,
+             Optional.empty(),
+             walGlobalOrdersExtractor,
+             cdcPoisonNotifier,
+             onEvents,
+             slotName,
+             cdcDispatcherProperties,
+             walParserMode,
+             deliveryMode,
+             Optional.empty(),
+             availability,
+             meterRegistry);
     }
 
     private void initMetrics() {
@@ -263,12 +307,14 @@ public final class CdcDispatcher implements Lifecycle {
         for (var row : batch) {
             if (stopping.get()) return;
             var payloadBytes = row.payloadJsonBytes();
+            PgOutputDecodedPayload pgOutputPayload = null;
 
             try {
+                if (isPgOutputPlugin()) {
+                    pgOutputPayload = decodePgOutputPayload(payloadBytes);
+                }
                 long convertStartNs = System.nanoTime();
-                var events = walParserMode == WalParserMode.BYTES
-                             ? converter.convert(payloadBytes)
-                             : converter.convert(payloadBytes == null ? null : new String(payloadBytes, StandardCharsets.UTF_8));
+                var events = convertEvents(payloadBytes, pgOutputPayload);
                 if (convertTimer != null) convertTimer.record(System.nanoTime() - convertStartNs, TimeUnit.NANOSECONDS);
                 if (!events.isEmpty()) {
                     long publishStartNs = System.nanoTime();
@@ -285,6 +331,7 @@ public final class CdcDispatcher implements Lifecycle {
                          slotName, row.inboxId(), row.lsn(), poisonPolicy, e.getMessage(), e);
 
                 if (poisonPolicy == PoisonPolicy.QUARANTINE_AND_CONTINUE) {
+                    var poisonGaps = extractPoisonGaps(payloadBytes, pgOutputPayload);
                     unitOfWorkFactory.usingUnitOfWork(uow -> {
                         log.warn("[{}] Poisoning inboxId={} lsn={}", slotName, row.inboxId(), row.lsn());
                         inbox.markPoison(slotName, row.lsn(), abbreviateExceptionMessage(e));
@@ -292,12 +339,8 @@ public final class CdcDispatcher implements Lifecycle {
                         if (poisonRowsCounter != null) poisonRowsCounter.increment();
 
                         // IMPORTANT: prevent subscribers stalling on this missing global_order
-                        // Extract (aggregateType, global_order list) from the WAL JSON without full conversion
-                        var gaps = walParserMode == WalParserMode.BYTES
-                                   ? walGlobalOrdersExtractor.extract(payloadBytes)
-                                   : walGlobalOrdersExtractor.extract(payloadBytes == null ? null : new String(payloadBytes, StandardCharsets.UTF_8));
-                        if (!gaps.isEmpty()) {
-                            for (var gap : gaps) {
+                        if (!poisonGaps.isEmpty()) {
+                            for (var gap : poisonGaps) {
                                 if (log.isDebugEnabled()) {
                                     log.debug("[{}] Poisoning gap for aggregateType={} global_order={}", slotName, gap.aggregateType(), gap.globalEventOrder());
                                 }
@@ -317,6 +360,46 @@ public final class CdcDispatcher implements Lifecycle {
                 throw e;
             }
         }
+    }
+
+    private List<PersistedEvent> convertEvents(byte[] payloadBytes, PgOutputDecodedPayload pgOutputPayload) {
+        if (isPgOutputPlugin()) {
+            if (pgOutputPayload == null || pgOutputPayload.rowChanges().isEmpty()) return List.of();
+
+            var events = new ArrayList<PersistedEvent>(pgOutputPayload.rowChanges().size());
+            for (var rowChange : pgOutputPayload.rowChanges()) {
+                pgOutputConverter.convertIfRelevant(rowChange).ifPresent(events::add);
+            }
+            return events;
+        }
+
+        return walParserMode == WalParserMode.BYTES
+               ? converter.convert(payloadBytes)
+               : converter.convert(payloadBytes == null ? null : new String(payloadBytes, StandardCharsets.UTF_8));
+    }
+
+    private List<WalGlobalOrdersExtractor.Gap> extractPoisonGaps(byte[] payloadBytes, PgOutputDecodedPayload pgOutputPayload) {
+        if (isPgOutputPlugin()) {
+            if (pgOutputPayload == null || pgOutputPayload.rowChanges().isEmpty()) return List.of();
+
+            var gaps = new ArrayList<WalGlobalOrdersExtractor.Gap>(pgOutputPayload.rowChanges().size());
+            for (var rowChange : pgOutputPayload.rowChanges()) {
+                pgOutputConverter.extractGap(rowChange).ifPresent(gaps::add);
+            }
+            return gaps;
+        }
+
+        return walParserMode == WalParserMode.BYTES
+               ? walGlobalOrdersExtractor.extract(payloadBytes)
+               : walGlobalOrdersExtractor.extract(payloadBytes == null ? null : new String(payloadBytes, StandardCharsets.UTF_8));
+    }
+
+    private PgOutputDecodedPayload decodePgOutputPayload(byte[] payloadBytes) {
+        if (payloadBytes == null || payloadBytes.length == 0) {
+            return new PgOutputDecodedPayload(List.of());
+        }
+        var decodedMessage = pgOutputMessageDecoder.decode(payloadBytes);
+        return new PgOutputDecodedPayload(pgOutputRowChangeDecoder.accept(decodedMessage));
     }
 
     private static String abbreviateExceptionMessage(Exception e) {
@@ -388,5 +471,12 @@ public final class CdcDispatcher implements Lifecycle {
             long lastBatchSize,
             long lastTickEpochMs
     ) {
+    }
+
+    private boolean isPgOutputPlugin() {
+        return logicalDecodingPlugin instanceof PgOutputLogicalDecodingPlugin;
+    }
+
+    private record PgOutputDecodedPayload(List<PgOutputRowChange> rowChanges) {
     }
 }

@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.a
 public record ApiCdcStatus(
         ApiCdcAvailability availability,
         ApiCdcConfiguration configuration,
+        ApiCdcSlotStatus slot,
         ApiCdcTailerStatus tailer,
         ApiCdcDispatcherStatus dispatcher
 ) {

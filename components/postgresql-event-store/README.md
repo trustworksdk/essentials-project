@@ -2201,13 +2201,13 @@ var observer = new MeasurementEventStoreSubscriptionObserver(
 
 ---
 
-## Hybrid CDC (wal2json)
+## Hybrid CDC (Logical Replication)
 
 Hybrid CDC is available through the CDC package and Spring Boot starter integration.
 
 What it adds:
 
-- low-latency live ingestion from PostgreSQL logical replication (`wal2json`)
+- low-latency live ingestion from PostgreSQL logical replication (`pgoutput` by default, `wal2json` optional)
 - configurable delivery pipeline:
   - `INBOX` (default): durable inbox/dispatcher with poison handling and permanent gap registration
   - `DIRECT`: tailer converts and publishes directly to CDC bus (no inbox persistence, no dispatcher)
@@ -2221,7 +2221,9 @@ Startup semantics:
 - `cdc.mode=auto` marks CDC as failed/inactive and continues with polling fallback
 - `cdc.delivery-mode=inbox|direct` controls whether CDC uses durable inbox or direct publish mode
 - `cdc.cdc-dispatcher.dispatched-row-policy=mark-dispatched|delete` controls whether dispatched inbox rows are retained for TTL cleanup or deleted immediately
-- WAL filtering only persists `kind=insert` changes for configured aggregate event stream tables
+- CDC conversion only processes configured aggregate event stream inserts
+  - `wal2json`: `kind=insert` rows on configured event tables
+  - `pgoutput`: only insert messages for configured event tables; non-insert messages are ignored
 
 Slot ownership and safety:
 
@@ -2235,7 +2237,7 @@ Design details:
 
 Operational API:
 
-- `CdcApi#getStatus(principal)` exposes CDC availability, effective configuration, tailer status, and dispatcher status for admin/support tooling.
+- `CdcApi#getStatus(principal)` exposes CDC availability, effective configuration, replication slot state, tailer status, and dispatcher status for admin/support tooling.
 
 Recommended defaults:
 

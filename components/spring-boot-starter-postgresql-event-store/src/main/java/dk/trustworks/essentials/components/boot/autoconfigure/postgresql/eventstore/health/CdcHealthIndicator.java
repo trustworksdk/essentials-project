@@ -26,12 +26,12 @@ import java.util.Optional;
 public class CdcHealthIndicator implements HealthIndicator {
 
     private final CdcAvailability availability;
-    private final Optional<Wal2JsonTailer> tailer;
+    private final Optional<WalReplicationTailer> tailer;
     private final Optional<CdcDispatcher> dispatcher;
     private final EssentialsEventStoreProperties properties;
 
     public CdcHealthIndicator(CdcAvailability availability,
-                              Optional<Wal2JsonTailer> tailer,
+                              Optional<WalReplicationTailer> tailer,
                               Optional<CdcDispatcher> dispatcher,
                               EssentialsEventStoreProperties properties) {
         this.availability = availability;
