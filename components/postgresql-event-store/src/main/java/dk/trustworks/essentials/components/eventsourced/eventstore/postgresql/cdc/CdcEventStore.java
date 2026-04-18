@@ -29,8 +29,8 @@ import io.micrometer.core.instrument.*;
 import dk.trustworks.essentials.reactive.EventBus;
 import dk.trustworks.essentials.types.LongRange;
 import io.micrometer.core.instrument.Timer;
+import org.reactivestreams.Subscription;
 import org.slf4j.*;
-import reactor.core.Disposable;
 import reactor.core.publisher.*;
 
 import java.time.Duration;
@@ -86,6 +86,7 @@ public class CdcEventStore implements EventStore {
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
     private final EventStreamGapHandler<?>                                    eventStreamGapHandler;
     private final CdcEventBus                                                 cdcBus;
+    private final CdcProperties.CdcEventBusProperties                         eventBusProperties;
     private final int                                                         backfillBatchSize;
     private final CdcAvailability                                             availability;
     private final MeterRegistry                                               meterRegistry;
@@ -117,6 +118,10 @@ public class CdcEventStore implements EventStore {
         this.eventStreamGapHandler = requireNonNull(eventStreamGapHandler, "eventStreamGapHandler must not be null");
         this.cdcBus = requireNonNull(cdcBus, "cdcBus must not be null");
         requireNonNull(cdcProperties, "cdcProperties must not be null");
+        this.eventBusProperties = requireNonNull(cdcProperties.getEventBus(), "cdcProperties.eventBus must not be null");
+        requireTrue(eventBusProperties.getBackpressureBufferSize() > 0, "eventBus.backpressureBufferSize must be > 0");
+        requireTrue(eventBusProperties.getNonSerializedMaxRetries() > 0, "eventBus.nonSerializedMaxRetries must be > 0");
+        requireTrue(eventBusProperties.getOverflowMaxRetries() >= 0, "eventBus.overflowMaxRetries must be >= 0");
         this.availability = requireNonNull(availability, "availability must not be null");
         requireTrue(cdcProperties.getCdcEventStoreBackfillBatchSize() >= 1, "backfillBatchSize must be >= 1");
         this.backfillBatchSize = cdcProperties.getCdcEventStoreBackfillBatchSize();
@@ -193,7 +198,7 @@ public class CdcEventStore implements EventStore {
                                                              .orElse(false))
                                                   .orElse(true));
 
-        return new BackfillThenLiveOrdered(backfillToLiveTransitionTimer).ordered(
+        return new BackfillThenLiveOrdered(backfillToLiveTransitionTimer, eventBusProperties).ordered(
                 backfill,
                 live,
                 head.longValue()
@@ -394,16 +399,22 @@ public class CdcEventStore implements EventStore {
      * See: cdc/cdc-eventstore.md
      */
     static final class BackfillThenLiveOrdered {
-        private final Timer backfillToLiveTransitionTimer;
+        private static final Logger LOG = LoggerFactory.getLogger(BackfillThenLiveOrdered.class);
 
-        private BackfillThenLiveOrdered(Timer backfillToLiveTransitionTimer) {
+        private final Timer                             backfillToLiveTransitionTimer;
+        private final CdcProperties.CdcEventBusProperties eventBusProperties;
+
+        private BackfillThenLiveOrdered(Timer backfillToLiveTransitionTimer,
+                                        CdcProperties.CdcEventBusProperties eventBusProperties) {
             this.backfillToLiveTransitionTimer = backfillToLiveTransitionTimer;
+            this.eventBusProperties = requireNonNull(eventBusProperties, "eventBusProperties");
         }
 
         static Flux<PersistedEvent> orderedWithoutMetrics(Flux<PersistedEvent> backfill,
                                                           Flux<PersistedEvent> live,
-                                                          long headInclusive) {
-            return new BackfillThenLiveOrdered(null).ordered(backfill, live, headInclusive);
+                                                          long headInclusive,
+                                                          CdcProperties.CdcEventBusProperties eventBusProperties) {
+            return new BackfillThenLiveOrdered(null, eventBusProperties).ordered(backfill, live, headInclusive);
         }
 
         Flux<PersistedEvent> ordered(
@@ -414,8 +425,16 @@ public class CdcEventStore implements EventStore {
             requireNonNull(backfill, "backfill");
             requireNonNull(live, "live");
 
+            int bufferSize              = eventBusProperties.getBackpressureBufferSize();
+            int nonSerializedMaxRetries = eventBusProperties.getNonSerializedMaxRetries();
+            int overflowMaxRetries      = eventBusProperties.getOverflowMaxRetries();
+            // Dropping events in the ordered pipeline would silently violate the strict-ordering contract.
+            // Honor retry counts from the bus config, but always fail-fast on terminal overflow.
+            CdcProperties.CdcOverflowPolicy effectivePolicy = CdcProperties.CdcOverflowPolicy.FAIL_FAST;
+
             return Flux.defer(() -> {
-                // Buffers live events by global order while backfill is running
+                // Buffers live events by global order while backfill is running.
+                // Bounded by the BaseSubscriber demand contract below: outstanding-demand + buffer.size() <= bufferSize.
                 NavigableMap<Long, PersistedEvent> buffer = new ConcurrentSkipListMap<>();
 
                 AtomicLong    expectedNext          = new AtomicLong(headInclusive + 1);
@@ -424,55 +443,86 @@ public class CdcEventStore implements EventStore {
                 long          backfillToLiveStartNs = System.nanoTime();
                 AtomicBoolean transitionRecorded    = new AtomicBoolean(false);
 
-                // Do NOT use replay().all() here (unbounded memory). We only start emitting after backfill is done.
-                Sinks.Many<PersistedEvent> orderedLiveSink = Sinks.many().unicast().onBackpressureBuffer();
+                // Bounded queue → tryEmitNext returns FAIL_OVERFLOW when a slow downstream consumer can't keep up.
+                // The shared CdcSinkEmitter then backs off and eventually fails fast per policy.
+                Sinks.Many<PersistedEvent> orderedLiveSink = Sinks.many()
+                                                                  .unicast()
+                                                                  .onBackpressureBuffer(new ArrayBlockingQueue<>(bufferSize));
 
-                Runnable drain = () -> {
-                    if (!backfillDone.get()) return;
+                IntSupplier drain = () -> {
+                    if (!backfillDone.get()) return 0;
 
+                    int drained = 0;
                     long next = expectedNext.get();
                     while (true) {
                         PersistedEvent ev = buffer.remove(next);
                         if (ev == null) break;
 
-                        orderedLiveSink.tryEmitNext(ev);
+                        CdcSinkEmitter.tryEmit(orderedLiveSink,
+                                               ev,
+                                               nonSerializedMaxRetries,
+                                               overflowMaxRetries,
+                                               effectivePolicy,
+                                               "BackfillThenLiveOrdered",
+                                               LOG);
                         next++;
                         expectedNext.set(next);
+                        drained++;
                     }
 
-                    // Only complete AFTER backfill is done and live has completed
                     if (liveDone.get() && buffer.isEmpty()) {
                         orderedLiveSink.tryEmitComplete();
                     }
+                    return drained;
                 };
 
-                // Subscribe to live immediately so we don't miss anything during backfill
-                Disposable liveSub = live.subscribe(
-                        ev -> {
-                            long go  = ev.globalEventOrder().longValue();
-                            long exp = expectedNext.get();
+                // BaseSubscriber participates in upstream backpressure: we request at most `bufferSize` outstanding
+                // demand from the CDC bus. If backfill hasn't completed, drain() is a no-op and we do NOT refill
+                // demand — upstream is backpressured via the bus's own overflow policy.
+                BaseSubscriber<PersistedEvent> liveSub = new BaseSubscriber<PersistedEvent>() {
+                    @Override
+                    protected void hookOnSubscribe(Subscription subscription) {
+                        request(bufferSize);
+                    }
 
-                            // drop duplicates/old events
-                            if (go < exp) return;
+                    @Override
+                    protected void hookOnNext(PersistedEvent ev) {
+                        long go  = ev.globalEventOrder().longValue();
+                        long exp = expectedNext.get();
 
-                            buffer.put(go, ev);
-                            drain.run();
-                        },
-                        err -> {
-                            // error can be forwarded immediately (concat will see it once subscribed)
-                            orderedLiveSink.tryEmitError(err);
-                        },
-                        () -> {
-                            liveDone.set(true);
-                            // Don't complete sink yet unless backfill is done (and we drained).
-                            drain.run();
+                        if (go < exp) {
+                            // Duplicate / already-emitted — does not occupy buffer, compensate immediately.
+                            request(1);
+                            return;
                         }
-                                                   );
+
+                        buffer.put(go, ev);
+                        int drained = drain.getAsInt();
+                        if (drained > 0) {
+                            request(drained);
+                        }
+                    }
+
+                    @Override
+                    protected void hookOnError(Throwable err) {
+                        orderedLiveSink.tryEmitError(err);
+                    }
+
+                    @Override
+                    protected void hookOnComplete() {
+                        liveDone.set(true);
+                        drain.getAsInt();
+                    }
+                };
+                live.subscribe(liveSub);
 
                 Flux<PersistedEvent> backfillWithGate =
                         backfill.doOnComplete(() -> {
                             backfillDone.set(true);
-                            drain.run(); // may also complete sink if liveDone
+                            int drained = drain.getAsInt();
+                            if (drained > 0) {
+                                liveSub.request(drained);
+                            }
                             if (backfillToLiveTransitionTimer != null && transitionRecorded.compareAndSet(false, true)) {
                                 backfillToLiveTransitionTimer.record(System.nanoTime() - backfillToLiveStartNs, java.util.concurrent.TimeUnit.NANOSECONDS);
                             }
@@ -480,10 +530,14 @@ public class CdcEventStore implements EventStore {
 
                 Flux<PersistedEvent> orderedLiveFlux = orderedLiveSink.asFlux();
 
-                return Flux.concat(backfillWithGate, orderedLiveFlux)
+                // Use merge (not concat) so the sink has a subscriber attached upfront. With a bounded sink queue,
+                // concat would race: backfill.doOnComplete -> drain emits to sink -> queue fills before concat
+                // subscribes to orderedLiveFlux -> next emit hits FAIL_OVERFLOW. Merge attaches B immediately, so
+                // tryEmitNext flows to the subscriber in real time. Ordering is preserved because drain is gated
+                // on backfillDone, so B emits nothing until after all backfill items have been delivered.
+                return Flux.merge(backfillWithGate, orderedLiveFlux)
                            .doFinally(sig -> {
                                liveSub.dispose();
-                               // Ensure completion on teardown
                                orderedLiveSink.tryEmitComplete();
                            });
             });
