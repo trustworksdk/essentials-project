@@ -17,12 +17,14 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalReplicationTailerProperties;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.DefaultDirectLogicalReplicationEventConverter;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.JacksonWal2JsonToPersistedEventConverter;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.LogicalReplicationToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.PgOutputToPersistedEventConverter;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -35,6 +37,7 @@ import org.testcontainers.junit.jupiter.*;
 import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -111,26 +114,8 @@ public class CdcModeAutoRequireIT {
     @Test
     void auto_mode_does_not_start_when_wal2json_unusable() {
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
-
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                limitedJdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(50),
-                        Duration.ofMillis(100),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = wal2JsonInboxTailer(slotName, availability, CdcMode.AUTO, limitedJdbi, unitOfWorkFactory, replicationDataSource);
 
         tailer.start();
 
@@ -141,26 +126,8 @@ public class CdcModeAutoRequireIT {
     @Test
     void require_mode_throws_when_wal2json_unusable() {
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
-
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                limitedJdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(50),
-                        Duration.ofMillis(100),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.REQUIRE,
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = wal2JsonInboxTailer(slotName, availability, CdcMode.REQUIRE, limitedJdbi, unitOfWorkFactory, replicationDataSource);
 
         assertThatThrownBy(tailer::start)
                 .isInstanceOf(IllegalStateException.class)
@@ -174,33 +141,7 @@ public class CdcModeAutoRequireIT {
         createPublication(publicationName);
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                adminReplicationDataSource,
-                adminJdbi,
-                new EventStoreManagedUnitOfWorkFactory(adminJdbi),
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(50),
-                        Duration.ofMillis(100),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcProperties.CdcDeliveryMode.DIRECT,
-                CdcProperties.WalParserMode.BYTES,
-                Optional.of(new DefaultDirectLogicalReplicationEventConverter(
-                        new JacksonWal2JsonToPersistedEventConverter(new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()), table -> null),
-                        new PgOutputToPersistedEventConverter(new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()), table -> null)
-                )),
-                Optional.of(events -> { }),
-                Optional.empty(),
-                Optional.of(pgOutputPlugin(publicationName)),
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = pgOutputDirectTailer(slotName, publicationName, availability, CdcMode.AUTO);
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 
@@ -217,33 +158,7 @@ public class CdcModeAutoRequireIT {
         createPublication(publicationName);
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                adminReplicationDataSource,
-                adminJdbi,
-                new EventStoreManagedUnitOfWorkFactory(adminJdbi),
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(50),
-                        Duration.ofMillis(100),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.REQUIRE,
-                CdcProperties.CdcDeliveryMode.DIRECT,
-                CdcProperties.WalParserMode.BYTES,
-                Optional.of(new DefaultDirectLogicalReplicationEventConverter(
-                        new JacksonWal2JsonToPersistedEventConverter(new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()), table -> null),
-                        new PgOutputToPersistedEventConverter(new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()), table -> null)
-                )),
-                Optional.of(events -> { }),
-                Optional.empty(),
-                Optional.of(pgOutputPlugin(publicationName)),
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = pgOutputDirectTailer(slotName, publicationName, availability, CdcMode.REQUIRE);
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 
@@ -259,33 +174,7 @@ public class CdcModeAutoRequireIT {
         String publicationName = publicationName();
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                adminReplicationDataSource,
-                adminJdbi,
-                new EventStoreManagedUnitOfWorkFactory(adminJdbi),
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(50),
-                        Duration.ofMillis(100),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                CdcProperties.CdcDeliveryMode.DIRECT,
-                CdcProperties.WalParserMode.BYTES,
-                Optional.of(new DefaultDirectLogicalReplicationEventConverter(
-                        new JacksonWal2JsonToPersistedEventConverter(new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()), table -> null),
-                        new PgOutputToPersistedEventConverter(new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()), table -> null)
-                )),
-                Optional.of(events -> { }),
-                Optional.empty(),
-                Optional.of(pgOutputPlugin(publicationName)),
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = pgOutputDirectTailer(slotName, publicationName, availability, CdcMode.AUTO);
 
         tailer.start();
 
@@ -300,33 +189,7 @@ public class CdcModeAutoRequireIT {
         String publicationName = publicationName();
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                adminReplicationDataSource,
-                adminJdbi,
-                new EventStoreManagedUnitOfWorkFactory(adminJdbi),
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(50),
-                        Duration.ofMillis(100),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.REQUIRE,
-                CdcProperties.CdcDeliveryMode.DIRECT,
-                CdcProperties.WalParserMode.BYTES,
-                Optional.of(new DefaultDirectLogicalReplicationEventConverter(
-                        new JacksonWal2JsonToPersistedEventConverter(new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()), table -> null),
-                        new PgOutputToPersistedEventConverter(new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()), table -> null)
-                )),
-                Optional.of(events -> { }),
-                Optional.empty(),
-                Optional.of(pgOutputPlugin(publicationName)),
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = pgOutputDirectTailer(slotName, publicationName, availability, CdcMode.REQUIRE);
 
         assertThatThrownBy(tailer::start)
                 .isInstanceOf(IllegalStateException.class)
@@ -345,13 +208,53 @@ public class CdcModeAutoRequireIT {
         return "pub_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
     }
 
-    private static PgOutputLogicalDecodingPlugin pgOutputPlugin(String publicationName) {
+    private static WalReplicationTailerProperties tailerProps() {
+        return WalReplicationTailerProperties.defaults(
+                Duration.ofMillis(50), Duration.ofMillis(100), Duration.ofSeconds(2), Duration.ofMillis(100));
+    }
+
+    private WalReplicationTailer wal2JsonInboxTailer(String slotName,
+                                                     CdcAvailability availability,
+                                                     CdcMode mode,
+                                                     Jdbi jdbi,
+                                                     HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> uow,
+                                                     DataSource ds) {
+        var props = tailerProps();
+        LogicalReplicationToPersistedEventConverter noConverter = (String s) -> List.of();
+        WalGlobalOrdersExtractor noExtractor = (String s) -> List.of();
+        var plugin = new Wal2JsonLogicalDecodingPlugin(props, noConverter, noExtractor, CdcProperties.WalParserMode.STRING);
+        return new WalReplicationTailer(
+                ds, jdbi, uow, slotName, inboxRepository, props,
+                PgSlotMode.CREATE_IF_MISSING, mode, CdcProperties.CdcDeliveryMode.INBOX, plugin,
+                Optional.empty(), Optional.empty(), availability,
+                Optional.empty(), Optional.empty());
+    }
+
+    private WalReplicationTailer pgOutputDirectTailer(String slotName,
+                                                      String publicationName,
+                                                      CdcAvailability availability,
+                                                      CdcMode mode) {
+        var props = tailerProps();
+        var pgConverter = new PgOutputToPersistedEventConverter(
+                new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()),
+                table -> null);
+        return new WalReplicationTailer(
+                adminReplicationDataSource, adminJdbi, new EventStoreManagedUnitOfWorkFactory(adminJdbi),
+                slotName, inboxRepository, props,
+                PgSlotMode.CREATE_IF_MISSING, mode, CdcProperties.CdcDeliveryMode.DIRECT,
+                pgOutputPlugin(publicationName, pgConverter),
+                Optional.of(events -> { }), Optional.empty(), availability,
+                Optional.empty(), Optional.empty());
+    }
+
+    private static PgOutputLogicalDecodingPlugin pgOutputPlugin(String publicationName,
+                                                                PgOutputToPersistedEventConverter converter) {
         var properties = new CdcProperties.PgOutputProperties();
         properties.setPublicationName(publicationName);
         properties.setProtoVersion(1);
         properties.setBinary(false);
         properties.setMessages(false);
-        return new PgOutputLogicalDecodingPlugin(properties);
+        return new PgOutputLogicalDecodingPlugin(properties, converter);
     }
 
     private static DataSource replicationDataSource(String host, int port, String db, String user, String pass) throws SQLException {

@@ -16,10 +16,16 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalParserMode;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalReplicationTailerProperties;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.LogicalReplicationToPersistedEventConverter;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import org.jdbi.v3.core.Handle;
 
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -27,14 +33,27 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * {@link LogicalDecodingPlugin} adapter for {@code wal2json}.
+ * <p>
+ * Owns the wal2json payload → {@link PersistedEvent} conversion pipeline, including the
+ * {@link WalParserMode} bytes/string switch. Tailer and dispatcher delegate decode + gap
+ * extraction here — no wal2json-specific code lives outside this plugin.
  */
 public final class Wal2JsonLogicalDecodingPlugin implements LogicalDecodingPlugin {
     public static final String PLUGIN_NAME = "wal2json";
 
-    private final WalReplicationTailerProperties properties;
+    private final WalReplicationTailerProperties              properties;
+    private final LogicalReplicationToPersistedEventConverter converter;
+    private final WalGlobalOrdersExtractor                    gapExtractor;
+    private final WalParserMode                               walParserMode;
 
-    public Wal2JsonLogicalDecodingPlugin(WalReplicationTailerProperties properties) {
+    public Wal2JsonLogicalDecodingPlugin(WalReplicationTailerProperties properties,
+                                         LogicalReplicationToPersistedEventConverter converter,
+                                         WalGlobalOrdersExtractor gapExtractor,
+                                         WalParserMode walParserMode) {
         this.properties = requireNonNull(properties, "properties cannot be null");
+        this.converter = requireNonNull(converter, "converter cannot be null");
+        this.gapExtractor = requireNonNull(gapExtractor, "gapExtractor cannot be null");
+        this.walParserMode = requireNonNull(walParserMode, "walParserMode cannot be null");
     }
 
     @Override
@@ -60,7 +79,23 @@ public final class Wal2JsonLogicalDecodingPlugin implements LogicalDecodingPlugi
     }
 
     @Override
-    public boolean supportsCurrentPayloadPipeline() {
+    public List<PersistedEvent> decode(byte[] payloadBytes) {
+        if (payloadBytes == null || payloadBytes.length == 0) return List.of();
+        return walParserMode == WalParserMode.BYTES
+               ? converter.convert(payloadBytes)
+               : converter.convert(new String(payloadBytes, StandardCharsets.UTF_8));
+    }
+
+    @Override
+    public List<WalGlobalOrdersExtractor.Gap> extractGaps(byte[] payloadBytes) {
+        if (payloadBytes == null || payloadBytes.length == 0) return List.of();
+        return walParserMode == WalParserMode.BYTES
+               ? gapExtractor.extract(payloadBytes)
+               : gapExtractor.extract(new String(payloadBytes, StandardCharsets.UTF_8));
+    }
+
+    @Override
+    public boolean preFiltersRawPayloads() {
         return true;
     }
 }

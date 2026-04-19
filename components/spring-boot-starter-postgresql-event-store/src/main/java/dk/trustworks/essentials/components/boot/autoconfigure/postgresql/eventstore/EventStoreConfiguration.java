@@ -520,9 +520,6 @@ public class EventStoreConfiguration {
     public CdcDispatcher cdcDispatcher(CdcInboxRepository cdcInboxRepository,
                                        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                        EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
-                                       LogicalReplicationToPersistedEventConverter converter,
-                                       PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter,
-                                       WalGlobalOrdersExtractor walGlobalOrdersExtractor,
                                        SubscriptionResetOnPoisonNotifier subscriptionResetOnPoisonNotifier,
                                        CdcEventBus cdcEventBus,
                                        EssentialsEventStoreProperties essentialsProperties,
@@ -537,16 +534,12 @@ public class EventStoreConfiguration {
         return new CdcDispatcher(cdcInboxRepository,
                                  eventStoreUnitOfWorkFactory,
                                  eventStreamGapHandler,
-                                 converter,
-                                 Optional.of(pgOutputToPersistedEventConverter),
-                                 walGlobalOrdersExtractor,
+                                 logicalDecodingPlugin,
                                  Optional.of(subscriptionResetOnPoisonNotifier),
                                  cdcEventBus::publish,
                                  slotName,
                                  essentialsProperties.getCdc().getCdcDispatcher(),
-                                 essentialsProperties.getCdc().getWalParserMode(),
                                  essentialsProperties.getCdc().getDeliveryMode(),
-                                 Optional.of(logicalDecodingPlugin),
                                  availability,
                                  meterRegistry
         );
@@ -592,14 +585,6 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public DirectLogicalReplicationEventConverter directLogicalReplicationEventConverter(LogicalReplicationToPersistedEventConverter converter,
-                                                                                         PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter) {
-        return new DefaultDirectLogicalReplicationEventConverter(converter, pgOutputToPersistedEventConverter);
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public WalGlobalOrdersExtractor walGlobalOrdersExtractor(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
         return new JacksonWalGlobalOrdersExtractor(jsonSerializer, aggregateTypeResolver);
     }
@@ -633,8 +618,13 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean(name = "wal2jsonLogicalDecodingPlugin")
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public LogicalDecodingPlugin wal2jsonLogicalDecodingPlugin(EssentialsEventStoreProperties properties) {
-        return new Wal2JsonLogicalDecodingPlugin(properties.getCdc().getWalReplicationTailer());
+    public LogicalDecodingPlugin wal2jsonLogicalDecodingPlugin(EssentialsEventStoreProperties properties,
+                                                                LogicalReplicationToPersistedEventConverter converter,
+                                                                WalGlobalOrdersExtractor walGlobalOrdersExtractor) {
+        return new Wal2JsonLogicalDecodingPlugin(properties.getCdc().getWalReplicationTailer(),
+                                                 converter,
+                                                 walGlobalOrdersExtractor,
+                                                 properties.getCdc().getWalParserMode());
     }
 
     @Bean("configuredLogicalDecodingPlugin")
@@ -656,8 +646,9 @@ public class EventStoreConfiguration {
     @Bean("pgoutputLogicalDecodingPlugin")
     @ConditionalOnMissingBean(name = "pgoutputLogicalDecodingPlugin")
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public LogicalDecodingPlugin pgoutputLogicalDecodingPlugin(EssentialsEventStoreProperties properties) {
-        return new PgOutputLogicalDecodingPlugin(properties.getCdc().getPgOutput());
+    public LogicalDecodingPlugin pgoutputLogicalDecodingPlugin(EssentialsEventStoreProperties properties,
+                                                                PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter) {
+        return new PgOutputLogicalDecodingPlugin(properties.getCdc().getPgOutput(), pgOutputToPersistedEventConverter);
     }
 
     @Bean
@@ -690,7 +681,6 @@ public class EventStoreConfiguration {
                                                      CdcConsumerGroup group,
                                                      CdcSlotNameProvider slotNameProvider,
                                                      CdcAvailability availability,
-                                                     DirectLogicalReplicationEventConverter directLogicalReplicationEventConverter,
                                                      WalMessageFilter walMessageFilter,
                                                      CdcEventBus cdcEventBus,
                                                      @Qualifier("configuredLogicalDecodingPlugin") LogicalDecodingPlugin logicalDecodingPlugin,
@@ -709,11 +699,9 @@ public class EventStoreConfiguration {
                                         properties.getCdc().getSlot().getMode(),
                                         properties.getCdc().getMode(),
                                         properties.getCdc().getDeliveryMode(),
-                                        properties.getCdc().getWalParserMode(),
-                                        Optional.of(directLogicalReplicationEventConverter),
+                                        logicalDecodingPlugin,
                                         Optional.of(cdcEventBus::publish),
                                         Optional.of(walMessageFilter),
-                                        Optional.of(logicalDecodingPlugin),
                                         availability,
                                         meterRegistry,
                                         errorHandler);

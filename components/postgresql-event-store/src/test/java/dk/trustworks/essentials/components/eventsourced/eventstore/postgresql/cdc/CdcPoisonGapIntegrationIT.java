@@ -112,18 +112,21 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
 
         var availability = new CdcAvailability();
         availability.active(slotName);
+        var plugin = new Wal2JsonLogicalDecodingPlugin(
+                CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                converter, walGlobalOrdersExtractor, CdcProperties.WalParserMode.STRING);
         var dispatcher = new CdcDispatcher(
                 inboxRepository,
                 unitOfWorkFactory,
                 gapHandler,
-                converter,
-                walGlobalOrdersExtractor,
+                plugin,
                 Optional.of(poisonNotifier),
                 cdcBus::addAll,
                 slotName,
                 CdcDispatcherProperties.defaults(),
-                CdcProperties.WalParserMode.STRING,
-                availability
+                CdcProperties.CdcDeliveryMode.INBOX,
+                availability,
+                Optional.empty()
         );
 
         var orderId = OrderId.of("beed77fb-1115-1115-9c48-03ed5bfe8f89");
@@ -325,18 +328,21 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
 
         var availability = new CdcAvailability();
         availability.active(slotName);
+        var plugin = new Wal2JsonLogicalDecodingPlugin(
+                CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                converter, walGlobalOrdersExtractor, CdcProperties.WalParserMode.STRING);
         var dispatcher = new CdcDispatcher(
                 inboxRepository,
                 unitOfWorkFactory,
                 gapHandler,
-                converter,
-                walGlobalOrdersExtractor,
+                plugin,
                 Optional.of(poisonNotifier),
                 dispatched::addAll,
                 slotName,
                 dispatcherProps,
-                CdcProperties.WalParserMode.STRING,
-                availability
+                CdcProperties.CdcDeliveryMode.INBOX,
+                availability,
+                Optional.empty()
         );
 
         // Same batch: first row is poison, second row is valid.
@@ -379,18 +385,21 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
 
         var availability = new CdcAvailability();
         availability.active(slotName);
+        var plugin = new Wal2JsonLogicalDecodingPlugin(
+                CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                converter, walGlobalOrdersExtractor, CdcProperties.WalParserMode.STRING);
         var dispatcher = new CdcDispatcher(
                 inboxRepository,
                 unitOfWorkFactory,
                 gapHandler,
-                converter,
-                walGlobalOrdersExtractor,
+                plugin,
                 Optional.of(poisonNotifier),
                 events -> dispatchedCount.addAndGet(events.size()),
                 slotName,
                 dispatcherProps,
-                CdcProperties.WalParserMode.STRING,
-                availability
+                CdcProperties.CdcDeliveryMode.INBOX,
+                availability,
+                Optional.empty()
         );
 
         // Same batch: first row is poison, second row is valid.

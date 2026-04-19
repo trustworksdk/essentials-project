@@ -17,9 +17,14 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.PgOutputProperties;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.PgOutputToPersistedEventConverter;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import org.jdbi.v3.core.Handle;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -29,16 +34,28 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
 /**
  * {@link LogicalDecodingPlugin} adapter for PostgreSQL built-in {@code pgoutput}.
+ * <p>
+ * Owns the pgoutput binary protocol decode pipeline (message + row-change decoders) and
+ * the {@link PgOutputToPersistedEventConverter} that turns decoded row changes into
+ * {@link PersistedEvent}s. Tailer and dispatcher delegate decode + gap extraction here —
+ * no pgoutput-specific code lives outside this plugin.
  */
 public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugin {
     public static final String PLUGIN_NAME = "pgoutput";
 
-    private final PgOutputProperties properties;
+    private final PgOutputProperties                properties;
+    private final PgOutputToPersistedEventConverter converter;
+    private final PgOutputMessageDecoder            messageDecoder;
+    private final PgOutputRowChangeDecoder          rowChangeDecoder;
 
-    public PgOutputLogicalDecodingPlugin(PgOutputProperties properties) {
+    public PgOutputLogicalDecodingPlugin(PgOutputProperties properties,
+                                         PgOutputToPersistedEventConverter converter) {
         this.properties = requireNonNull(properties, "properties cannot be null");
+        this.converter = requireNonNull(converter, "converter cannot be null");
         requireNonBlank(properties.getPublicationName(), "publicationName cannot be blank");
         requireTrue(properties.getProtoVersion() > 0, "protoVersion must be > 0");
+        this.messageDecoder = new PgOutputMessageDecoder(properties.getProtoVersion());
+        this.rowChangeDecoder = new PgOutputRowChangeDecoder();
     }
 
     @Override
@@ -68,8 +85,31 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
     }
 
     @Override
-    public boolean supportsCurrentPayloadPipeline() {
-        return true;
+    public List<PersistedEvent> decode(byte[] payloadBytes) {
+        var rowChanges = decodeRowChanges(payloadBytes);
+        if (rowChanges.isEmpty()) return List.of();
+        var events = new ArrayList<PersistedEvent>(rowChanges.size());
+        for (var rowChange : rowChanges) {
+            converter.convertIfRelevant(rowChange).ifPresent(events::add);
+        }
+        return events;
+    }
+
+    @Override
+    public List<WalGlobalOrdersExtractor.Gap> extractGaps(byte[] payloadBytes) {
+        var rowChanges = decodeRowChanges(payloadBytes);
+        if (rowChanges.isEmpty()) return List.of();
+        var gaps = new ArrayList<WalGlobalOrdersExtractor.Gap>(rowChanges.size());
+        for (var rowChange : rowChanges) {
+            converter.extractGap(rowChange).ifPresent(gaps::add);
+        }
+        return gaps;
+    }
+
+    private List<PgOutputRowChange> decodeRowChanges(byte[] payloadBytes) {
+        if (payloadBytes == null || payloadBytes.length == 0) return List.of();
+        var decodedMessage = messageDecoder.decode(payloadBytes);
+        return rowChangeDecoder.accept(decodedMessage);
     }
 
     public int protocolVersion() {

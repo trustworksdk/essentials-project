@@ -104,7 +104,6 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         createPublication(publicationName);
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var wal2JsonConverter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
         var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver);
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
 
@@ -119,11 +118,9 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 PgSlotMode.CREATE_IF_MISSING,
                 CdcMode.AUTO,
                 CdcDeliveryMode.DIRECT,
-                WalParserMode.BYTES,
-                Optional.of(new DefaultDirectLogicalReplicationEventConverter(wal2JsonConverter, pgOutputConverter)),
+                pgOutputPlugin(publicationName, pgOutputConverter),
                 Optional.of(cdcPersistedEvents::addAll),
                 Optional.empty(),
-                Optional.of(pgOutputPlugin(publicationName)),
                 availability,
                 Optional.empty(),
                 Optional.empty()
@@ -152,13 +149,11 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         createPublication(publicationName);
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var wal2JsonExtractor = new JacksonWalGlobalOrdersExtractor(jacksonJSONSerializer, resolver);
-        var wal2JsonConverter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
         var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver);
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
 
         var availability = new CdcAvailability();
-        var logicalDecodingPlugin = pgOutputPlugin(publicationName);
+        var logicalDecodingPlugin = pgOutputPlugin(publicationName, pgOutputConverter);
         var tailer = new WalReplicationTailer(
                 replicationDataSource,
                 jdbi,
@@ -169,11 +164,9 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 PgSlotMode.CREATE_IF_MISSING,
                 CdcMode.AUTO,
                 CdcDeliveryMode.INBOX,
-                WalParserMode.BYTES,
-                Optional.of(new DefaultDirectLogicalReplicationEventConverter(wal2JsonConverter, pgOutputConverter)),
+                logicalDecodingPlugin,
                 Optional.of(cdcPersistedEvents::addAll),
                 Optional.empty(),
-                Optional.of(logicalDecodingPlugin),
                 availability,
                 Optional.empty(),
                 Optional.empty()
@@ -183,16 +176,12 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 inboxRepository,
                 unitOfWorkFactory,
                 gapHandler,
-                wal2JsonConverter,
-                Optional.of(pgOutputConverter),
-                wal2JsonExtractor,
+                logicalDecodingPlugin,
                 Optional.empty(),
                 cdcPersistedEvents::addAll,
                 slotName,
                 CdcDispatcherProperties.defaults(),
-                WalParserMode.BYTES,
                 CdcDeliveryMode.INBOX,
-                Optional.of(logicalDecodingPlugin),
                 availability,
                 Optional.empty()
         );
@@ -222,13 +211,12 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         createPublication(publicationName);
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var wal2JsonConverter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
         var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver);
         List<PersistedEvent> node1Events = new CopyOnWriteArrayList<>();
         List<PersistedEvent> node2Events = new CopyOnWriteArrayList<>();
 
-        var tailer1 = directPgOutputTailer(slotName, publicationName, wal2JsonConverter, pgOutputConverter, node1Events);
-        var tailer2 = directPgOutputTailer(slotName, publicationName, wal2JsonConverter, pgOutputConverter, node2Events);
+        var tailer1 = directPgOutputTailer(slotName, publicationName, pgOutputConverter, node1Events);
+        var tailer2 = directPgOutputTailer(slotName, publicationName, pgOutputConverter, node2Events);
 
         tailer1.startAndAwaitReady(Duration.ofSeconds(10));
         tailer2.start();
@@ -270,7 +258,6 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
 
     private WalReplicationTailer directPgOutputTailer(String slotName,
                                                        String publicationName,
-                                                       JacksonWal2JsonToPersistedEventConverter wal2JsonConverter,
                                                        PgOutputToPersistedEventConverter pgOutputConverter,
                                                        List<PersistedEvent> persistedEvents) {
         var availability = new CdcAvailability();
@@ -284,11 +271,9 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 PgSlotMode.CREATE_IF_MISSING,
                 CdcMode.AUTO,
                 CdcDeliveryMode.DIRECT,
-                WalParserMode.BYTES,
-                Optional.of(new DefaultDirectLogicalReplicationEventConverter(wal2JsonConverter, pgOutputConverter)),
+                pgOutputPlugin(publicationName, pgOutputConverter),
                 Optional.of(persistedEvents::addAll),
                 Optional.empty(),
-                Optional.of(pgOutputPlugin(publicationName)),
                 availability,
                 Optional.empty(),
                 Optional.empty()
@@ -340,12 +325,12 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         );
     }
 
-    private static PgOutputLogicalDecodingPlugin pgOutputPlugin(String publicationName) {
+    private static PgOutputLogicalDecodingPlugin pgOutputPlugin(String publicationName, PgOutputToPersistedEventConverter converter) {
         var properties = new PgOutputProperties();
         properties.setPublicationName(publicationName);
         properties.setProtoVersion(1);
         properties.setBinary(false);
         properties.setMessages(false);
-        return new PgOutputLogicalDecodingPlugin(properties);
+        return new PgOutputLogicalDecodingPlugin(properties, converter);
     }
 }

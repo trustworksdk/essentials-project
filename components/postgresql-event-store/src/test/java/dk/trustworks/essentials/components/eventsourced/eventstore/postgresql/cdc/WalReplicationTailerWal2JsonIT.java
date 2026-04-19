@@ -17,8 +17,11 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalReplicationTailerProperties;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.LogicalReplicationToPersistedEventConverter;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.WalReplicationTailerErrorHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
+import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
@@ -76,6 +79,43 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         });
     }
 
+    /**
+     * These tests exercise the tailer in INBOX delivery mode, which only needs the plugin for
+     * slot provisioning and byte-level payload filtering — never for decode/extract. A no-op
+     * wal2json plugin is therefore sufficient.
+     */
+    private static Wal2JsonLogicalDecodingPlugin noOpWal2JsonPlugin(WalReplicationTailerProperties props) {
+        LogicalReplicationToPersistedEventConverter noConverter = (String s) -> List.of();
+        WalGlobalOrdersExtractor noExtractor = (String s) -> List.of();
+        return new Wal2JsonLogicalDecodingPlugin(props, noConverter, noExtractor, CdcProperties.WalParserMode.STRING);
+    }
+
+    private WalReplicationTailer inboxTailer(String slotName,
+                                             CdcInboxRepository inboxRepo,
+                                             WalReplicationTailerProperties props,
+                                             PgSlotMode slotMode,
+                                             CdcAvailability availability,
+                                             Optional<MeterRegistry> meterRegistry,
+                                             Optional<WalReplicationTailerErrorHandler> errorHandler) {
+        return new WalReplicationTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepo,
+                props,
+                slotMode,
+                CdcMode.AUTO,
+                CdcProperties.CdcDeliveryMode.INBOX,
+                noOpWal2JsonPlugin(props),
+                Optional.empty(),
+                Optional.empty(),
+                availability,
+                meterRegistry,
+                errorHandler
+        );
+    }
+
     @AfterEach
     void cleanup() {
         unitOfWorkFactory.getCurrentUnitOfWork().ifPresent(uow -> uow.rollback(new RuntimeException("test-cleanup")));
@@ -87,24 +127,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(50),
-                        Duration.ofMillis(100),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = inboxTailer(slotName,
+                                 inboxRepository,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(50), Duration.ofMillis(100), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.empty());
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
         assertThat(tailer.isStarted()).isTrue();
@@ -133,24 +162,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(50),
-                        Duration.ofMillis(100),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = inboxTailer(slotName,
+                                 inboxRepository,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(50), Duration.ofMillis(100), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.empty());
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 
@@ -220,24 +238,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         };
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                flakyInbox,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.of(handler)
-        );
+        var tailer = inboxTailer(slotName,
+                                 flakyInbox,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.of(handler));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 
@@ -289,24 +296,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         };
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                flakyInbox,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.of(handler)
-        );
+        var tailer = inboxTailer(slotName,
+                                 flakyInbox,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.of(handler));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 
@@ -356,24 +352,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         };
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                alwaysFailingInbox,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.of(handler)
-        );
+        var tailer = inboxTailer(slotName,
+                                 alwaysFailingInbox,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.of(handler));
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 
@@ -419,24 +404,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         };
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(1),
-                        Duration.ofMillis(50)
-                ),
-                PgSlotMode.REQUIRE_EXISTING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.of(handler)
-        );
+        var tailer = inboxTailer(slotName,
+                                 inboxRepository,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofMillis(50)),
+                                 PgSlotMode.REQUIRE_EXISTING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.of(handler));
 
         tailer.start();
 
@@ -478,24 +452,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         };
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(1),
-                        Duration.ofMillis(50)
-                ),
-                PgSlotMode.REQUIRE_EXISTING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.of(handler)
-        );
+        var tailer = inboxTailer(slotName,
+                                 inboxRepository,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofMillis(50)),
+                                 PgSlotMode.REQUIRE_EXISTING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.of(handler));
 
         tailer.start();
 
@@ -537,24 +500,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         };
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(1),
-                        Duration.ofMillis(50)
-                ),
-                PgSlotMode.REQUIRE_EXISTING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.of(handler)
-        );
+        var tailer = inboxTailer(slotName,
+                                 inboxRepository,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofMillis(50)),
+                                 PgSlotMode.REQUIRE_EXISTING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.of(handler));
 
         tailer.start();
 
@@ -591,24 +543,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         var registry = new SimpleMeterRegistry();
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability,
-                Optional.of(registry),
-                Optional.empty()
-        );
+        var tailer = inboxTailer(slotName,
+                                 inboxRepository,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 availability,
+                                 Optional.of(registry),
+                                 Optional.empty());
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 
@@ -639,44 +580,22 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
         var availability1 = new CdcAvailability();
-        var tailer1 = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability1,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer1 = inboxTailer(slotName,
+                                  inboxRepository,
+                                  WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                  PgSlotMode.CREATE_IF_MISSING,
+                                  availability1,
+                                  Optional.empty(),
+                                  Optional.empty());
 
         var availability2 = new CdcAvailability();
-        var tailer2 = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(20),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability2,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer2 = inboxTailer(slotName,
+                                  inboxRepository,
+                                  WalReplicationTailerProperties.defaults(Duration.ofMillis(20), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                  PgSlotMode.CREATE_IF_MISSING,
+                                  availability2,
+                                  Optional.empty(),
+                                  Optional.empty());
 
         tailer1.startAndAwaitReady(Duration.ofSeconds(10));
         tailer2.start();
@@ -701,24 +620,13 @@ public class WalReplicationTailerWal2JsonIT extends AbstractLogicalReplicationPo
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
         var availability = new CdcAvailability();
-        var tailer = new WalReplicationTailer(
-                replicationDataSource,
-                jdbi,
-                unitOfWorkFactory,
-                slotName,
-                inboxRepository,
-                WalReplicationTailerProperties.defaults(
-                        Duration.ofMillis(5),
-                        Duration.ofMillis(50),
-                        Duration.ofSeconds(2),
-                        Duration.ofMillis(100)
-                                                 ),
-                PgSlotMode.CREATE_IF_MISSING,
-                CdcMode.AUTO,
-                availability,
-                Optional.empty(),
-                Optional.empty()
-        );
+        var tailer = inboxTailer(slotName,
+                                 inboxRepository,
+                                 WalReplicationTailerProperties.defaults(Duration.ofMillis(5), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                                 PgSlotMode.CREATE_IF_MISSING,
+                                 availability,
+                                 Optional.empty(),
+                                 Optional.empty());
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
 

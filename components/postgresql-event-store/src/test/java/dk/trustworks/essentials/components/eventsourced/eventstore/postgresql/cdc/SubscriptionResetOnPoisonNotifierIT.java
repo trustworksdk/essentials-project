@@ -130,18 +130,21 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
 
         var availability = new CdcAvailability();
         availability.active(slotName);
+        var plugin = new Wal2JsonLogicalDecodingPlugin(
+                CdcProperties.WalReplicationTailerProperties.defaults(Duration.ofMillis(25), Duration.ofMillis(50), Duration.ofSeconds(2), Duration.ofMillis(100)),
+                converter, walGlobalOrdersExtractor, CdcProperties.WalParserMode.STRING);
         var dispatcher = new CdcDispatcher(
                 inboxRepository,
                 unitOfWorkFactory,
                 gapHandler,
-                converter,
-                walGlobalOrdersExtractor,
+                plugin,
                 Optional.of(poisonNotifier),
                 cdcEventStore.getCdcBus()::publish, // publish converted events
                 slotName,
                 CdcDispatcherProperties.defaults(),
-                CdcProperties.WalParserMode.STRING,
-                availability
+                CdcProperties.CdcDeliveryMode.INBOX,
+                availability,
+                Optional.empty()
         );
 
         var received   = new CopyOnWriteArrayList<Long>();

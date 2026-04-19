@@ -103,6 +103,7 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                                                                  );
 
         var availability = new CdcAvailability();
+        var plugin = new Wal2JsonLogicalDecodingPlugin(cfg, converter, extractor, CdcProperties.WalParserMode.STRING);
         var tailer = new WalReplicationTailer(
                 replicationDataSource,
                 jdbi,
@@ -112,6 +113,10 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                 cfg,
                 PgSlotMode.CREATE_IF_MISSING,
                 CdcMode.AUTO,
+                CdcProperties.CdcDeliveryMode.INBOX,
+                plugin,
+                Optional.empty(),
+                Optional.empty(),
                 availability,
                 Optional.empty(),
                 Optional.empty()
@@ -121,14 +126,14 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                 inboxRepository,
                 unitOfWorkFactory,
                 gapHandler,
-                converter,
-                extractor,
+                plugin,
                 Optional.empty(),
                 cdcPersistedEvents::addAll,
                 slotName,
                 CdcDispatcherProperties.defaults(),
-                CdcProperties.WalParserMode.STRING,
-                availability
+                CdcProperties.CdcDeliveryMode.INBOX,
+                availability,
+                Optional.empty()
         );
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
@@ -184,6 +189,7 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                                         );
 
         var availability = new CdcAvailability();
+        var plugin = new Wal2JsonLogicalDecodingPlugin(cfg, converter, extractor, CdcProperties.WalParserMode.STRING);
         var tailer = new WalReplicationTailer(
                 replicationDataSource,
                 jdbi,
@@ -193,6 +199,10 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                 cfg,
                 PgSlotMode.CREATE_IF_MISSING,
                 CdcMode.AUTO,
+                CdcProperties.CdcDeliveryMode.INBOX,
+                plugin,
+                Optional.empty(),
+                Optional.empty(),
                 availability,
                 Optional.empty(),
                 Optional.empty()
@@ -202,14 +212,14 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                 inboxRepository,
                 unitOfWorkFactory,
                 gapHandler,
-                converter,
-                extractor,
+                plugin,
                 Optional.empty(),
                 cdcPersistedEvents::addAll,
                 slotName,
                 CdcDispatcherProperties.defaults(),
-                CdcProperties.WalParserMode.STRING,
-                availability
+                CdcProperties.CdcDeliveryMode.INBOX,
+                availability,
+                Optional.empty()
         );
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
@@ -263,6 +273,8 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
         );
 
         var availability = new CdcAvailability();
+        WalGlobalOrdersExtractor noGaps = (String ignored) -> List.of();
+        var plugin = new Wal2JsonLogicalDecodingPlugin(cfg, converter, noGaps, CdcProperties.WalParserMode.BYTES);
         var tailer = new WalReplicationTailer(
                 replicationDataSource,
                 jdbi,
@@ -273,10 +285,8 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                 PgSlotMode.CREATE_IF_MISSING,
                 CdcMode.AUTO,
                 CdcDeliveryMode.DIRECT,
-                CdcProperties.WalParserMode.BYTES,
-                Optional.of(DirectLogicalReplicationEventConverter.wal2JsonOnly(converter)),
+                plugin,
                 Optional.of(cdcPersistedEvents::addAll),
-                Optional.empty(),
                 Optional.empty(),
                 availability,
                 Optional.empty(),

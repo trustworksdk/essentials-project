@@ -18,8 +18,6 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalReplicationTailerProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.CdcDeliveryMode;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalParserMode;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.DirectLogicalReplicationEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
@@ -71,12 +69,8 @@ public class WalReplicationTailer implements Lifecycle {
     private final CdcMode                                                       cdcMode;
     private final CdcAvailability                                               availability;
     private final CdcDeliveryMode                                               deliveryMode;
-    private final WalParserMode                                                 walParserMode;
     private final LogicalDecodingPlugin                                         logicalDecodingPlugin;
-    private final DirectLogicalReplicationEventConverter                       directEventConverter;
     private final Consumer<List<PersistedEvent>>                                directOnEvents;
-    private final PgOutputMessageDecoder                                        pgOutputMessageDecoder;
-    private final PgOutputRowChangeDecoder                                      pgOutputRowChangeDecoder;
 
     private ExecutorService executor;
     private Future<?>       loopFuture;
@@ -109,54 +103,23 @@ public class WalReplicationTailer implements Lifecycle {
     private       Counter                 handlerFailuresCounter;
 
     /**
-     * Constructs a new instance of the WalReplicationTailer class.
+     * Constructs a new WalReplicationTailer.
      *
-     * @param replicationDataSource The {@link DataSource} used for replication connection.
-     * @param jdbi The {@link Jdbi} instance for database interaction.
-     * @param unitOfWorkFactory The factory responsible for creating {@link HandleAwareUnitOfWork} instances.
-     * @param slotName The name of the replication slot used for listening to WAL changes.
-     * @param inboxRepository The repository for handling CDC inbox operations.
-     * @param tailerProperties The configuration properties for the WAL replication tailer.
-     * @param pgSlotMode The PostgreSQL slot mode to be used.
-     * @param cdcMode The mode of change data capture (CDC) being employed.
-     * @param availability The mechanism for checking CDC availability.
-     * @param meterRegistry The optional {@link MeterRegistry} for collecting metrics.
-     * @param errorHandler The optional {@link WalReplicationTailerErrorHandler} for handling errors.
-     */
-    public WalReplicationTailer(
-            DataSource replicationDataSource,
-            Jdbi jdbi,
-            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-            String slotName,
-            CdcInboxRepository inboxRepository,
-            WalReplicationTailerProperties tailerProperties,
-            PgSlotMode pgSlotMode,
-            CdcMode cdcMode,
-            CdcAvailability availability,
-            Optional<MeterRegistry> meterRegistry,
-            Optional<WalReplicationTailerErrorHandler> errorHandler) {
-        this(replicationDataSource,
-             jdbi,
-             unitOfWorkFactory,
-             slotName,
-             inboxRepository,
-             tailerProperties,
-             pgSlotMode,
-             cdcMode,
-             CdcDeliveryMode.INBOX,
-             WalParserMode.STRING,
-             Optional.empty(),
-             Optional.empty(),
-             Optional.empty(),
-             Optional.empty(),
-             availability,
-             meterRegistry,
-             errorHandler);
-    }
-
-    /**
-     * Constructs a new instance of WalReplicationTailer, which processes logical replication entries
-     * for change data capture (CDC) and manages the handling of events based on the specified configurations.
+     * @param replicationDataSource  the replication {@link DataSource}
+     * @param jdbi                   the {@link Jdbi} instance for db interaction
+     * @param unitOfWorkFactory      the {@link HandleAwareUnitOfWork} factory
+     * @param slotName               the replication slot name
+     * @param inboxRepository        the CDC inbox repository
+     * @param tailerProperties       the tailer configuration properties
+     * @param pgSlotMode             the PostgreSQL slot lifecycle mode
+     * @param cdcMode                REQUIRE / AUTO semantics for startup failures
+     * @param deliveryMode           INBOX (default) or DIRECT
+     * @param logicalDecodingPlugin  the plugin that owns payload decoding and gap extraction
+     * @param directOnEvents         consumer for decoded events in DIRECT mode (required when deliveryMode=DIRECT)
+     * @param walMessageFilter       optional raw-payload filter (applied only when plugin opts in via {@link LogicalDecodingPlugin#preFiltersRawPayloads()})
+     * @param availability           CDC availability state machine
+     * @param meterRegistry          optional metrics registry
+     * @param errorHandler           optional error handler
      */
     public WalReplicationTailer(
             DataSource replicationDataSource,
@@ -168,11 +131,9 @@ public class WalReplicationTailer implements Lifecycle {
             PgSlotMode pgSlotMode,
             CdcMode cdcMode,
             CdcDeliveryMode deliveryMode,
-            WalParserMode walParserMode,
-            Optional<DirectLogicalReplicationEventConverter> directEventConverter,
+            LogicalDecodingPlugin logicalDecodingPlugin,
             Optional<Consumer<List<PersistedEvent>>> directOnEvents,
             Optional<WalMessageFilter> walMessageFilter,
-            Optional<LogicalDecodingPlugin> logicalDecodingPlugin,
             CdcAvailability availability,
             Optional<MeterRegistry> meterRegistry,
             Optional<WalReplicationTailerErrorHandler> errorHandler) {
@@ -186,18 +147,11 @@ public class WalReplicationTailer implements Lifecycle {
         this.pgSlotMode = requireNonNull(pgSlotMode, "pgSlotMode cannot be null");
         this.cdcMode = requireNonNull(cdcMode, "cdcMode cannot be null");
         this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
-        this.walParserMode = requireNonNull(walParserMode, "walParserMode cannot be null");
-        this.logicalDecodingPlugin = logicalDecodingPlugin.orElseGet(() -> new Wal2JsonLogicalDecodingPlugin(tailerProperties));
-        this.directEventConverter = directEventConverter.orElse(null);
+        this.logicalDecodingPlugin = requireNonNull(logicalDecodingPlugin, "logicalDecodingPlugin cannot be null");
         this.directOnEvents = directOnEvents.orElse(null);
-        this.pgOutputMessageDecoder = this.logicalDecodingPlugin instanceof PgOutputLogicalDecodingPlugin plugin
-                                      ? new PgOutputMessageDecoder(plugin.protocolVersion())
-                                      : null;
-        this.pgOutputRowChangeDecoder = pgOutputMessageDecoder != null ? new PgOutputRowChangeDecoder() : null;
         this.availability = requireNonNull(availability, "availability cannot be null");
         if (this.deliveryMode == CdcDeliveryMode.DIRECT) {
             requireNonNull(this.directOnEvents, "directOnEvents cannot be null in DIRECT delivery mode");
-            requireNonNull(this.directEventConverter, "directEventConverter cannot be null in DIRECT delivery mode");
         }
         requireNonNull(tailerProperties.getPollInterval(), "pollInterval cannot be null");
         requireNonNull(tailerProperties.getPollBackoffInterval(), "pollBackoffInterval cannot be null");
@@ -209,7 +163,7 @@ public class WalReplicationTailer implements Lifecycle {
         this.errorHandler = errorHandler.orElseGet(DefaultWalReplicationTailerErrorHandler::new);
         this.walMessageFilter = walMessageFilter.orElseGet(RegexWalMessageFilter::new);
         initMetrics();
-        if (deliveryMode == CdcDeliveryMode.INBOX && currentPipelineUnsupportedReason() == null) {
+        if (deliveryMode == CdcDeliveryMode.INBOX) {
             unitOfWorkFactory.usingUnitOfWork(inboxRepository::createTableAndIndexes);
         }
     }
@@ -459,14 +413,6 @@ public class WalReplicationTailer implements Lifecycle {
     }
 
     private boolean initializePluginAvailability() {
-        var unsupportedReason = currentPipelineUnsupportedReason();
-        if (unsupportedReason != null) {
-            pluginAvailable = false;
-            availability.failed(slotName, unsupportedReason);
-            log.warn("{}", unsupportedReason);
-            return handleUnavailablePlugin();
-        }
-
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             boolean logicalOk = PostgresqlUtil.isLogicalDecodingEnabled(uow.handle());
             if (!logicalOk) {
@@ -573,18 +519,8 @@ public class WalReplicationTailer implements Lifecycle {
         var lsn     = stream.getLastReceiveLSN();
         var lsnStr  = lsn != null ? lsn.asString() : null;
 
-        if (isPgOutputPlugin()) {
-            recordReceivedMessage(payload, lsnStr);
-            try {
-                persistMessage(payload, lsnStr);
-            } catch (ContinueStreamingException | StopStreamingException ignored) {
-                return false;
-            }
-            acknowledge(stream, lsn);
-            return true;
-        }
-
-        if (!walMessageFilter.shouldPersist(payload.bytes())) {
+        if (logicalDecodingPlugin.preFiltersRawPayloads()
+                && !walMessageFilter.shouldPersist(payload.bytes())) {
             logFilteredMessage(payload, lsnStr);
             acknowledge(stream, lsn);
             return false;
@@ -612,13 +548,16 @@ public class WalReplicationTailer implements Lifecycle {
         long m = messagesReceived.incrementAndGet();
         incrementCounter(messagesReceivedCounter);
         lastMessageEpochMs.set(System.currentTimeMillis());
-        if (walParserMode == WalParserMode.STRING) {
+        if (logicalDecodingPlugin.preFiltersRawPayloads()) {
+            // Text-format plugins (e.g. wal2json) — cheap to preview as UTF-8.
+            // Binary plugins (e.g. pgoutput) skip the preview since the bytes aren't human-readable.
             lastMessagePreview.set(payload.preview(300));
         }
 
         if (log.isTraceEnabled()) {
             log.trace("[{}] WAL message #{} lsn='{}' bytes='{}' payload='{}'",
-                      slotName, m, lastReceiveLsn.get(), payload.bytes().length, payload.preview(800));
+                      slotName, m, lastReceiveLsn.get(), payload.bytes().length,
+                      logicalDecodingPlugin.preFiltersRawPayloads() ? payload.preview(800) : "(binary)");
         }
     }
 
@@ -638,32 +577,11 @@ public class WalReplicationTailer implements Lifecycle {
     }
 
     private boolean dispatchDirectly(WalPayload payload) {
-        List<PersistedEvent> events;
-        if (isPgOutputDirectMode()) {
-            events = dispatchPgOutputDirectly(payload);
-        } else {
-            events = directEventConverter.convertWal2Json(
-                    payload.bytes(),
-                    walParserMode == WalParserMode.BYTES ? null : payload.asString(),
-                    walParserMode
-            );
-        }
+        var events = logicalDecodingPlugin.decode(payload.bytes());
         if (!events.isEmpty()) {
             directOnEvents.accept(events);
         }
         return true;
-    }
-
-    private List<PersistedEvent> dispatchPgOutputDirectly(WalPayload payload) {
-        var decodedMessage = pgOutputMessageDecoder.decode(payload.bytes());
-        var rowChanges     = pgOutputRowChangeDecoder.accept(decodedMessage);
-        if (rowChanges.isEmpty()) return List.of();
-
-        var events = new ArrayList<PersistedEvent>(rowChanges.size());
-        for (var rowChange : rowChanges) {
-            directEventConverter.convertPgOutputIfRelevant(rowChange).ifPresent(events::add);
-        }
-        return events;
     }
 
     private void recordPersistenceOutcome(boolean inserted, String lsnStr) {
@@ -840,27 +758,6 @@ public class WalReplicationTailer implements Lifecycle {
     @Override
     public boolean isStarted() {
         return started.get();
-    }
-
-    private String currentPipelineUnsupportedReason() {
-        if (isPgOutputPlugin()) {
-            if (pgOutputMessageDecoder == null || pgOutputRowChangeDecoder == null) {
-                return "CDC plugin 'pgoutput' is configured, but pgoutput message decoding pipeline is not fully configured";
-            }
-            if (deliveryMode == CdcDeliveryMode.DIRECT && directEventConverter == null) {
-                return "CDC plugin 'pgoutput' is configured, but direct conversion pipeline is not fully configured";
-            }
-            return null;
-        }
-        return logicalDecodingPlugin.supportsCurrentPayloadPipeline() ? null : logicalDecodingPlugin.unsupportedReason();
-    }
-
-    private boolean isPgOutputPlugin() {
-        return logicalDecodingPlugin instanceof PgOutputLogicalDecodingPlugin;
-    }
-
-    private boolean isPgOutputDirectMode() {
-        return deliveryMode == CdcDeliveryMode.DIRECT && isPgOutputPlugin();
     }
 
     public WalReplicationTailerStatus getStatus() {

@@ -17,9 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler;
-import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.functional.CheckedConsumer;
@@ -35,9 +33,9 @@ import static org.mockito.Mockito.*;
 /**
  * Regression tests for CdcDispatcher's resilience to failures inside the poison-handling path.
  * <p>
- * The original implementation at CdcDispatcher.java:334 called {@code extractPoisonGaps(...)}
- * inside the outer {@code catch} block but outside any inner {@code try}. If gap extraction
- * itself threw, the exception propagated out of {@code tick()}, which — combined with
+ * The original implementation called {@code extractPoisonGaps(...)} inside the outer
+ * {@code catch} block but outside any inner {@code try}. If gap extraction itself threw, the
+ * exception propagated out of {@code tick()}, which — combined with
  * {@code ScheduledExecutorService.scheduleWithFixedDelay}'s "suppress further ticks on throw"
  * contract — silently killed the dispatcher.
  */
@@ -51,8 +49,7 @@ class CdcDispatcherPoisonGapFailureTest {
         @SuppressWarnings("unchecked")
         HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> uowFactory = mock(HandleAwareUnitOfWorkFactory.class);
         var gapHandler = mock(EventStreamGapHandler.class);
-        var converter = mock(LogicalReplicationToPersistedEventConverter.class);
-        var extractor = mock(WalGlobalOrdersExtractor.class);
+        var plugin = mock(LogicalDecodingPlugin.class);
         var notifier = mock(CdcPoisonNotifier.class);
 
         // Invoke the uow consumer inline (no real transaction).
@@ -73,29 +70,25 @@ class CdcDispatcherPoisonGapFailureTest {
                 .thenReturn(List.of());
 
         // Primary conversion fails with QUARANTINE_AND_CONTINUE → poison path runs.
-        when(converter.convert(any(String.class)))
-                .thenThrow(new RuntimeException("simulated conversion failure"));
-        when(converter.convert(any(byte[].class)))
+        when(plugin.decode(any(byte[].class)))
                 .thenThrow(new RuntimeException("simulated conversion failure"));
 
         // Gap extraction ALSO fails — this is the regression we're guarding.
-        when(extractor.extract(any(String.class)))
-                .thenThrow(new RuntimeException("simulated gap extraction failure"));
-        when(extractor.extract(any(byte[].class)))
+        when(plugin.extractGaps(any(byte[].class)))
                 .thenThrow(new RuntimeException("simulated gap extraction failure"));
 
         var dispatcher = new CdcDispatcher(
                 inbox,
                 uowFactory,
                 gapHandler,
-                converter,
-                extractor,
+                plugin,
                 Optional.of(notifier),
                 events -> { /* no-op */ },
                 SLOT,
                 CdcProperties.CdcDispatcherProperties.defaults(),
-                CdcProperties.WalParserMode.STRING,
-                ignoreAvailability()
+                CdcProperties.CdcDeliveryMode.INBOX,
+                ignoreAvailability(),
+                Optional.empty()
         );
 
         // When — run one tick directly (no scheduler).
@@ -130,8 +123,7 @@ class CdcDispatcherPoisonGapFailureTest {
         @SuppressWarnings("unchecked")
         HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> uowFactory = mock(HandleAwareUnitOfWorkFactory.class);
         var gapHandler = mock(EventStreamGapHandler.class);
-        var converter = mock(LogicalReplicationToPersistedEventConverter.class);
-        var extractor = mock(WalGlobalOrdersExtractor.class);
+        var plugin = mock(LogicalDecodingPlugin.class);
 
         // First tick: fetch blows up with a transient DB-like error. Second tick: normal empty fetch.
         when(inbox.fetchNextBatch(eq(SLOT), anyInt()))
@@ -142,14 +134,14 @@ class CdcDispatcherPoisonGapFailureTest {
                 inbox,
                 uowFactory,
                 gapHandler,
-                converter,
-                extractor,
+                plugin,
                 Optional.empty(),
                 events -> { /* no-op */ },
                 SLOT,
                 CdcProperties.CdcDispatcherProperties.defaults(),
-                CdcProperties.WalParserMode.STRING,
-                ignoreAvailability()
+                CdcProperties.CdcDeliveryMode.INBOX,
+                ignoreAvailability(),
+                Optional.empty()
         );
 
         // tick() must NOT throw — the outer catch-all keeps the scheduler alive.

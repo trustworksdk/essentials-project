@@ -349,18 +349,21 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
 
             var availability = new CdcAvailability();
             availability.active(slotName);
+            var plugin = new Wal2JsonLogicalDecodingPlugin(
+                    CdcProperties.WalReplicationTailerProperties.defaults(java.time.Duration.ofMillis(25), java.time.Duration.ofMillis(50), java.time.Duration.ofSeconds(2), java.time.Duration.ofMillis(100)),
+                    converter, extractor, CdcProperties.WalParserMode.STRING);
             var dispatcher = new CdcDispatcher(
                     node1.inboxRepository,
                     node1.unitOfWorkFactory,
                     node1.gapHandler,
-                    converter,
-                    extractor,
+                    plugin,
                     Optional.of(notifier),
                     cdcBus::publish,
                     slotName,
                     CdcDispatcherProperties.defaults(),
-                    CdcProperties.WalParserMode.STRING,
-                    availability
+                    CdcProperties.CdcDeliveryMode.INBOX,
+                    availability,
+                    Optional.empty()
             );
 
             dispatcher.start();
