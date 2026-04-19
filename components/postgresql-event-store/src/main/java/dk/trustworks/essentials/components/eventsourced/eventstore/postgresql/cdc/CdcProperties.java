@@ -257,7 +257,9 @@ public class CdcProperties {
      * - Exponential backoff mechanism with jitter and scaling factor.
      * - JSON output formatting, including options for pretty printing.
      * - Inclusion of additional metadata such as XIDs, timestamps, and log sequence numbers (LSN).
-     * - Poison message handling through a defined {@link PoisonPolicy}.
+     * <p>
+     * Poison-payload handling is a dispatcher-side concern and lives on
+     * {@link CdcDispatcherProperties}.
      * <p>
      * This class also provides methods to get and set these properties, as well as a static builder
      * method for creating a new instance with custom defaults.
@@ -274,7 +276,6 @@ public class CdcProperties {
         private boolean      includeXids               = true;
         private boolean      includeTimestamp          = true;
         private boolean      includeLsn                = true;
-        private PoisonPolicy poisonPolicy              = PoisonPolicy.QUARANTINE_AND_CONTINUE;
 
 
         public static WalReplicationTailerProperties defaults(Duration pollInterval,
@@ -497,24 +498,6 @@ public class CdcProperties {
             this.includeLsn = includeLsn;
         }
 
-        /**
-         * Retrieves the configured poison policy. The poison policy defines the behavior
-         * for handling poisoned messages or errors during processing.
-         *
-         * @return the configured PoisonPolicy object
-         */
-        public PoisonPolicy getPoisonPolicy() {
-            return poisonPolicy;
-        }
-
-        /**
-         * Sets the poison policy to define the behavior for handling poisoned messages or errors during processing.
-         *
-         * @param poisonPolicy the PoisonPolicy object to set as the configuration for handling poisoned messages
-         */
-        public void setPoisonPolicy(PoisonPolicy poisonPolicy) {
-            this.poisonPolicy = poisonPolicy;
-        }
     }
 
     public static class PgOutputProperties {

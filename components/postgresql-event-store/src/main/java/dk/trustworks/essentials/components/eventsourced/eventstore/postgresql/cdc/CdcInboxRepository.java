@@ -30,10 +30,10 @@ import java.util.*;
  */
 @TTLJob(name = "eventstore_cdc_inbox_ttl",
         tableName = "eventstore_cdc_inbox",
-        tableNameProperty = "essentials.cdc.inbox-table-name",
+        tableNameProperty = "essentials.eventstore.cdc.inbox-table-name",
         timestampColumn = "received_at",
         cronExpression = "30 0 * * *",
-        ttlDurationProperty = "essentials.cdc.inbox-ttl-duration",
+        ttlDurationProperty = "essentials.eventstore.cdc.inbox-ttl-duration",
         defaultTtlDays = 90
 )
 public class CdcInboxRepository {

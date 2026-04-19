@@ -132,7 +132,51 @@ public final class CdcDispatcher implements Lifecycle {
         this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
         this.availability = requireNonNull(availability, "availability cannot be null");
         this.meterRegistry = meterRegistry.orElse(null);
+        warnOnDispatcherKnobsIgnoredInDirectMode(cdcDispatcherProperties);
         initMetrics();
+    }
+
+    /**
+     * In DIRECT delivery mode the dispatcher is not started — the tailer publishes straight to the
+     * CDC bus. Any non-default {@link CdcDispatcherProperties} value therefore has no effect. Warn
+     * loudly so that perf-tuned dispatcher settings don't silently evaporate when someone flips
+     * {@code deliveryMode=DIRECT}.
+     */
+    private void warnOnDispatcherKnobsIgnoredInDirectMode(CdcDispatcherProperties props) {
+        var ignored = ignoredDispatcherKnobsForMode(props, deliveryMode);
+        if (!ignored.isEmpty()) {
+            log.warn("[{}] deliveryMode=DIRECT — the following cdcDispatcher.* settings will have NO effect: {}. "
+                             + "If you need these semantics, switch to deliveryMode=INBOX. If DIRECT is intentional, "
+                             + "remove the overrides to silence this warning.",
+                     slotName, ignored);
+        }
+    }
+
+    /**
+     * Returns the list of {@code cdcDispatcher.*} overrides that will be silently dropped for the
+     * given {@link CdcDeliveryMode}. Returns an empty list when the dispatcher is actually in use
+     * (i.e. {@link CdcDeliveryMode#INBOX}).
+     * <p>
+     * Package-private for unit-test verification — there's no need to instrument log capture just
+     * to confirm the comparison.
+     */
+    static List<String> ignoredDispatcherKnobsForMode(CdcDispatcherProperties props, CdcDeliveryMode deliveryMode) {
+        if (deliveryMode != CdcDeliveryMode.DIRECT) return List.of();
+        var defaults = CdcDispatcherProperties.defaults();
+        var ignored  = new ArrayList<String>();
+        if (!props.getPollInterval().equals(defaults.getPollInterval())) {
+            ignored.add("pollInterval=" + props.getPollInterval());
+        }
+        if (props.getBatchSize() != defaults.getBatchSize()) {
+            ignored.add("batchSize=" + props.getBatchSize());
+        }
+        if (props.getPoisonPolicy() != defaults.getPoisonPolicy()) {
+            ignored.add("poisonPolicy=" + props.getPoisonPolicy());
+        }
+        if (props.getDispatchedRowPolicy() != defaults.getDispatchedRowPolicy()) {
+            ignored.add("dispatchedRowPolicy=" + props.getDispatchedRowPolicy());
+        }
+        return ignored;
     }
 
     private void initMetrics() {
