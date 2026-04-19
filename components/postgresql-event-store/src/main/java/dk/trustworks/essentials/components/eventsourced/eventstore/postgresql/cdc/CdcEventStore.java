@@ -96,6 +96,15 @@ public class CdcEventStore implements EventStore {
     private final Counter                                                     liveEventsCounter;
     private final Timer                                                       backfillPageTimer;
     private final Timer                                                       backfillToLiveTransitionTimer;
+    /**
+     * Live size of the in-memory live-event buffer inside the currently-running
+     * {@link BackfillThenLiveOrdered} pipeline. Updated by BackfillThenLiveOrdered as events flow
+     * through its ordering buffer, so operators can observe pressure in real time and perf-lab /
+     * backpressure tests can assert the bound holds. Multiple concurrent subscriptions share this
+     * gauge (last-writer-wins aggregation) — acceptable for the expected single-subscription-per-
+     * aggregate case.
+     */
+    private final AtomicInteger                                               backfillLiveBufferSize = new AtomicInteger(0);
 
     public CdcEventStore(EventStore delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
@@ -135,6 +144,9 @@ public class CdcEventStore implements EventStore {
                                                                    .register(this.meterRegistry);
             backfillToLiveTransitionTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.eventstore.backfill_to_live.transition.latency")
                                                                                .register(this.meterRegistry);
+            Gauge.builder("essentials.cdc.backfill_live.buffer.size", backfillLiveBufferSize, AtomicInteger::get)
+                 .description("Current size of the in-memory live-event buffer inside BackfillThenLiveOrdered; bounded by eventBus.backpressureBufferSize")
+                 .register(this.meterRegistry);
         } else {
             fallbackPollCounter = null;
             backfillLoadedSummary = null;
@@ -198,7 +210,7 @@ public class CdcEventStore implements EventStore {
                                                              .orElse(false))
                                                   .orElse(true));
 
-        return new BackfillThenLiveOrdered(backfillToLiveTransitionTimer, eventBusProperties).ordered(
+        return new BackfillThenLiveOrdered(backfillToLiveTransitionTimer, eventBusProperties, backfillLiveBufferSize).ordered(
                 backfill,
                 live,
                 head.longValue()
@@ -401,20 +413,24 @@ public class CdcEventStore implements EventStore {
     static final class BackfillThenLiveOrdered {
         private static final Logger LOG = LoggerFactory.getLogger(BackfillThenLiveOrdered.class);
 
-        private final Timer                             backfillToLiveTransitionTimer;
+        private final Timer                               backfillToLiveTransitionTimer;
         private final CdcProperties.CdcEventBusProperties eventBusProperties;
+        /** Observable gauge backing {@code essentials.cdc.backfill_live.buffer.size}. May be null in tests. */
+        private final AtomicInteger                       bufferSizeGauge;
 
         private BackfillThenLiveOrdered(Timer backfillToLiveTransitionTimer,
-                                        CdcProperties.CdcEventBusProperties eventBusProperties) {
+                                        CdcProperties.CdcEventBusProperties eventBusProperties,
+                                        AtomicInteger bufferSizeGauge) {
             this.backfillToLiveTransitionTimer = backfillToLiveTransitionTimer;
             this.eventBusProperties = requireNonNull(eventBusProperties, "eventBusProperties");
+            this.bufferSizeGauge = bufferSizeGauge;
         }
 
         static Flux<PersistedEvent> orderedWithoutMetrics(Flux<PersistedEvent> backfill,
                                                           Flux<PersistedEvent> live,
                                                           long headInclusive,
                                                           CdcProperties.CdcEventBusProperties eventBusProperties) {
-            return new BackfillThenLiveOrdered(null, eventBusProperties).ordered(backfill, live, headInclusive);
+            return new BackfillThenLiveOrdered(null, eventBusProperties, null).ordered(backfill, live, headInclusive);
         }
 
         Flux<PersistedEvent> ordered(
@@ -457,6 +473,7 @@ public class CdcEventStore implements EventStore {
                     while (true) {
                         PersistedEvent ev = buffer.remove(next);
                         if (ev == null) break;
+                        if (bufferSizeGauge != null) bufferSizeGauge.decrementAndGet();
 
                         CdcSinkEmitter.tryEmit(orderedLiveSink,
                                                ev,
@@ -496,7 +513,10 @@ public class CdcEventStore implements EventStore {
                             return;
                         }
 
-                        buffer.put(go, ev);
+                        // buffer.put replaces on duplicate key; only count truly-new entries.
+                        if (buffer.put(go, ev) == null && bufferSizeGauge != null) {
+                            bufferSizeGauge.incrementAndGet();
+                        }
                         int drained = drain.getAsInt();
                         if (drained > 0) {
                             request(drained);

@@ -35,6 +35,13 @@ public class EssentialsPerformanceLabProperties {
     private int appendMaxAttempts = 3;
     private Duration appendRetryBackoff = Duration.ofMillis(2);
     private String metricsOutputFile;
+    /**
+     * Artificial delay applied inside each subscriber handler, in milliseconds.
+     * Used by the {@code backpressure} scenario to simulate a slow downstream consumer and
+     * validate that the CDC pipeline's bounded buffers hold under sustained producer pressure.
+     * Default {@code 0} means no delay — the baseline scenarios run at full subscriber speed.
+     */
+    private long subscriberHandlerDelayMs = 0;
 
     public Mode getMode() {
         return mode;
@@ -130,6 +137,14 @@ public class EssentialsPerformanceLabProperties {
 
     public void setMetricsOutputFile(String metricsOutputFile) {
         this.metricsOutputFile = metricsOutputFile;
+    }
+
+    public long getSubscriberHandlerDelayMs() {
+        return subscriberHandlerDelayMs;
+    }
+
+    public void setSubscriberHandlerDelayMs(long subscriberHandlerDelayMs) {
+        this.subscriberHandlerDelayMs = subscriberHandlerDelayMs;
     }
 
     public enum Mode {

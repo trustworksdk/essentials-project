@@ -1,0 +1,621 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.examples.perflab.scenario;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStoreSubscription;
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.EssentialsEventStoreProperties;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcAvailability;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.OptimisticAppendToStreamException;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.examples.perflab.EssentialsPerformanceLabProperties;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Gauge;
+import org.jdbi.v3.core.Jdbi;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
+
+import java.io.IOException;
+import java.nio.file.*;
+import java.time.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+
+/**
+ * Backpressure / slow-subscriber scenario. Validates that the CDC pipeline's bounded buffers hold
+ * under sustained producer load when subscribers consume slower than producers produce.
+ * <p>
+ * The scenario adds an artificial sleep inside each subscriber handler
+ * ({@code essentials.lab.subscriber-handler-delay-ms}) and samples, during the measurement window:
+ * <ul>
+ *   <li>peak {@code essentials.cdc.backfill_live.buffer.size} (the bounded live-event buffer
+ *       inside {@code BackfillThenLiveOrdered})</li>
+ *   <li>peak {@code RECEIVED}-status count in the CDC inbox (INBOX mode backlog)</li>
+ *   <li>cumulative {@code essentials.cdc.dispatcher.tick.failures} and
+ *       {@code essentials.cdc.dispatcher.conversion.failures}</li>
+ *   <li>dispatcher gauge for {@code essentials.cdc.dispatcher.poison.rows} (conversion poison)</li>
+ * </ul>
+ * <p>
+ * Invariants asserted at the end (failures logged at ERROR and reflected in the JSON output):
+ * <ul>
+ *   <li>peak BackfillThenLiveOrdered buffer size ≤ {@code eventBus.backpressureBufferSize}
+ *       (default 8192) — validates the bounded-buffer fix.</li>
+ *   <li>every produced event is eventually delivered (no loss) — validates the retry / overflow
+ *       contract doesn't silently drop in the ordered pipeline.</li>
+ *   <li>no dispatcher tick failures — validates the catch-all fix didn't mask real bugs.</li>
+ * </ul>
+ */
+@Component
+public class BackpressureScenario implements LabScenario {
+    private static final Logger log = LoggerFactory.getLogger(BackpressureScenario.class);
+
+    private static final AggregateType ORDERS = AggregateType.of("LabOrdersBackpressure");
+    private static final Duration SAMPLE_INTERVAL = Duration.ofMillis(100);
+
+    private final EventStore eventStore;
+    private final ConfigurableEventStore<?> configurableEventStore;
+    private final EventStoreSubscriptionManager subscriptionManager;
+    private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+    private final Optional<CdcAvailability> cdcAvailability;
+    private final Optional<MeterRegistry> meterRegistry;
+    private final EssentialsEventStoreProperties eventStoreProperties;
+    private final Jdbi jdbi;
+    private final ObjectMapper objectMapper;
+
+    public BackpressureScenario(EventStore eventStore,
+                                ConfigurableEventStore<?> configurableEventStore,
+                                EventStoreSubscriptionManager subscriptionManager,
+                                EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
+                                Optional<CdcAvailability> cdcAvailability,
+                                Optional<MeterRegistry> meterRegistry,
+                                EssentialsEventStoreProperties eventStoreProperties,
+                                Jdbi jdbi,
+                                ObjectMapper objectMapper) {
+        this.eventStore = eventStore;
+        this.configurableEventStore = configurableEventStore;
+        this.subscriptionManager = subscriptionManager;
+        this.unitOfWorkFactory = unitOfWorkFactory;
+        this.cdcAvailability = cdcAvailability;
+        this.meterRegistry = meterRegistry;
+        this.eventStoreProperties = eventStoreProperties;
+        this.jdbi = jdbi;
+        this.objectMapper = objectMapper;
+    }
+
+    @Override
+    public String name() {
+        return "backpressure";
+    }
+
+    @Override
+    public String description() {
+        return "Slow-subscriber scenario that validates CDC bounded buffers hold under sustained producer pressure";
+    }
+
+    @Override
+    public void run(EssentialsPerformanceLabProperties properties) throws Exception {
+        ensureAggregateConfigured();
+
+        long handlerDelayMs = Math.max(0L, properties.getSubscriberHandlerDelayMs());
+        if (handlerDelayMs == 0) {
+            log.warn("[backpressure] essentials.lab.subscriber-handler-delay-ms is 0 — this run won't exercise any backpressure. Set a non-zero value (e.g. 50) to simulate a slow subscriber.");
+        }
+
+        var cdcProperties = eventStoreProperties.getCdc();
+        int backpressureBufferSize = cdcProperties.getEventBus().getBackpressureBufferSize();
+        log.info("[backpressure] handlerDelayMs={}ms, backpressureBufferSize={}", handlerDelayMs, backpressureBufferSize);
+
+        var subscriptions = new ArrayList<EventStoreSubscription>();
+        var collector = new MetricsCollector();
+        var sampler = new PressureSampler(meterRegistry, jdbi, cdcProperties.getInboxTableName());
+
+        var startFrom = currentHighWatermark().map(GlobalEventOrder::increment)
+                                              .orElse(GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER);
+
+        for (int i = 0; i < properties.getSubscriberCount(); i++) {
+            var subscriberId = SubscriberId.of("lab-backpressure-" + i + "-" + UUID.randomUUID());
+            var subscription = subscriptionManager.subscribeToAggregateEventsAsynchronously(
+                    subscriberId,
+                    ORDERS,
+                    startFrom,
+                    ev -> {
+                        collector.recordDelivery(ev);
+                        if (handlerDelayMs > 0) {
+                            try {
+                                Thread.sleep(handlerDelayMs);
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                            }
+                        }
+                    }
+            );
+            subscriptions.add(subscription);
+        }
+
+        ScheduledExecutorService samplerExec = Executors.newSingleThreadScheduledExecutor(r -> {
+            var t = new Thread(r, "lab-backpressure-sampler");
+            t.setDaemon(true);
+            return t;
+        });
+
+        try {
+            // Short warmup without delay to get the stream flowing.
+            var warmupProduced = runProducerPhase(properties.getWarmup(), properties, properties.getRandomSeed(), new MetricsCollector(), 0);
+            waitForDeliveries(warmupProduced * properties.getSubscriberCount(), collector, TimeUnit.SECONDS.toMillis(10));
+
+            collector.reset();
+            sampler.reset();
+
+            var samplerFuture = samplerExec.scheduleAtFixedRate(sampler::sample,
+                                                                0,
+                                                                SAMPLE_INTERVAL.toMillis(),
+                                                                TimeUnit.MILLISECONDS);
+
+            var measurementStartedAtNanos = System.nanoTime();
+            var measurementProduced = runProducerPhase(properties.getDuration(),
+                                                       properties,
+                                                       properties.getRandomSeed() + 10_000,
+                                                       collector,
+                                                       1);
+            var producerStoppedAtNanos = System.nanoTime();
+
+            long expectedDeliveries = measurementProduced * properties.getSubscriberCount();
+
+            // Catchup window: leave enough room for the slow subscriber to drain its accumulated
+            // backlog (one delay-slot per event per subscriber) plus a generous safety margin.
+            long catchupBudgetMs = Math.max(
+                    TimeUnit.SECONDS.toMillis(30),
+                    (long) (measurementProduced * handlerDelayMs * 1.5) + TimeUnit.SECONDS.toMillis(15)
+            );
+            var catchup = waitForDeliveries(expectedDeliveries, collector, catchupBudgetMs);
+
+            samplerFuture.cancel(false);
+            sampler.sample(); // final reading
+
+            var snapshot = collector.snapshot(detectMode(),
+                                              handlerDelayMs,
+                                              backpressureBufferSize,
+                                              measurementProduced,
+                                              expectedDeliveries,
+                                              properties,
+                                              measurementStartedAtNanos,
+                                              producerStoppedAtNanos,
+                                              catchup,
+                                              sampler.snapshot(),
+                                              cdcAvailability.map(CdcAvailability::snapshot));
+            assertInvariantsAndLog(snapshot);
+
+            var json = toJson(snapshot);
+            log.info("Backpressure scenario metrics: {}", json);
+            System.out.println("############# [perf-lab] BACKPRESSURE DONE #############");
+            System.out.println("############# [perf-lab] mode=" + snapshot.mode() +
+                               " handler_delay_ms=" + snapshot.handlerDelayMs() +
+                               " produced=" + snapshot.producedEvents() +
+                               " delivered=" + snapshot.deliveredEvents() +
+                               " peak_buffer=" + snapshot.pressure().peakBackfillLiveBufferSize() +
+                               " buffer_bound=" + snapshot.backpressureBufferSize() +
+                               " peak_inbox_backlog=" + snapshot.pressure().peakInboxReceivedCount() +
+                               " bound_held=" + snapshot.invariantBoundedBufferHeld() +
+                               " no_loss=" + snapshot.invariantNoEventsLost() +
+                               " no_tick_failures=" + snapshot.invariantNoDispatcherTickFailures());
+            System.out.println("############# [perf-lab] ##############################");
+            writeMetricsIfConfigured(properties.getMetricsOutputFile(), json);
+        } finally {
+            samplerExec.shutdownNow();
+            subscriptions.forEach(EventStoreSubscription::unsubscribe);
+        }
+    }
+
+    private void assertInvariantsAndLog(BackpressureMetrics m) {
+        if (!m.invariantBoundedBufferHeld()) {
+            log.error("[backpressure] INVARIANT VIOLATED: BackfillThenLiveOrdered buffer exceeded configured bound (peak={} > bound={})",
+                      m.pressure().peakBackfillLiveBufferSize(), m.backpressureBufferSize());
+        }
+        if (!m.invariantNoEventsLost()) {
+            log.error("[backpressure] INVARIANT VIOLATED: not all produced events were delivered (produced={} delivered={} lag={})",
+                      m.producedEvents(), m.deliveredEvents(), m.deliveryLagEventsEnd());
+        }
+        if (!m.invariantNoDispatcherTickFailures()) {
+            log.error("[backpressure] INVARIANT VIOLATED: dispatcher had {} tick failures during the run",
+                      m.pressure().dispatcherTickFailuresDelta());
+        }
+    }
+
+    private String detectMode() {
+        boolean cdcWrapper = eventStore.getClass().getSimpleName().contains("CdcEventStore");
+        if (!cdcWrapper) return "polling";
+        return cdcAvailability.map(CdcAvailability::isActive).orElse(false) ? "cdc-active" : "cdc-fallback";
+    }
+
+    private void ensureAggregateConfigured() {
+        if (configurableEventStore.findAggregateEventStreamConfiguration(ORDERS).isEmpty()) {
+            configurableEventStore.addAggregateEventStreamConfiguration(ORDERS, String.class);
+        }
+    }
+
+    private Optional<GlobalEventOrder> currentHighWatermark() {
+        return unitOfWorkFactory.withUnitOfWork(() -> eventStore.findHighestGlobalEventOrderPersisted(ORDERS));
+    }
+
+    private long runProducerPhase(Duration phaseDuration,
+                                  EssentialsPerformanceLabProperties properties,
+                                  long seed,
+                                  MetricsCollector collector,
+                                  int phaseIndex) throws InterruptedException {
+        if (phaseDuration.isZero() || phaseDuration.isNegative()) return 0;
+
+        var nextEventNumber = new AtomicLong();
+        var produced = new AtomicLong();
+        var appendConflictErrors = new AtomicLong();
+        var appendInfrastructureErrors = new AtomicLong();
+        var appendRetriedConflicts = new AtomicLong();
+        long deadlineNanos = System.nanoTime() + phaseDuration.toNanos();
+
+        var executor = Executors.newFixedThreadPool(properties.getProducerThreads(), runnable -> {
+            var thread = new Thread(runnable, "lab-bp-producer-" + phaseIndex);
+            thread.setDaemon(true);
+            return thread;
+        });
+
+        for (int i = 0; i < properties.getProducerThreads(); i++) {
+            final int producerIndex = i;
+            executor.submit(() -> {
+                var random = new Random(seed + (long) producerIndex * 31L + (long) phaseIndex * 997L);
+                var aggregateCardinality = Math.max(1, properties.getAggregateCardinality());
+                if (producerIndex >= aggregateCardinality) return;
+                while (System.nanoTime() < deadlineNanos) {
+                    var aggregateId = "bp-order-" + nextAggregateIndex(random,
+                                                                        producerIndex,
+                                                                        properties.getProducerThreads(),
+                                                                        aggregateCardinality);
+                    var event = new LabOrderPlaced(aggregateId,
+                                                   nextEventNumber.incrementAndGet(),
+                                                   System.nanoTime());
+                    var maxAttempts = Math.max(1, properties.getAppendMaxAttempts());
+                    var retryBackoffMillis = Math.max(0L, properties.getAppendRetryBackoff().toMillis());
+                    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+                        try {
+                            unitOfWorkFactory.withUnitOfWork(() -> {
+                                eventStore.appendToStream(ORDERS, aggregateId, List.of(event));
+                                return null;
+                            });
+                            produced.incrementAndGet();
+                            break;
+                        } catch (Exception e) {
+                            var optimisticConflict = isOptimisticConflict(e);
+                            var canRetry = optimisticConflict && attempt < maxAttempts;
+                            if (canRetry) {
+                                appendRetriedConflicts.incrementAndGet();
+                                if (retryBackoffMillis > 0) {
+                                    try {
+                                        Thread.sleep(retryBackoffMillis * attempt);
+                                    } catch (InterruptedException interruptedException) {
+                                        Thread.currentThread().interrupt();
+                                        return;
+                                    }
+                                }
+                                continue;
+                            }
+                            if (optimisticConflict) {
+                                appendConflictErrors.incrementAndGet();
+                            } else {
+                                appendInfrastructureErrors.incrementAndGet();
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+
+        executor.shutdown();
+        executor.awaitTermination(phaseDuration.toMillis() + TimeUnit.SECONDS.toMillis(5), TimeUnit.MILLISECONDS);
+        if (!executor.isTerminated()) executor.shutdownNow();
+
+        collector.setAppendOutcomes(appendConflictErrors.get(),
+                                    appendInfrastructureErrors.get(),
+                                    appendRetriedConflicts.get());
+        return produced.get();
+    }
+
+    private int nextAggregateIndex(Random random,
+                                   int producerIndex,
+                                   int producerThreads,
+                                   int aggregateCardinality) {
+        int step = Math.max(1, producerThreads);
+        int partitions = Math.max(1, (aggregateCardinality - producerIndex + step - 1) / step);
+        return producerIndex + step * random.nextInt(partitions);
+    }
+
+    private boolean isOptimisticConflict(Throwable throwable) {
+        var current = throwable;
+        while (current != null) {
+            if (current instanceof OptimisticAppendToStreamException) return true;
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private DeliveryCatchup waitForDeliveries(long expected, MetricsCollector collector, long timeoutMillis) throws InterruptedException {
+        if (expected <= 0) return new DeliveryCatchup(true, 0);
+        long startedAt = System.currentTimeMillis();
+        long deadline = startedAt + timeoutMillis;
+        while (collector.deliveredCount() < expected && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50L);
+        }
+        long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
+        boolean caughtUp = collector.deliveredCount() >= expected;
+        return new DeliveryCatchup(caughtUp, elapsed);
+    }
+
+    private void writeMetricsIfConfigured(String metricsOutputFile, String json) throws IOException {
+        if (!StringUtils.hasText(metricsOutputFile)) return;
+        var target = Paths.get(metricsOutputFile).toAbsolutePath().normalize();
+        if (target.getParent() != null) Files.createDirectories(target.getParent());
+        Files.writeString(target, json + System.lineSeparator(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        log.info("Wrote backpressure metrics to {}", target);
+        System.out.println("############# [perf-lab] backpressure metrics file: " + target);
+    }
+
+    private String toJson(BackpressureMetrics metrics) {
+        try {
+            return objectMapper.writeValueAsString(metrics);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize backpressure metrics to JSON", e);
+        }
+    }
+
+    /**
+     * Samples pressure-signals (gauge values + inbox-backlog query) periodically and tracks peaks.
+     * Each sample is O(1) for gauges and a single count query against the inbox table.
+     */
+    private static final class PressureSampler {
+        private final Optional<MeterRegistry> meterRegistry;
+        private final Jdbi jdbi;
+        private final String inboxTable;
+
+        private final AtomicLong peakBackfillLiveBufferSize = new AtomicLong(0);
+        private final AtomicLong peakInboxReceivedCount     = new AtomicLong(0);
+        private final AtomicLong samples                    = new AtomicLong(0);
+
+        private long dispatcherTickFailuresAtStart = 0;
+        private long dispatcherConversionFailuresAtStart = 0;
+        private long dispatcherPoisonRowsAtStart = 0;
+
+        PressureSampler(Optional<MeterRegistry> meterRegistry, Jdbi jdbi, String inboxTable) {
+            this.meterRegistry = meterRegistry;
+            this.jdbi = jdbi;
+            this.inboxTable = inboxTable;
+        }
+
+        void reset() {
+            peakBackfillLiveBufferSize.set(0);
+            peakInboxReceivedCount.set(0);
+            samples.set(0);
+            dispatcherTickFailuresAtStart = readCounter("essentials.cdc.dispatcher.tick.failures");
+            dispatcherConversionFailuresAtStart = readCounter("essentials.cdc.dispatcher.conversion.failures");
+            dispatcherPoisonRowsAtStart = readCounter("essentials.cdc.dispatcher.poison.rows");
+        }
+
+        void sample() {
+            samples.incrementAndGet();
+            long bufferSize = readGauge("essentials.cdc.backfill_live.buffer.size");
+            peakBackfillLiveBufferSize.accumulateAndGet(bufferSize, Math::max);
+            long inbox = inboxReceivedCount();
+            peakInboxReceivedCount.accumulateAndGet(inbox, Math::max);
+        }
+
+        Pressure snapshot() {
+            return new Pressure(
+                    peakBackfillLiveBufferSize.get(),
+                    peakInboxReceivedCount.get(),
+                    samples.get(),
+                    Math.max(0L, readCounter("essentials.cdc.dispatcher.tick.failures") - dispatcherTickFailuresAtStart),
+                    Math.max(0L, readCounter("essentials.cdc.dispatcher.conversion.failures") - dispatcherConversionFailuresAtStart),
+                    Math.max(0L, readCounter("essentials.cdc.dispatcher.poison.rows") - dispatcherPoisonRowsAtStart)
+            );
+        }
+
+        private long readGauge(String name) {
+            return meterRegistry.map(reg -> {
+                Gauge g = reg.find(name).gauge();
+                return g == null ? 0L : (long) g.value();
+            }).orElse(0L);
+        }
+
+        private long readCounter(String name) {
+            return meterRegistry.map(reg -> {
+                var c = reg.find(name).counter();
+                return c == null ? 0L : (long) c.count();
+            }).orElse(0L);
+        }
+
+        private long inboxReceivedCount() {
+            try {
+                return jdbi.withHandle(h -> h.createQuery("select count(*) from " + inboxTable + " where status = 'RECEIVED'")
+                                              .mapTo(Long.class)
+                                              .findFirst()
+                                              .orElse(0L));
+            } catch (Exception e) {
+                // INBOX table may not exist in DIRECT mode — that's fine, return 0.
+                return 0L;
+            }
+        }
+    }
+
+    private static final class MetricsCollector {
+        private final AtomicLong delivered = new AtomicLong();
+        private final AtomicLong deserializationMisses = new AtomicLong();
+        private final AtomicLong appendConflictErrors = new AtomicLong();
+        private final AtomicLong appendInfrastructureErrors = new AtomicLong();
+        private final AtomicLong appendRetriedConflicts = new AtomicLong();
+        private final AtomicLong firstDeliveryAtNanos = new AtomicLong(Long.MAX_VALUE);
+        private final List<Long> latenciesNanos = Collections.synchronizedList(new ArrayList<>());
+
+        void recordDelivery(PersistedEvent event) {
+            delivered.incrementAndGet();
+            firstDeliveryAtNanos.accumulateAndGet(System.nanoTime(), Math::min);
+            var payload = event.event().getJsonDeserialized().orElse(null);
+            if (payload instanceof LabOrderPlaced placed) {
+                latenciesNanos.add(Math.max(0, System.nanoTime() - placed.appendedAtNanos()));
+            } else {
+                deserializationMisses.incrementAndGet();
+            }
+        }
+
+        void setAppendOutcomes(long conflictErrors, long infrastructureErrors, long retriedConflicts) {
+            appendConflictErrors.set(conflictErrors);
+            appendInfrastructureErrors.set(infrastructureErrors);
+            appendRetriedConflicts.set(retriedConflicts);
+        }
+
+        long deliveredCount() {
+            return delivered.get();
+        }
+
+        void reset() {
+            delivered.set(0);
+            deserializationMisses.set(0);
+            appendConflictErrors.set(0);
+            appendInfrastructureErrors.set(0);
+            appendRetriedConflicts.set(0);
+            firstDeliveryAtNanos.set(Long.MAX_VALUE);
+            synchronized (latenciesNanos) {
+                latenciesNanos.clear();
+            }
+        }
+
+        BackpressureMetrics snapshot(String mode,
+                                     long handlerDelayMs,
+                                     int backpressureBufferSize,
+                                     long produced,
+                                     long expectedDeliveries,
+                                     EssentialsPerformanceLabProperties properties,
+                                     long measurementStartedAtNanos,
+                                     long producerStoppedAtNanos,
+                                     DeliveryCatchup catchup,
+                                     Pressure pressure,
+                                     Optional<CdcAvailability.Snapshot> cdcSnapshot) {
+            long[] sortedLatencies;
+            synchronized (latenciesNanos) {
+                sortedLatencies = latenciesNanos.stream().mapToLong(Long::longValue).toArray();
+            }
+            Arrays.sort(sortedLatencies);
+
+            var runMillis = Math.max(1L, properties.getDuration().toMillis());
+            var appendThroughput = produced * 1_000.0d / runMillis;
+            var deliveryThroughput = delivered.get() * 1_000.0d / runMillis;
+            var deliveredCount = delivered.get();
+            var finalLagEvents = Math.max(0L, expectedDeliveries - deliveredCount);
+            var completionPct = expectedDeliveries == 0 ? 100.0d : (deliveredCount * 100.0d) / expectedDeliveries;
+            var producerWindowMs = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(Math.max(0L, producerStoppedAtNanos - measurementStartedAtNanos)));
+            var catchupMs = catchup.caughtUp() ? catchup.elapsedMs() : -1L;
+
+            boolean bufferBoundHeld = pressure.peakBackfillLiveBufferSize() <= backpressureBufferSize;
+            boolean noEventsLost    = catchup.caughtUp() && finalLagEvents == 0;
+            boolean noTickFailures  = pressure.dispatcherTickFailuresDelta() == 0;
+
+            return new BackpressureMetrics(
+                    mode,
+                    Instant.now().toString(),
+                    handlerDelayMs,
+                    backpressureBufferSize,
+                    produced,
+                    expectedDeliveries,
+                    deliveredCount,
+                    appendConflictErrors.get() + appendInfrastructureErrors.get(),
+                    deserializationMisses.get(),
+                    appendThroughput,
+                    deliveryThroughput,
+                    percentileMillis(sortedLatencies, 0.50d),
+                    percentileMillis(sortedLatencies, 0.95d),
+                    percentileMillis(sortedLatencies, 0.99d),
+                    producerWindowMs,
+                    catchupMs,
+                    catchup.caughtUp(),
+                    finalLagEvents,
+                    completionPct,
+                    pressure,
+                    bufferBoundHeld,
+                    noEventsLost,
+                    noTickFailures,
+                    cdcSnapshot.orElse(null)
+            );
+        }
+
+        private static double percentileMillis(long[] sortedLatenciesNanos, double percentile) {
+            if (sortedLatenciesNanos.length == 0) return 0.0d;
+            int index = (int) Math.ceil(percentile * sortedLatenciesNanos.length) - 1;
+            index = Math.max(0, Math.min(index, sortedLatenciesNanos.length - 1));
+            return sortedLatenciesNanos[index] / 1_000_000.0d;
+        }
+    }
+
+    private record BackpressureMetrics(String mode,
+                                       String capturedAt,
+                                       long handlerDelayMs,
+                                       int backpressureBufferSize,
+                                       long producedEvents,
+                                       long expectedDeliveries,
+                                       long deliveredEvents,
+                                       long appendErrors,
+                                       long deserializationMisses,
+                                       double appendEventsPerSecond,
+                                       double deliveredEventsPerSecond,
+                                       double p50LatencyMs,
+                                       double p95LatencyMs,
+                                       double p99LatencyMs,
+                                       long producerWindowMs,
+                                       long timeToCatchUpMs,
+                                       boolean caughtUpWithinTimeout,
+                                       long deliveryLagEventsEnd,
+                                       double deliveryCompletionPct,
+                                       Pressure pressure,
+                                       boolean invariantBoundedBufferHeld,
+                                       boolean invariantNoEventsLost,
+                                       boolean invariantNoDispatcherTickFailures,
+                                       CdcAvailability.Snapshot cdc) {
+    }
+
+    private record Pressure(long peakBackfillLiveBufferSize,
+                            long peakInboxReceivedCount,
+                            long samples,
+                            long dispatcherTickFailuresDelta,
+                            long dispatcherConversionFailuresDelta,
+                            long dispatcherPoisonRowsDelta) {
+    }
+
+    private record DeliveryCatchup(boolean caughtUp, long elapsedMs) {
+    }
+
+    private record LabOrderPlaced(String aggregateId,
+                                  long sequence,
+                                  long appendedAtNanos) {
+    }
+}
