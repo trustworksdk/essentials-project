@@ -200,7 +200,6 @@ public final class CdcDispatcher implements Lifecycle {
         log.info("[{}] CDC dispatcher started", slotName);
     }
 
-    // package-private for testing — production callers drive this via the ScheduledExecutorService in start()
     void tick() {
         if (stopping.get()) return;
         try {
