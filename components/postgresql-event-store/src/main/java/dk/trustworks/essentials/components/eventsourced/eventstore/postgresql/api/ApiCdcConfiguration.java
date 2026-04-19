@@ -52,7 +52,7 @@ public record ApiCdcConfiguration(
                 cdcProperties.getWalParserMode().name(),
                 cdcProperties.getCdcEventStoreBackfillBatchSize(),
                 cdcProperties.getInboxTableName(),
-                cdcProperties.getInboxTtlDuration(),
+                cdcProperties.getInboxTtlDurationDays(),
                 slotName,
                 cdcProperties.getSlot().getMode().name(),
                 cdcProperties.getSlot().getGroup(),

@@ -40,21 +40,21 @@ import java.time.Duration;
  */
 public class CdcProperties {
 
-    private boolean       enabled                        = true;
-    private CdcMode       mode                           = CdcMode.AUTO;
-    private int           cdcEventStoreBackfillBatchSize = 1000;
-    private String        plugin                         = PgOutputLogicalDecodingPlugin.PLUGIN_NAME;
-    private WalParserMode walParserMode                  = WalParserMode.STRING;
-    private CdcDeliveryMode deliveryMode                 = CdcDeliveryMode.INBOX;
+    private boolean         enabled                        = true;
+    private CdcMode         mode                           = CdcMode.AUTO;
+    private int             cdcEventStoreBackfillBatchSize = 1000;
+    private String          plugin                         = PgOutputLogicalDecodingPlugin.PLUGIN_NAME;
+    private WalParserMode   walParserMode                  = WalParserMode.STRING;
+    private CdcDeliveryMode deliveryMode                   = CdcDeliveryMode.INBOX;
 
-    private String inboxTableName   = "eventstore_cdc_inbox";
-    private long   inboxTtlDuration = 90L;
+    private String inboxTableName       = "eventstore_cdc_inbox";
+    private long   inboxTtlDurationDays = 90L;
 
     private final WalReplicationTailerProperties walReplicationTailer = new WalReplicationTailerProperties();
-    private final PgOutputProperties       pgOutput       = new PgOutputProperties();
-    private final CdcDispatcherProperties  cdcDispatcher  = new CdcDispatcherProperties();
-    private final CdcEventBusProperties    eventBus       = new CdcEventBusProperties();
-    private final CdcSlotProperties        slot           = new CdcSlotProperties();
+    private final PgOutputProperties             pgOutput             = new PgOutputProperties();
+    private final CdcDispatcherProperties        cdcDispatcher        = new CdcDispatcherProperties();
+    private final CdcEventBusProperties          eventBus             = new CdcEventBusProperties();
+    private final CdcSlotProperties              slot                 = new CdcSlotProperties();
 
     /**
      * Checks whether the Change Data Capture (CDC) functionality is enabled.
@@ -168,21 +168,21 @@ public class CdcProperties {
     }
 
     /**
-     * Retrieves the Time-To-Live (TTL) duration for inbox entries in the CDC configuration.
+     * Retrieves the Time-To-Live (TTL) duration days for inbox entries in the CDC configuration.
      *
      * @return the duration representing the TTL for inbox entries as a {@code Long} object
      */
-    public long getInboxTtlDuration() {
-        return inboxTtlDuration;
+    public long getInboxTtlDurationDays() {
+        return inboxTtlDurationDays;
     }
 
     /**
-     * Sets the Time-To-Live (TTL) duration for inbox entries in the Change Data Capture (CDC) configuration.
+     * Sets the Time-To-Live (TTL) duration days for inbox entries in the Change Data Capture (CDC) configuration.
      *
-     * @param inboxTtlDuration the duration representing the TTL for inbox entries as a {@code Long} object
+     * @param inboxTtlDurationDays the duration representing the TTL for inbox entries as a {@code Long} object
      */
-    public void setInboxTtlDuration(long inboxTtlDuration) {
-        this.inboxTtlDuration = inboxTtlDuration;
+    public void setInboxTtlDurationDays(long inboxTtlDurationDays) {
+        this.inboxTtlDurationDays = inboxTtlDurationDays;
     }
 
     /**
@@ -266,22 +266,22 @@ public class CdcProperties {
      */
     public static class WalReplicationTailerProperties {
 
-        private Duration     pollInterval              = Duration.ofMillis(25);
-        private Duration     pollBackoffInterval       = Duration.ofMillis(250);
-        private Duration     maxPollBackoffInterval    = Duration.ofSeconds(5);
-        private Duration     replicationStatusInterval = Duration.ofSeconds(1);
-        private double       jitterRatio               = 0.2;
-        private double       backOffFactor             = 2;
-        private boolean      prettyPrint               = false;
-        private boolean      includeXids               = true;
-        private boolean      includeTimestamp          = true;
-        private boolean      includeLsn                = true;
+        private Duration pollInterval              = Duration.ofMillis(25);
+        private Duration pollBackoffInterval       = Duration.ofMillis(250);
+        private Duration maxPollBackoffInterval    = Duration.ofSeconds(5);
+        private Duration replicationStatusInterval = Duration.ofSeconds(1);
+        private double   jitterRatio               = 0.2;
+        private double   backOffFactor             = 2;
+        private boolean  prettyPrint               = false;
+        private boolean  includeXids               = true;
+        private boolean  includeTimestamp          = true;
+        private boolean  includeLsn                = true;
 
 
         public static WalReplicationTailerProperties defaults(Duration pollInterval,
-                                                        Duration pollBackoffInterval,
-                                                        Duration maxPollBackoffInterval,
-                                                        Duration replicationStatusInterval) {
+                                                              Duration pollBackoffInterval,
+                                                              Duration maxPollBackoffInterval,
+                                                              Duration replicationStatusInterval) {
             var tailer = new WalReplicationTailerProperties();
             tailer.setPollInterval(pollInterval);
             tailer.setPollBackoffInterval(pollBackoffInterval);
@@ -501,10 +501,10 @@ public class CdcProperties {
     }
 
     public static class PgOutputProperties {
-        private String publicationName = "essentials_cdc_publication";
-        private int    protoVersion    = 1;
-        private boolean binary         = false;
-        private boolean messages       = false;
+        private String  publicationName = "essentials_cdc_publication";
+        private int     protoVersion    = 1;
+        private boolean binary          = false;
+        private boolean messages        = false;
 
         public String getPublicationName() {
             return publicationName;
@@ -553,9 +553,9 @@ public class CdcProperties {
      * (e.g., stop processing entirely or quarantine and continue).
      */
     public static class CdcDispatcherProperties {
-        private Duration     pollInterval = Duration.ofMillis(20);
-        private int          batchSize    = 500;
-        private PoisonPolicy poisonPolicy = PoisonPolicy.QUARANTINE_AND_CONTINUE;
+        private Duration            pollInterval        = Duration.ofMillis(20);
+        private int                 batchSize           = 500;
+        private PoisonPolicy        poisonPolicy        = PoisonPolicy.QUARANTINE_AND_CONTINUE;
         private DispatchedRowPolicy dispatchedRowPolicy = DispatchedRowPolicy.MARK_DISPATCHED;
 
         public static CdcDispatcherProperties defaults() {
@@ -645,11 +645,11 @@ public class CdcProperties {
      * Configuration properties for the in-memory CDC event bus used by DIRECT delivery mode.
      */
     public static class CdcEventBusProperties {
-        private int                backpressureBufferSize = 8192;
-        private int                nonSerializedMaxRetries = 16;
-        private int                overflowMaxRetries      = 20;
-        private double             queuedTaskCapFactor     = 1.5d;
-        private CdcOverflowPolicy  overflowPolicy          = CdcOverflowPolicy.FAIL_FAST;
+        private int               backpressureBufferSize  = 8192;
+        private int               nonSerializedMaxRetries = 16;
+        private int               overflowMaxRetries      = 20;
+        private double            queuedTaskCapFactor     = 1.5d;
+        private CdcOverflowPolicy overflowPolicy          = CdcOverflowPolicy.FAIL_FAST;
 
         public int getBackpressureBufferSize() {
             return backpressureBufferSize;
