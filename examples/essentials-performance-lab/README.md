@@ -183,11 +183,12 @@ This smoke test does not require `wal2json`; CDC path is exercised in `auto` fal
 
 ## Benchmark matrix scripts
 
-Two helper scripts are included under `examples/essentials-performance-lab/scripts`:
+Helper scripts are included under `examples/essentials-performance-lab/scripts`:
 
 - `run-baseline-matrix.sh`: fixed small matrix over subscriber/cardinality shapes
 - `run-cdc-tuning-matrix.sh`: CDC tuning matrix over dispatcher/backfill/tailer knobs
 - `run-cdc-dispatched-policy-ab.sh`: repeated A/B compare of `mark-dispatched` vs `delete` inbox row policy
+- `run-backpressure-matrix.sh`: slow-subscriber matrix that validates the CDC pipeline's bounded buffers hold under sustained producer pressure
 
 Run full CDC tuning matrix (recommended default):
 
@@ -310,6 +311,61 @@ Notes:
 
 - Keep machine awake during long runs (sleep will skew results).
 - A/B script excludes invalid runs from medians and prints reasons.
+
+## Backpressure / slow-subscriber validation
+
+The `backpressure` scenario exercises a deliberately-slow subscriber to validate that the CDC
+pipeline's bounded buffers hold under sustained producer pressure. It reports three pass/fail
+invariants in its JSON output:
+
+- `invariantBoundedBufferHeld`: peak `BackfillThenLiveOrdered` buffer size stayed ≤
+  `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` (default 8192).
+- `invariantNoEventsLost`: every produced event was eventually delivered to every subscriber.
+- `invariantNoDispatcherTickFailures`: zero dispatcher tick failures during the run.
+
+### Ad-hoc single run
+
+```bash
+mvn -q -pl examples/essentials-performance-lab -DskipTests -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="--essentials.lab.scenario=backpressure --essentials.eventstore.cdc.enabled=true --essentials.lab.warmup=PT5S --essentials.lab.duration=PT60S --essentials.lab.producer-threads=4 --essentials.lab.subscriber-count=1 --essentials.lab.subscriber-handler-delay-ms=25 --essentials.lab.aggregate-cardinality=1000 --essentials.lab.metrics-output-file=./target/backpressure-single.json" \
+  spring-boot:run
+```
+
+Key knob: `--essentials.lab.subscriber-handler-delay-ms=<N>` — artificial sleep (in ms) inside
+each subscriber handler. `0` is the baseline; `25` is moderate pressure; `100` is heavy.
+
+### Matrix
+
+```bash
+examples/essentials-performance-lab/scripts/run-backpressure-matrix.sh
+```
+
+Default cases sweep `subscriber-count` × `handler-delay-ms` (no-delay / light / moderate / heavy /
+5-subscriber fan-out). Override `PLUGIN=wal2json`, `DELIVERY_MODE=DIRECT`, or `BUFFER_SIZE=<N>`
+to exercise other configurations. Custom cases via `CUSTOM_CASES`:
+
+```bash
+CUSTOM_CASES='smoke|1|0;heavy|1|100' \
+WARMUP=PT2S DURATION=PT10S \
+examples/essentials-performance-lab/scripts/run-backpressure-matrix.sh
+```
+
+Outputs per run:
+
+- `examples/essentials-performance-lab/target/backpressure/<run-id>/summary.json`
+- `examples/essentials-performance-lab/target/backpressure/<run-id>/summary.md` — per-case pass/fail
+  table plus an invariant-violations section flagging any case that failed.
+
+### Observability
+
+The scenario reads these meters live during the run (every 100ms) and surfaces peaks in the
+per-case JSON:
+
+- `essentials.cdc.backfill_live.buffer.size` — gauge for the in-flight live-event buffer inside
+  `BackfillThenLiveOrdered`. Peak is compared against the configured bound.
+- `essentials.cdc.dispatcher.tick.failures` / `.conversion.failures` / `.poison.rows` — counter
+  deltas over the measurement window.
+- Inbox `RECEIVED` backlog — a direct `COUNT(*)` against the inbox table (0 in DIRECT mode).
 
 ## Next planned scenarios
 
