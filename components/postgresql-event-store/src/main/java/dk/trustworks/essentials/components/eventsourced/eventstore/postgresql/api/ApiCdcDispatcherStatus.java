@@ -23,8 +23,10 @@ public record ApiCdcDispatcherStatus(
         boolean started,
         boolean stopping,
         long ticks,
+        long tickFailures,
         long conversionFailures,
         long poisonRows,
+        long gapExtractionFailures,
         long publishedEvents,
         long lastBatchSize,
         long lastTickEpochMs
@@ -35,8 +37,10 @@ public record ApiCdcDispatcherStatus(
                 status.started(),
                 status.stopping(),
                 status.ticks(),
+                status.tickFailures(),
                 status.conversionFailures(),
                 status.poisonRows(),
+                status.gapExtractionFailures(),
                 status.publishedEvents(),
                 status.lastBatchSize(),
                 status.lastTickEpochMs()

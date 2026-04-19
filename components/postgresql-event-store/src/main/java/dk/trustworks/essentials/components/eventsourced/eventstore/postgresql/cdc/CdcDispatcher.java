@@ -79,8 +79,10 @@ public final class CdcDispatcher implements Lifecycle {
     private final AtomicBoolean started  = new AtomicBoolean(false);
     private final AtomicBoolean stopping = new AtomicBoolean(false);
     private final AtomicLong    tickCount = new AtomicLong(0);
+    private final AtomicLong    tickFailureCount = new AtomicLong(0);
     private final AtomicLong    conversionFailureCount = new AtomicLong(0);
     private final AtomicLong    poisonRowCount = new AtomicLong(0);
+    private final AtomicLong    gapExtractionFailureCount = new AtomicLong(0);
     private final AtomicLong    publishedEventCount = new AtomicLong(0);
     private final AtomicLong    lastBatchSize = new AtomicLong(0);
     private final AtomicLong    lastTickEpochMs = new AtomicLong(0);
@@ -89,8 +91,10 @@ public final class CdcDispatcher implements Lifecycle {
     private Future<?>                tickFuture;
 
     private Counter             ticksCounter;
+    private Counter             tickFailuresCounter;
     private Counter             conversionFailuresCounter;
     private Counter             poisonRowsCounter;
+    private Counter             gapExtractionFailuresCounter;
     private Counter             publishedEventsCounter;
     private Timer               pollTimer;
     private Timer               convertTimer;
@@ -234,12 +238,18 @@ public final class CdcDispatcher implements Lifecycle {
         ticksCounter = Counter.builder("essentials.cdc.dispatcher.ticks")
                               .tag("slot", slotName)
                               .register(meterRegistry);
+        tickFailuresCounter = Counter.builder("essentials.cdc.dispatcher.tick.failures")
+                                     .tag("slot", slotName)
+                                     .register(meterRegistry);
         conversionFailuresCounter = Counter.builder("essentials.cdc.dispatcher.conversion.failures")
                                            .tag("slot", slotName)
                                            .register(meterRegistry);
         poisonRowsCounter = Counter.builder("essentials.cdc.dispatcher.poison.rows")
                                    .tag("slot", slotName)
                                    .register(meterRegistry);
+        gapExtractionFailuresCounter = Counter.builder("essentials.cdc.dispatcher.gap_extraction.failures")
+                                              .tag("slot", slotName)
+                                              .register(meterRegistry);
         publishedEventsCounter = Counter.builder("essentials.cdc.dispatcher.published.events")
                                         .tag("slot", slotName)
                                         .register(meterRegistry);
@@ -288,8 +298,27 @@ public final class CdcDispatcher implements Lifecycle {
         log.info("[{}] CDC dispatcher started", slotName);
     }
 
-    private void tick() {
+    // package-private for testing — production callers drive this via the ScheduledExecutorService in start()
+    void tick() {
         if (stopping.get()) return;
+        try {
+            tickInternal();
+        } catch (Throwable t) {
+            // Intentional STOP (poisonPolicy=STOP path) sets stopping=true and re-throws; let it propagate
+            // so the ScheduledExecutorService suppresses further ticks — that's the desired terminal state.
+            if (stopping.get()) {
+                throw t;
+            }
+            // Everything else (transient DB errors, unexpected decoder failures, gap-extraction throws, etc.)
+            // must NOT suppress future ticks. scheduleWithFixedDelay will not retry after an uncaught throw,
+            // so we swallow-and-log here to keep the dispatcher alive. Next tick retries the fetch.
+            tickFailureCount.incrementAndGet();
+            if (tickFailuresCounter != null) tickFailuresCounter.increment();
+            log.error("[{}] Unexpected error in CDC dispatcher tick — will retry on next tick", slotName, t);
+        }
+    }
+
+    private void tickInternal() {
         tickCount.incrementAndGet();
         lastTickEpochMs.set(System.currentTimeMillis());
         if (ticksCounter != null) ticksCounter.increment();
@@ -331,7 +360,23 @@ public final class CdcDispatcher implements Lifecycle {
                          slotName, row.inboxId(), row.lsn(), poisonPolicy, e.getMessage(), e);
 
                 if (poisonPolicy == PoisonPolicy.QUARANTINE_AND_CONTINUE) {
-                    var poisonGaps = extractPoisonGaps(payloadBytes, pgOutputPayload);
+                    // Gap extraction is best-effort. If it throws (malformed payload, decoder bug), we still
+                    // mark the row POISON so the dispatcher makes forward progress. Without a registered gap,
+                    // the event stream gap handler's transient→permanent promotion timeout (default 120s) is
+                    // the fallback that eventually unblocks subscribers.
+                    List<WalGlobalOrdersExtractor.Gap> poisonGaps;
+                    try {
+                        poisonGaps = extractPoisonGaps(payloadBytes, pgOutputPayload);
+                    } catch (Exception gapExtractionFailure) {
+                        gapExtractionFailureCount.incrementAndGet();
+                        if (gapExtractionFailuresCounter != null) gapExtractionFailuresCounter.increment();
+                        log.error("[{}] Gap extraction failed for poisoned inboxId={} lsn={} — row will be quarantined without gap registration. "
+                                          + "Subscribers may stall on the missing global_order until the EventStreamGapHandler promotes it from transient to permanent (default: 120s).",
+                                  slotName, row.inboxId(), row.lsn(), gapExtractionFailure);
+                        poisonGaps = List.of();
+                    }
+
+                    final List<WalGlobalOrdersExtractor.Gap> poisonGapsFinal = poisonGaps;
                     unitOfWorkFactory.usingUnitOfWork(uow -> {
                         log.warn("[{}] Poisoning inboxId={} lsn={}", slotName, row.inboxId(), row.lsn());
                         inbox.markPoison(slotName, row.lsn(), abbreviateExceptionMessage(e));
@@ -339,8 +384,8 @@ public final class CdcDispatcher implements Lifecycle {
                         if (poisonRowsCounter != null) poisonRowsCounter.increment();
 
                         // IMPORTANT: prevent subscribers stalling on this missing global_order
-                        if (!poisonGaps.isEmpty()) {
-                            for (var gap : poisonGaps) {
+                        if (!poisonGapsFinal.isEmpty()) {
+                            for (var gap : poisonGapsFinal) {
                                 if (log.isDebugEnabled()) {
                                     log.debug("[{}] Poisoning gap for aggregateType={} global_order={}", slotName, gap.aggregateType(), gap.globalEventOrder());
                                 }
@@ -452,8 +497,10 @@ public final class CdcDispatcher implements Lifecycle {
                 started.get(),
                 stopping.get(),
                 tickCount.get(),
+                tickFailureCount.get(),
                 conversionFailureCount.get(),
                 poisonRowCount.get(),
+                gapExtractionFailureCount.get(),
                 publishedEventCount.get(),
                 lastBatchSize.get(),
                 lastTickEpochMs.get()
@@ -465,8 +512,10 @@ public final class CdcDispatcher implements Lifecycle {
             boolean started,
             boolean stopping,
             long ticks,
+            long tickFailures,
             long conversionFailures,
             long poisonRows,
+            long gapExtractionFailures,
             long publishedEvents,
             long lastBatchSize,
             long lastTickEpochMs
