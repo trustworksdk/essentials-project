@@ -167,14 +167,27 @@ public class BackpressureScenario implements LabScenario {
             subscriptions.add(subscription);
         }
 
-        ScheduledExecutorService samplerExec = Executors.newSingleThreadScheduledExecutor(r -> {
+        ScheduledExecutorService samplerExec = Executors.newScheduledThreadPool(1, r -> {
             var t = new Thread(r, "lab-backpressure-sampler");
             t.setDaemon(true);
             return t;
         });
 
+        // Progress reporter heartbeat. Long drain phases (up to max(3 × duration, 120s)) would
+        // otherwise be silent for minutes — confusing for operators watching the matrix run.
+        // Fields are updated by the main flow as it transitions through phases; the scheduler
+        // reads them and emits a grep-friendly line every 10s.
+        var progressPhase        = new AtomicReference<>("init");
+        var progressPhaseStartNs = new AtomicLong(System.nanoTime());
+        var progressDeadlineNs   = new AtomicLong(0L);
+        var progressFuture       = samplerExec.scheduleAtFixedRate(
+                () -> logProgress(progressPhase.get(), progressPhaseStartNs.get(), progressDeadlineNs.get(), collector, sampler),
+                10, 10, TimeUnit.SECONDS);
+
         try {
             // Short warmup without delay to get the stream flowing.
+            progressPhase.set("warmup");
+            progressPhaseStartNs.set(System.nanoTime());
             var warmupProduced = runProducerPhase(properties.getWarmup(), properties, properties.getRandomSeed(), new MetricsCollector(), 0);
             waitForDeliveries(warmupProduced * properties.getSubscriberCount(), collector, TimeUnit.SECONDS.toMillis(10));
 
@@ -186,6 +199,8 @@ public class BackpressureScenario implements LabScenario {
                                                                 SAMPLE_INTERVAL.toMillis(),
                                                                 TimeUnit.MILLISECONDS);
 
+            progressPhase.set("measurement");
+            progressPhaseStartNs.set(System.nanoTime());
             var measurementStartedAtNanos = System.nanoTime();
             var measurementProduced = runProducerPhase(properties.getDuration(),
                                                        properties,
@@ -208,10 +223,15 @@ public class BackpressureScenario implements LabScenario {
             long catchupBudgetMs = Math.min(catchupCeilingMs, Math.max(TimeUnit.SECONDS.toMillis(30), drainEstimateMs));
             log.info("[backpressure] catchup budget: {} ms (estimate={} ms, ceiling={} ms)",
                      catchupBudgetMs, drainEstimateMs, catchupCeilingMs);
+            progressPhase.set("catchup");
+            progressPhaseStartNs.set(System.nanoTime());
+            progressDeadlineNs.set(System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(catchupBudgetMs));
             var catchup = waitForDeliveries(expectedDeliveries, collector, catchupBudgetMs);
 
             samplerFuture.cancel(false);
+            progressFuture.cancel(false);
             sampler.sample(); // final reading
+            progressPhase.set("done");
 
             var snapshot = collector.snapshot(detectMode(),
                                               handlerDelayMs,
@@ -247,6 +267,36 @@ public class BackpressureScenario implements LabScenario {
             samplerExec.shutdownNow();
             subscriptions.forEach(EventStoreSubscription::unsubscribe);
         }
+    }
+
+    /**
+     * Emits a grep-friendly progress heartbeat. Printed to both logger and stdout so it's visible
+     * whether the run is followed via {@code tail -f} on the log file or via the matrix script's
+     * watcher that greps the log. Keep the format stable — the matrix script parses it.
+     */
+    private void logProgress(String phase,
+                             long phaseStartNs,
+                             long deadlineNs,
+                             MetricsCollector collector,
+                             PressureSampler sampler) {
+        if ("init".equals(phase) || "done".equals(phase)) return;
+        long elapsedS = Math.max(0, TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - phaseStartNs));
+        long delivered = collector.deliveredCount();
+        var pressure = sampler.snapshot();
+        String remaining = "";
+        if ("catchup".equals(phase) && deadlineNs > 0) {
+            long remainingS = Math.max(0, TimeUnit.NANOSECONDS.toSeconds(deadlineNs - System.nanoTime()));
+            remaining = " remainingBudgetS=" + remainingS;
+        }
+        String line = String.format(java.util.Locale.ROOT,
+                "[backpressure] progress phase=%s elapsedS=%d delivered=%d peakBuffer=%d peakInboxBacklog=%d tickFailures=%d%s",
+                phase, elapsedS, delivered,
+                pressure.peakBackfillLiveBufferSize(),
+                pressure.peakInboxReceivedCount(),
+                pressure.dispatcherTickFailuresDelta(),
+                remaining);
+        log.info(line);
+        System.out.println(line);
     }
 
     private void assertInvariantsAndLog(BackpressureMetrics m) {

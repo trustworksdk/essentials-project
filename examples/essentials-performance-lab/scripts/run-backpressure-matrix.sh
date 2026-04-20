@@ -51,6 +51,8 @@ echo "[perf-lab] producer_threads=$PRODUCER_THREADS card=$AGGREGATE_CARDINALITY 
 echo "[perf-lab] plugin=$PLUGIN delivery_mode=$DELIVERY_MODE buffer_size=$BUFFER_SIZE"
 echo "[perf-lab] cases=${#CASES[@]} output_dir=$OUT_DIR"
 
+HEARTBEAT_INTERVAL_S="${HEARTBEAT_INTERVAL_S:-15}"
+
 i=0
 for c in "${CASES[@]}"; do
   i=$((i+1))
@@ -61,12 +63,38 @@ for c in "${CASES[@]}"; do
 
   echo "[perf-lab] ($i/${#CASES[@]}) case=$ID subscribers=$SUBSCRIBER_COUNT handlerDelay=${HANDLER_DELAY_MS}ms producerRate=${PRODUCER_RATE_HZ}eps"
 
+  CASE_START=$(date +%s)
   mvn -q -pl examples/essentials-performance-lab \
     -DskipTests \
     -Dspring-boot.run.profiles="$PROFILE" \
     -Dspring-boot.run.arguments="--essentials.lab.scenario=backpressure --essentials.eventstore.cdc.enabled=true --essentials.eventstore.cdc.plugin=$PLUGIN --essentials.eventstore.cdc.delivery-mode=$DELIVERY_MODE --essentials.eventstore.cdc.event-bus.backpressure-buffer-size=$BUFFER_SIZE --essentials.lab.warmup=$WARMUP --essentials.lab.duration=$DURATION --essentials.lab.producer-threads=$PRODUCER_THREADS --essentials.lab.subscriber-count=$SUBSCRIBER_COUNT --essentials.lab.subscriber-handler-delay-ms=$HANDLER_DELAY_MS --essentials.lab.producer-rate-hz=$PRODUCER_RATE_HZ --essentials.lab.aggregate-cardinality=$AGGREGATE_CARDINALITY --essentials.lab.random-seed=$SEED --essentials.lab.metrics-output-file=$JSON_FILE" \
-    spring-boot:run > "$LOG_FILE" 2>&1
+    spring-boot:run > "$LOG_FILE" 2>&1 &
+  MVN_PID=$!
 
+  # Heartbeat: while the case is running, print the latest [backpressure] progress line every
+  # HEARTBEAT_INTERVAL_S seconds so the operator sees progress during long drain phases.
+  while kill -0 "$MVN_PID" 2>/dev/null; do
+    sleep "$HEARTBEAT_INTERVAL_S"
+    if ! kill -0 "$MVN_PID" 2>/dev/null; then break; fi
+    elapsed=$(( $(date +%s) - CASE_START ))
+    LAST="$(grep -a '\[backpressure\] progress' "$LOG_FILE" 2>/dev/null | tail -1 | sed 's/.*progress //' | tr -d '\n' || true)"
+    if [ -n "$LAST" ]; then
+      printf '  ... [%3ds] %s\n' "$elapsed" "$LAST"
+    else
+      printf '  ... [%3ds] (still starting up, no progress line yet)\n' "$elapsed"
+    fi
+  done
+
+  # Use set +e / restore around wait so we can inspect the return code without aborting the script
+  # mid-matrix. set -e is still active for everything else.
+  set +e
+  wait "$MVN_PID"
+  MVN_RC=$?
+  set -e
+  if [ $MVN_RC -ne 0 ]; then
+    echo "[perf-lab] case $ID failed (rc=$MVN_RC); see $LOG_FILE" >&2
+    exit $MVN_RC
+  fi
 done
 
 RUN_ID="$RUN_ID" OUT_DIR="$OUT_DIR" python3 - <<'PY'

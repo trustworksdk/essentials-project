@@ -366,6 +366,19 @@ Outputs per run:
 - `examples/essentials-performance-lab/target/backpressure/<run-id>/summary.md` — per-case pass/fail
   table plus an invariant-violations section flagging any case that failed.
 
+### Progress heartbeat
+
+Long drain phases can take minutes. To keep the operator informed the scenario emits a
+grep-friendly progress line every 10 seconds to both the logger and stdout:
+
+```
+[backpressure] progress phase=catchup elapsedS=47 delivered=2400 peakBuffer=80 peakInboxBacklog=1560 tickFailures=0 remainingBudgetS=133
+```
+
+The matrix script tails this line every 15 seconds (override via `HEARTBEAT_INTERVAL_S`) and
+prints it alongside the wall-clock elapsed time for the current case, so you never have to
+`tail -f` the per-case log file to know the run is healthy.
+
 ### Observability
 
 The scenario reads these meters live during the run (every 100ms) and surfaces peaks in the
