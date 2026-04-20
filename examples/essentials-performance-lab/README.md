@@ -327,12 +327,22 @@ invariants in its JSON output:
 
 ```bash
 mvn -q -pl examples/essentials-performance-lab -DskipTests -Dspring-boot.run.profiles=compose \
-  -Dspring-boot.run.arguments="--essentials.lab.scenario=backpressure --essentials.eventstore.cdc.enabled=true --essentials.lab.warmup=PT5S --essentials.lab.duration=PT60S --essentials.lab.producer-threads=4 --essentials.lab.subscriber-count=1 --essentials.lab.subscriber-handler-delay-ms=25 --essentials.lab.aggregate-cardinality=1000 --essentials.lab.metrics-output-file=./target/backpressure-single.json" \
+  -Dspring-boot.run.arguments="--essentials.lab.scenario=backpressure --essentials.eventstore.cdc.enabled=true --essentials.lab.warmup=PT5S --essentials.lab.duration=PT60S --essentials.lab.producer-threads=4 --essentials.lab.subscriber-count=1 --essentials.lab.subscriber-handler-delay-ms=25 --essentials.lab.producer-rate-hz=80 --essentials.lab.aggregate-cardinality=1000 --essentials.lab.metrics-output-file=./target/backpressure-single.json" \
   spring-boot:run
 ```
 
-Key knob: `--essentials.lab.subscriber-handler-delay-ms=<N>` — artificial sleep (in ms) inside
-each subscriber handler. `0` is the baseline; `25` is moderate pressure; `100` is heavy.
+Key knobs:
+
+- `--essentials.lab.subscriber-handler-delay-ms=<N>` — artificial sleep (ms) inside each
+  subscriber handler. `0` = baseline, `25` = moderate pressure, `100` = heavy.
+- `--essentials.lab.producer-rate-hz=<N>` — target aggregate production rate across all
+  producer threads (eps). `0` (default) = unthrottled. **With a slow subscriber, set this to
+  roughly `2 × 1000 / handler-delay-ms`** (e.g. 80 eps for 25ms, 20 eps for 100ms) so the
+  produced backlog stays drainable within the catchup budget. The scenario logs a warning
+  if you forget.
+- The scenario caps its catchup budget at `max(3 × duration, 120s)`. Cases that don't fully
+  drain within that window fail the `invariantNoEventsLost` check and move on — they won't
+  stall the matrix.
 
 ### Matrix
 

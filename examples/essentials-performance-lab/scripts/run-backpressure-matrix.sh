@@ -26,15 +26,18 @@ PLUGIN="${PLUGIN:-pgoutput}"               # pgoutput | wal2json
 DELIVERY_MODE="${DELIVERY_MODE:-INBOX}"    # INBOX | DIRECT
 BUFFER_SIZE="${BUFFER_SIZE:-8192}"         # eventBus.backpressureBufferSize
 
-# id|subscriber_count|handler_delay_ms
-# Covers: no-pressure baseline, moderate, heavy, and fan-out pressure.
+# id|subscriber_count|handler_delay_ms|producer_rate_hz
+#
+# producer_rate_hz is chosen so a single subscriber at handler_delay_ms drains the produced
+# backlog within ~2 × duration (subscriber drain rate = 1000 / delay eps; we overshoot 2×).
+# For no-delay and light cases we leave it unthrottled (0).
 CASES=(
-  "no-delay|1|0"
-  "light-1sub|1|5"
-  "moderate-1sub|1|25"
-  "heavy-1sub|1|100"
-  "moderate-5sub|5|25"
-  "heavy-5sub|5|100"
+  "no-delay|1|0|0"
+  "light-1sub|1|5|0"
+  "moderate-1sub|1|25|80"
+  "heavy-1sub|1|100|20"
+  "moderate-5sub|5|25|80"
+  "heavy-5sub|5|100|20"
 )
 
 if [[ -n "${CUSTOM_CASES:-}" ]]; then
@@ -51,17 +54,17 @@ echo "[perf-lab] cases=${#CASES[@]} output_dir=$OUT_DIR"
 i=0
 for c in "${CASES[@]}"; do
   i=$((i+1))
-  IFS='|' read -r ID SUBSCRIBER_COUNT HANDLER_DELAY_MS <<< "$c"
+  IFS='|' read -r ID SUBSCRIBER_COUNT HANDLER_DELAY_MS PRODUCER_RATE_HZ <<< "$c"
 
   JSON_FILE="$OUT_DIR/$ID.json"
   LOG_FILE="/tmp/perf-lab-backpressure-$RUN_ID-$ID.log"
 
-  echo "[perf-lab] ($i/${#CASES[@]}) case=$ID subscribers=$SUBSCRIBER_COUNT handlerDelay=${HANDLER_DELAY_MS}ms"
+  echo "[perf-lab] ($i/${#CASES[@]}) case=$ID subscribers=$SUBSCRIBER_COUNT handlerDelay=${HANDLER_DELAY_MS}ms producerRate=${PRODUCER_RATE_HZ}eps"
 
   mvn -q -pl examples/essentials-performance-lab \
     -DskipTests \
     -Dspring-boot.run.profiles="$PROFILE" \
-    -Dspring-boot.run.arguments="--essentials.lab.scenario=backpressure --essentials.eventstore.cdc.enabled=true --essentials.eventstore.cdc.plugin=$PLUGIN --essentials.eventstore.cdc.delivery-mode=$DELIVERY_MODE --essentials.eventstore.cdc.event-bus.backpressure-buffer-size=$BUFFER_SIZE --essentials.lab.warmup=$WARMUP --essentials.lab.duration=$DURATION --essentials.lab.producer-threads=$PRODUCER_THREADS --essentials.lab.subscriber-count=$SUBSCRIBER_COUNT --essentials.lab.subscriber-handler-delay-ms=$HANDLER_DELAY_MS --essentials.lab.aggregate-cardinality=$AGGREGATE_CARDINALITY --essentials.lab.random-seed=$SEED --essentials.lab.metrics-output-file=$JSON_FILE" \
+    -Dspring-boot.run.arguments="--essentials.lab.scenario=backpressure --essentials.eventstore.cdc.enabled=true --essentials.eventstore.cdc.plugin=$PLUGIN --essentials.eventstore.cdc.delivery-mode=$DELIVERY_MODE --essentials.eventstore.cdc.event-bus.backpressure-buffer-size=$BUFFER_SIZE --essentials.lab.warmup=$WARMUP --essentials.lab.duration=$DURATION --essentials.lab.producer-threads=$PRODUCER_THREADS --essentials.lab.subscriber-count=$SUBSCRIBER_COUNT --essentials.lab.subscriber-handler-delay-ms=$HANDLER_DELAY_MS --essentials.lab.producer-rate-hz=$PRODUCER_RATE_HZ --essentials.lab.aggregate-cardinality=$AGGREGATE_CARDINALITY --essentials.lab.random-seed=$SEED --essentials.lab.metrics-output-file=$JSON_FILE" \
     spring-boot:run > "$LOG_FILE" 2>&1
 
 done
@@ -81,6 +84,8 @@ for p in sorted(out_dir.glob("*.json")):
         "case": case,
         "mode": data.get("mode", "unknown"),
         "handlerDelayMs": data.get("handlerDelayMs", 0),
+        "producerRateHz": data.get("producerRateHz", 0),
+        "catchupBudgetMs": data.get("catchupBudgetMs", 0),
         "bufferBound": data.get("backpressureBufferSize", 0),
         "produced": data.get("producedEvents", 0),
         "delivered": data.get("deliveredEvents", 0),
@@ -122,19 +127,13 @@ else:
 
 lines.append("## Per-case results")
 lines.append("")
-lines.append("| case | delay (ms) | subs | produced | delivered | delivery eps | p95 ms | p99 ms | peak buffer | bound | peak inbox | tick fails | buffer-bound | no-loss | no-tick-fails |")
-lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|:---:|:---:|")
+lines.append("| case | delay ms | rate eps | catchup budget s | produced | delivered | delivery eps | p95 ms | p99 ms | peak buffer | bound | peak inbox | tick fails | buf-bound | no-loss | no-tick-fails |")
+lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|:---:|:---:|")
 for r in rows:
-    subs = 1  # we don't capture it in JSON directly, but case id often encodes it
-    # prefer explicit metadata if present
-    meta_subs = r.get("expectedDeliveries", 0)
-    # expectedDeliveries = produced * subscriberCount → derive subscriberCount if possible
-    if r["produced"] > 0 and isinstance(meta_subs, (int, float)) and meta_subs > 0:
-        derived = int(round(meta_subs / r["produced"]))
-        if derived > 0:
-            subs = derived
+    rate_display = r["producerRateHz"] if r["producerRateHz"] > 0 else "—"
+    catchup_s = round(r["catchupBudgetMs"] / 1000.0, 1) if r.get("catchupBudgetMs") else "—"
     lines.append(
-        f"| {r['case']} | {r['handlerDelayMs']} | {subs} | {r['produced']} | {r['delivered']} | {r['deliveryEps']:.2f} | {r['p95Ms']:.2f} | {r['p99Ms']:.2f} | "
+        f"| {r['case']} | {r['handlerDelayMs']} | {rate_display} | {catchup_s} | {r['produced']} | {r['delivered']} | {r['deliveryEps']:.2f} | {r['p95Ms']:.2f} | {r['p99Ms']:.2f} | "
         f"{r['peakBuffer']} | {r['bufferBound']} | {r['peakInboxBacklog']} | {r['tickFailures']} | "
         f"{'✅' if r['bufferBoundHeld'] else '❌'} | {'✅' if r['noEventsLost'] else '❌'} | {'✅' if r['noTickFailures'] else '❌'} |"
     )

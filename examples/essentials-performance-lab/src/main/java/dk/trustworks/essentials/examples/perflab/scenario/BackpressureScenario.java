@@ -46,6 +46,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.LockSupport;
 
 /**
  * Backpressure / slow-subscriber scenario. Validates that the CDC pipeline's bounded buffers hold
@@ -123,13 +124,21 @@ public class BackpressureScenario implements LabScenario {
         ensureAggregateConfigured();
 
         long handlerDelayMs = Math.max(0L, properties.getSubscriberHandlerDelayMs());
+        int  producerRateHz = Math.max(0, properties.getProducerRateHz());
         if (handlerDelayMs == 0) {
             log.warn("[backpressure] essentials.lab.subscriber-handler-delay-ms is 0 — this run won't exercise any backpressure. Set a non-zero value (e.g. 50) to simulate a slow subscriber.");
+        }
+        if (handlerDelayMs > 0 && producerRateHz == 0) {
+            log.warn("[backpressure] essentials.lab.producer-rate-hz is 0 (unthrottled) with a slow subscriber (delay={}ms). "
+                             + "The producer will outpace the subscriber and accumulate a backlog that may take far longer than the measurement window to drain. "
+                             + "For a drainable matrix case, try producerRateHz ≈ 2 × 1000 / handlerDelayMs (= {} eps here).",
+                     handlerDelayMs, 2_000L / Math.max(1L, handlerDelayMs));
         }
 
         var cdcProperties = eventStoreProperties.getCdc();
         int backpressureBufferSize = cdcProperties.getEventBus().getBackpressureBufferSize();
-        log.info("[backpressure] handlerDelayMs={}ms, backpressureBufferSize={}", handlerDelayMs, backpressureBufferSize);
+        log.info("[backpressure] handlerDelayMs={}ms producerRateHz={} backpressureBufferSize={}",
+                 handlerDelayMs, producerRateHz, backpressureBufferSize);
 
         var subscriptions = new ArrayList<EventStoreSubscription>();
         var collector = new MetricsCollector();
@@ -187,12 +196,18 @@ public class BackpressureScenario implements LabScenario {
 
             long expectedDeliveries = measurementProduced * properties.getSubscriberCount();
 
-            // Catchup window: leave enough room for the slow subscriber to drain its accumulated
-            // backlog (one delay-slot per event per subscriber) plus a generous safety margin.
-            long catchupBudgetMs = Math.max(
-                    TimeUnit.SECONDS.toMillis(30),
-                    (long) (measurementProduced * handlerDelayMs * 1.5) + TimeUnit.SECONDS.toMillis(15)
-            );
+            // Catchup window: bounded max(3 × duration, 120s) so a single case can never stall the
+            // matrix, even when producers massively outpaced subscribers (e.g. unthrottled + slow
+            // handler). Within that ceiling we still scale proportionally to the estimated drain
+            // time — short runs don't waste minutes waiting when a few seconds will do.
+            long catchupCeilingMs = Math.max(properties.getDuration().toMillis() * 3L, TimeUnit.SECONDS.toMillis(120));
+            long drainEstimateMs  = handlerDelayMs > 0
+                    ? (long) Math.ceil((double) measurementProduced * handlerDelayMs / Math.max(1, properties.getSubscriberCount()) * 1.5)
+                      + TimeUnit.SECONDS.toMillis(15)
+                    : TimeUnit.SECONDS.toMillis(30);
+            long catchupBudgetMs = Math.min(catchupCeilingMs, Math.max(TimeUnit.SECONDS.toMillis(30), drainEstimateMs));
+            log.info("[backpressure] catchup budget: {} ms (estimate={} ms, ceiling={} ms)",
+                     catchupBudgetMs, drainEstimateMs, catchupCeilingMs);
             var catchup = waitForDeliveries(expectedDeliveries, collector, catchupBudgetMs);
 
             samplerFuture.cancel(false);
@@ -200,6 +215,8 @@ public class BackpressureScenario implements LabScenario {
 
             var snapshot = collector.snapshot(detectMode(),
                                               handlerDelayMs,
+                                              producerRateHz,
+                                              catchupBudgetMs,
                                               backpressureBufferSize,
                                               measurementProduced,
                                               expectedDeliveries,
@@ -277,6 +294,11 @@ public class BackpressureScenario implements LabScenario {
         var appendRetriedConflicts = new AtomicLong();
         long deadlineNanos = System.nanoTime() + phaseDuration.toNanos();
 
+        int  producerRateHz         = Math.max(0, properties.getProducerRateHz());
+        long perThreadIntervalNanos = producerRateHz > 0
+                ? 1_000_000_000L * properties.getProducerThreads() / producerRateHz
+                : 0L;
+
         var executor = Executors.newFixedThreadPool(properties.getProducerThreads(), runnable -> {
             var thread = new Thread(runnable, "lab-bp-producer-" + phaseIndex);
             thread.setDaemon(true);
@@ -289,7 +311,20 @@ public class BackpressureScenario implements LabScenario {
                 var random = new Random(seed + (long) producerIndex * 31L + (long) phaseIndex * 997L);
                 var aggregateCardinality = Math.max(1, properties.getAggregateCardinality());
                 if (producerIndex >= aggregateCardinality) return;
+
+                // Stagger start across threads so they don't all fire on the same tick.
+                long nextAppendAtNanos = System.nanoTime()
+                                         + (perThreadIntervalNanos > 0 ? perThreadIntervalNanos * producerIndex / properties.getProducerThreads() : 0L);
+
                 while (System.nanoTime() < deadlineNanos) {
+                    if (perThreadIntervalNanos > 0) {
+                        long waitNanos = nextAppendAtNanos - System.nanoTime();
+                        if (waitNanos > 0) {
+                            LockSupport.parkNanos(waitNanos);
+                        }
+                        nextAppendAtNanos += perThreadIntervalNanos;
+                    }
+
                     var aggregateId = "bp-order-" + nextAggregateIndex(random,
                                                                         producerIndex,
                                                                         properties.getProducerThreads(),
@@ -513,6 +548,8 @@ public class BackpressureScenario implements LabScenario {
 
         BackpressureMetrics snapshot(String mode,
                                      long handlerDelayMs,
+                                     int producerRateHz,
+                                     long catchupBudgetMs,
                                      int backpressureBufferSize,
                                      long produced,
                                      long expectedDeliveries,
@@ -545,6 +582,8 @@ public class BackpressureScenario implements LabScenario {
                     mode,
                     Instant.now().toString(),
                     handlerDelayMs,
+                    producerRateHz,
+                    catchupBudgetMs,
                     backpressureBufferSize,
                     produced,
                     expectedDeliveries,
@@ -580,6 +619,8 @@ public class BackpressureScenario implements LabScenario {
     private record BackpressureMetrics(String mode,
                                        String capturedAt,
                                        long handlerDelayMs,
+                                       int producerRateHz,
+                                       long catchupBudgetMs,
                                        int backpressureBufferSize,
                                        long producedEvents,
                                        long expectedDeliveries,

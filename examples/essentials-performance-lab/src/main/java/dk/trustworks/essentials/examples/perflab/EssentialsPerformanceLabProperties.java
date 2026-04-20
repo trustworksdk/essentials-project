@@ -42,6 +42,17 @@ public class EssentialsPerformanceLabProperties {
      * Default {@code 0} means no delay — the baseline scenarios run at full subscriber speed.
      */
     private long subscriberHandlerDelayMs = 0;
+    /**
+     * Target aggregate production rate across all producer threads, in events per second.
+     * {@code 0} (default) means unthrottled — each producer appends as fast as the event store
+     * allows.
+     * <p>
+     * Primarily used by the {@code backpressure} scenario: with a slow subscriber, an unthrottled
+     * producer accumulates a backlog that takes orders of magnitude longer to drain than the
+     * measurement window. Setting a rate proportional to the subscriber's drain capacity
+     * (e.g. {@code 2 × 1000 / handlerDelayMs}) keeps the pressure real but bounded.
+     */
+    private int producerRateHz = 0;
 
     public Mode getMode() {
         return mode;
@@ -145,6 +156,14 @@ public class EssentialsPerformanceLabProperties {
 
     public void setSubscriberHandlerDelayMs(long subscriberHandlerDelayMs) {
         this.subscriberHandlerDelayMs = subscriberHandlerDelayMs;
+    }
+
+    public int getProducerRateHz() {
+        return producerRateHz;
+    }
+
+    public void setProducerRateHz(int producerRateHz) {
+        this.producerRateHz = producerRateHz;
     }
 
     public enum Mode {
