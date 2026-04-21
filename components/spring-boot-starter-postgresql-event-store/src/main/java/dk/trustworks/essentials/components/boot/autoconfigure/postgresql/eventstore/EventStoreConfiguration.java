@@ -593,9 +593,11 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public AggregateTypeResolver aggregateTypeResolver(@Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
-        var postgresqlEventStore           = (PostgresqlEventStore<?>) eventStore;
-        var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates();
-        return new DefaultAggregateTypeResolver(aggregateEventStreamTableNames);
+        // Pass a live supplier rather than a snapshot — aggregates registered at runtime via
+        // addAggregateEventStreamConfiguration(...) must become visible to CDC conversion.
+        var postgresqlEventStore = (PostgresqlEventStore<?>) eventStore;
+        return new DefaultAggregateTypeResolver(
+                () -> postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates());
     }
 
     @Bean

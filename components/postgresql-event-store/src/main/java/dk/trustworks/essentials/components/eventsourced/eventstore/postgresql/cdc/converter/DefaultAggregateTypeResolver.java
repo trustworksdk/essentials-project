@@ -18,36 +18,58 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 
-import java.util.*;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Default implementation of the {@link AggregateTypeResolver} interface. This implementation resolves
- * aggregate types based on a predefined mapping between event table names and {@link AggregateType} instances.
+ * Default implementation of {@link AggregateTypeResolver} that resolves aggregate types based on a
+ * <em>live</em> mapping between event table names and {@link AggregateType} instances.
  * <p>
- * The resolution process uses a {@code Map} where the keys are event table names and the values
- * are the corresponding aggregate types. If a table name cannot be resolved, an exception is thrown.
+ * The resolver takes a {@link Supplier} rather than a fixed {@link Map} so that aggregates
+ * registered at runtime (e.g. via {@code addAggregateEventStreamConfiguration}) become visible to
+ * CDC conversion without needing to rebuild the Spring context. Earlier versions of this class
+ * held a map snapshot captured at construction time — any runtime registration was silently
+ * invisible to CDC, causing events to be dropped at conversion (returned as {@code Optional.empty()}
+ * without surfacing a conversion failure, poison row, or dispatcher error).
+ * <p>
+ * Each {@link #resolveFromEventTable(String)} call invokes the supplier exactly once. The cost is
+ * one map lookup per resolve plus whatever the supplier costs (typically either a direct reference
+ * or a cheap {@code Collectors.toMap} over the configured aggregates). For CDC dispatch rates this
+ * is negligible.
  */
 public class DefaultAggregateTypeResolver implements AggregateTypeResolver {
 
-    private final Map<String, AggregateType> aggregateEventStreamTableNames;
+    private final Supplier<Map<String, AggregateType>> aggregateEventStreamTableNamesSupplier;
 
+    /**
+     * Construct a resolver backed by a live supplier of the table-name → aggregate-type map.
+     * The supplier is invoked on every {@link #resolveFromEventTable(String)} call, so runtime
+     * registrations propagate immediately.
+     */
+    public DefaultAggregateTypeResolver(Supplier<Map<String, AggregateType>> aggregateEventStreamTableNamesSupplier) {
+        this.aggregateEventStreamTableNamesSupplier = requireNonNull(aggregateEventStreamTableNamesSupplier,
+                                                                     "aggregateEventStreamTableNamesSupplier cannot be null.");
+    }
+
+    /**
+     * Back-compat convenience for callers (typically tests) that have a static table-name map and
+     * don't need live updates. Wraps the provided map in a {@code () -> map} supplier.
+     */
     public DefaultAggregateTypeResolver(Map<String, AggregateType> aggregateEventStreamTableNames) {
-        this.aggregateEventStreamTableNames = requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null.");
+        this(() -> requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null."));
     }
 
     /**
      * Resolves and returns the {@link AggregateType} associated with the given event table name.
-     * The mapping between event table names and aggregate types is predefined.
-     * If the table name does not exist in the mapping, an {@code IllegalArgumentException} is thrown.
-     *
-     * @param tableName the name of the event table for which the aggregate type needs to be resolved
-     * @return the {@link AggregateType} associated with the specified table name
-     * @throws IllegalArgumentException if no matching aggregate type is found for the provided table name
+     * Throws {@link IllegalArgumentException} if no mapping is present. Callers who want soft
+     * resolution should use {@link #tryResolveFromEventTable(String)}.
      */
     @Override
     public AggregateType resolveFromEventTable(String tableName) {
-        return Optional.ofNullable(aggregateEventStreamTableNames.get(tableName)).orElseThrow(() -> new IllegalArgumentException("No aggregate type found for event table name: " + tableName));
+        return Optional.ofNullable(aggregateEventStreamTableNamesSupplier.get().get(tableName))
+                       .orElseThrow(() -> new IllegalArgumentException("No aggregate type found for event table name: " + tableName));
     }
 }
