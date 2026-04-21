@@ -315,13 +315,22 @@ Notes:
 ## Backpressure / slow-subscriber validation
 
 The `backpressure` scenario exercises a deliberately-slow subscriber to validate that the CDC
-pipeline's bounded buffers hold under sustained producer pressure. It reports three pass/fail
-invariants in its JSON output:
+pipeline's bounded buffers hold under sustained producer pressure. It reports four invariants in
+its JSON output — three are correctness signals, one is a delivery-timeliness signal:
 
+**Correctness (should always hold — block ship on failure):**
 - `invariantBoundedBufferHeld`: peak `BackfillThenLiveOrdered` buffer size stayed ≤
   `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` (default 8192).
-- `invariantNoEventsLost`: every produced event was eventually delivered to every subscriber.
+- `invariantNoEventsActuallyLost`: every produced event is durably persisted in the aggregate's
+  event-stream table by end of run. This is the true "no data loss" check.
 - `invariantNoDispatcherTickFailures`: zero dispatcher tick failures during the run.
+
+**Delivery-timeliness (advisory, not a bug if it fails):**
+- `invariantCaughtUpWithinTimeout`: every produced event reached every subscriber before the
+  catchup budget elapsed. False here means "backlog still draining when we gave up waiting" —
+  typically caused by a stale inbox from a prior unclean run. Data is safe (`invariantNoEventsActuallyLost`
+  still holds); delivery just hadn't finished yet. Use `RESET_CDC_STATE=true` on the matrix
+  script to start from a clean baseline.
 
 ### Ad-hoc single run
 
@@ -352,7 +361,21 @@ examples/essentials-performance-lab/scripts/run-backpressure-matrix.sh
 
 Default cases sweep `subscriber-count` × `handler-delay-ms` (no-delay / light / moderate / heavy /
 5-subscriber fan-out). Override `PLUGIN=wal2json`, `DELIVERY_MODE=DIRECT`, or `BUFFER_SIZE=<N>`
-to exercise other configurations. Custom cases via `CUSTOM_CASES`:
+to exercise other configurations.
+
+Strongly recommended: `RESET_CDC_STATE=true` to truncate the inbox and drop the replication
+slot before the matrix runs. Without this, stale backlog from prior runs starves the dispatcher
+and `invariantCaughtUpWithinTimeout` fails across the board (even though no data is actually
+lost). Requires `psql` on PATH and libpq env vars (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`,
+`PGDB`). Override `CDC_INBOX_TABLE` / `CDC_SLOT_NAME` if you're not using defaults.
+
+```bash
+PGHOST=localhost PGPORT=5432 PGUSER=essentials PGPASSWORD=essentials PGDB=essentials_lab \
+RESET_CDC_STATE=true \
+examples/essentials-performance-lab/scripts/run-backpressure-matrix.sh
+```
+
+Custom cases via `CUSTOM_CASES`:
 
 ```bash
 CUSTOM_CASES='smoke|1|0;heavy|1|100' \

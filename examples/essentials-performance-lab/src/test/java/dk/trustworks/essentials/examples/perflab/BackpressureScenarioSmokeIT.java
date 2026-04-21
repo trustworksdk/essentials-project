@@ -92,15 +92,21 @@ class BackpressureScenarioSmokeIT {
         assertThat(pressure).isNotNull();
         assertThat(pressure.has("peakBackfillLiveBufferSize")).isTrue();
         assertThat(pressure.has("peakInboxReceivedCount")).isTrue();
+        assertThat(pressure.has("finalInboxReceivedCount")).isTrue();
         assertThat(pressure.has("samples")).isTrue();
         assertThat(pressure.has("dispatcherTickFailuresDelta")).isTrue();
 
-        // Invariants are reported. With CDC disabled (polling fallback), all three should hold
-        // trivially — this proves the scenario doesn't false-alarm in the happy path.
+        // All four invariants are reported. With CDC disabled (polling fallback), all should hold
+        // trivially — this proves the scenario doesn't false-alarm in the happy path and that the
+        // split between "actually lost" and "caught up in time" is wired correctly.
         assertThat(json.get("invariantBoundedBufferHeld").asBoolean()).isTrue();
+        assertThat(json.get("invariantNoEventsActuallyLost").asBoolean()).isTrue();
+        assertThat(json.get("invariantCaughtUpWithinTimeout").asBoolean()).isTrue();
         assertThat(json.get("invariantNoDispatcherTickFailures").asBoolean()).isTrue();
 
-        // Produced > 0 proves the producer phase actually ran.
-        assertThat(json.get("producedEvents").asLong()).isPositive();
+        // eventsInDbCount should equal producedEvents in the happy path (all appends landed durably).
+        long produced = json.get("producedEvents").asLong();
+        assertThat(produced).isPositive();
+        assertThat(json.get("eventsInDbCount").asLong()).isEqualTo(produced);
     }
 }
