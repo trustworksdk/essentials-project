@@ -21,6 +21,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,5 +123,81 @@ class WalMessageFilterTest {
 
         assertThat(filter.shouldPersist(wal)).isFalse();
         assertThat(filter.shouldPersist(wal.getBytes(StandardCharsets.UTF_8))).isFalse();
+    }
+
+    /**
+     * Regression test for the snapshot bug: aggregates registered at runtime after the filter is
+     * constructed must become visible on the next {@code shouldPersist} call. Mirrors the
+     * equivalent fix in {@code DefaultAggregateTypeResolver}.
+     */
+    @Test
+    void supplier_constructor_sees_runtime_registrations() {
+        var liveTables = new HashSet<String>();
+        liveTables.add("orders_events");
+
+        var liveFilter = new DefaultWalMessageFilter(
+                new JacksonJSONEventSerializer(new ObjectMapper()),
+                () -> liveTables);
+
+        String ordersInsert = """
+                              {"change":[{"kind":"insert","table":"orders_events"}]}
+                              """;
+        String customersInsert = """
+                                 {"change":[{"kind":"insert","table":"customers_events"}]}
+                                 """;
+
+        // customers_events not yet registered — filter must reject.
+        assertThat(liveFilter.shouldPersist(ordersInsert)).isTrue();
+        assertThat(liveFilter.shouldPersist(customersInsert)).isFalse();
+
+        // Simulate runtime registration via addAggregateEventStreamConfiguration(...).
+        liveTables.add("customers_events");
+
+        // Next call must see the newly-registered table without rebuilding the filter.
+        assertThat(liveFilter.shouldPersist(customersInsert)).isTrue();
+        assertThat(liveFilter.shouldPersist(ordersInsert)).isTrue();
+    }
+
+    /**
+     * Verifies the supplier is invoked on every {@code shouldPersist} call — no caching that would
+     * re-introduce the snapshot bug.
+     */
+    @Test
+    void supplier_is_invoked_on_every_shouldPersist_call() {
+        var invocations = new AtomicInteger();
+        var liveFilter = new DefaultWalMessageFilter(
+                new JacksonJSONEventSerializer(new ObjectMapper()),
+                () -> {
+                    invocations.incrementAndGet();
+                    return java.util.Set.of("orders_events");
+                });
+
+        String wal = """
+                     {"change":[{"kind":"insert","table":"orders_events"}]}
+                     """;
+
+        liveFilter.shouldPersist(wal);
+        liveFilter.shouldPersist(wal);
+        liveFilter.shouldPersist(wal.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(invocations.get()).isEqualTo(3);
+    }
+
+    /**
+     * Empty table set must short-circuit to {@code false} without parsing the JSON — catches
+     * regressions where the supplier path accidentally matches every table.
+     */
+    @Test
+    void empty_supplier_rejects_everything() {
+        var liveFilter = new DefaultWalMessageFilter(
+                new JacksonJSONEventSerializer(new ObjectMapper()),
+                java.util.Set.<String>of());
+
+        String wal = """
+                     {"change":[{"kind":"insert","table":"orders_events"}]}
+                     """;
+
+        assertThat(liveFilter.shouldPersist(wal)).isFalse();
+        assertThat(liveFilter.shouldPersist(wal.getBytes(StandardCharsets.UTF_8))).isFalse();
     }
 }

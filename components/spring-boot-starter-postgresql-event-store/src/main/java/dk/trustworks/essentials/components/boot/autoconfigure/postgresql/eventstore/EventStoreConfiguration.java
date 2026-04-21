@@ -605,9 +605,13 @@ public class EventStoreConfiguration {
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public WalMessageFilter walMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
                                              @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        // Pass a live supplier rather than a snapshot — aggregates registered at runtime via
+        // addAggregateEventStreamConfiguration(...) must become visible to the WAL filter or
+        // their INSERTs will be silently dropped before reaching the CDC inbox.
         var postgresqlEventStore = (PostgresqlEventStore<?>) eventStore;
-        var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates();
-        return new DefaultWalMessageFilter(jacksonJSONSerializer, aggregateEventStreamTableNames);
+        return new DefaultWalMessageFilter(
+                jacksonJSONSerializer,
+                () -> postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates().keySet());
     }
 
     @Bean

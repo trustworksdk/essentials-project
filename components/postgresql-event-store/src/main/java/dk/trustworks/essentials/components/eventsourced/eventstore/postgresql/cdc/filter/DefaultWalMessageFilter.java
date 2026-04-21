@@ -22,34 +22,65 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 
 import java.io.IOException;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Filters wal2json messages so we only persist INSERT changes for configured event stream tables.
+ * <p>
+ * The filter takes a {@link Supplier} of table names rather than a fixed collection so that
+ * aggregates registered at runtime (e.g. via {@code addAggregateEventStreamConfiguration}) become
+ * visible to filtering without needing to rebuild the Spring context. Earlier versions of this
+ * class captured the table-name set at construction time — any runtime registration was silently
+ * invisible to the filter, causing {@link #shouldPersist} to return {@code false} for the new
+ * aggregate's events and dropping them before they reached the CDC inbox.
+ * <p>
+ * Each {@link #shouldPersist} call snapshots the supplier's result once at the top of the call and
+ * reuses that snapshot for every {@code change} entry in the WAL message. The snapshot cost is
+ * typically a few microseconds (one {@code Collectors.toMap} over a handful of configured
+ * aggregates) versus milliseconds of JSON parsing, so the overhead is negligible at CDC dispatch
+ * rates.
  */
 public class DefaultWalMessageFilter implements WalMessageFilter {
-    private final JsonFactory jsonFactory;
+    private final JsonFactory                    jsonFactory;
+    private final Supplier<Collection<String>>   aggregateEventStreamTableNamesSupplier;
 
-    private final Set<String> aggregateEventStreamTableNames;
-
+    /**
+     * Primary constructor — takes a live supplier so aggregates registered at runtime are visible
+     * to filtering. Typical wiring passes
+     * {@code () -> persistenceStrategy.getSeparateTablePerEventStreamTableNameAggregates().keySet()}.
+     */
     public DefaultWalMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
-                                   Map<String, AggregateType> aggregateEventStreamTableNames) {
-        this(jacksonJSONSerializer,
-             requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null").keySet());
-    }
-
-    public DefaultWalMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
-                                   Collection<String> aggregateEventStreamTableNames) {
+                                   Supplier<Collection<String>> aggregateEventStreamTableNamesSupplier) {
         this.jsonFactory = requireNonNull(jacksonJSONSerializer, "jacksonJSONSerializer cannot be null")
                 .getObjectMapper()
                 .getFactory();
-        requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null");
-        this.aggregateEventStreamTableNames = aggregateEventStreamTableNames.stream()
-                                                                            .filter(Objects::nonNull)
-                                                                            .map(tableName -> tableName.toLowerCase(Locale.ROOT))
-                                                                            .collect(Collectors.toUnmodifiableSet());
+        this.aggregateEventStreamTableNamesSupplier = requireNonNull(aggregateEventStreamTableNamesSupplier,
+                                                                     "aggregateEventStreamTableNamesSupplier cannot be null");
+    }
+
+    /**
+     * Back-compat convenience for callers (typically tests) with a static table-name → aggregate
+     * map. Wraps the keySet in a constant supplier — use the {@link Supplier} constructor when
+     * runtime registrations matter.
+     */
+    public DefaultWalMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
+                                   Map<String, AggregateType> aggregateEventStreamTableNames) {
+        this(jacksonJSONSerializer,
+             () -> requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null").keySet());
+    }
+
+    /**
+     * Back-compat convenience for callers (typically tests) with a static collection of table
+     * names. Wraps the collection in a constant supplier — use the {@link Supplier} constructor
+     * when runtime registrations matter.
+     */
+    public DefaultWalMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
+                                   Collection<String> aggregateEventStreamTableNames) {
+        this(jacksonJSONSerializer,
+             () -> requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null"));
     }
 
     @Override
@@ -57,8 +88,12 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
         if (walJson == null || walJson.isBlank()) {
             return false;
         }
+        var trackedTables = snapshotTrackedTables();
+        if (trackedTables.isEmpty()) {
+            return false;
+        }
         try (var parser = jsonFactory.createParser(walJson)) {
-            return containsRelevantInsert(parser);
+            return containsRelevantInsert(parser, trackedTables);
         } catch (IOException e) {
             return false;
         }
@@ -69,14 +104,34 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
         if (walJsonBytes == null || walJsonBytes.length == 0) {
             return false;
         }
+        var trackedTables = snapshotTrackedTables();
+        if (trackedTables.isEmpty()) {
+            return false;
+        }
         try (var parser = jsonFactory.createParser(walJsonBytes)) {
-            return containsRelevantInsert(parser);
+            return containsRelevantInsert(parser, trackedTables);
         } catch (IOException e) {
             return false;
         }
     }
 
-    private boolean containsRelevantInsert(JsonParser parser) throws IOException {
+    /**
+     * Snapshot the current tracked-table set once per {@code shouldPersist} call. Normalises to
+     * lowercase so downstream comparisons are case-insensitive without repeating the transform
+     * per change entry.
+     */
+    private Set<String> snapshotTrackedTables() {
+        var names = aggregateEventStreamTableNamesSupplier.get();
+        if (names == null || names.isEmpty()) {
+            return Set.of();
+        }
+        return names.stream()
+                    .filter(Objects::nonNull)
+                    .map(tableName -> tableName.toLowerCase(Locale.ROOT))
+                    .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private boolean containsRelevantInsert(JsonParser parser, Set<String> trackedTables) throws IOException {
         while (parser.nextToken() != null) {
             if (parser.currentToken() != JsonToken.FIELD_NAME || !"change".equals(parser.currentName())) {
                 continue;
@@ -107,7 +162,7 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
                         parser.skipChildren();
                     }
                 }
-                if (isInsert(kind) && isTrackedEventTable(table)) {
+                if (isInsert(kind) && isTrackedEventTable(table, trackedTables)) {
                     return true;
                 }
             }
@@ -119,7 +174,7 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
         return kind != null && "insert".equalsIgnoreCase(kind);
     }
 
-    private boolean isTrackedEventTable(String tableName) {
-        return tableName != null && aggregateEventStreamTableNames.contains(tableName.toLowerCase(Locale.ROOT));
+    private static boolean isTrackedEventTable(String tableName, Set<String> trackedTables) {
+        return tableName != null && trackedTables.contains(tableName.toLowerCase(Locale.ROOT));
     }
 }
