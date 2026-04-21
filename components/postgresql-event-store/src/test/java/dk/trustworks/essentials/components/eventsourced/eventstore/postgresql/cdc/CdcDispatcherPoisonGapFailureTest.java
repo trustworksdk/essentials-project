@@ -155,6 +155,60 @@ class CdcDispatcherPoisonGapFailureTest {
         assertThat(dispatcher.getStatus().tickFailures()).isEqualTo(1L);
     }
 
+    /**
+     * Regression: dispatcher used to check availability at {@code start()} and bail permanently
+     * if CDC wasn't already ACTIVE. Spring Lifecycle ordering doesn't guarantee the tailer
+     * transitions availability to ACTIVE before dispatcher.start() runs — the perf-lab showed
+     * 248k RECEIVED inbox rows with 0 dispatched because the dispatcher gave up at startup.
+     * <p>
+     * The check now lives in {@link CdcDispatcher#tick()}: ticks run regardless, they just
+     * no-op when availability isn't ACTIVE. A later {@code availability.active(...)} call
+     * flips the switch and subsequent ticks start processing.
+     */
+    @Test
+    void tick_no_ops_when_availability_is_not_active_then_picks_up_after_activation() {
+        var inbox = mock(CdcInboxRepository.class);
+        @SuppressWarnings("unchecked")
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> uowFactory = mock(HandleAwareUnitOfWorkFactory.class);
+        var gapHandler = mock(EventStreamGapHandler.class);
+        var plugin = mock(LogicalDecodingPlugin.class);
+
+        var startingInactive = new CdcAvailability(); // INACTIVE by default
+
+        when(inbox.fetchNextBatch(eq(SLOT), anyInt())).thenReturn(List.of());
+
+        var dispatcher = new CdcDispatcher(
+                inbox,
+                uowFactory,
+                gapHandler,
+                plugin,
+                Optional.empty(),
+                events -> { /* no-op */ },
+                SLOT,
+                CdcProperties.CdcDispatcherProperties.defaults(),
+                CdcProperties.CdcDeliveryMode.INBOX,
+                startingInactive,
+                Optional.empty()
+        );
+
+        // While INACTIVE: tick must not query the inbox (no wasted round-trips) and must not
+        // fault or increment any failure counter.
+        dispatcher.tick();
+        dispatcher.tick();
+        verify(inbox, never()).fetchNextBatch(any(), anyInt());
+        assertThat(dispatcher.getStatus().ticks()).isZero();
+        assertThat(dispatcher.getStatus().tickFailures()).isZero();
+
+        // Simulate the tailer connecting after dispatcher startup — availability flips ACTIVE.
+        startingInactive.active(SLOT);
+
+        // Next tick must now attempt to fetch the inbox batch, proving the dispatcher self-heals.
+        dispatcher.tick();
+        verify(inbox, atLeastOnce()).fetchNextBatch(eq(SLOT), anyInt());
+        assertThat(dispatcher.getStatus().ticks()).isEqualTo(1L);
+        assertThat(dispatcher.getStatus().tickFailures()).isZero();
+    }
+
     private static CdcAvailability ignoreAvailability() {
         var a = new CdcAvailability();
         a.active("test");

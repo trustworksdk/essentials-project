@@ -223,11 +223,15 @@ public final class CdcDispatcher implements Lifecycle {
             return;
         }
 
-        if (!availability.isActive()) {
-            started.set(false);
-            log.info("[{}] CDC dispatcher not started because CDC is not active (state={})", slotName, availability.getState());
-            return;
-        }
+        // NOTE: we deliberately do NOT check availability.isActive() here. Spring's Lifecycle
+        // ordering is not guaranteed — in practice the dispatcher's start() runs before the
+        // tailer has connected and transitioned availability to ACTIVE. Checking here strands
+        // the dispatcher permanently in the "inactive at startup" case (observed in perf-lab
+        // with 248k RECEIVED / 0 DISPATCHED rows because the tailer started later).
+        //
+        // Instead, the scheduler is always started and each tick() performs the liveness check.
+        // Cost is one cheap availability read per pollInterval while CDC is inactive; correctness
+        // gain is that any future transition to ACTIVE is picked up on the next tick.
 
         log.info("[{}] ⚙️ Starting CDC dispatcher, polling every '{}' ms, batch size '{}', poison policy '{}', plugin '{}'",
                  slotName, pollInterval.toMillis(), batchSize, poisonPolicy, logicalDecodingPlugin.pluginName());
@@ -246,6 +250,13 @@ public final class CdcDispatcher implements Lifecycle {
 
     void tick() {
         if (stopping.get()) return;
+        if (!availability.isActive()) {
+            // CDC not (yet) ACTIVE — could be because the tailer hasn't connected yet (startup
+            // race) or has transitioned to FAILED / INACTIVE after a reconnection issue. Quietly
+            // skip; the next tick will retry. No counter bump — this is expected during startup
+            // and not a tick "failure".
+            return;
+        }
         try {
             tickInternal();
         } catch (Throwable t) {
