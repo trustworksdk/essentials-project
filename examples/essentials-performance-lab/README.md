@@ -366,10 +366,25 @@ to exercise other configurations.
 Strongly recommended: `RESET_CDC_STATE=true` to truncate the inbox and drop the replication
 slot before the matrix runs. Without this, stale backlog from prior runs starves the dispatcher
 and `invariantCaughtUpWithinTimeout` fails across the board (even though no data is actually
-lost). Requires `psql` on PATH and libpq env vars (`PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`,
-`PGDB`). Override `CDC_INBOX_TABLE` / `CDC_SLOT_NAME` if you're not using defaults.
+lost).
+
+The script picks one of two connection paths, in preference order:
+
+1. **Host `psql`** — if `psql` is on PATH, uses libpq env vars (`PGHOST`, `PGPORT`, `PGUSER`,
+   `PGPASSWORD`, `PGDB`).
+2. **Docker exec into the compose Postgres container** — if no host `psql`, falls back to
+   `docker exec` into `$CDC_RESET_CONTAINER` (default `essentials-perf-lab-postgres`) using its
+   `$CDC_RESET_CONTAINER_USER` / `$CDC_RESET_CONTAINER_DB` (defaults `essentials` /
+   `essentials_lab`). Works out of the box with the `PROFILE=compose` stack — no host psql needed.
+
+Override `CDC_INBOX_TABLE` / `CDC_SLOT_NAME` if you're not using defaults.
 
 ```bash
+# With compose stack running (no host psql needed):
+RESET_CDC_STATE=true \
+examples/essentials-performance-lab/scripts/run-backpressure-matrix.sh
+
+# With custom Postgres + host psql:
 PGHOST=localhost PGPORT=5432 PGUSER=essentials PGPASSWORD=essentials PGDB=essentials_lab \
 RESET_CDC_STATE=true \
 examples/essentials-performance-lab/scripts/run-backpressure-matrix.sh

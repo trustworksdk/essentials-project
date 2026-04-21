@@ -60,21 +60,44 @@ echo "[perf-lab] cases=${#CASES[@]} output_dir=$OUT_DIR"
 # Optional pre-run cleanup. Stale inbox rows (e.g. from a prior interrupted run) cause dispatcher
 # starvation: the scenario's own events sit at the tail of a massive backlog and never reach
 # subscribers within the catchup budget. Setting RESET_CDC_STATE=true truncates the inbox and
-# drops the replication slot so the matrix starts from a clean baseline. Requires PGHOST etc.
-# to be set (standard libpq env vars — psql picks them up automatically).
+# drops the replication slot so the matrix starts from a clean baseline.
+#
+# Two connection paths — preferred order:
+#   1. Host psql on PATH + libpq env vars (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDB).
+#   2. Docker exec into the compose Postgres container ($CDC_RESET_CONTAINER, default
+#      essentials-perf-lab-postgres) — no host psql needed. Uses the container's POSTGRES_USER
+#      and POSTGRES_DB via local socket.
+#
+# Picks path 1 when `psql` is on PATH, otherwise falls back to path 2 when the container is
+# running. Fails fast if neither is available.
 if [[ "${RESET_CDC_STATE:-false}" == "true" ]]; then
   CDC_INBOX_TABLE="${CDC_INBOX_TABLE:-eventstore_cdc_inbox}"
   CDC_SLOT_NAME="${CDC_SLOT_NAME:-essentials_default_essentials_lab}"
+  CDC_RESET_CONTAINER="${CDC_RESET_CONTAINER:-essentials-perf-lab-postgres}"
+  CDC_RESET_CONTAINER_USER="${CDC_RESET_CONTAINER_USER:-essentials}"
+  CDC_RESET_CONTAINER_DB="${CDC_RESET_CONTAINER_DB:-essentials_lab}"
   echo "[perf-lab] RESET_CDC_STATE=true — cleaning inbox table '$CDC_INBOX_TABLE' and dropping slot '$CDC_SLOT_NAME'"
-  if ! command -v psql >/dev/null 2>&1; then
-    echo "[perf-lab] psql not on PATH; cannot reset CDC state" >&2
+
+  if command -v psql >/dev/null 2>&1; then
+    RESET_MODE="host"
+    run_sql() { psql -v ON_ERROR_STOP=0 -c "$1" >/dev/null 2>&1 || true; }
+  elif command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CDC_RESET_CONTAINER"; then
+    RESET_MODE="docker:$CDC_RESET_CONTAINER"
+    run_sql() {
+      docker exec -i "$CDC_RESET_CONTAINER" \
+        psql -v ON_ERROR_STOP=0 -U "$CDC_RESET_CONTAINER_USER" -d "$CDC_RESET_CONTAINER_DB" -c "$1" >/dev/null 2>&1 || true
+    }
+  else
+    echo "[perf-lab] neither host psql nor docker container '$CDC_RESET_CONTAINER' is available; cannot reset CDC state." >&2
+    echo "[perf-lab] install postgresql-client (brew install libpq / apt install postgresql-client) or" >&2
+    echo "[perf-lab] start the compose stack first: docker compose -f examples/essentials-performance-lab/docker-compose.yml up -d" >&2
     exit 1
   fi
-  # Inbox truncate — if table doesn't exist yet, a TRUNCATE fails; swallow that case only.
-  psql -v ON_ERROR_STOP=0 -c "TRUNCATE TABLE $CDC_INBOX_TABLE" >/dev/null 2>&1 || true
-  # Slot drop — safe if slot doesn't exist; needs to be terminated first if active.
-  psql -c "SELECT pg_terminate_backend(active_pid) FROM pg_replication_slots WHERE slot_name = '$CDC_SLOT_NAME' AND active_pid IS NOT NULL" >/dev/null 2>&1 || true
-  psql -c "SELECT pg_drop_replication_slot('$CDC_SLOT_NAME') WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = '$CDC_SLOT_NAME')" >/dev/null 2>&1 || true
+  echo "[perf-lab] reset mode: $RESET_MODE"
+
+  run_sql "TRUNCATE TABLE $CDC_INBOX_TABLE"
+  run_sql "SELECT pg_terminate_backend(active_pid) FROM pg_replication_slots WHERE slot_name = '$CDC_SLOT_NAME' AND active_pid IS NOT NULL"
+  run_sql "SELECT pg_drop_replication_slot('$CDC_SLOT_NAME') WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = '$CDC_SLOT_NAME')"
   echo "[perf-lab] reset complete"
 fi
 
