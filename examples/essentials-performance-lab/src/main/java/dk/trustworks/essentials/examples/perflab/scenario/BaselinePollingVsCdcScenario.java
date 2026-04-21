@@ -31,6 +31,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.examples.perflab.EssentialsPerformanceLabProperties;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -80,10 +81,20 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
         return "Runs a fixed-seed append + subscribe workload and outputs JSON metrics for polling/CDC mode comparison";
     }
 
+    /**
+     * Register the scenario's aggregate type at Spring startup, matching how real applications
+     * typically declare their aggregates. The CDC {@code AggregateTypeResolver} uses a live
+     * supplier so runtime registration also works, but startup is the idiomatic path.
+     */
+    @PostConstruct
+    void registerAggregateAtStartup() {
+        if (configurableEventStore.findAggregateEventStreamConfiguration(ORDERS).isEmpty()) {
+            configurableEventStore.addAggregateEventStreamConfiguration(ORDERS, String.class);
+        }
+    }
+
     @Override
     public void run(EssentialsPerformanceLabProperties properties) throws Exception {
-        ensureAggregateConfigured();
-
         var subscriptions = new ArrayList<EventStoreSubscription>();
         var collector = new MetricsCollector();
 
@@ -144,12 +155,6 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
         boolean cdcWrapper = eventStore.getClass().getSimpleName().contains("CdcEventStore");
         if (!cdcWrapper) return "polling";
         return cdcAvailability.map(CdcAvailability::isActive).orElse(false) ? "cdc-active" : "cdc-fallback";
-    }
-
-    private void ensureAggregateConfigured() {
-        if (configurableEventStore.findAggregateEventStreamConfiguration(ORDERS).isEmpty()) {
-            configurableEventStore.addAggregateEventStreamConfiguration(ORDERS, String.class);
-        }
     }
 
     private Optional<GlobalEventOrder> currentHighWatermark() {

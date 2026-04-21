@@ -34,6 +34,7 @@ import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.examples.perflab.EssentialsPerformanceLabProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Gauge;
+import jakarta.annotation.PostConstruct;
 import org.jdbi.v3.core.Jdbi;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -125,10 +126,25 @@ public class BackpressureScenario implements LabScenario {
         return "Slow-subscriber scenario that validates CDC bounded buffers hold under sustained producer pressure";
     }
 
+    /**
+     * Register the scenario's aggregate type at Spring startup, matching how real applications
+     * typically declare their aggregates (via {@code @PostConstruct} or an {@code @Configuration}
+     * bean). Registering here — rather than lazily in {@link #run(EssentialsPerformanceLabProperties)}
+     * — makes the perf-lab more representative of production usage and ensures any Spring bean
+     * ordering quirks are shaken out against the same shape real users ship.
+     * <p>
+     * Note: the CDC {@code AggregateTypeResolver} uses a live supplier, so runtime registration
+     * also works — but startup is the idiomatic path.
+     */
+    @PostConstruct
+    void registerAggregateAtStartup() {
+        if (configurableEventStore.findAggregateEventStreamConfiguration(ORDERS).isEmpty()) {
+            configurableEventStore.addAggregateEventStreamConfiguration(ORDERS, String.class);
+        }
+    }
+
     @Override
     public void run(EssentialsPerformanceLabProperties properties) throws Exception {
-        ensureAggregateConfigured();
-
         long handlerDelayMs = Math.max(0L, properties.getSubscriberHandlerDelayMs());
         int  producerRateHz = Math.max(0, properties.getProducerRateHz());
         if (handlerDelayMs == 0) {
@@ -374,12 +390,6 @@ public class BackpressureScenario implements LabScenario {
         boolean cdcWrapper = eventStore.getClass().getSimpleName().contains("CdcEventStore");
         if (!cdcWrapper) return "polling";
         return cdcAvailability.map(CdcAvailability::isActive).orElse(false) ? "cdc-active" : "cdc-fallback";
-    }
-
-    private void ensureAggregateConfigured() {
-        if (configurableEventStore.findAggregateEventStreamConfiguration(ORDERS).isEmpty()) {
-            configurableEventStore.addAggregateEventStreamConfiguration(ORDERS, String.class);
-        }
     }
 
     private Optional<GlobalEventOrder> currentHighWatermark() {
