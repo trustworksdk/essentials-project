@@ -55,6 +55,7 @@ public class CdcProperties {
     private final CdcDispatcherProperties        cdcDispatcher        = new CdcDispatcherProperties();
     private final CdcEventBusProperties          eventBus             = new CdcEventBusProperties();
     private final CdcSlotProperties              slot                 = new CdcSlotProperties();
+    private final CdcHealthCheckProperties       healthCheck          = new CdcHealthCheckProperties();
 
     /**
      * Checks whether the Change Data Capture (CDC) functionality is enabled.
@@ -227,6 +228,16 @@ public class CdcProperties {
      */
     public CdcSlotProperties getSlot() {
         return slot;
+    }
+
+    /**
+     * Configuration for {@code CdcEffectivenessMonitor} — the background health probe that
+     * detects "CDC appears ACTIVE but isn't actually delivering events" scenarios (e.g. pgoutput
+     * filtering out row-change messages, dispatcher silently dropping events) and fails the
+     * availability so subscribers fall back to polling.
+     */
+    public CdcHealthCheckProperties getHealthCheck() {
+        return healthCheck;
     }
 
     public enum WalParserMode {
@@ -777,5 +788,87 @@ public class CdcProperties {
             this.mode = mode;
         }
 
+    }
+
+    /**
+     * Configuration for the CDC effectiveness monitor — a background probe that detects
+     * two failure modes the in-band availability checks miss:
+     * <ol>
+     *   <li><b>Stuck delivery</b>: tailer is receiving messages but the dispatcher published
+     *       zero events over a configurable window. Example: pgoutput silently filtering
+     *       row-change messages, slot misconfiguration, dispatcher dropping events without
+     *       erroring. The monitor fails availability so subscribers fall back to polling.</li>
+     *   <li><b>Dispatcher dead</b>: the dispatcher's tick counter didn't advance over a grace
+     *       period — scheduler crashed or stuck. Same remediation.</li>
+     * </ol>
+     */
+    public static class CdcHealthCheckProperties {
+        /** Master switch. Disable to skip all health-check logic. */
+        private boolean enabled = true;
+        /** Window between each health-check evaluation. */
+        private Duration interval = Duration.ofSeconds(60);
+        /**
+         * Minimum number of messages the tailer must have received within a window before the
+         * "tailer received but dispatcher published 0" heuristic can fire. Protects against
+         * false positives in idle systems where no events are produced.
+         */
+        private long messagesReceivedThreshold = 1000;
+        /**
+         * Additional grace period on top of {@link #interval} before the monitor declares the
+         * dispatcher dead on zero-tick-delta. Default = {@code 2 × interval}. Protects against
+         * scheduler jitter where a single window might legitimately observe 0 ticks (e.g.
+         * dispatcher was blocked on a long DB call).
+         */
+        private Duration dispatcherIdleGracePeriod = Duration.ofSeconds(120);
+        /**
+         * When {@code true} (default), the monitor keeps running after it has fired. A tailer
+         * reconnect may restore {@code CdcAvailability} to ACTIVE, at which point the monitor
+         * resumes evaluation from a fresh baseline. Self-rate-limited via the window —
+         * oscillation between ACTIVE and FAILED is a visible, actionable signal.
+         * <p>
+         * When {@code false}, the monitor fires once then stays quiet — suitable for
+         * environments that want a sticky fail-closed signal and manual intervention.
+         */
+        private boolean autoRecover = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public Duration getInterval() {
+            return interval;
+        }
+
+        public void setInterval(Duration interval) {
+            this.interval = interval;
+        }
+
+        public long getMessagesReceivedThreshold() {
+            return messagesReceivedThreshold;
+        }
+
+        public void setMessagesReceivedThreshold(long messagesReceivedThreshold) {
+            this.messagesReceivedThreshold = messagesReceivedThreshold;
+        }
+
+        public Duration getDispatcherIdleGracePeriod() {
+            return dispatcherIdleGracePeriod;
+        }
+
+        public void setDispatcherIdleGracePeriod(Duration dispatcherIdleGracePeriod) {
+            this.dispatcherIdleGracePeriod = dispatcherIdleGracePeriod;
+        }
+
+        public boolean isAutoRecover() {
+            return autoRecover;
+        }
+
+        public void setAutoRecover(boolean autoRecover) {
+            this.autoRecover = autoRecover;
+        }
     }
 }

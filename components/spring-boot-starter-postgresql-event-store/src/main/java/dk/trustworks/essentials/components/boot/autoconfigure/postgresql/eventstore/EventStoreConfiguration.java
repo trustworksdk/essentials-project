@@ -717,6 +717,32 @@ public class EventStoreConfiguration {
         return new CdcInboxRepository(eventStoreUnitOfWorkFactory, meterRegistry);
     }
 
+    /**
+     * Background health probe that watches for "CDC appears ACTIVE but isn't delivering" and
+     * "dispatcher scheduler dead" failure modes. Fires availability.failed(...) so subscribers
+     * fall back to polling. Guarded by essentials.eventstore.cdc.health-check.enabled (default
+     * true) — also skipped when delivery-mode is DIRECT, since the heuristic depends on the
+     * dispatcher.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcEffectivenessMonitor cdcEffectivenessMonitor(WalReplicationTailer walReplicationTailer,
+                                                           CdcDispatcher cdcDispatcher,
+                                                           CdcAvailability availability,
+                                                           EssentialsEventStoreProperties essentialsProperties,
+                                                           CdcConsumerGroup group,
+                                                           CdcSlotNameProvider slotNameProvider) {
+        String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
+        return new CdcEffectivenessMonitor(
+                walReplicationTailer,
+                cdcDispatcher,
+                availability,
+                essentialsProperties.getCdc().getDeliveryMode(),
+                essentialsProperties.getCdc().getHealthCheck(),
+                slotName);
+    }
+
     private DataSource createReplicationDataSource(DataSourceProperties properties) throws SQLException {
         var jdbcUrl = properties.getUrl();
         if (jdbcUrl == null) {
