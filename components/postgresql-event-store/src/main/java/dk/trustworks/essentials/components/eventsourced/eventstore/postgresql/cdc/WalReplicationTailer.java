@@ -727,8 +727,10 @@ public class WalReplicationTailer implements Lifecycle {
     }
 
     private void ensureReplicationSlot() {
+        boolean performingRecreate = recreateSlotOnStart && firstStreamAttempt.compareAndSet(true, false);
+
         unitOfWorkFactory.usingUnitOfWork(uow -> {
-            if (recreateSlotOnStart && firstStreamAttempt.compareAndSet(true, false)) {
+            if (performingRecreate) {
                 // Opt-in destructive path — force-drop-and-recreate the slot on first connection
                 // after start(). Terminates any attached backend (e.g. stray JVM from a prior
                 // test run) and drops any unacknowledged WAL changes. Subsequent reconnects
@@ -745,6 +747,30 @@ public class WalReplicationTailer implements Lifecycle {
             }
             PgReplicationSlots.ensureSlot(uow.handle().getConnection(), slotName, pgSlotMode, logicalDecodingPlugin.pluginName());
         });
+
+        // If we just recreated the slot, the CDC inbox may contain rows from prior sessions
+        // that reference now-lost WAL positions AND pgoutput relationIds whose RELATION
+        // messages were already marked DISPATCHED by a previous JVM. The new JVM's
+        // PgOutputRowChangeDecoder starts with an empty relation cache, so stale rows
+        // would decode with "Missing cached pgoutput relation metadata" — inflating
+        // conversionFailures / poisonRows and stalling publishedEventCount. Wipe them.
+        // Runs in its own unit of work so a probe-slot check in downstream handshake isn't
+        // contaminated by this write (same rationale as the plugin.prepare() split).
+        if (performingRecreate && deliveryMode == CdcDeliveryMode.INBOX) {
+            try {
+                int deleted = inboxRepository.deleteAllForSlot(slotName);
+                log.info("[{}] recreate-on-start: cleared {} inbox row(s) carrying stale pgoutput " +
+                                 "relation metadata from prior sessions",
+                         slotName, deleted);
+            } catch (Exception e) {
+                // Inbox clear failure is non-fatal; stale rows will surface as conversion
+                // failures + poison rows during dispatch, which is the visible-but-degraded
+                // mode the monitor already reports. Log loud so operators can intervene.
+                log.warn("[{}] recreate-on-start: failed to clear inbox rows — expect " +
+                                 "conversion failures on any stale rows from prior sessions: {}",
+                         slotName, e.toString());
+            }
+        }
     }
 
     private ChainedLogicalStreamBuilder logicalStreamBuilder(PGConnection pgConn) {

@@ -178,6 +178,28 @@ public class CdcInboxRepository {
     }
 
     /**
+     * Destructively remove every row for the given slot. Intended only for the
+     * {@code slot.recreate-on-start} path — when the replication slot is dropped and
+     * re-created, any inbox rows keyed to that slot reference now-lost WAL positions AND
+     * carry relation metadata whose corresponding {@code RELATION} messages may have already
+     * been processed by a prior JVM session (leaving the new JVM's decoder without the cached
+     * pgoutput relation metadata). Leaving those rows around would cause
+     * "Missing cached pgoutput relation metadata for relationId=X" failures as soon as the
+     * new dispatcher gets to them.
+     * <p>
+     * Returns the number of rows deleted. Logs at INFO since this fires at most once per JVM
+     * and operators need to see how much was discarded.
+     */
+    public int deleteAllForSlot(String slotName) {
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createUpdate("""
+                                                                                 delete from eventstore_cdc_inbox
+                                                                                 where slot_name=:slot
+                                                                                 """)
+                                                          .bind("slot", slotName)
+                                                          .execute());
+    }
+
+    /**
      * Deletes an already dispatched row from the CDC inbox.
      */
     public void deleteDispatched(long inboxId) {
