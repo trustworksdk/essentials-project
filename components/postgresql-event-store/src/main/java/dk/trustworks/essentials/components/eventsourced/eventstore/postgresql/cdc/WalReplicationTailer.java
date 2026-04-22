@@ -72,6 +72,24 @@ public class WalReplicationTailer implements Lifecycle {
     private final LogicalDecodingPlugin                                         logicalDecodingPlugin;
     private final Consumer<List<PersistedEvent>>                                directOnEvents;
 
+    /**
+     * How often the tailer emits a "CDC heartbeat" INFO log from inside the streamOnce inner
+     * loop when no message has arrived. Makes it obvious in operator logs whether the tailer is
+     * receiving or sitting in null-poll zombie-stream. Also controls the backoff-sleep chunk
+     * size so long reconnect waits produce periodic progress logs. Kept at 15s — short enough
+     * to surface problems fast, long enough that a healthy idle stream doesn't spam.
+     */
+    private static final long HEARTBEAT_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(15);
+
+    /**
+     * How often the tailer force-ack's the stream's current receive LSN when idle (no messages
+     * flowing). Prevents {@code confirmed_flush_lsn} from sticking at the slot's start position
+     * when pgoutput has nothing publication-relevant to emit — without this push, Postgres
+     * retains all WAL past the stuck confirmed_flush_lsn, which empirically correlates with
+     * slot-sender throttling / disconnection under stress.
+     */
+    private static final long IDLE_LSN_PUSH_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
+
     private ExecutorService executor;
     private Future<?>       loopFuture;
 
@@ -360,12 +378,34 @@ public class WalReplicationTailer implements Lifecycle {
 
                 onStreamStarted();
 
+                // Track timing for two independent heartbeats:
+                //  - Connected-heartbeat log every HEARTBEAT_INTERVAL_NANOS so operators can see
+                //    whether the tailer is receiving messages or sitting in null-poll zombie-stream.
+                //  - Idle LSN push every IDLE_LSN_PUSH_INTERVAL_NANOS so Postgres can advance
+                //    confirmed_flush_lsn even when pgoutput has nothing to emit (publication
+                //    quiet), preventing WAL retention from growing on idle slots.
+                long lastHeartbeatNs = System.nanoTime();
+                long lastIdleLsnPushNs = System.nanoTime();
+
                 while (!Thread.currentThread().isInterrupted() && !stopping.get()) {
                     ByteBuffer msg = stream.readPending();
+                    long nowNs = System.nanoTime();
                     if (msg == null) {
                         handleNullPoll();
+                        if (nowNs - lastHeartbeatNs >= HEARTBEAT_INTERVAL_NANOS) {
+                            logConnectedHeartbeat();
+                            lastHeartbeatNs = nowNs;
+                        }
+                        if (nowNs - lastIdleLsnPushNs >= IDLE_LSN_PUSH_INTERVAL_NANOS) {
+                            forceIdleLsnPush(stream);
+                            lastIdleLsnPushNs = nowNs;
+                        }
                         continue;
                     }
+                    // We got data — a message arrival counts as liveness evidence. Reset both
+                    // timers so we don't spam heartbeat logs on a healthy stream.
+                    lastHeartbeatNs = nowNs;
+                    lastIdleLsnPushNs = nowNs;
                     if (!handleStreamMessage(stream, msg)) continue;
                 }
             }
@@ -627,6 +667,104 @@ public class WalReplicationTailer implements Lifecycle {
         lastAckedLsn.set(lsn.asString());
     }
 
+    /**
+     * Emitted from inside the streamOnce loop every {@link #HEARTBEAT_INTERVAL_NANOS} when no
+     * message has arrived. Gives operators a clear signal distinguishing "tailer is connected
+     * and idle" from "tailer is disconnected / stuck in reconnect loop" without needing to
+     * enable TRACE logging.
+     */
+    private void logConnectedHeartbeat() {
+        long lastMsgEpoch = lastMessageEpochMs.get();
+        long idleMs       = lastMsgEpoch == 0 ? -1 : (System.currentTimeMillis() - lastMsgEpoch);
+        log.info("[{}] CDC heartbeat: connected; messagesReceived={}, inboxWrites={}, " +
+                         "nullPolls={}, idleMs={}, lastReceiveLsn='{}', lastAckedLsn='{}'",
+                 slotName,
+                 messagesReceived.get(),
+                 inboxWrites.get(),
+                 nullPolls.get(),
+                 idleMs,
+                 lastReceiveLsn.get(),
+                 lastAckedLsn.get());
+    }
+
+    /**
+     * When the stream has been idle (no messages arriving), still advance Postgres's view of
+     * the slot's flushed LSN so {@code confirmed_flush_lsn} doesn't get stuck at the slot's
+     * start position — which holds WAL indefinitely and has been observed to correlate with
+     * sender throttling / disconnection. Safe to call even when the LSN hasn't changed:
+     * in that case we skip the setter calls and just re-send the keepalive status.
+     */
+    private void forceIdleLsnPush(PGReplicationStream stream) {
+        try {
+            var currentLsn = stream.getLastReceiveLSN();
+            if (currentLsn == null) return;
+            String asString = currentLsn.asString();
+            String prev     = lastAckedLsn.get();
+            if (asString.equals(prev)) {
+                // No new data since our last ack — just re-send status to keep server
+                // aware we're still here. Skipping the LSN setters avoids a no-op write.
+                stream.forceUpdateStatus();
+                return;
+            }
+            stream.setAppliedLSN(currentLsn);
+            stream.setFlushedLSN(currentLsn);
+            stream.forceUpdateStatus();
+            lastAckedLsn.set(asString);
+            log.debug("[{}] Idle LSN push: advanced flushed LSN to '{}' (previous='{}')",
+                      slotName, asString, prev);
+        } catch (Exception e) {
+            // Swallow — this is a best-effort liveness push. A failure here typically means
+            // the connection is dying, which the main readPending loop will surface via
+            // exception on the next iteration.
+            log.warn("[{}] Idle LSN push failed: {}", slotName, e.getMessage());
+        }
+    }
+
+    /**
+     * Point-in-time snapshot of the slot's server-side state, queried via a fresh unit of work.
+     * Used by {@link CdcEffectivenessMonitor} to include live slot info (active, LSN, lag) in
+     * its failure log so the root cause of a stuck CDC run can be diagnosed without running
+     * {@code pg_replication_slots} manually. Returns {@link Optional#empty()} on any failure so
+     * the caller can log a plain message and move on.
+     */
+    public Optional<SlotState> getSlotStateSnapshot() {
+        try {
+            return unitOfWorkFactory.withUnitOfWork(uow -> {
+                try (var stmt = uow.handle().getConnection().prepareStatement(
+                        "SELECT active, " +
+                                "       confirmed_flush_lsn::text AS flush_lsn, " +
+                                "       pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes " +
+                                "FROM pg_replication_slots WHERE slot_name = ?")) {
+                    stmt.setString(1, slotName);
+                    try (var rs = stmt.executeQuery()) {
+                        if (!rs.next()) return Optional.<SlotState>empty();
+                        return Optional.of(new SlotState(
+                                slotName,
+                                rs.getBoolean("active"),
+                                rs.getString("flush_lsn"),
+                                rs.getLong("lag_bytes")
+                        ));
+                    }
+                }
+            });
+        } catch (Exception e) {
+            log.debug("[{}] Could not query pg_replication_slots: {}", slotName, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Immutable snapshot of a replication slot's server-side state. Returned by
+     * {@link #getSlotStateSnapshot()}. {@code lagBytes} is the number of bytes of WAL the server
+     * is retaining past {@code confirmedFlushLsn} — a steadily growing value indicates the
+     * tailer isn't ack'ing LSN progress back to Postgres.
+     */
+    public record SlotState(String slotName,
+                            boolean active,
+                            String confirmedFlushLsn,
+                            long lagBytes) {
+    }
+
     private static byte[] toByteArray(ByteBuffer msg) {
         byte[] bytes = new byte[msg.remaining()];
         msg.get(bytes);
@@ -639,8 +777,33 @@ public class WalReplicationTailer implements Lifecycle {
 
     private void sleepBackoffWithJitter(long baseMs) throws InterruptedException {
         long jitter = (long) (baseMs * tailerProperties.getJitterRatio());
-        long delay  = baseMs + ThreadLocalRandom.current().nextLong(-jitter, jitter + 1);
-        Thread.sleep(Math.max(0, delay));
+        long delay  = Math.max(0, baseMs + ThreadLocalRandom.current().nextLong(-jitter, jitter + 1));
+
+        // Short backoff — single sleep, no need for progress heartbeats.
+        long heartbeatChunkMs = TimeUnit.NANOSECONDS.toMillis(HEARTBEAT_INTERVAL_NANOS);
+        if (delay <= heartbeatChunkMs) {
+            Thread.sleep(delay);
+            return;
+        }
+
+        // Long backoff — sleep in chunks and emit a progress log after each chunk so operators
+        // can distinguish "tailer is in the middle of a long reconnect wait" from "tailer is
+        // wedged for unrelated reasons". The last (partial) chunk is followed by the next
+        // connect-attempt log in runPollLoop, so we skip the trailing log.
+        long startNs = System.nanoTime();
+        long remainingMs = delay;
+        while (remainingMs > 0) {
+            long sleepMs = Math.min(heartbeatChunkMs, remainingMs);
+            Thread.sleep(sleepMs);
+            remainingMs -= sleepMs;
+            if (remainingMs > 0) {
+                log.info("[{}] CDC reconnect backoff in progress: elapsedMs={}, remainingMs={}, plannedDelayMs={}",
+                         slotName,
+                         TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs),
+                         remainingMs,
+                         delay);
+            }
+        }
     }
 
     private static void sleepQuietly(Duration d) {

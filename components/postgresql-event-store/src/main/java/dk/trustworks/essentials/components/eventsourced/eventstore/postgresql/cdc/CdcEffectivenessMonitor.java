@@ -264,10 +264,21 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
     }
 
     private void flipFailed(String reason) {
+        // Include a live snapshot of pg_replication_slots in the failure log so the operator
+        // doesn't have to reach for psql to diagnose: active=false + stuck confirmed_flush_lsn
+        // + large lag bytes is the signature of "tailer disconnected", whereas active=true with
+        // moving LSN points more at "pgoutput filtering row-changes". Best-effort — absent on
+        // query failure.
+        String slotStateSuffix = tailer.getSlotStateSnapshot()
+                                       .map(s -> String.format(
+                                               " [slot_state: active=%s, confirmed_flush_lsn=%s, lag_bytes=%d]",
+                                               s.active(), s.confirmedFlushLsn(), s.lagBytes()))
+                                       .orElse("");
+
         // Loud — operators should be paged on this. Include the slot and a hint that fallback
         // to polling is automatic so readers don't panic about data loss.
-        log.error("[{}] ⚠️  CDC EFFECTIVENESS CHECK FAILED — {} Subscribers will transparently fall back to classic polling; no events are lost, but CDC's live-tail advantage is gone until the underlying cause is fixed.",
-                  slotName, reason);
+        log.error("[{}] ⚠️  CDC EFFECTIVENESS CHECK FAILED — {}{} Subscribers will transparently fall back to classic polling; no events are lost, but CDC's live-tail advantage is gone until the underlying cause is fixed.",
+                  slotName, reason, slotStateSuffix);
         availability.failed(slotName, reason);
         monitorMarkedFailedAtNanos = System.nanoTime();
         // Intentionally do NOT advance previousSnapshot — on the next tick, if the tailer has
