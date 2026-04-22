@@ -319,6 +319,22 @@ public final class CdcDispatcher implements Lifecycle {
                     inboxRowsWithEmptyDecodeCount.incrementAndGet();
                 }
                 acknowledgeDispatchedRow(row.inboxId());
+            } catch (CdcBusOverflowException overflow) {
+                // Transient backpressure — NOT a conversion failure. The event decoded fine;
+                // the CDC bus couldn't accept it because subscribers are behind producers. We
+                // intentionally:
+                //   - don't bump conversionFailureCount / poisonRowsCount
+                //   - don't mark the row POISON (would skip the event forever in CDC live-tail)
+                //   - don't advance to the next row in this batch (they'd all hit the same
+                //     backpressure; better to let the bus drain and retry whole batch next tick)
+                //   - leave the row as RECEIVED so the next tick re-processes it
+                //
+                // Subscribers meanwhile keep pulling from the bus at their own pace — once the
+                // bus's in-memory buffer has headroom, the next dispatcher tick will push this
+                // row through.
+                log.warn("[{}] CDC bus backpressure — inboxId={} lsn={} will be retried next tick: {}",
+                         slotName, row.inboxId(), row.lsn(), overflow.getMessage());
+                return;
             } catch (Exception e) {
                 conversionFailureCount.incrementAndGet();
                 if (conversionFailuresCounter != null) conversionFailuresCounter.increment();

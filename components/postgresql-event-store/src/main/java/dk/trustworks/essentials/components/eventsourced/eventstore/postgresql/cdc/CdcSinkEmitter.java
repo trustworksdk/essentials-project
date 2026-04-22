@@ -74,7 +74,7 @@ final class CdcSinkEmitter {
             }
             if (result == Sinks.EmitResult.FAIL_OVERFLOW) {
                 if (overflowAttempts >= overflowMaxRetries) {
-                    handleFailure(event, result, overflowPolicy, context, "overflow retries exhausted", log);
+                    handleOverflowFailure(event, overflowPolicy, context, log);
                     return;
                 }
                 overflowAttempts++;
@@ -89,6 +89,29 @@ final class CdcSinkEmitter {
             handleFailure(event, result, overflowPolicy, context, "emit failed", log);
             return;
         }
+    }
+
+    /**
+     * Dedicated handler for {@code FAIL_OVERFLOW} after retries are exhausted. Throws
+     * {@link CdcBusOverflowException} specifically (rather than the generic
+     * {@link IllegalStateException}) so the {@code CdcDispatcher} can distinguish transient
+     * backpressure from genuine conversion failures and retry-later instead of poisoning the
+     * inbox row. Preserves the {@link CdcOverflowPolicy#LOG_AND_DROP} escape hatch: when the
+     * policy is drop-not-fail, log and swallow.
+     */
+    private static void handleOverflowFailure(PersistedEvent event,
+                                              CdcOverflowPolicy overflowPolicy,
+                                              String context,
+                                              Logger log) {
+        String message = "[" + context + "] overflow retries exhausted"
+                + " (emitResult=FAIL_OVERFLOW"
+                + ", globalOrder=" + event.globalEventOrder()
+                + ", aggregateType=" + event.aggregateType() + ")";
+        if (overflowPolicy == CdcOverflowPolicy.LOG_AND_DROP) {
+            log.warn(message);
+            return;
+        }
+        throw new CdcBusOverflowException(message);
     }
 
     private static void handleFailure(PersistedEvent event,
