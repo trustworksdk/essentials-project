@@ -424,10 +424,13 @@ public class WalReplicationTailer implements Lifecycle {
                 return;
             }
 
-            // Plugin-specific bootstrap (e.g. pgoutput publication auto-manage) runs before slot
-            // creation so a freshly-created slot sees the intended publication membership on
-            // its first handshake. No-op for plugins that don't need it (wal2json).
-            preparePlugin();
+            // Plugin-specific bootstrap (pgoutput publication auto-manage, etc.) happens in
+            // initializePluginAvailability() at tailer start — before the unusableReason()
+            // check that would otherwise fail on a missing-publication. Per-reconnect prepare
+            // would also work (the plugin operations are idempotent) but there's no
+            // correctness need for it and avoiding the extra DB roundtrip per reconnect is
+            // cheaper. If the publication is externally dropped after startup, recovery will
+            // need a tailer restart.
 
             ensureReplicationSlot();
 
@@ -521,6 +524,13 @@ public class WalReplicationTailer implements Lifecycle {
                 availability.failed(slotName, "logical decoding not enabled");
                 return;
             }
+
+            // Run the plugin's prepare() BEFORE checking usability — publication auto-manage
+            // creates the publication here, so unusableReason()'s "publication exists?" check
+            // on the next line sees the result. Without this ordering, a freshly-provisioned
+            // Postgres (no pre-created publication) would fail startup with
+            // "publication 'X' does not exist" even though auto-manage is enabled.
+            logicalDecodingPlugin.prepare(uow.handle(), eventStreamTableNamesSupplier);
 
             var unusableReason = logicalDecodingPlugin.unusableReason(uow.handle());
             pluginAvailable = unusableReason.isEmpty();
