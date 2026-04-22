@@ -25,7 +25,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.shared.Lifecycle;
 import io.micrometer.core.instrument.*;
-import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.*;
 import org.postgresql.PGConnection;
 import org.postgresql.replication.PGReplicationStream;
 import org.postgresql.replication.fluent.logical.ChainedLogicalStreamBuilder;
@@ -65,7 +65,7 @@ public class WalReplicationTailer implements Lifecycle {
     private final WalMessageFilter                                              walMessageFilter;
     private final MeterRegistry                                                 meterRegistry;
     private final WalReplicationTailerErrorHandler                              errorHandler;
-    private final WalReplicationTailerProperties                                      tailerProperties;
+    private final WalReplicationTailerProperties                                tailerProperties;
     private final PgSlotMode                                                    pgSlotMode;
     private final CdcMode                                                       cdcMode;
     private final CdcAvailability                                               availability;
@@ -114,33 +114,25 @@ public class WalReplicationTailer implements Lifecycle {
     private ExecutorService executor;
     private Future<?>       loopFuture;
 
-    private final    AtomicBoolean started         = new AtomicBoolean(false);
-    private final    AtomicBoolean stopping        = new AtomicBoolean(false);
-    /**
-     * Set to {@code true} when {@link #stop()} is explicitly called by the framework's
-     * lifecycle manager. Distinguishes "clean shutdown requested by owner" from "runPollLoop
-     * exited for some other reason" (e.g. an error-handler STOP decision, or a bug flipping
-     * {@link #stopping} unexpectedly). The latter produces a loud ERROR at loop exit so
-     * operators notice that the tailer has silently died — previously such exits went
-     * completely unlogged.
-     */
-    private final    AtomicBoolean stopRequestedByOwner = new AtomicBoolean(false);
-    private volatile boolean       pluginAvailable = false;
+    private final AtomicBoolean started  = new AtomicBoolean(false);
+    private final AtomicBoolean stopping = new AtomicBoolean(false);
+
+    private volatile boolean pluginAvailable = false;
 
     private final CountDownLatch streamStartedLatch = new CountDownLatch(1);
 
-    private final AtomicLong              nullPolls            = new AtomicLong(0);
-    private final AtomicLong              connectAttempt       = new AtomicLong(0);
-    private final AtomicLong              messagesReceived     = new AtomicLong(0);
-    private final AtomicLong              inboxWrites          = new AtomicLong(0);
-    private final AtomicLong              inboxDuplicateWrites = new AtomicLong(0);
-    private final AtomicLong              inboxWriteFailures   = new AtomicLong(0);
-    private final AtomicLong              handlerFailures      = new AtomicLong(0);
-    private final AtomicLong              lastMessageEpochMs   = new AtomicLong(0);
-    private final AtomicReference<String> lastReceiveLsn       = new AtomicReference<>("n/a");
-    private final AtomicReference<String> lastAckedLsn         = new AtomicReference<>("n/a");
-    private final AtomicReference<String> lastMessagePreview   = new AtomicReference<>("");
-    private final AtomicBoolean           slotLockAcquired     = new AtomicBoolean(false);
+    private final        AtomicLong              nullPolls                       = new AtomicLong(0);
+    private final        AtomicLong              connectAttempt                  = new AtomicLong(0);
+    private final        AtomicLong              messagesReceived                = new AtomicLong(0);
+    private final        AtomicLong              inboxWrites                     = new AtomicLong(0);
+    private final        AtomicLong              inboxDuplicateWrites            = new AtomicLong(0);
+    private final        AtomicLong              inboxWriteFailures              = new AtomicLong(0);
+    private final        AtomicLong              handlerFailures                 = new AtomicLong(0);
+    private final        AtomicLong              lastMessageEpochMs              = new AtomicLong(0);
+    private final        AtomicReference<String> lastReceiveLsn                  = new AtomicReference<>("n/a");
+    private final        AtomicReference<String> lastAckedLsn                    = new AtomicReference<>("n/a");
+    private final        AtomicReference<String> lastMessagePreview              = new AtomicReference<>("");
+    private final        AtomicBoolean           slotLockAcquired                = new AtomicBoolean(false);
     /**
      * Counters for the slot-lock contention escalation. When another tailer holds the
      * advisory lock, {@link #handleSlotLockContention()} increments {@link #slotLockFailureAttempts}
@@ -149,41 +141,51 @@ public class WalReplicationTailer implements Lifecycle {
      * prolonged contention is visible at operator-level log verbosity without spamming INFO
      * on every retry. Both counters reset after a successful acquisition.
      */
-    private final AtomicLong              slotLockFailureAttempts     = new AtomicLong(0);
-    private final AtomicLong              slotLockFirstFailureEpochMs = new AtomicLong(0);
+    private final        AtomicLong              slotLockFailureAttempts         = new AtomicLong(0);
+    private final        AtomicLong              slotLockFirstFailureEpochMs     = new AtomicLong(0);
+    /**
+     * Set to {@code true} when {@link #stop()} is explicitly called by the framework's
+     * lifecycle manager. Distinguishes "clean shutdown requested by owner" from "runPollLoop
+     * exited for some other reason" (e.g. an error-handler STOP decision, or a bug flipping
+     * {@link #stopping} unexpectedly). The latter produces a loud ERROR at loop exit so
+     * operators notice that the tailer has silently died — previously such exits went
+     * completely unlogged.
+     */
+    private final        AtomicBoolean           stopRequestedByOwner            = new AtomicBoolean(false);
     /**
      * How often to escalate slot-lock-contention logs from INFO/DEBUG to WARN. The first
      * failure always logs INFO; every Nth subsequent failure logs WARN with cumulative
      * attempt-count + elapsed time; others log at DEBUG.
      */
-    private static final long             SLOT_LOCK_WARN_EVERY_N_ATTEMPTS = 20;
-    private       Counter                 connectAttemptsCounter;
-    private       Counter                 connectSuccessCounter;
-    private       Counter                 connectFailuresCounter;
-    private       Counter                 messagesReceivedCounter;
-    private       Counter                 inboxWritesCounter;
-    private       Counter                 inboxDuplicatesCounter;
-    private       Counter                 inboxWriteFailuresCounter;
-    private       Counter                 handlerFailuresCounter;
+    private static final long                    SLOT_LOCK_WARN_EVERY_N_ATTEMPTS = 20;
+
+    private Counter connectAttemptsCounter;
+    private Counter connectSuccessCounter;
+    private Counter connectFailuresCounter;
+    private Counter messagesReceivedCounter;
+    private Counter inboxWritesCounter;
+    private Counter inboxDuplicatesCounter;
+    private Counter inboxWriteFailuresCounter;
+    private Counter handlerFailuresCounter;
 
     /**
      * Constructs a new WalReplicationTailer.
      *
-     * @param replicationDataSource  the replication {@link DataSource}
-     * @param jdbi                   the {@link Jdbi} instance for db interaction
-     * @param unitOfWorkFactory      the {@link HandleAwareUnitOfWork} factory
-     * @param slotName               the replication slot name
-     * @param inboxRepository        the CDC inbox repository
-     * @param tailerProperties       the tailer configuration properties
-     * @param pgSlotMode             the PostgreSQL slot lifecycle mode
-     * @param cdcMode                REQUIRE / AUTO semantics for startup failures
-     * @param deliveryMode           INBOX (default) or DIRECT
-     * @param logicalDecodingPlugin  the plugin that owns payload decoding and gap extraction
-     * @param directOnEvents         consumer for decoded events in DIRECT mode (required when deliveryMode=DIRECT)
-     * @param walMessageFilter       optional raw-payload filter (applied only when plugin opts in via {@link LogicalDecodingPlugin#preFiltersRawPayloads()})
-     * @param availability           CDC availability state machine
-     * @param meterRegistry          optional metrics registry
-     * @param errorHandler           optional error handler
+     * @param replicationDataSource the replication {@link DataSource}
+     * @param jdbi                  the {@link Jdbi} instance for db interaction
+     * @param unitOfWorkFactory     the {@link HandleAwareUnitOfWork} factory
+     * @param slotName              the replication slot name
+     * @param inboxRepository       the CDC inbox repository
+     * @param tailerProperties      the tailer configuration properties
+     * @param pgSlotMode            the PostgreSQL slot lifecycle mode
+     * @param cdcMode               REQUIRE / AUTO semantics for startup failures
+     * @param deliveryMode          INBOX (default) or DIRECT
+     * @param logicalDecodingPlugin the plugin that owns payload decoding and gap extraction
+     * @param directOnEvents        consumer for decoded events in DIRECT mode (required when deliveryMode=DIRECT)
+     * @param walMessageFilter      optional raw-payload filter (applied only when plugin opts in via {@link LogicalDecodingPlugin#preFiltersRawPayloads()})
+     * @param availability          CDC availability state machine
+     * @param meterRegistry         optional metrics registry
+     * @param errorHandler          optional error handler
      */
     public WalReplicationTailer(
             DataSource replicationDataSource,
@@ -502,16 +504,16 @@ public class WalReplicationTailer implements Lifecycle {
                 //    StaleReplicationStreamException so the outer reconnect loop fires. Protects
                 //    against silently half-open TCP sockets where readPending() returns null
                 //    forever without the connection reporting as dead.
-                long lastHeartbeatNs     = System.nanoTime();
-                long lastIdleLsnPushNs   = System.nanoTime();
-                long lastMessageAtNs     = System.nanoTime();
-                long maxIdleNs           = tailerProperties.getMaxIdleDuration() == null
-                                           ? 0L
-                                           : tailerProperties.getMaxIdleDuration().toNanos();
+                long lastHeartbeatNs   = System.nanoTime();
+                long lastIdleLsnPushNs = System.nanoTime();
+                long lastMessageAtNs   = System.nanoTime();
+                long maxIdleNs = tailerProperties.getMaxIdleDuration() == null
+                                 ? 0L
+                                 : tailerProperties.getMaxIdleDuration().toNanos();
 
                 while (!Thread.currentThread().isInterrupted() && !stopping.get()) {
-                    ByteBuffer msg = stream.readPending();
-                    long nowNs = System.nanoTime();
+                    ByteBuffer msg   = stream.readPending();
+                    long       nowNs = System.nanoTime();
                     if (msg == null) {
                         handleNullPoll();
                         if (nowNs - lastHeartbeatNs >= HEARTBEAT_INTERVAL_NANOS) {
@@ -539,9 +541,9 @@ public class WalReplicationTailer implements Lifecycle {
                     // We got data — a message arrival counts as liveness evidence. Reset all
                     // three watchdogs so we don't spam heartbeat logs or force-reconnect on a
                     // healthy stream.
-                    lastHeartbeatNs   = nowNs;
+                    lastHeartbeatNs = nowNs;
                     lastIdleLsnPushNs = nowNs;
-                    lastMessageAtNs   = nowNs;
+                    lastMessageAtNs = nowNs;
                     if (!handleStreamMessage(stream, msg)) continue;
                 }
             }
@@ -592,7 +594,7 @@ public class WalReplicationTailer implements Lifecycle {
         // STEP 1 — logical-decoding check. Read-only query; own UoW just for isolation.
         var logicalDecodingEnabled = new AtomicBoolean(false);
         unitOfWorkFactory.usingUnitOfWork(uow ->
-                logicalDecodingEnabled.set(PostgresqlUtil.isLogicalDecodingEnabled(uow.handle())));
+                                                  logicalDecodingEnabled.set(PostgresqlUtil.isLogicalDecodingEnabled(uow.handle())));
         if (!logicalDecodingEnabled.get()) {
             log.warn("Logical decoding not enabled (wal_level/max_replication_slots/max_wal_senders). CDC disabled.");
             pluginAvailable = false;
@@ -612,7 +614,7 @@ public class WalReplicationTailer implements Lifecycle {
         // write-side (CREATE PUBLICATION) and the probe-slot check cleanly isolated.
         try {
             unitOfWorkFactory.usingUnitOfWork(uow ->
-                    logicalDecodingPlugin.prepare(uow.handle(), eventStreamTableNamesSupplier));
+                                                      logicalDecodingPlugin.prepare(uow.handle(), eventStreamTableNamesSupplier));
         } catch (Exception e) {
             // Plugin's own prepare() is documented as best-effort (publication auto-manage
             // logs a WARN on privilege failure and continues). Anything reaching here is a
@@ -867,7 +869,7 @@ public class WalReplicationTailer implements Lifecycle {
                     if (registeredTables.isEmpty()) {
                         log.debug("[{}] No event-stream tables yet registered; skipping publication membership check", slotName);
                     } else {
-                        var missing = new java.util.TreeSet<String>();
+                        var missing = new TreeSet<String>();
                         for (String table : registeredTables) {
                             if (table == null || table.isBlank()) continue;
                             // Normalise lookup — publication_tables returns schema.table. If the
@@ -946,7 +948,7 @@ public class WalReplicationTailer implements Lifecycle {
      *   <li><b>DEBUG</b> — everything in between. Allows retrieval of full traffic at DEBUG
      *       without cluttering INFO.</li>
      * </ul>
-     *
+     * <p>
      * Sleep uses the exponential-with-jitter backoff instead of the fixed
      * {@code pollInterval} so sustained contention doesn't hammer Postgres with 500ms-
      * cadence advisory-lock attempts forever. Backoff state is local (not shared with the
@@ -1222,7 +1224,7 @@ public class WalReplicationTailer implements Lifecycle {
         // can distinguish "tailer is in the middle of a long reconnect wait" from "tailer is
         // wedged for unrelated reasons". The last (partial) chunk is followed by the next
         // connect-attempt log in runPollLoop, so we skip the trailing log.
-        long startNs = System.nanoTime();
+        long startNs     = System.nanoTime();
         long remainingMs = delay;
         while (remainingMs > 0) {
             long sleepMs = Math.min(heartbeatChunkMs, remainingMs);
