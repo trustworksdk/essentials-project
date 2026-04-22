@@ -682,6 +682,7 @@ public class EventStoreConfiguration {
     public WalReplicationTailer walReplicationTailer(DataSourceProperties dataSourceProperties,
                                                      Jdbi jdbi,
                                                      EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                                     @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                                                      CdcInboxRepository cdcInboxRepository,
                                                      EssentialsEventStoreProperties properties,
                                                      CdcConsumerGroup group,
@@ -695,6 +696,14 @@ public class EventStoreConfiguration {
 
         String     slotName              = getCdcSlotName(properties, group, slotNameProvider);
         DataSource replicationDataSource = createReplicationDataSource(dataSourceProperties);
+
+        // Live supplier mirroring the aggregateTypeResolver wiring — aggregates registered at
+        // runtime must become visible to the tailer's publication-membership diagnostic check.
+        var postgresqlEventStore = (PostgresqlEventStore<?>) eventStore;
+        java.util.function.Supplier<java.util.Set<String>> eventStreamTableNamesSupplier =
+                () -> postgresqlEventStore.getPersistenceStrategy()
+                                          .getSeparateTablePerEventStreamTableNameAggregates()
+                                          .keySet();
 
         return new WalReplicationTailer(replicationDataSource,
                                         jdbi,
@@ -710,7 +719,8 @@ public class EventStoreConfiguration {
                                         Optional.of(walMessageFilter),
                                         availability,
                                         meterRegistry,
-                                        errorHandler);
+                                        errorHandler,
+                                        Optional.of(eventStreamTableNamesSupplier));
     }
 
     @Bean

@@ -41,6 +41,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -71,6 +72,16 @@ public class WalReplicationTailer implements Lifecycle {
     private final CdcDeliveryMode                                               deliveryMode;
     private final LogicalDecodingPlugin                                         logicalDecodingPlugin;
     private final Consumer<List<PersistedEvent>>                                directOnEvents;
+    /**
+     * Live supplier of fully-qualified event-stream table names (e.g. {@code public.orders_events}).
+     * Used by {@code onStreamStarted()} to verify each event-stream table is covered by the
+     * configured pgoutput publication — the single most common cause of "CDC runs but publishes
+     * no events". Typically wired from
+     * {@code () -> eventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates().keySet()}.
+     * Always returns a non-null set; may be empty when aggregates haven't been registered yet
+     * (startup race).
+     */
+    private final Supplier<Set<String>>                                         eventStreamTableNamesSupplier;
 
     /**
      * How often the tailer emits a "CDC heartbeat" INFO log from inside the streamOnce inner
@@ -155,6 +166,35 @@ public class WalReplicationTailer implements Lifecycle {
             CdcAvailability availability,
             Optional<MeterRegistry> meterRegistry,
             Optional<WalReplicationTailerErrorHandler> errorHandler) {
+        this(replicationDataSource, jdbi, unitOfWorkFactory, slotName, inboxRepository,
+             tailerProperties, pgSlotMode, cdcMode, deliveryMode, logicalDecodingPlugin,
+             directOnEvents, walMessageFilter, availability, meterRegistry, errorHandler,
+             Optional.empty());
+    }
+
+    /**
+     * Extended constructor that also accepts an {@code eventStreamTableNamesSupplier} used by
+     * the {@code onStreamStarted} diagnostic logging to verify publication membership against
+     * the configured event-stream tables. Exists as a separate overload to preserve
+     * backward-compat with existing test wiring; production auto-config should call this form.
+     */
+    public WalReplicationTailer(
+            DataSource replicationDataSource,
+            Jdbi jdbi,
+            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+            String slotName,
+            CdcInboxRepository inboxRepository,
+            WalReplicationTailerProperties tailerProperties,
+            PgSlotMode pgSlotMode,
+            CdcMode cdcMode,
+            CdcDeliveryMode deliveryMode,
+            LogicalDecodingPlugin logicalDecodingPlugin,
+            Optional<Consumer<List<PersistedEvent>>> directOnEvents,
+            Optional<WalMessageFilter> walMessageFilter,
+            CdcAvailability availability,
+            Optional<MeterRegistry> meterRegistry,
+            Optional<WalReplicationTailerErrorHandler> errorHandler,
+            Optional<Supplier<Set<String>>> eventStreamTableNamesSupplier) {
         this.replicationDataSource = requireNonNull(replicationDataSource, "replicationDataSource cannot be null");
         requireNonNull(jdbi, "jdbi cannot be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
@@ -167,6 +207,7 @@ public class WalReplicationTailer implements Lifecycle {
         this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
         this.logicalDecodingPlugin = requireNonNull(logicalDecodingPlugin, "logicalDecodingPlugin cannot be null");
         this.directOnEvents = directOnEvents.orElse(null);
+        this.eventStreamTableNamesSupplier = eventStreamTableNamesSupplier.orElse(Set::of);
         this.availability = requireNonNull(availability, "availability cannot be null");
         if (this.deliveryMode == CdcDeliveryMode.DIRECT) {
             requireNonNull(this.directOnEvents, "directOnEvents cannot be null in DIRECT delivery mode");
@@ -544,6 +585,130 @@ public class WalReplicationTailer implements Lifecycle {
         availability.active(slotName);
         incrementCounter(connectSuccessCounter);
         streamStartedLatch.countDown();
+        // Emit diagnostic logging: slot LSN freshness, publication configuration, and
+        // event-stream-table coverage. Best-effort — any failure here only results in a
+        // debug log; never interferes with the actual stream handshake.
+        logSlotAndPublicationState();
+    }
+
+    /**
+     * One-shot diagnostic logging at stream-start: slot freshness (LSN + lag), publication
+     * configuration (FOR ALL TABLES or explicit member list), and event-stream-table coverage
+     * (WARN if any registered aggregate tables aren't in an explicit-list publication). Runs
+     * inside a unit of work on the control-plane JDBC pool, not the replication connection.
+     * Any exception is swallowed at DEBUG — this is purely informational.
+     */
+    private void logSlotAndPublicationState() {
+        try {
+            unitOfWorkFactory.usingUnitOfWork(uow -> {
+                var handle = uow.handle();
+
+                // (3) Slot freshness — loud warning when a pre-existing slot has a huge backlog,
+                // because the tailer will spend minutes replaying historical WAL before reaching
+                // current activity, which looks identical to "pgoutput is stuck" for observers.
+                PostgresqlUtil.getSlotLagInfo(handle, slotName).ifPresent(info -> {
+                    long lagMb = info.lagBytes() / (1024L * 1024L);
+                    if (lagMb >= 100) {
+                        log.warn("[{}] CDC slot inherits a large WAL backlog: confirmed_flush_lsn={}, currentWalLsn={}, lag={} MB. " +
+                                         "The tailer will replay historical WAL before reaching recent events; subscribers " +
+                                         "may see 0 CDC-delivered events until catchup completes. Consider setting " +
+                                         "essentials.eventstore.cdc.slot.recreate-on-start=true for dev/test environments.",
+                                 slotName, info.confirmedFlushLsn(), info.currentWalLsn(), lagMb);
+                    } else {
+                        log.info("[{}] CDC slot state: confirmed_flush_lsn={}, currentWalLsn={}, lag={} MB",
+                                 slotName, info.confirmedFlushLsn(), info.currentWalLsn(), lagMb);
+                    }
+                });
+
+                // (1) + (2) are pgoutput-specific. Skip for other plugins (wal2json streams all
+                // tables and doesn't have the publication-membership failure mode).
+                if (!PgOutputLogicalDecodingPlugin.PLUGIN_NAME.equals(logicalDecodingPlugin.pluginName())) return;
+
+                String publicationName = extractPublicationNameFromPlugin();
+                if (publicationName == null) return;
+
+                // (1) Publication contents — one-line summary so operators can immediately spot
+                // a misconfigured publication. FOR ALL TABLES is a common-case fast path; an
+                // explicit-list publication gets its members enumerated.
+                var pubInfoOpt = PostgresqlUtil.getPublicationInfo(handle, publicationName);
+                if (pubInfoOpt.isEmpty()) {
+                    log.warn("[{}] pgoutput publication '{}' not found — CDC will fail to receive row changes. " +
+                                     "Create it via 'CREATE PUBLICATION {} FOR ALL TABLES;' or enable " +
+                                     "essentials.eventstore.cdc.pg-output.publication.auto-manage=true (opt-in).",
+                             slotName, publicationName, publicationName);
+                    return;
+                }
+                var pubInfo = pubInfoOpt.get();
+                if (pubInfo.forAllTables()) {
+                    log.info("[{}] pgoutput publication '{}' is FOR ALL TABLES — all tables' row changes will stream",
+                             slotName, publicationName);
+                } else {
+                    log.info("[{}] pgoutput publication '{}' has explicit member list ({} tables): {}",
+                             slotName, publicationName, pubInfo.tableMembers().size(), pubInfo.tableMembers());
+                }
+
+                // (2) Event-stream-table coverage — cross-check registered aggregate tables against
+                // publication membership. Only meaningful for explicit-list publications; FOR ALL
+                // TABLES implicitly covers any known aggregate table.
+                if (!pubInfo.forAllTables()) {
+                    var registeredTables = eventStreamTableNamesSupplier.get();
+                    if (registeredTables.isEmpty()) {
+                        log.debug("[{}] No event-stream tables yet registered; skipping publication membership check", slotName);
+                    } else {
+                        var missing = new java.util.TreeSet<String>();
+                        for (String table : registeredTables) {
+                            if (table == null || table.isBlank()) continue;
+                            // Normalise lookup — publication_tables returns schema.table. If the
+                            // registered name is unqualified, compare against the table portion.
+                            boolean covered = pubInfo.tableMembers().stream()
+                                                     .anyMatch(member -> memberMatchesRegistered(member, table));
+                            if (!covered) missing.add(table);
+                        }
+                        if (!missing.isEmpty()) {
+                            log.warn("[{}] pgoutput publication '{}' is MISSING {} event-stream table(s): {}. " +
+                                             "pgoutput will NOT emit row changes for these tables and subscribers " +
+                                             "will see 0 CDC-delivered events. Remediation: run 'ALTER PUBLICATION {} " +
+                                             "ADD TABLE {};' or enable " +
+                                             "essentials.eventstore.cdc.pg-output.publication.auto-manage=true.",
+                                     slotName, publicationName, missing.size(), missing, publicationName,
+                                     String.join(", ", missing));
+                        } else {
+                            log.info("[{}] pgoutput publication '{}' covers all {} registered event-stream tables",
+                                     slotName, publicationName, registeredTables.size());
+                        }
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            log.debug("[{}] Slot/publication diagnostic logging failed — will continue: {}", slotName, t.toString());
+        }
+    }
+
+    /**
+     * Looks up the publication name the configured {@code pgoutput} plugin will use. Returns
+     * null when the plugin doesn't advertise one (e.g. wal2json) or when the slot options
+     * don't contain a {@code publication_names} entry.
+     */
+    private String extractPublicationNameFromPlugin() {
+        var opts = logicalDecodingPlugin.slotOptions();
+        if (opts == null) return null;
+        Object val = opts.get("publication_names");
+        if (val == null) return null;
+        String s = val.toString().trim();
+        return s.isBlank() ? null : s;
+    }
+
+    /**
+     * Loose match between a publication member (always fully-qualified {@code schema.table})
+     * and a registered event-stream table name which may be qualified or not. Exists so a
+     * registered entry of {@code orders_events} and a publication member of
+     * {@code public.orders_events} are treated as the same table for coverage purposes.
+     */
+    private static boolean memberMatchesRegistered(String member, String registered) {
+        if (member.equalsIgnoreCase(registered)) return true;
+        int dot = member.indexOf('.');
+        if (dot > 0 && member.substring(dot + 1).equalsIgnoreCase(registered)) return true;
+        return false;
     }
 
     private void handleNullPoll() {

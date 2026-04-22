@@ -112,6 +112,109 @@ public final class PostgresqlUtil {
                      .first();
     }
 
+    /**
+     * Detailed server-side view of a logical-replication publication — used by the CDC startup
+     * logging to make publication misconfiguration immediately obvious. Captures whether the
+     * publication exists at all, whether it was declared {@code FOR ALL TABLES} (dynamic
+     * membership), the schemas declared via {@code FOR TABLES IN SCHEMA} (Postgres 15+), and
+     * the explicit table members.
+     * <p>
+     * Returns {@link Optional#empty()} when the publication doesn't exist; returns a populated
+     * snapshot otherwise. Table members are fully qualified as {@code schema.table}.
+     */
+    public static Optional<PublicationInfo> getPublicationInfo(Handle handle, String publicationName) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(publicationName, "No publicationName provided");
+        var row = handle.createQuery(
+                                   """
+                                   SELECT puballtables, pg_get_userbyid(pubowner) AS owner_name
+                                   FROM pg_publication
+                                   WHERE pubname = :publicationName
+                                   """)
+                        .bind("publicationName", publicationName)
+                        .map((rs, ctx) -> new boolean[]{rs.getBoolean("puballtables")})
+                        .findFirst();
+        if (row.isEmpty()) return Optional.empty();
+
+        boolean forAllTables = row.get()[0];
+
+        // Only query membership if not FOR ALL TABLES — for all-tables publications, listing
+        // every table in the database would be misleading (the publication matches future
+        // tables dynamically) and potentially expensive.
+        Set<String> tables = Set.of();
+        if (!forAllTables) {
+            tables = new java.util.LinkedHashSet<>(handle.createQuery(
+                                                                 """
+                                                                 SELECT schemaname || '.' || tablename AS fqname
+                                                                 FROM pg_publication_tables
+                                                                 WHERE pubname = :publicationName
+                                                                 ORDER BY schemaname, tablename
+                                                                 """)
+                                                        .bind("publicationName", publicationName)
+                                                        .mapTo(String.class)
+                                                        .list());
+        }
+
+        return Optional.of(new PublicationInfo(publicationName, forAllTables, tables));
+    }
+
+    /**
+     * Immutable server-side snapshot of a publication's relevant metadata for CDC startup
+     * logging and membership verification. {@code tableMembers} is only populated when
+     * {@code forAllTables} is false — a FOR-ALL-TABLES publication is dynamic and listing its
+     * current members at one moment in time would mislead rather than inform.
+     */
+    public record PublicationInfo(String name,
+                                  boolean forAllTables,
+                                  Set<String> tableMembers) {
+    }
+
+    /**
+     * Server-side snapshot of a replication slot's position — used by CDC startup logging to
+     * warn operators when a slot is inheriting a large historical WAL backlog. A slot whose
+     * {@code confirmedFlushLsn} trails {@code currentWalLsn} by hundreds of MB will spend
+     * significant time replaying historical transactions before reaching any fresh events,
+     * which can look identical to "pgoutput is stuck" for observers waiting on live data.
+     * <p>
+     * Returns {@link Optional#empty()} when the slot doesn't exist (caller should treat that
+     * as "slot will be created shortly") or when a query error occurs.
+     */
+    public static Optional<SlotLagInfo> getSlotLagInfo(Handle handle, String slotName) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(slotName, "No slotName provided");
+        try {
+            return handle.createQuery(
+                                 """
+                                 SELECT confirmed_flush_lsn::text AS flush_lsn,
+                                        pg_current_wal_lsn()::text AS current_wal_lsn,
+                                        pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes
+                                 FROM pg_replication_slots
+                                 WHERE slot_name = :slotName
+                                 """)
+                         .bind("slotName", slotName)
+                         .map((rs, ctx) -> new SlotLagInfo(
+                                 slotName,
+                                 rs.getString("flush_lsn"),
+                                 rs.getString("current_wal_lsn"),
+                                 rs.getLong("lag_bytes")))
+                         .findFirst();
+        } catch (Exception e) {
+            log.debug("Could not query pg_replication_slots for slot '{}': {}", slotName, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Immutable snapshot of a replication slot's current LSN position. {@code lagBytes} is
+     * bytes of WAL retained by Postgres past {@code confirmedFlushLsn} — steadily growing
+     * values indicate the tailer isn't acknowledging LSN progress back to Postgres.
+     */
+    public record SlotLagInfo(String slotName,
+                              String confirmedFlushLsn,
+                              String currentWalLsn,
+                              long lagBytes) {
+    }
+
     public static boolean isOutputPluginUsable(Handle handle, String pluginName) {
         // Requires a role with sufficient privileges to create replication slots
         // (often needs REPLICATION role or superuser depending on setup).
