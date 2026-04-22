@@ -37,8 +37,6 @@ The local compose Postgres image includes:
 
 - `pgoutput` support via PostgreSQL itself
 - `wal2json` plugin for explicit comparison runs
-- a default `pgoutput` publication:
-  - `essentials_cdc_publication`
 
 Start local Postgres:
 
@@ -46,11 +44,13 @@ Start local Postgres:
 docker compose -f examples/essentials-performance-lab/docker-compose.yml up -d --build
 ```
 
-The default CDC plugin is `pgoutput`, and the default publication name is already configured as:
-
-- `essentials.eventstore.cdc.pg-output.publication-name=essentials_cdc_publication`
-
-So a compose-backed run works out of the box with the default CDC plugin. In the EventStore CDC path, `pgoutput` only converts insert messages for configured aggregate event tables; non-insert replication messages are ignored.
+The default CDC plugin is `pgoutput`. The publication (`essentials_cdc_publication` by
+default) is **not** pre-created by the Docker image — the framework's
+`essentials.eventstore.cdc.pg-output.publication.auto-manage=true` setting creates it as
+`FOR TABLE <event-stream-tables>` at tailer startup. See "Publication management" below for
+why this matters. In the EventStore CDC path, `pgoutput` only converts insert messages for
+configured aggregate event tables; non-insert replication messages are ignored at the
+tailer (see `PgOutputRawPayloadFilter`).
 
 Run the app against compose DB (port `55432`) using the default `pgoutput` path:
 
@@ -102,6 +102,65 @@ Defaults:
 
 - `essentials.eventstore.cdc.plugin=pgoutput`
 - `essentials.eventstore.cdc.pg-output.publication-name=essentials_cdc_publication`
+
+### Publication management (pgoutput)
+
+The pgoutput plugin requires a server-side publication; it tells Postgres which tables'
+row changes should stream over the replication slot. The framework offers two control models:
+
+**Auto-manage (recommended default for most deployments)** — the framework creates and
+maintains the publication at tailer startup using the registered aggregate event-stream
+tables:
+
+```yaml
+essentials:
+  eventstore:
+    cdc:
+      pg-output:
+        publication:
+          auto-manage: true
+          mode: FOR_TABLE_LIST    # default — one explicit table per registered aggregate
+          # mode: FOR_ALL_TABLES  # alternative — requires superuser, broader net
+```
+
+Why `FOR_TABLE_LIST` (the default):
+
+- **Server-side filter.** pgoutput drops entire transactions that don't touch any listed
+  table — the WAL message never reaches the client. A `FOR ALL TABLES` publication would
+  stream every transaction's B/C envelopes plus row changes on chatty framework tables
+  (`durable_queues`, `fenced_lock`, `subscription_tracking`, TTL timestamps, …). At load
+  that's meaningful wasted server CPU + network + client-side filtering.
+- **No superuser required.** `CREATE PUBLICATION ... FOR TABLE <list>` needs only
+  ownership of the listed tables, which the framework user already has (it created them).
+  `FOR ALL TABLES` requires superuser and is usually not available in managed Postgres.
+- **Self-healing** — on privilege failure or any SQLException, auto-manage logs a loud
+  WARN with the remediation SQL and the tailer continues; subsequent startup runs retry.
+
+**DBA-managed (traditional)** — leave `auto-manage=false` (default) and have an operator
+create the publication as part of your Postgres migrations or bootstrapping. The framework
+will log the publication's current state + coverage at tailer start (WARN if event-stream
+tables aren't covered), so misconfiguration is immediately visible.
+
+**Known limitation (auto-manage):** the publication is only (re-)evaluated at tailer
+startup. Aggregates registered at runtime (after `Lifecycle.start()`) won't automatically
+be added to the publication until the next restart — the startup coverage-check will WARN
+about them. For the vast majority of apps aggregate registration happens at Spring
+startup (`@PostConstruct`, `@Configuration` beans), so this is rarely an issue. If your
+workload requires truly dynamic aggregates, either restart the tailer after registration
+or pre-declare the publication with `FOR ALL TABLES`.
+
+### Fresh slot per JVM (dev/test)
+
+Each `matrix case` starts a new JVM against the same Postgres instance. Without
+intervention, the replication slot persists across cases and each new JVM inherits the
+previous case's WAL backlog — at heavy load the tailer spends the whole measurement
+window replaying backlog instead of reaching fresh events. The perf-lab opts into
+`essentials.eventstore.cdc.slot.recreate-on-start=true` so each JVM drops + re-creates
+the slot at current WAL head, giving clean per-case measurements.
+
+Never enable this in production: the drop discards any unacknowledged WAL. For production,
+rely on `auto-recover`, the adaptive polling fallback, and the self-healing
+`auto-recreate-slot-on-stuck` flag documented in the CDC properties.
 
 ## Baseline CDC vs polling runs
 
@@ -363,10 +422,13 @@ Default cases sweep `subscriber-count` × `handler-delay-ms` (no-delay / light /
 5-subscriber fan-out). Override `PLUGIN=wal2json`, `DELIVERY_MODE=DIRECT`, or `BUFFER_SIZE=<N>`
 to exercise other configurations.
 
-Strongly recommended: `RESET_CDC_STATE=true` to truncate the inbox and drop the replication
-slot before the matrix runs. Without this, stale backlog from prior runs starves the dispatcher
-and `invariantCaughtUpWithinTimeout` fails across the board (even though no data is actually
-lost).
+The perf-lab's `application.yml` already enables
+`essentials.eventstore.cdc.slot.recreate-on-start=true`, which drops + re-creates the
+replication slot at the start of every JVM. Matrix cases therefore begin with clean slot
+state by default — no manual `RESET_CDC_STATE` needed.
+
+`RESET_CDC_STATE=true` is still supported and clears the inbox table as well (useful if
+an older run left inbox rows behind that the slot no longer knows about).
 
 The script picks one of two connection paths, in preference order:
 

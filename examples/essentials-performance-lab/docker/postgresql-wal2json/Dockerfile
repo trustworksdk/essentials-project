@@ -21,6 +21,15 @@ FROM postgres:17.5-bookworm
 
 COPY --from=builder /usr/lib/postgresql/ /usr/lib/postgresql/
 COPY --from=builder /usr/share/postgresql/ /usr/share/postgresql/
-COPY docker/postgresql-wal2json/initdb/ /docker-entrypoint-initdb.d/
+
+# The pgoutput publication is intentionally NOT pre-created via docker-entrypoint-initdb.d.
+# The framework's essentials.eventstore.cdc.pg-output.publication.auto-manage=true
+# (see application.yml) creates the publication as FOR TABLE <event-stream-tables> at
+# tailer startup, giving precise server-side filtering. A broad FOR ALL TABLES publication
+# would force pgoutput to stream row changes for every table in the database — including
+# chatty framework tables like durable_queues, fenced_lock, subscription tracking, and
+# TTL timestamps — even though the framework only consumes aggregate event tables.
+# That's meaningful wasted server CPU, network bytes, and client-side filtering for every
+# chatty non-event table.
 
 EXPOSE 5432
