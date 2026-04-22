@@ -251,6 +251,19 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
         return quoteIdentifier(tableRef.substring(0, dot)) + "." + quoteIdentifier(tableRef.substring(dot + 1));
     }
 
+    /**
+     * pgoutput payloads are binary, but a cheap binary peek at each message's type marker +
+     * relation-id is plenty to decide whether the row belongs to a tracked event-stream table.
+     * The dedicated {@code PgOutputRawPayloadFilter} implements that peek; wiring it via the
+     * existing {@code preFiltersRawPayloads} gate lets the tailer drop irrelevant WAL messages
+     * before they hit the inbox — removing the chatty B/C envelopes, all U/D/T/other types,
+     * and all 'I's on non-event-stream tables that FOR-ALL-TABLES publications emit.
+     */
+    @Override
+    public boolean preFiltersRawPayloads() {
+        return true;
+    }
+
     @Override
     public DiagnosticSummary diagnosticSummary() {
         // Render a compact histogram of pgoutput message types so failures like "zero INSERTs

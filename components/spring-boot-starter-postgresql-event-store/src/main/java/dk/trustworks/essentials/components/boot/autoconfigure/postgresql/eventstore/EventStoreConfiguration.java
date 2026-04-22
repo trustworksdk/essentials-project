@@ -604,14 +604,26 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public WalMessageFilter walMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
-                                             @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+                                             @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                             EssentialsEventStoreProperties properties) {
         // Pass a live supplier rather than a snapshot — aggregates registered at runtime via
         // addAggregateEventStreamConfiguration(...) must become visible to the WAL filter or
         // their INSERTs will be silently dropped before reaching the CDC inbox.
         var postgresqlEventStore = (PostgresqlEventStore<?>) eventStore;
-        return new DefaultWalMessageFilter(
-                jacksonJSONSerializer,
-                () -> postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates().keySet());
+        java.util.function.Supplier<java.util.Collection<String>> tablesSupplier =
+                () -> postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates().keySet();
+
+        // Plugin-specific filter. pgoutput gets the binary-peek filter that drops B/C/U/D/T
+        // and I messages for non-event-stream tables BEFORE they hit the inbox; wal2json
+        // keeps the JSON-regex filter. Either can be overridden via a user-supplied
+        // WalMessageFilter bean (ConditionalOnMissingBean above).
+        String configuredPlugin = properties.getCdc().getPlugin();
+        if (dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.PgOutputLogicalDecodingPlugin.PLUGIN_NAME
+                .equalsIgnoreCase(configuredPlugin)) {
+            return new dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.PgOutputRawPayloadFilter(
+                    tablesSupplier);
+        }
+        return new DefaultWalMessageFilter(jacksonJSONSerializer, tablesSupplier);
     }
 
     @Bean
