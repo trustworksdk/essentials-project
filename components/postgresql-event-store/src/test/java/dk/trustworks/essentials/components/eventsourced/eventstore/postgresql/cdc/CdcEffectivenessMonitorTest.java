@@ -171,6 +171,60 @@ class CdcEffectivenessMonitorTest {
         assertThat(fixture.availability.isActive()).isTrue();
     }
 
+    /**
+     * Regression: previously, a monitor that started before the tailer flipped availability to
+     * ACTIVE wasted a full interval on "tick 1 sets baseline, tick 2 evaluates" — pushing
+     * detection out to 2×interval. The listener-based baseline capture (subscribed to
+     * {@link CdcAvailability#stateChanges()}) eagerly snapshots counters the moment availability
+     * transitions ACTIVE, so the first scheduled tick at t=interval runs a real evaluation.
+     * <p>
+     * This test drives the real {@code start()} path — the other tests exercise {@code evaluate()}
+     * directly, which doesn't install the listener.
+     */
+    @Test
+    void active_transition_triggers_eager_baseline_capture_so_detection_lands_within_one_interval() throws InterruptedException {
+        var config = defaultConfig();
+        // Minimum enforced interval in start() is 1000ms. Using the floor here keeps the test
+        // fast; anything smaller would be silently clamped and mislead the assertions.
+        config.setInterval(Duration.ofMillis(1000));
+        var fixture = newFixture(config);
+
+        fixture.tailerMessagesReceived.set(0);
+        fixture.dispatcherPublished.set(0);
+        fixture.dispatcherTicks.set(0);
+
+        fixture.monitor.start();
+        try {
+            // Let the monitor tick once with INACTIVE — no signal, no firing.
+            Thread.sleep(1200);
+            assertThat(fixture.monitor.hasFiredAtLeastOnce()).isFalse();
+
+            // Availability flips ACTIVE — listener fires immediately, baseline is captured now
+            // (tailerMessagesReceived=0, dispatcherPublished=0, dispatcherTicks=0).
+            fixture.availability.active(SLOT);
+
+            // Short delay for the listener's executor.execute(evaluateSafely) to finish capturing
+            // baseline before we mutate the counters.
+            Thread.sleep(100);
+
+            // Simulate stuck delivery: tailer receives a batch, dispatcher publishes nothing.
+            fixture.tailerMessagesReceived.set(5000);
+            fixture.dispatcherPublished.set(0);
+            fixture.dispatcherTicks.set(500);
+
+            // Wait one full interval plus slack — the NEXT scheduled tick should evaluate and
+            // fire. If the baseline hadn't been captured eagerly, we'd still be in "first tick
+            // sets baseline" territory and would NOT fire until a second interval elapsed.
+            Thread.sleep(config.getInterval().toMillis() + 500);
+
+            assertThat(fixture.monitor.hasFiredAtLeastOnce())
+                    .as("monitor should fire within one interval of the ACTIVE transition thanks to eager baseline capture")
+                    .isTrue();
+        } finally {
+            fixture.monitor.stop();
+        }
+    }
+
     @Test
     void auto_recover_true_re_fires_on_next_stuck_window_after_tailer_reconnects() {
         var fixture = newFixture(defaultConfig()); // autoRecover=true by default

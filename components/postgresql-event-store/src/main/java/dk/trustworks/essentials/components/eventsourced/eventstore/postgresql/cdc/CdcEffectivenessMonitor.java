@@ -21,10 +21,12 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.foundation.Lifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.Disposable;
 
 import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -66,6 +68,15 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
     private final AtomicBoolean started = new AtomicBoolean(false);
     private ScheduledExecutorService executor;
     private Future<?>                scheduled;
+    /**
+     * Subscription to {@link CdcAvailability#stateChanges()} used to kick an immediate baseline
+     * capture the moment availability first flips ACTIVE. Without this, a monitor that starts
+     * before the tailer finishes handshaking wastes a whole interval on "first tick sets
+     * baseline, second tick evaluates" — pushing detection out to 2×interval. With the listener,
+     * the baseline is captured at the moment of ACTIVE transition and the first scheduled tick
+     * at t=interval runs a full evaluation.
+     */
+    private Disposable               availabilityStateSubscription;
 
     // Snapshot of counters captured on the last ACTIVE evaluation. Null until the first tick
     // after an ACTIVE transition; reset whenever availability leaves ACTIVE.
@@ -117,12 +128,30 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
             return t;
         });
         scheduled = executor.scheduleWithFixedDelay(this::evaluateSafely, intervalMs, intervalMs, TimeUnit.MILLISECONDS);
+
+        // Listen for availability transitions. When we observe ACTIVE (either the replay sink's
+        // initial emission on subscribe or a later transition), push an immediate evaluate()
+        // onto the monitor's own single-threaded executor so the baseline snapshot gets captured
+        // right away. The next scheduled tick at t=interval can then run a real evaluation
+        // against a meaningful delta, instead of burning that tick on baseline setup.
+        availabilityStateSubscription = availability.stateChanges()
+                                                    .filter(s -> s == CdcAvailability.State.ACTIVE)
+                                                    .subscribe(s -> {
+                                                        var exec = executor;
+                                                        if (exec == null || exec.isShutdown()) return;
+                                                        try {
+                                                            exec.execute(this::evaluateSafely);
+                                                        } catch (RejectedExecutionException ignored) {
+                                                            // stop() racing with a late emission — next scheduled tick handles it.
+                                                        }
+                                                    });
     }
 
     @Override
     public void stop() {
         if (!started.compareAndSet(true, false)) return;
         try {
+            if (availabilityStateSubscription != null) availabilityStateSubscription.dispose();
             if (scheduled != null) scheduled.cancel(true);
         } finally {
             if (executor != null) executor.shutdownNow();
