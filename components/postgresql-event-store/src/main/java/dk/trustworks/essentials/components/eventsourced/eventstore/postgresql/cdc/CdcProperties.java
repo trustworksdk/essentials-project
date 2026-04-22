@@ -287,6 +287,20 @@ public class CdcProperties {
         private boolean  includeXids               = true;
         private boolean  includeTimestamp          = true;
         private boolean  includeLsn                = true;
+        /**
+         * Hard ceiling on how long the tailer will sit on a silent replication stream before
+         * treating it as stale (half-open TCP, server-side state gone dark, etc.) and forcing
+         * a reconnect. The tailer already ack's the current read LSN every 30s to keep Postgres
+         * advancing {@code confirmed_flush_lsn} even on idle streams, but a genuinely broken
+         * TCP socket can continue to read {@code null} from {@code readPending()} forever
+         * without the status push surfacing the failure.
+         * <p>
+         * Default is 5 minutes — long enough that a genuinely-idle-but-healthy stream (low
+         * write volume, quiet overnight period) isn't disturbed, short enough that zombie
+         * streams recover well before an operator would notice. Set to {@code Duration.ZERO}
+         * to disable the check (not recommended).
+         */
+        private Duration maxIdleDuration           = Duration.ofMinutes(5);
 
 
         public static WalReplicationTailerProperties defaults(Duration pollInterval,
@@ -507,6 +521,14 @@ public class CdcProperties {
          */
         public void setIncludeLsn(boolean includeLsn) {
             this.includeLsn = includeLsn;
+        }
+
+        public Duration getMaxIdleDuration() {
+            return maxIdleDuration;
+        }
+
+        public void setMaxIdleDuration(Duration maxIdleDuration) {
+            this.maxIdleDuration = maxIdleDuration;
         }
 
     }

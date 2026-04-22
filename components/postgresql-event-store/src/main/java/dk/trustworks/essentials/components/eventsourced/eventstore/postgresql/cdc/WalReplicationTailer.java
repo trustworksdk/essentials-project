@@ -116,6 +116,15 @@ public class WalReplicationTailer implements Lifecycle {
 
     private final    AtomicBoolean started         = new AtomicBoolean(false);
     private final    AtomicBoolean stopping        = new AtomicBoolean(false);
+    /**
+     * Set to {@code true} when {@link #stop()} is explicitly called by the framework's
+     * lifecycle manager. Distinguishes "clean shutdown requested by owner" from "runPollLoop
+     * exited for some other reason" (e.g. an error-handler STOP decision, or a bug flipping
+     * {@link #stopping} unexpectedly). The latter produces a loud ERROR at loop exit so
+     * operators notice that the tailer has silently died — previously such exits went
+     * completely unlogged.
+     */
+    private final    AtomicBoolean stopRequestedByOwner = new AtomicBoolean(false);
     private volatile boolean       pluginAvailable = false;
 
     private final CountDownLatch streamStartedLatch = new CountDownLatch(1);
@@ -132,6 +141,22 @@ public class WalReplicationTailer implements Lifecycle {
     private final AtomicReference<String> lastAckedLsn         = new AtomicReference<>("n/a");
     private final AtomicReference<String> lastMessagePreview   = new AtomicReference<>("");
     private final AtomicBoolean           slotLockAcquired     = new AtomicBoolean(false);
+    /**
+     * Counters for the slot-lock contention escalation. When another tailer holds the
+     * advisory lock, {@link #handleSlotLockContention()} increments {@link #slotLockFailureAttempts}
+     * and selects a log level — {@code INFO} on the first occurrence, {@code WARN} at each
+     * multiple of {@link #SLOT_LOCK_WARN_EVERY_N_ATTEMPTS}, {@code DEBUG} otherwise — so
+     * prolonged contention is visible at operator-level log verbosity without spamming INFO
+     * on every retry. Both counters reset after a successful acquisition.
+     */
+    private final AtomicLong              slotLockFailureAttempts     = new AtomicLong(0);
+    private final AtomicLong              slotLockFirstFailureEpochMs = new AtomicLong(0);
+    /**
+     * How often to escalate slot-lock-contention logs from INFO/DEBUG to WARN. The first
+     * failure always logs INFO; every Nth subsequent failure logs WARN with cumulative
+     * attempt-count + elapsed time; others log at DEBUG.
+     */
+    private static final long             SLOT_LOCK_WARN_EVERY_N_ATTEMPTS = 20;
     private       Counter                 connectAttemptsCounter;
     private       Counter                 connectSuccessCounter;
     private       Counter                 connectFailuresCounter;
@@ -295,6 +320,11 @@ public class WalReplicationTailer implements Lifecycle {
         if (!started.get()) {
             return;
         }
+        // Record that this is an owner-requested stop BEFORE flipping the stopping flag — the
+        // runPollLoop finally block uses the absence of this flag to log unexpected exits.
+        // Order matters: stopRequestedByOwner must be observable to the loop thread before
+        // it reaches the finally clause.
+        stopRequestedByOwner.set(true);
         boolean initiatedStop = stopping.compareAndSet(false, true);
         if (initiatedStop) {
             log.info("[{}] ⏹  Stopping Essentials WalReplicationTailer", slotName);
@@ -374,7 +404,14 @@ public class WalReplicationTailer implements Lifecycle {
                 }
             }
         } finally {
-            transitionToStoppedState("stopped");
+            // Distinguish owner-requested shutdown from unexpected termination. Owner-
+            // requested ("stopped") is the normal path on stop() / application shutdown.
+            // Anything else means the loop exited on its own — error-handler STOP decision,
+            // an unexpected exception leak, or a bug flipping `stopping` out from under us —
+            // and we want that to be loudly visible so operators don't discover a dead
+            // tailer hours later via "why is the monitor not firing but delivery is zero".
+            String exitReason = stopRequestedByOwner.get() ? "stopped" : "unexpected-exit";
+            transitionToStoppedState(exitReason);
         }
     }
 
@@ -382,7 +419,20 @@ public class WalReplicationTailer implements Lifecycle {
         slotLockAcquired.set(false);
         availability.inactive(slotName, reason);
         started.set(false);
-        log.info("[{}] 🛑 Stopped Essentials WalReplicationTailer", slotName);
+        if ("stopped".equals(reason)) {
+            log.info("[{}] 🛑 Stopped Essentials WalReplicationTailer", slotName);
+        } else {
+            // Unexpected path — loud ERROR so this shows up in operator dashboards. The tailer
+            // is now dead and will not auto-restart within the same JVM; application restart
+            // or a lifecycle re-start() is required. This typically indicates either an
+            // error-handler STOP decision for a permanent problem (e.g. logical decoding
+            // disabled, wrong replication-user privileges) or a code bug in the loop.
+            log.error("[{}] ❌ Essentials WalReplicationTailer exited UNEXPECTEDLY (reason='{}'). " +
+                              "The tailer is no longer running and will not self-restart. CDC subscribers " +
+                              "will fall back to polling via the adaptive live source; investigate the " +
+                              "error-handler log lines immediately preceding this message for root cause.",
+                      slotName, reason);
+        }
     }
 
     /**
@@ -418,11 +468,12 @@ public class WalReplicationTailer implements Lifecycle {
             }
 
             if (!tryAcquireSlotLock(replConn, slotName)) {
-                log.info("[{}] CDC slot lock not acquired; another tailer is active for this slot", slotName);
-                availability.inactive(slotName, "slot lock not acquired");
-                sleepQuietly(tailerProperties.getPollInterval());
+                handleSlotLockContention();
                 return;
             }
+            // Acquired — reset contention counters so the next contention episode starts fresh.
+            slotLockFailureAttempts.set(0);
+            slotLockFirstFailureEpochMs.set(0);
 
             // Plugin-specific bootstrap (pgoutput publication auto-manage, etc.) happens in
             // initializePluginAvailability() at tailer start — before the unusableReason()
@@ -441,14 +492,22 @@ public class WalReplicationTailer implements Lifecycle {
 
                 onStreamStarted();
 
-                // Track timing for two independent heartbeats:
+                // Track timing for three independent watchdogs:
                 //  - Connected-heartbeat log every HEARTBEAT_INTERVAL_NANOS so operators can see
                 //    whether the tailer is receiving messages or sitting in null-poll zombie-stream.
                 //  - Idle LSN push every IDLE_LSN_PUSH_INTERVAL_NANOS so Postgres can advance
                 //    confirmed_flush_lsn even when pgoutput has nothing to emit (publication
                 //    quiet), preventing WAL retention from growing on idle slots.
-                long lastHeartbeatNs = System.nanoTime();
-                long lastIdleLsnPushNs = System.nanoTime();
+                //  - Max-idle detection: if no message arrives for maxIdleDuration, throw a
+                //    StaleReplicationStreamException so the outer reconnect loop fires. Protects
+                //    against silently half-open TCP sockets where readPending() returns null
+                //    forever without the connection reporting as dead.
+                long lastHeartbeatNs     = System.nanoTime();
+                long lastIdleLsnPushNs   = System.nanoTime();
+                long lastMessageAtNs     = System.nanoTime();
+                long maxIdleNs           = tailerProperties.getMaxIdleDuration() == null
+                                           ? 0L
+                                           : tailerProperties.getMaxIdleDuration().toNanos();
 
                 while (!Thread.currentThread().isInterrupted() && !stopping.get()) {
                     ByteBuffer msg = stream.readPending();
@@ -463,12 +522,26 @@ public class WalReplicationTailer implements Lifecycle {
                             forceIdleLsnPush(stream);
                             lastIdleLsnPushNs = nowNs;
                         }
+                        // Stale-stream detection. Zero-threshold disables the check; positive
+                        // threshold forces a reconnect when exceeded.
+                        if (maxIdleNs > 0 && nowNs - lastMessageAtNs >= maxIdleNs) {
+                            long idleMs = TimeUnit.NANOSECONDS.toMillis(nowNs - lastMessageAtNs);
+                            long maxMs  = TimeUnit.NANOSECONDS.toMillis(maxIdleNs);
+                            throw new StaleReplicationStreamException(msg(
+                                    "[{}] CDC stream idle for {} ms — exceeded maxIdleDuration ({} ms). " +
+                                            "Treating as half-open TCP / stale stream and forcing a reconnect. " +
+                                            "Tune essentials.eventstore.cdc.wal-replication-tailer.max-idle-duration " +
+                                            "if this fires on genuinely-idle-but-healthy streams.",
+                                    slotName, idleMs, maxMs));
+                        }
                         continue;
                     }
-                    // We got data — a message arrival counts as liveness evidence. Reset both
-                    // timers so we don't spam heartbeat logs on a healthy stream.
-                    lastHeartbeatNs = nowNs;
+                    // We got data — a message arrival counts as liveness evidence. Reset all
+                    // three watchdogs so we don't spam heartbeat logs or force-reconnect on a
+                    // healthy stream.
+                    lastHeartbeatNs   = nowNs;
                     lastIdleLsnPushNs = nowNs;
+                    lastMessageAtNs   = nowNs;
                     if (!handleStreamMessage(stream, msg)) continue;
                 }
             }
@@ -810,6 +883,61 @@ public class WalReplicationTailer implements Lifecycle {
             log.trace("[{}] No WAL message yet (null polls='{}')", slotName, n);
         }
         sleepQuietly(tailerProperties.getPollInterval());
+    }
+
+    /**
+     * Invoked from {@code streamOnce()} when {@code tryAcquireSlotLock} returns false. Handles
+     * the progressive logging + backoff sleep for slot-lock contention so prolonged
+     * stand-offs don't silently drown in INFO-level noise. Logging tiers:
+     *
+     * <ul>
+     *   <li><b>INFO</b> — first occurrence of a contention episode. One-line "another tailer
+     *       holds the slot; will retry" so operators see the situation immediately.</li>
+     *   <li><b>WARN</b> — every {@link #SLOT_LOCK_WARN_EVERY_N_ATTEMPTS} subsequent
+     *       occurrences. Includes cumulative attempt count and elapsed time since the first
+     *       failure so an operator can tell "hours-long stand-off" from "momentary
+     *       contention during a failover".</li>
+     *   <li><b>DEBUG</b> — everything in between. Allows retrieval of full traffic at DEBUG
+     *       without cluttering INFO.</li>
+     * </ul>
+     *
+     * Sleep uses the exponential-with-jitter backoff instead of the fixed
+     * {@code pollInterval} so sustained contention doesn't hammer Postgres with 500ms-
+     * cadence advisory-lock attempts forever. Backoff state is local (not shared with the
+     * connection-failure retry path) — a lock-contention episode is semantically different
+     * from a connection failure and shouldn't share a backoff budget with it.
+     */
+    private void handleSlotLockContention() {
+        long attempts = slotLockFailureAttempts.incrementAndGet();
+        long nowMs    = System.currentTimeMillis();
+        slotLockFirstFailureEpochMs.compareAndSet(0, nowMs);
+        long elapsedMs = nowMs - slotLockFirstFailureEpochMs.get();
+
+        availability.inactive(slotName, "slot lock not acquired");
+
+        if (attempts == 1) {
+            log.info("[{}] CDC slot lock not acquired; another tailer is active for this slot — will retry with backoff", slotName);
+        } else if (attempts % SLOT_LOCK_WARN_EVERY_N_ATTEMPTS == 0) {
+            log.warn("[{}] CDC slot lock still contended — {} consecutive failures over {} ms. " +
+                             "Another tailer instance continues to hold the slot. Check for stuck replica " +
+                             "pods or duplicate deployments of this consumer group.",
+                     slotName, attempts, elapsedMs);
+        } else if (log.isDebugEnabled()) {
+            log.debug("[{}] CDC slot lock not acquired (attempt #{}, elapsed {} ms)", slotName, attempts, elapsedMs);
+        }
+
+        // Use the same exponential-with-jitter backoff as the connection-failure path but
+        // with local state: a lock-contention episode deserves its own ramping sleep rather
+        // than a fixed pollInterval.
+        long sleepMs = Math.min(
+                tailerProperties.getMaxPollBackoffInterval().toMillis(),
+                (long) (tailerProperties.getPollBackoffInterval().toMillis()
+                        * Math.pow(tailerProperties.getBackOffFactor(), Math.min(attempts - 1, 10))));
+        try {
+            sleepBackoffWithJitter(sleepMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private boolean handleStreamMessage(PGReplicationStream stream, ByteBuffer msg) throws Exception {
