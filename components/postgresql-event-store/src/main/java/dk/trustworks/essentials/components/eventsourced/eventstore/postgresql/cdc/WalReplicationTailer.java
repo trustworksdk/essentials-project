@@ -589,22 +589,42 @@ public class WalReplicationTailer implements Lifecycle {
     }
 
     private boolean initializePluginAvailability() {
+        // STEP 1 — logical-decoding check. Read-only query; own UoW just for isolation.
+        var logicalDecodingEnabled = new AtomicBoolean(false);
+        unitOfWorkFactory.usingUnitOfWork(uow ->
+                logicalDecodingEnabled.set(PostgresqlUtil.isLogicalDecodingEnabled(uow.handle())));
+        if (!logicalDecodingEnabled.get()) {
+            log.warn("Logical decoding not enabled (wal_level/max_replication_slots/max_wal_senders). CDC disabled.");
+            pluginAvailable = false;
+            availability.failed(slotName, "logical decoding not enabled");
+            return handleUnavailablePlugin();
+        }
+
+        // STEP 2 — plugin prepare (pgoutput publication auto-manage etc.). In its OWN UoW.
+        //
+        // Why: Postgres rejects pg_create_logical_replication_slot() inside a transaction that
+        // has already performed writes. unusableReason()'s probe-slot check (via
+        // PostgresqlUtil.isOutputPluginUsable) creates+drops a throwaway slot to verify the
+        // plugin is installed. If auto-manage's CREATE/ALTER PUBLICATION ran in the SAME tx,
+        // the probe fails with "cannot create logical replication slot in transaction that has
+        // performed writes" → plugin reported as unusable → tailer refuses to start → CDC
+        // silently falls back to polling. Splitting the two into separate UoWs keeps the
+        // write-side (CREATE PUBLICATION) and the probe-slot check cleanly isolated.
+        try {
+            unitOfWorkFactory.usingUnitOfWork(uow ->
+                    logicalDecodingPlugin.prepare(uow.handle(), eventStreamTableNamesSupplier));
+        } catch (Exception e) {
+            // Plugin's own prepare() is documented as best-effort (publication auto-manage
+            // logs a WARN on privilege failure and continues). Anything reaching here is a
+            // real error, but don't give up yet — the subsequent unusableReason() will reject
+            // if the publication genuinely isn't usable, with a more actionable message.
+            log.warn("[{}] plugin.prepare() failed — will continue and let the usability check decide: {}",
+                     slotName, e.toString());
+        }
+
+        // STEP 3 — usability check (probe slot + publication availability). Fresh UoW so the
+        // probe-slot create/drop sees a no-writes transaction.
         unitOfWorkFactory.usingUnitOfWork(uow -> {
-            boolean logicalOk = PostgresqlUtil.isLogicalDecodingEnabled(uow.handle());
-            if (!logicalOk) {
-                log.warn("Logical decoding not enabled (wal_level/max_replication_slots/max_wal_senders). CDC disabled.");
-                pluginAvailable = false;
-                availability.failed(slotName, "logical decoding not enabled");
-                return;
-            }
-
-            // Run the plugin's prepare() BEFORE checking usability — publication auto-manage
-            // creates the publication here, so unusableReason()'s "publication exists?" check
-            // on the next line sees the result. Without this ordering, a freshly-provisioned
-            // Postgres (no pre-created publication) would fail startup with
-            // "publication 'X' does not exist" even though auto-manage is enabled.
-            logicalDecodingPlugin.prepare(uow.handle(), eventStreamTableNamesSupplier);
-
             var unusableReason = logicalDecodingPlugin.unusableReason(uow.handle());
             pluginAvailable = unusableReason.isEmpty();
             if (!pluginAvailable) {
