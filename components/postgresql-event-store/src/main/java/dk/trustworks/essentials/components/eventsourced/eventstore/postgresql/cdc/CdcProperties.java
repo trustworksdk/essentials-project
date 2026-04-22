@@ -516,6 +516,7 @@ public class CdcProperties {
         private int     protoVersion    = 1;
         private boolean binary          = false;
         private boolean messages        = false;
+        private final PublicationManagement publication = new PublicationManagement();
 
         public String getPublicationName() {
             return publicationName;
@@ -547,6 +548,67 @@ public class CdcProperties {
 
         public void setMessages(boolean messages) {
             this.messages = messages;
+        }
+
+        public PublicationManagement getPublication() {
+            return publication;
+        }
+
+        /**
+         * Controls whether the framework creates and maintains the pgoutput publication on the
+         * user's behalf. Opt-in — most deployments pre-create the publication via migrations or
+         * DBA-driven SQL and should leave this disabled.
+         * <p>
+         * When {@link #autoManage} is {@code true}, at tailer startup the framework will:
+         * <ul>
+         *   <li>Create the configured publication if it doesn't exist (mode decides
+         *       {@code FOR ALL TABLES} vs {@code FOR TABLE <list>}).</li>
+         *   <li>When mode is {@code FOR_TABLE_LIST}, {@code ALTER PUBLICATION ... ADD TABLE}
+         *       for every registered event-stream table not yet in the publication.</li>
+         * </ul>
+         * Any SQL-level failure (most commonly a privilege error — {@code CREATE PUBLICATION
+         * FOR ALL TABLES} requires superuser; {@code FOR TABLE} requires table ownership) is
+         * logged loudly at WARN with the remediation SQL, and the tailer continues without
+         * auto-management. Subsequent startup runs will retry.
+         */
+        public static class PublicationManagement {
+            /** Master switch. Default {@code false}. */
+            private boolean autoManage = false;
+            /**
+             * How the publication should be declared when auto-creation fires.
+             * <p>
+             * {@link Mode#FOR_TABLE_LIST} (default) creates the publication with an explicit
+             * list of event-stream tables; later reruns {@code ALTER ... ADD TABLE} to pick up
+             * newly-registered aggregates. Requires only table ownership — the framework user
+             * usually has this already.
+             * <p>
+             * {@link Mode#FOR_ALL_TABLES} creates it as {@code FOR ALL TABLES}, which
+             * automatically covers any current or future table in the database. Requires
+             * superuser. Simplest and most robust in dev/test environments; operationally too
+             * broad for most production setups.
+             */
+            private Mode mode = Mode.FOR_TABLE_LIST;
+
+            public enum Mode {
+                FOR_TABLE_LIST,
+                FOR_ALL_TABLES
+            }
+
+            public boolean isAutoManage() {
+                return autoManage;
+            }
+
+            public void setAutoManage(boolean autoManage) {
+                this.autoManage = autoManage;
+            }
+
+            public Mode getMode() {
+                return mode;
+            }
+
+            public void setMode(Mode mode) {
+                this.mode = mode;
+            }
         }
     }
 

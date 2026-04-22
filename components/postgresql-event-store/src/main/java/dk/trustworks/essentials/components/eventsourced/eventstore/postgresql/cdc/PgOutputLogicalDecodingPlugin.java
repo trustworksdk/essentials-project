@@ -27,6 +27,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonBlank;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -42,6 +49,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
  */
 public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugin {
     public static final String PLUGIN_NAME = "pgoutput";
+
+    private static final Logger log = LoggerFactory.getLogger(PgOutputLogicalDecodingPlugin.class);
 
     private final PgOutputProperties                properties;
     private final PgOutputToPersistedEventConverter converter;
@@ -104,6 +113,142 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
             converter.extractGap(rowChange).ifPresent(gaps::add);
         }
         return gaps;
+    }
+
+    @Override
+    public void prepare(Handle handle, Supplier<Set<String>> eventStreamTableNames) {
+        var mgmt = properties.getPublication();
+        if (mgmt == null || !mgmt.isAutoManage()) return;
+
+        String publicationName = properties.getPublicationName();
+        try {
+            var pubInfoOpt = PostgresqlUtil.getPublicationInfo(handle, publicationName);
+            if (pubInfoOpt.isEmpty()) {
+                createPublication(handle, publicationName, mgmt.getMode(), eventStreamTableNames.get());
+                return;
+            }
+            var pubInfo = pubInfoOpt.get();
+            if (pubInfo.forAllTables()) {
+                // FOR ALL TABLES is already the broadest possible membership; nothing to add.
+                log.info("publication '{}' is FOR ALL TABLES; auto-manage has nothing to do", publicationName);
+                return;
+            }
+            // Explicit-list publication — add any registered event-stream tables that aren't
+            // already members. Only meaningful when mode is FOR_TABLE_LIST; a FOR_ALL_TABLES
+            // auto-manage config that finds an explicit-list publication doesn't try to
+            // convert it (that would require DROP+CREATE and is destructive).
+            if (mgmt.getMode() != PgOutputProperties.PublicationManagement.Mode.FOR_TABLE_LIST) {
+                log.warn("publication '{}' exists with explicit member list but auto-manage.mode={}; " +
+                                 "will not convert to FOR ALL TABLES (that would require DROP+CREATE). " +
+                                 "Change mode to FOR_TABLE_LIST or drop the publication manually.",
+                         publicationName, mgmt.getMode());
+                return;
+            }
+            Set<String> registered = eventStreamTableNames.get();
+            Set<String> missing = diffMissing(pubInfo.tableMembers(), registered);
+            if (missing.isEmpty()) {
+                log.debug("publication '{}' already covers all {} registered event-stream tables",
+                          publicationName, registered.size());
+                return;
+            }
+            addTablesToPublication(handle, publicationName, missing);
+        } catch (Exception e) {
+            // Swallow — auto-manage is best-effort. Log a loud WARN with the remediation SQL so
+            // an operator can run it manually, and continue the handshake. The tailer will
+            // still connect; if the publication really isn't usable, the existing startup
+            // diagnostic logs will call that out.
+            log.warn("pgoutput publication auto-manage failed for '{}' (likely missing privileges) — " +
+                             "continuing without auto-management. Remediation: run one of " +
+                             "'CREATE PUBLICATION {} FOR ALL TABLES;' (requires superuser) or " +
+                             "'CREATE PUBLICATION {} FOR TABLE <event-stream-tables>;' (requires table ownership). " +
+                             "Error: {}",
+                     publicationName, publicationName, publicationName, e.getMessage());
+        }
+    }
+
+    /**
+     * Create the publication with either a FOR-ALL-TABLES clause (requires superuser) or an
+     * explicit table list (requires only table ownership). Sanity-checks the table names to
+     * prevent SQL injection since they come from user-registered aggregate config.
+     */
+    private void createPublication(Handle handle,
+                                   String publicationName,
+                                   PgOutputProperties.PublicationManagement.Mode mode,
+                                   Set<String> registeredTables) {
+        if (mode == PgOutputProperties.PublicationManagement.Mode.FOR_ALL_TABLES) {
+            handle.execute("CREATE PUBLICATION " + quoteIdentifier(publicationName) + " FOR ALL TABLES");
+            log.info("Created pgoutput publication '{}' FOR ALL TABLES (auto-manage)", publicationName);
+            return;
+        }
+        // FOR_TABLE_LIST
+        if (registeredTables.isEmpty()) {
+            // An empty-list publication isn't valid SQL. Create FOR ALL TABLES as a fallback
+            // (same as the framework's implicit promise of "stream what we know about") —
+            // upgraded log so the operator notices this wasn't the preferred path.
+            log.info("No event-stream tables registered yet; creating publication '{}' FOR ALL TABLES " +
+                             "as fallback (will require superuser). Restart after registering aggregates " +
+                             "to instead get an explicit-list publication.",
+                     publicationName);
+            handle.execute("CREATE PUBLICATION " + quoteIdentifier(publicationName) + " FOR ALL TABLES");
+            return;
+        }
+        String tableListSql = registeredTables.stream()
+                                              .filter(t -> t != null && !t.isBlank())
+                                              .map(PgOutputLogicalDecodingPlugin::quoteTableName)
+                                              .collect(Collectors.joining(", "));
+        handle.execute("CREATE PUBLICATION " + quoteIdentifier(publicationName) + " FOR TABLE " + tableListSql);
+        log.info("Created pgoutput publication '{}' FOR TABLE ({}) (auto-manage)", publicationName, tableListSql);
+    }
+
+    private void addTablesToPublication(Handle handle, String publicationName, Set<String> missingTables) {
+        String tableListSql = missingTables.stream()
+                                           .map(PgOutputLogicalDecodingPlugin::quoteTableName)
+                                           .collect(Collectors.joining(", "));
+        handle.execute("ALTER PUBLICATION " + quoteIdentifier(publicationName) + " ADD TABLE " + tableListSql);
+        log.info("Added {} table(s) to pgoutput publication '{}' (auto-manage): {}",
+                 missingTables.size(), publicationName, missingTables);
+    }
+
+    /**
+     * Compute which registered tables are not covered by the publication's current members.
+     * Matching is loose: a registered bare table name is considered covered by a fully-
+     * qualified {@code schema.table} member with the same table-portion.
+     */
+    private static Set<String> diffMissing(Set<String> publicationMembers, Set<String> registered) {
+        var missing = new TreeSet<String>();
+        for (String table : registered) {
+            if (table == null || table.isBlank()) continue;
+            boolean covered = publicationMembers.stream().anyMatch(member -> {
+                if (member.equalsIgnoreCase(table)) return true;
+                int dot = member.indexOf('.');
+                return dot > 0 && member.substring(dot + 1).equalsIgnoreCase(table);
+            });
+            if (!covered) missing.add(table);
+        }
+        return missing;
+    }
+
+    /**
+     * Defensive quoting for an identifier — validates the name conforms to Postgres's rules
+     * (letters/digits/underscore, start with letter or underscore, length bound) then wraps in
+     * double quotes for the SQL. Rejects anything suspicious; auto-manage must never be a
+     * SQL-injection vector.
+     */
+    private static String quoteIdentifier(String name) {
+        PostgresqlUtil.checkIsValidTableOrColumnName(name);
+        return "\"" + name + "\"";
+    }
+
+    /**
+     * Quote a table reference that may be bare ({@code orders_events}) or schema-qualified
+     * ({@code public.orders_events}). Each component is validated and double-quoted
+     * independently so {@code CREATE PUBLICATION FOR TABLE "public"."orders_events"} is what
+     * reaches the server.
+     */
+    private static String quoteTableName(String tableRef) {
+        int dot = tableRef.indexOf('.');
+        if (dot < 0) return quoteIdentifier(tableRef);
+        return quoteIdentifier(tableRef.substring(0, dot)) + "." + quoteIdentifier(tableRef.substring(dot + 1));
     }
 
     @Override

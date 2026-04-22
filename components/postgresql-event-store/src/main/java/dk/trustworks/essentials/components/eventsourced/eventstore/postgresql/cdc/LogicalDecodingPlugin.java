@@ -23,6 +23,8 @@ import org.jdbi.v3.core.Handle;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * Describes a logical decoding plugin used by the CDC tailer.
@@ -63,6 +65,23 @@ public interface LogicalDecodingPlugin {
      * dispatcher guards against that.
      */
     List<WalGlobalOrdersExtractor.Gap> extractGaps(byte[] payloadBytes);
+
+    /**
+     * Hook called by the tailer once per {@code start()}, after successfully acquiring a
+     * replication connection but before {@code START_REPLICATION} is issued. Plugins that need
+     * to prepare server-side state (e.g. pgoutput auto-managing its publication) implement this
+     * to run their bootstrapping SQL. The {@code eventStreamTableNames} supplier returns the
+     * current set of registered event-stream table names — plugins can use it to decide
+     * publication membership, build ALTER statements, etc.
+     * <p>
+     * Default implementation is a no-op. Implementations should <b>never</b> throw for
+     * recoverable / optional work (e.g. missing privileges for publication auto-manage); log a
+     * loud WARN and return instead, so the tailer falls back to streaming whatever the
+     * server-side state already provides.
+     */
+    default void prepare(Handle handle, Supplier<Set<String>> eventStreamTableNames) {
+        // no-op by default
+    }
 
     /**
      * Whether the tailer should apply the configured {@code WalMessageFilter} to raw payload

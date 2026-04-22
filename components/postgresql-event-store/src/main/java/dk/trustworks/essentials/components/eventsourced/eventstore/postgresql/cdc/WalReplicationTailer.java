@@ -424,6 +424,11 @@ public class WalReplicationTailer implements Lifecycle {
                 return;
             }
 
+            // Plugin-specific bootstrap (e.g. pgoutput publication auto-manage) runs before slot
+            // creation so a freshly-created slot sees the intended publication membership on
+            // its first handshake. No-op for plugins that don't need it (wal2json).
+            preparePlugin();
+
             ensureReplicationSlot();
 
             try (PGReplicationStream stream =
@@ -568,6 +573,17 @@ public class WalReplicationTailer implements Lifecycle {
                  lastAckedLsn.get(),
                  lastMessagePreview.get(),
                  e);
+    }
+
+    /**
+     * Delegate to {@link LogicalDecodingPlugin#prepare(Handle, Supplier)} on a control-plane
+     * connection. Plugins use this hook to bootstrap server-side state they need (pgoutput,
+     * for instance, optionally creates and maintains its publication here). Default plugin
+     * behaviour is a no-op; exceptions inside the plugin should be caught and logged by the
+     * plugin — we don't double-wrap here.
+     */
+    private void preparePlugin() {
+        unitOfWorkFactory.usingUnitOfWork(uow -> logicalDecodingPlugin.prepare(uow.handle(), eventStreamTableNamesSupplier));
     }
 
     private void ensureReplicationSlot() {
