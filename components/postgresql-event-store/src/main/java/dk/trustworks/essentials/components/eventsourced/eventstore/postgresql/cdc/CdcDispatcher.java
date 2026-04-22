@@ -73,6 +73,15 @@ public final class CdcDispatcher implements Lifecycle {
     private final AtomicLong    poisonRowCount = new AtomicLong(0);
     private final AtomicLong    gapExtractionFailureCount = new AtomicLong(0);
     private final AtomicLong    publishedEventCount = new AtomicLong(0);
+    /**
+     * Inbox rows whose {@code plugin.decode()} returned an empty list — i.e. the row was a
+     * legitimate non-data WAL message (BEGIN/COMMIT/RELATION/TRUNCATE), OR an INSERT that the
+     * converter dropped silently. Split further via
+     * {@link LogicalDecodingPlugin#diagnosticSummary()} so the monitor failure log can show
+     * whether the zero-publish is "all B/C traffic" (benign) vs "INSERTs hitting unknown-
+     * aggregate drops" (real bug).
+     */
+    private final AtomicLong    inboxRowsWithEmptyDecodeCount = new AtomicLong(0);
     private final AtomicLong    lastBatchSize = new AtomicLong(0);
     private final AtomicLong    lastTickEpochMs = new AtomicLong(0);
 
@@ -303,6 +312,11 @@ public final class CdcDispatcher implements Lifecycle {
                     if (publishTimer != null) publishTimer.record(System.nanoTime() - publishStartNs, TimeUnit.NANOSECONDS);
                     publishedEventCount.addAndGet(events.size());
                     if (publishedEventsCounter != null) publishedEventsCounter.increment(events.size());
+                } else {
+                    // Either legitimate non-data WAL (B/C/R/TRUNCATE) or an INSERT the converter
+                    // silently dropped. The monitor's failure log correlates this with the
+                    // plugin's diagnostic summary to distinguish benign from buggy.
+                    inboxRowsWithEmptyDecodeCount.incrementAndGet();
                 }
                 acknowledgeDispatchedRow(row.inboxId());
             } catch (Exception e) {
@@ -414,8 +428,10 @@ public final class CdcDispatcher implements Lifecycle {
                 poisonRowCount.get(),
                 gapExtractionFailureCount.get(),
                 publishedEventCount.get(),
+                inboxRowsWithEmptyDecodeCount.get(),
                 lastBatchSize.get(),
-                lastTickEpochMs.get()
+                lastTickEpochMs.get(),
+                logicalDecodingPlugin.diagnosticSummary()
         );
     }
 
@@ -429,8 +445,10 @@ public final class CdcDispatcher implements Lifecycle {
             long poisonRows,
             long gapExtractionFailures,
             long publishedEvents,
+            long inboxRowsWithEmptyDecode,
             long lastBatchSize,
-            long lastTickEpochMs
+            long lastTickEpochMs,
+            LogicalDecodingPlugin.DiagnosticSummary pluginDiagnostics
     ) {
     }
 }

@@ -297,7 +297,9 @@ class CdcEffectivenessMonitorTest {
                 SLOT, true, false,
                 ticks.get(), 0L, 0L, 0L, 0L,
                 publ.get(),
-                0L, 0L));
+                0L, // inboxRowsWithEmptyDecode
+                0L, 0L,
+                LogicalDecodingPlugin.DiagnosticSummary.EMPTY));
 
         var monitor = new CdcEffectivenessMonitor(tailer, dispatcher, availability,
                                                   CdcDeliveryMode.INBOX, config, SLOT);

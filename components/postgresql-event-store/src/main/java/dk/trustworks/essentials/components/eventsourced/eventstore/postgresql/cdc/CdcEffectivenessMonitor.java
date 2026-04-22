@@ -275,15 +275,40 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
                                                s.active(), s.confirmedFlushLsn(), s.lagBytes()))
                                        .orElse("");
 
+        // Append the dispatcher's decode-outcome counters + the plugin's per-row diagnostics.
+        // Together these tell the operator whether the zero-publish is benign (all B/C/R) or
+        // a real bug (INSERTs being dropped because the resolver can't find the aggregate).
+        String decodeSuffix = buildDecodeSuffix();
+
         // Loud — operators should be paged on this. Include the slot and a hint that fallback
         // to polling is automatic so readers don't panic about data loss.
-        log.error("[{}] ⚠️  CDC EFFECTIVENESS CHECK FAILED — {}{} Subscribers will transparently fall back to classic polling; no events are lost, but CDC's live-tail advantage is gone until the underlying cause is fixed.",
-                  slotName, reason, slotStateSuffix);
+        log.error("[{}] ⚠️  CDC EFFECTIVENESS CHECK FAILED — {}{}{} Subscribers will transparently fall back to classic polling; no events are lost, but CDC's live-tail advantage is gone until the underlying cause is fixed.",
+                  slotName, reason, slotStateSuffix, decodeSuffix);
         availability.failed(slotName, reason);
         monitorMarkedFailedAtNanos = System.nanoTime();
         // Intentionally do NOT advance previousSnapshot — on the next tick, if the tailer has
         // already been flipped back to ACTIVE by reconnect, the baseline will reset via the
         // "first tick after ACTIVE" branch.
+    }
+
+    /**
+     * Builds the "[decode: ...]" tail for the failure log. Pulled out so the flipFailed() path
+     * stays readable. Swallows any error — a diagnostic log line should never throw.
+     */
+    private String buildDecodeSuffix() {
+        try {
+            var ds = dispatcher.getStatus();
+            var plugin = ds.pluginDiagnostics();
+            // -1 fields mean "not reported by the plugin" — render them as a dash so the reader
+            // can tell "zero" from "unknown".
+            String insertsSeen    = plugin.insertsSeen() < 0 ? "-" : Long.toString(plugin.insertsSeen());
+            String insertsDropped = plugin.insertsDroppedUnknownAggregate() < 0 ? "-" : Long.toString(plugin.insertsDroppedUnknownAggregate());
+            return String.format(
+                    " [decode: published=%d, emptyDecodes=%d, insertsSeen=%s, insertsDroppedUnknownAggregate=%s]",
+                    ds.publishedEvents(), ds.inboxRowsWithEmptyDecode(), insertsSeen, insertsDropped);
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     // Test hook — so unit tests can assert monitor state without poking private fields.

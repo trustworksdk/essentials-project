@@ -106,6 +106,13 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
         return gaps;
     }
 
+    @Override
+    public DiagnosticSummary diagnosticSummary() {
+        return new DiagnosticSummary(
+                converter.getInsertsSeenCount(),
+                converter.getInsertsWithUnknownAggregateCount());
+    }
+
     private List<PgOutputRowChange> decodeRowChanges(byte[] payloadBytes) {
         if (payloadBytes == null || payloadBytes.length == 0) return List.of();
         var decodedMessage = messageDecoder.decode(payloadBytes);

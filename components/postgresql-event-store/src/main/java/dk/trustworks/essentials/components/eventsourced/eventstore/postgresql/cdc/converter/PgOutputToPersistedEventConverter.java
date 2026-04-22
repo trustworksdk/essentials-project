@@ -39,6 +39,7 @@ import java.time.format.DateTimeFormatterBuilder;
 import java.time.temporal.ChronoField;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Converts canonical {@link PgOutputRowChange} inserts into {@link PersistedEvent}s.
@@ -56,7 +57,20 @@ public final class PgOutputToPersistedEventConverter {
                     .toFormatter();
 
     private final JacksonJSONEventSerializer jacksonJSONSerializer;
-    private final AggregateTypeResolver aggregateTypeResolver;
+    private final AggregateTypeResolver      aggregateTypeResolver;
+
+    /**
+     * Diagnostic counters — answer "why did the dispatcher publish 0 events?" without needing to
+     * enable TRACE logs. {@link #insertsSeenCount} is the total INSERT row-changes we've seen;
+     * {@link #insertsWithUnknownAggregateCount} is how many of those were dropped because the
+     * table wasn't registered with the {@link AggregateTypeResolver}. If the two counters are
+     * equal, the resolver is returning empty for every event table — either the aggregate
+     * wasn't registered with the event store, or there's a table-name mismatch (schema prefix,
+     * case, etc.). Surfaced via {@link #getInsertsSeenCount()} / {@link #getInsertsWithUnknownAggregateCount()}
+     * and included in the {@code CdcEffectivenessMonitor} failure log.
+     */
+    private final AtomicLong insertsSeenCount                 = new AtomicLong(0);
+    private final AtomicLong insertsWithUnknownAggregateCount = new AtomicLong(0);
 
     public PgOutputToPersistedEventConverter(JacksonJSONEventSerializer jacksonJSONSerializer,
                                              AggregateTypeResolver aggregateTypeResolver) {
@@ -72,9 +86,18 @@ public final class PgOutputToPersistedEventConverter {
         if (change == null) return Optional.empty();
         if (!"insert".equalsIgnoreCase(change.kind())) return Optional.empty();
 
+        insertsSeenCount.incrementAndGet();
+
         var aggregateType = aggregateTypeResolver.tryResolveFromEventTable(change.table())
                 .orElse(null);
-        if (aggregateType == null) return Optional.empty();
+        if (aggregateType == null) {
+            long unresolved = insertsWithUnknownAggregateCount.incrementAndGet();
+            if (log.isDebugEnabled()) {
+                log.debug("Dropping INSERT row — no aggregate registered for table '{}' (insertsSeen={}, insertsWithUnknownAggregate={})",
+                          change.table(), insertsSeenCount.get(), unresolved);
+            }
+            return Optional.empty();
+        }
 
         try {
             return Optional.of(toPersistedEvent(aggregateType, change.values()));
@@ -226,5 +249,23 @@ public final class PgOutputToPersistedEventConverter {
         var value = values.get(key);
         if (value == null) throw new IllegalStateException("Missing column '" + key + "'");
         return value;
+    }
+
+    /**
+     * Total number of INSERT row-changes this converter has been asked to convert. Includes
+     * both successfully converted rows and those dropped due to an unknown aggregate. Exposed
+     * for diagnostic logging — see {@link #insertsSeenCount}'s Javadoc.
+     */
+    public long getInsertsSeenCount() {
+        return insertsSeenCount.get();
+    }
+
+    /**
+     * Number of INSERT row-changes dropped because the table wasn't registered with the
+     * {@link AggregateTypeResolver}. When this equals {@link #getInsertsSeenCount()} and both
+     * are non-zero while {@code publishedEvents} is zero, the resolver is the smoking gun.
+     */
+    public long getInsertsWithUnknownAggregateCount() {
+        return insertsWithUnknownAggregateCount.get();
     }
 }

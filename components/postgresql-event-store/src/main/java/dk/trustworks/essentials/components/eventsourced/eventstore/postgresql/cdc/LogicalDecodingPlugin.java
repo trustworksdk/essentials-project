@@ -76,4 +76,29 @@ public interface LogicalDecodingPlugin {
     default boolean preFiltersRawPayloads() {
         return false;
     }
+
+    /**
+     * Plugin-specific diagnostic counters surfaced in {@code CdcDispatcherStatus} so the
+     * effectiveness monitor's failure log can explain why zero events were published. Default
+     * implementation returns {@link DiagnosticSummary#EMPTY} — plugins that silently drop rows
+     * (e.g. pgoutput dropping INSERTs with unknown aggregates) should override to expose those
+     * counts.
+     */
+    default DiagnosticSummary diagnosticSummary() {
+        return DiagnosticSummary.EMPTY;
+    }
+
+    /**
+     * Immutable snapshot of plugin-specific decode outcomes. Fields that don't apply to a given
+     * plugin stay at {@code -1} (unknown) so callers rendering the summary can skip them.
+     * <p>
+     * {@code insertsSeen} is the total number of INSERT row-changes (or equivalent) the plugin
+     * has been asked to convert; {@code insertsDroppedUnknownAggregate} is how many of those
+     * were rejected because the table didn't resolve to a registered aggregate. When the two
+     * are equal and non-zero while the dispatcher's {@code publishedEvents} is zero, the
+     * aggregate-type-resolver is the smoking gun.
+     */
+    record DiagnosticSummary(long insertsSeen, long insertsDroppedUnknownAggregate) {
+        public static final DiagnosticSummary EMPTY = new DiagnosticSummary(-1L, -1L);
+    }
 }
