@@ -929,6 +929,32 @@ public class CdcProperties {
          * recovered. Set higher for jittery environments, lower if you want faster CDC recovery.
          */
         private Duration activeCutbackDebounce = Duration.ofSeconds(60);
+        /**
+         * Opt-in self-healing for "CDC pipeline permanently stuck" cases (e.g. a replication
+         * slot whose pgoutput session has gotten into a bad state and repeatedly refuses to
+         * emit row changes despite the publication being correct). When {@code true}, after the
+         * monitor fires {@link #recreateSlotAfterConsecutiveFires} consecutive times without
+         * the availability state returning to ACTIVE successfully, the monitor will ask the
+         * tailer to drop and re-create the replication slot.
+         * <p>
+         * <b>Not lossy for subscribers:</b> the adaptive live source already falls back to
+         * classic polling when availability flips to FAILED — subscribers continue to receive
+         * events from the database directly throughout the recreate. The fresh slot starts at
+         * {@code pg_current_wal_lsn()}, so historical backlogs accumulated on the old stuck
+         * slot are intentionally discarded; those WAL changes would otherwise keep blocking
+         * live-tail delivery indefinitely.
+         * <p>
+         * Logged loudly whenever it fires. Default {@code false} — destructive operations
+         * should be explicit.
+         */
+        private boolean  autoRecreateSlotOnStuck = false;
+        /**
+         * Number of consecutive monitor fires (ACTIVE → FAILED transitions with no successful
+         * ACTIVE recovery in between) required before {@link #autoRecreateSlotOnStuck} kicks
+         * in. Protects against one-off false-positive fires where the tailer would have
+         * recovered on its own.
+         */
+        private int      recreateSlotAfterConsecutiveFires = 3;
 
         public boolean isEnabled() {
             return enabled;
@@ -976,6 +1002,22 @@ public class CdcProperties {
 
         public void setActiveCutbackDebounce(Duration activeCutbackDebounce) {
             this.activeCutbackDebounce = activeCutbackDebounce;
+        }
+
+        public boolean isAutoRecreateSlotOnStuck() {
+            return autoRecreateSlotOnStuck;
+        }
+
+        public void setAutoRecreateSlotOnStuck(boolean autoRecreateSlotOnStuck) {
+            this.autoRecreateSlotOnStuck = autoRecreateSlotOnStuck;
+        }
+
+        public int getRecreateSlotAfterConsecutiveFires() {
+            return recreateSlotAfterConsecutiveFires;
+        }
+
+        public void setRecreateSlotAfterConsecutiveFires(int recreateSlotAfterConsecutiveFires) {
+            this.recreateSlotAfterConsecutiveFires = recreateSlotAfterConsecutiveFires;
         }
     }
 }

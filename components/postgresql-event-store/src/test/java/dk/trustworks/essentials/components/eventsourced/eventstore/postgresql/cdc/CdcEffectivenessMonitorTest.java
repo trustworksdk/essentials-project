@@ -25,6 +25,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -253,6 +256,94 @@ class CdcEffectivenessMonitorTest {
         fixture.dispatcherPublished.set(0);
         fixture.monitor.evaluate();
         assertThat(fixture.availability.getState()).isEqualTo(CdcAvailability.State.FAILED);
+    }
+
+    @Test
+    void auto_recreate_slot_on_stuck_fires_after_threshold_consecutive_fires() {
+        var config = defaultConfig();
+        config.setAutoRecreateSlotOnStuck(true);
+        config.setRecreateSlotAfterConsecutiveFires(3);
+        var fixture = newFixture(config);
+        fixture.availability.active(SLOT);
+        fixture.monitor.evaluate(); // baseline
+
+        // Real-world cycle: fire, then tailer reconnect re-flips ACTIVE, then monitor's next
+        // tick enters the recovery-reset branch (resets baseline + clears
+        // monitorMarkedFailedAtNanos, counter stays), then the next window fires again.
+        // Threshold=3 means we need THREE fire-recovery cycles to trigger auto-recreate.
+        for (int cycle = 1; cycle <= 3; cycle++) {
+            // Stuck window — fires.
+            sleep(50);
+            fixture.tailerMessagesReceived.addAndGet(5000);
+            fixture.dispatcherPublished.set(0);
+            fixture.dispatcherTicks.addAndGet(1000);
+            fixture.monitor.evaluate();
+            // Tailer reconnect flaps availability back to ACTIVE — monitor's next tick absorbs
+            // this as recovery-reset without clearing the counter.
+            fixture.availability.active(SLOT);
+            fixture.monitor.evaluate();
+        }
+
+        verify(fixture.tailer, times(1)).requestSlotRecreation();
+    }
+
+    @Test
+    void auto_recreate_does_not_fire_when_flag_disabled() {
+        var config = defaultConfig();
+        config.setAutoRecreateSlotOnStuck(false);
+        config.setRecreateSlotAfterConsecutiveFires(1);
+        var fixture = newFixture(config);
+        fixture.availability.active(SLOT);
+        fixture.monitor.evaluate();
+
+        sleep(50);
+        fixture.tailerMessagesReceived.set(5000);
+        fixture.dispatcherPublished.set(0);
+        fixture.dispatcherTicks.set(3000);
+        fixture.monitor.evaluate();
+
+        verify(fixture.tailer, never()).requestSlotRecreation();
+    }
+
+    @Test
+    void auto_recreate_counter_resets_after_healthy_window() {
+        var config = defaultConfig();
+        config.setAutoRecreateSlotOnStuck(true);
+        config.setRecreateSlotAfterConsecutiveFires(3);
+        var fixture = newFixture(config);
+        fixture.availability.active(SLOT);
+        fixture.monitor.evaluate();
+
+        // Fire once.
+        sleep(50);
+        fixture.tailerMessagesReceived.set(5000);
+        fixture.dispatcherPublished.set(0);
+        fixture.monitor.evaluate();
+
+        // Tailer recovers genuinely: availability back to ACTIVE and the next evaluate observes
+        // actual delivery (publishedEvents advances), which is the canonical "healthy window"
+        // signal that clears the consecutive-fire counter.
+        fixture.availability.active(SLOT);
+        sleep(20);
+        fixture.monitor.evaluate(); // resets baseline after the prior fire; monitorMarkedFailedAtNanos cleared
+        sleep(50);
+        fixture.tailerMessagesReceived.addAndGet(500);
+        fixture.dispatcherPublished.addAndGet(500);
+        fixture.dispatcherTicks.addAndGet(1000);
+        fixture.monitor.evaluate(); // healthy window — resets consecutiveFireCount to 0
+
+        // Now fire twice more — should NOT have reached threshold=3 because the healthy window
+        // reset the counter.
+        for (int i = 0; i < 2; i++) {
+            sleep(50);
+            fixture.tailerMessagesReceived.addAndGet(5000);
+            long beforePublished = fixture.dispatcherPublished.get();
+            fixture.dispatcherPublished.set(beforePublished); // no new publications
+            fixture.monitor.evaluate();
+            fixture.availability.active(SLOT);
+        }
+
+        verify(fixture.tailer, never()).requestSlotRecreation();
     }
 
     // -------- fixture plumbing --------

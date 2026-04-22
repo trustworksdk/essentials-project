@@ -576,6 +576,43 @@ public class WalReplicationTailer implements Lifecycle {
     }
 
     /**
+     * Externally-triggered, destructive re-creation of the replication slot. Invoked by the
+     * {@link CdcEffectivenessMonitor} auto-healing path after the monitor has fired N
+     * consecutive times without recovery — the working hypothesis at that point is that the
+     * slot is in a bad state the tailer can't recover from by reconnecting alone.
+     * <p>
+     * Runs a full {@code pg_terminate_backend} + drop + create cycle on a control-plane
+     * connection. The tailer's own streaming connection dies (by design) when the backend is
+     * terminated; the outer reconnect loop then fires, re-handshakes with the freshly-created
+     * slot starting at current WAL head, and resumes normal operation. Subscribers stay
+     * connected throughout — their adaptive live source falls back to polling when
+     * availability flips FAILED and cuts back to CDC once the stream recovers.
+     * <p>
+     * <b>Lossy for the slot:</b> any unacknowledged WAL changes on the discarded slot are
+     * lost. This is acceptable for the calling pattern — if the slot was stuck, those
+     * unacknowledged changes were never going to reach subscribers anyway. Events themselves
+     * remain durable in the event store tables and subscribers will catch them via polling.
+     * Any logic-level error handling (poison rows, gap registration, etc.) is bypassed for
+     * rows on the discarded slot.
+     */
+    public void requestSlotRecreation() {
+        log.warn("[{}] CDC auto-recreate requested — dropping replication slot (terminating any " +
+                         "attached backend) and re-creating fresh at current WAL head. Subscribers " +
+                         "stay served via polling fallback; unacked WAL changes on the discarded slot " +
+                         "are lost (events themselves remain durable in the event store).",
+                 slotName);
+        try {
+            unitOfWorkFactory.usingUnitOfWork(uow -> {
+                boolean dropped = PgReplicationSlots.forceRecreateSlot(
+                        uow.handle().getConnection(), slotName, logicalDecodingPlugin.pluginName());
+                log.info("[{}] CDC auto-recreate complete (previousSlotExisted={})", slotName, dropped);
+            });
+        } catch (Exception e) {
+            log.error("[{}] CDC auto-recreate failed: {}", slotName, e.getMessage(), e);
+        }
+    }
+
+    /**
      * Delegate to {@link LogicalDecodingPlugin#prepare(Handle, Supplier)} on a control-plane
      * connection. Plugins use this hook to bootstrap server-side state they need (pgoutput,
      * for instance, optionally creates and maintains its publication here). Default plugin

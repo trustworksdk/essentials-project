@@ -87,6 +87,13 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
     // Tracks whether we previously observed ACTIVE — so we can detect ACTIVE→!ACTIVE transitions
     // and reset the baseline.
     private boolean prevObservedActive;
+    /**
+     * Count of how many consecutive times the monitor has fired {@link #flipFailed(String)}
+     * without an intervening successful ACTIVE recovery. Reset to 0 in the "recovery reset"
+     * branch of {@link #evaluate()} when availability comes back ACTIVE after a prior fire.
+     * Drives the opt-in {@link CdcHealthCheckProperties#isAutoRecreateSlotOnStuck()} self-heal.
+     */
+    private long consecutiveFireCount;
 
     public CdcEffectivenessMonitor(WalReplicationTailer tailer,
                                    CdcDispatcher dispatcher,
@@ -181,7 +188,11 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
         if (!active) {
             // Not ACTIVE — reset baseline so the next ACTIVE transition starts fresh. If we were
             // previously ACTIVE and this is a transition, clear the "already fired" marker so
-            // auto-recover can re-evaluate once the tailer reconnects.
+            // auto-recover can re-evaluate once the tailer reconnects. Don't reset
+            // consecutiveFireCount here: a flap through INACTIVE (e.g. tailer reconnect) counts
+            // as the same stuck episode as the ACTIVE→FAILED fire that preceded it; only a
+            // successful recovery (handled in the monitorMarkedFailedAtNanos != null branch
+            // below) clears the counter.
             if (prevObservedActive) {
                 log.debug("[{}] CDC effectiveness monitor: availability transitioned away from ACTIVE — resetting baseline", slotName);
             }
@@ -206,7 +217,12 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
         // autoRecover=true and we previously fired: the tailer has flipped availability back to
         // ACTIVE, so the stuck-state is (at least for now) cleared. Reset the baseline from the
         // current snapshot and drop the "already fired" marker; the next full window determines
-        // whether the problem has really gone away.
+        // whether the problem has really gone away. We deliberately do NOT reset
+        // consecutiveFireCount here — a tailer reconnect that just flaps availability back to
+        // ACTIVE without actually unsticking the pipeline would re-fire on the next window, and
+        // auto-recreate-on-stuck needs to see those repeated fires to decide CDC is permanently
+        // broken. Counter is cleared only after a genuinely healthy window (see
+        // "Healthy — advance baseline" branch below).
         if (monitorMarkedFailedAtNanos != null) {
             previousSnapshot = current;
             prevObservedActive = true;
@@ -235,8 +251,12 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
         } else if (dispatcherDeadReason != null) {
             flipFailed(dispatcherDeadReason);
         } else {
-            // Healthy — advance baseline.
+            // Healthy — advance baseline. This is also the canonical "CDC is working" signal,
+            // so clear any accumulated consecutive-fire count here: we've now observed a full
+            // window with delivery actually happening, so any prior stuck episode is genuinely
+            // behind us.
             previousSnapshot = current;
+            consecutiveFireCount = 0;
         }
     }
 
@@ -286,9 +306,43 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
                   slotName, reason, slotStateSuffix, decodeSuffix);
         availability.failed(slotName, reason);
         monitorMarkedFailedAtNanos = System.nanoTime();
+        consecutiveFireCount++;
+        maybeTriggerSlotRecreation();
         // Intentionally do NOT advance previousSnapshot — on the next tick, if the tailer has
         // already been flipped back to ACTIVE by reconnect, the baseline will reset via the
         // "first tick after ACTIVE" branch.
+    }
+
+    /**
+     * If {@link CdcHealthCheckProperties#isAutoRecreateSlotOnStuck()} is on and we've now fired
+     * at least {@link CdcHealthCheckProperties#getRecreateSlotAfterConsecutiveFires()} times
+     * in a row, ask the tailer to drop and re-create the replication slot. Resets the counter
+     * so each successful recreate needs a full fresh sequence of fires before we'd try again.
+     * Subscribers transparently fall back to polling via the adaptive live source — no events
+     * are lost at the subscriber level, though unacked WAL changes on the discarded slot are
+     * discarded (events themselves remain durable in the event store).
+     */
+    private void maybeTriggerSlotRecreation() {
+        if (!config.isAutoRecreateSlotOnStuck()) return;
+        int threshold = Math.max(1, config.getRecreateSlotAfterConsecutiveFires());
+        if (consecutiveFireCount < threshold) return;
+
+        log.warn("[{}] CDC auto-recreate-slot-on-stuck threshold reached (consecutiveFires={}, threshold={}). " +
+                         "Asking tailer to drop + re-create the replication slot. Subscribers stay " +
+                         "served via polling fallback; events already persisted to the event store " +
+                         "are never lost. Unacked WAL changes on the discarded slot (if any) are discarded.",
+                 slotName, consecutiveFireCount, threshold);
+        try {
+            tailer.requestSlotRecreation();
+        } catch (Throwable t) {
+            log.error("[{}] CDC auto-recreate invocation failed — will rely on regular reconnect to recover: {}",
+                      slotName, t.toString(), t);
+        } finally {
+            // Reset the counter regardless of success — if the recreate worked, the next ACTIVE
+            // window starts a fresh count; if it failed, we don't want to thrash on every
+            // subsequent fire.
+            consecutiveFireCount = 0;
+        }
     }
 
     /**
