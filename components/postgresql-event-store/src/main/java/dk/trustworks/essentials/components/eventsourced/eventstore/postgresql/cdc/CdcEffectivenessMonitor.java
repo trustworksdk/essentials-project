@@ -303,9 +303,10 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
             // can tell "zero" from "unknown".
             String insertsSeen    = plugin.insertsSeen() < 0 ? "-" : Long.toString(plugin.insertsSeen());
             String insertsDropped = plugin.insertsDroppedUnknownAggregate() < 0 ? "-" : Long.toString(plugin.insertsDroppedUnknownAggregate());
+            String extra          = plugin.extra() == null || plugin.extra().isBlank() ? "" : ", " + plugin.extra();
             return String.format(
-                    " [decode: published=%d, emptyDecodes=%d, insertsSeen=%s, insertsDroppedUnknownAggregate=%s]",
-                    ds.publishedEvents(), ds.inboxRowsWithEmptyDecode(), insertsSeen, insertsDropped);
+                    " [decode: published=%d, emptyDecodes=%d, insertsSeen=%s, insertsDroppedUnknownAggregate=%s%s]",
+                    ds.publishedEvents(), ds.inboxRowsWithEmptyDecode(), insertsSeen, insertsDropped, extra);
         } catch (Throwable t) {
             return "";
         }

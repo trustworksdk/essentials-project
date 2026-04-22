@@ -108,9 +108,16 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
 
     @Override
     public DiagnosticSummary diagnosticSummary() {
+        // Render a compact histogram of pgoutput message types so failures like "zero INSERTs
+        // arriving" show up plainly. Format: "types={B=123, C=123, R=5, I=0, Y=42}"
+        var counts = rowChangeDecoder.messageTypeCountsSnapshot();
+        String extra = counts.isEmpty()
+                       ? null
+                       : "types=" + counts;
         return new DiagnosticSummary(
                 converter.getInsertsSeenCount(),
-                converter.getInsertsWithUnknownAggregateCount());
+                converter.getInsertsWithUnknownAggregateCount(),
+                extra);
     }
 
     private List<PgOutputRowChange> decodeRowChanges(byte[] payloadBytes) {

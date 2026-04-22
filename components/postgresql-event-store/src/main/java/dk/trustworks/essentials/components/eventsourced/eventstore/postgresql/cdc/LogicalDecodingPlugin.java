@@ -97,8 +97,14 @@ public interface LogicalDecodingPlugin {
      * were rejected because the table didn't resolve to a registered aggregate. When the two
      * are equal and non-zero while the dispatcher's {@code publishedEvents} is zero, the
      * aggregate-type-resolver is the smoking gun.
+     * <p>
+     * {@code extra} is plugin-specific free-form diagnostic text (e.g. pgoutput message-type
+     * histograms) rendered into the monitor failure log as-is. May be {@code null} or blank
+     * when the plugin has nothing to add.
      */
-    record DiagnosticSummary(long insertsSeen, long insertsDroppedUnknownAggregate) {
-        public static final DiagnosticSummary EMPTY = new DiagnosticSummary(-1L, -1L);
+    record DiagnosticSummary(long insertsSeen,
+                             long insertsDroppedUnknownAggregate,
+                             String extra) {
+        public static final DiagnosticSummary EMPTY = new DiagnosticSummary(-1L, -1L, null);
     }
 }
