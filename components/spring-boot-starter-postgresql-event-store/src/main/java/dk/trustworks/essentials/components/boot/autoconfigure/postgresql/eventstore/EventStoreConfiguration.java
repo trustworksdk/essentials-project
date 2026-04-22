@@ -720,7 +720,8 @@ public class EventStoreConfiguration {
                                         availability,
                                         meterRegistry,
                                         errorHandler,
-                                        Optional.of(eventStreamTableNamesSupplier));
+                                        Optional.of(eventStreamTableNamesSupplier),
+                                        properties.getCdc().getSlot().isRecreateOnStart());
     }
 
     @Bean

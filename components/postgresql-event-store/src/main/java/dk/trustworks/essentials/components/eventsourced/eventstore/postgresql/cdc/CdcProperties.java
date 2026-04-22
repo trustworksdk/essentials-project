@@ -724,6 +724,21 @@ public class CdcProperties {
          */
         private PgSlotMode mode = PgSlotMode.CREATE_IF_MISSING;
         private String     name;
+        /**
+         * Opt-in flag (default {@code false}). When {@code true}, the tailer drops the
+         * replication slot at startup — terminating any attached backend if necessary — then
+         * re-creates it fresh. The new slot starts at the current {@code pg_current_wal_lsn()},
+         * so there is no historical WAL backlog for the tailer to replay.
+         * <p>
+         * <b>Destructive</b>: any unacknowledged WAL changes on the existing slot are lost.
+         * Appropriate for dev/test/perf-lab scenarios where each JVM start should get a clean
+         * slate. Never enable this in production — it silently drops any in-flight changes
+         * that subscribers on a previous JVM hadn't finished consuming.
+         * <p>
+         * Prefer this over {@link PgSlotMode#RECREATE} when you want the framework to handle
+         * the active-slot case automatically (RECREATE refuses to drop an active slot).
+         */
+        private boolean    recreateOnStart = false;
 
         /**
          * Returns the logical WAL consumer group associated with the configuration.
@@ -786,6 +801,14 @@ public class CdcProperties {
          */
         public void setMode(PgSlotMode mode) {
             this.mode = mode;
+        }
+
+        public boolean isRecreateOnStart() {
+            return recreateOnStart;
+        }
+
+        public void setRecreateOnStart(boolean recreateOnStart) {
+            this.recreateOnStart = recreateOnStart;
         }
 
     }

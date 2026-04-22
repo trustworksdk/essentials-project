@@ -82,6 +82,16 @@ public class WalReplicationTailer implements Lifecycle {
      * (startup race).
      */
     private final Supplier<Set<String>>                                         eventStreamTableNamesSupplier;
+    /**
+     * Opt-in flag that, when {@code true}, causes the tailer to force-drop-and-recreate the
+     * replication slot at first connection (terminating any attached backend). The new slot
+     * starts at the current {@code pg_current_wal_lsn()} with no historical backlog. Applied
+     * only on the very first {@code streamOnce()} invocation after {@code start()} — subsequent
+     * reconnects reuse the freshly-created slot. Destructive; see
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.CdcSlotProperties#isRecreateOnStart()}.
+     */
+    private final boolean                                                       recreateSlotOnStart;
+    private final AtomicBoolean                                                 firstStreamAttempt = new AtomicBoolean(true);
 
     /**
      * How often the tailer emits a "CDC heartbeat" INFO log from inside the streamOnce inner
@@ -169,14 +179,16 @@ public class WalReplicationTailer implements Lifecycle {
         this(replicationDataSource, jdbi, unitOfWorkFactory, slotName, inboxRepository,
              tailerProperties, pgSlotMode, cdcMode, deliveryMode, logicalDecodingPlugin,
              directOnEvents, walMessageFilter, availability, meterRegistry, errorHandler,
-             Optional.empty());
+             Optional.empty(), false);
     }
 
     /**
      * Extended constructor that also accepts an {@code eventStreamTableNamesSupplier} used by
      * the {@code onStreamStarted} diagnostic logging to verify publication membership against
-     * the configured event-stream tables. Exists as a separate overload to preserve
-     * backward-compat with existing test wiring; production auto-config should call this form.
+     * the configured event-stream tables, and a {@code recreateSlotOnStart} flag that force-
+     * drops-and-recreates the replication slot at first connection. Exists as a separate
+     * overload to preserve backward-compat with existing test wiring; production auto-config
+     * should call this form.
      */
     public WalReplicationTailer(
             DataSource replicationDataSource,
@@ -194,7 +206,8 @@ public class WalReplicationTailer implements Lifecycle {
             CdcAvailability availability,
             Optional<MeterRegistry> meterRegistry,
             Optional<WalReplicationTailerErrorHandler> errorHandler,
-            Optional<Supplier<Set<String>>> eventStreamTableNamesSupplier) {
+            Optional<Supplier<Set<String>>> eventStreamTableNamesSupplier,
+            boolean recreateSlotOnStart) {
         this.replicationDataSource = requireNonNull(replicationDataSource, "replicationDataSource cannot be null");
         requireNonNull(jdbi, "jdbi cannot be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
@@ -208,6 +221,7 @@ public class WalReplicationTailer implements Lifecycle {
         this.logicalDecodingPlugin = requireNonNull(logicalDecodingPlugin, "logicalDecodingPlugin cannot be null");
         this.directOnEvents = directOnEvents.orElse(null);
         this.eventStreamTableNamesSupplier = eventStreamTableNamesSupplier.orElse(Set::of);
+        this.recreateSlotOnStart = recreateSlotOnStart;
         this.availability = requireNonNull(availability, "availability cannot be null");
         if (this.deliveryMode == CdcDeliveryMode.DIRECT) {
             requireNonNull(this.directOnEvents, "directOnEvents cannot be null in DIRECT delivery mode");
@@ -557,8 +571,24 @@ public class WalReplicationTailer implements Lifecycle {
     }
 
     private void ensureReplicationSlot() {
-        unitOfWorkFactory.usingUnitOfWork(uow ->
-                                                  PgReplicationSlots.ensureSlot(uow.handle().getConnection(), slotName, pgSlotMode, logicalDecodingPlugin.pluginName()));
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            if (recreateSlotOnStart && firstStreamAttempt.compareAndSet(true, false)) {
+                // Opt-in destructive path — force-drop-and-recreate the slot on first connection
+                // after start(). Terminates any attached backend (e.g. stray JVM from a prior
+                // test run) and drops any unacknowledged WAL changes. Subsequent reconnects
+                // reuse the freshly-created slot via the normal ensureSlot path below.
+                log.warn("[{}] recreate-on-start=true — dropping any existing replication slot " +
+                                 "(with backend termination if active) and re-creating it fresh at current WAL head. " +
+                                 "Unacked changes on the previous slot are DISCARDED. " +
+                                 "Flip essentials.eventstore.cdc.slot.recreate-on-start=false in non-dev environments.",
+                         slotName);
+                boolean dropped = PgReplicationSlots.forceRecreateSlot(
+                        uow.handle().getConnection(), slotName, logicalDecodingPlugin.pluginName());
+                log.info("[{}] recreate-on-start complete (previousSlotExisted={})", slotName, dropped);
+                return;
+            }
+            PgReplicationSlots.ensureSlot(uow.handle().getConnection(), slotName, pgSlotMode, logicalDecodingPlugin.pluginName());
+        });
     }
 
     private ChainedLogicalStreamBuilder logicalStreamBuilder(PGConnection pgConn) {

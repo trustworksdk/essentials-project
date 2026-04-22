@@ -134,6 +134,33 @@ public final class PgReplicationSlots {
         }
     }
 
+    /**
+     * Force-recreate the slot by terminating any attached backend first, then dropping and
+     * re-creating it. Unlike {@link PgSlotMode#RECREATE} (which refuses active slots), this
+     * helper is destructive: it tears down whatever session owned the slot and discards any
+     * unacknowledged WAL changes. Intended for dev/test/perf-lab scenarios — never production.
+     * Returns {@code true} when a pre-existing slot was dropped, {@code false} when no prior
+     * slot existed.
+     */
+    public static boolean forceRecreateSlot(Connection c, String slotName, String plugin) throws SQLException {
+        SlotInfo existing = findSlot(c, slotName);
+        boolean dropped = false;
+        if (existing != null) {
+            if (existing.isActive()) {
+                try (var term = c.prepareStatement(
+                        "select pg_terminate_backend(active_pid) " +
+                                "from pg_replication_slots where slot_name = ? and active_pid is not null")) {
+                    term.setString(1, slotName);
+                    term.execute();
+                }
+            }
+            dropSlot(c, slotName);
+            dropped = true;
+        }
+        createLogicalSlot(c, slotName, plugin);
+        return dropped;
+    }
+
     public static void ensureSlot(Connection c, String slotName, PgSlotMode mode, String expectedPlugin) throws SQLException {
         requireNonNull(c, "connection cannot be null");
         requireNonNull(slotName, "slotName cannot be null");
