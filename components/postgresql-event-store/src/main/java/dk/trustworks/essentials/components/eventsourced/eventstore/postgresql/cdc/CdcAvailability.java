@@ -17,6 +17,8 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import io.micrometer.core.instrument.*;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 import java.util.Locale;
 import java.util.Optional;
@@ -68,6 +70,15 @@ public final class CdcAvailability {
     private final Counter startFailuresCounter;
     private final MeterRegistry meterRegistry;
 
+    /**
+     * Multicast sink that replays the latest state to new subscribers and emits on every
+     * transition. Used by {@link CdcEventStore} to switch the live source between the CDC bus and
+     * classic polling when availability changes mid-subscription. Transitions are the contract —
+     * only distinct state changes are published (see {@link #set}).
+     */
+    private final Sinks.Many<State> stateSink = Sinks.many().replay().latest();
+    private final Flux<State>       stateChangesFlux;
+
     public CdcAvailability() {
         this(Optional.empty());
     }
@@ -83,6 +94,11 @@ public final class CdcAvailability {
             fallbackCounter = null;
             startFailuresCounter = null;
         }
+        // Seed the replay sink with the initial state so subscribers that connect before any
+        // transition (which is the common case) still get a starting value to drive source
+        // selection.
+        this.stateSink.tryEmitNext(State.INACTIVE);
+        this.stateChangesFlux = this.stateSink.asFlux();
     }
 
     public void active(String slot) {
@@ -116,6 +132,17 @@ public final class CdcAvailability {
         return fallbackCount.get();
     }
 
+    /**
+     * A {@link Flux} that replays the current state on subscription and emits on every subsequent
+     * transition. Consumers (currently {@link CdcEventStore}) use it to switch live-subscription
+     * sources when CDC becomes unavailable mid-stream without needing to re-subscribe from the
+     * top. Multi-subscriber safe — each subscriber receives the current state and all future
+     * transitions, regardless of when it subscribes.
+     */
+    public Flux<State> stateChanges() {
+        return stateChangesFlux;
+    }
+
     public Snapshot snapshot() {
         return new Snapshot(
                 state.get(),
@@ -127,10 +154,17 @@ public final class CdcAvailability {
     }
 
     private void set(State newState, String slot, String reason) {
-        this.state.set(newState);
+        State previous = this.state.getAndSet(newState);
         this.slotName.set(slot);
         this.reason.set(reason);
         this.lastChangedEpochMs.set(System.currentTimeMillis());
+        // Only publish on actual transitions. Repeated calls with the same state (e.g. tailer
+        // heartbeat marking availability ACTIVE each loop) would otherwise flood subscribers with
+        // redundant events; distinctUntilChanged downstream would still filter, but emitting less
+        // keeps the replay sink's cached value meaningful and reduces wake-ups.
+        if (previous != newState) {
+            this.stateSink.tryEmitNext(newState);
+        }
     }
 
     private void incrementStartFailureReason(String reason) {

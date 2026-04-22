@@ -830,6 +830,20 @@ public class CdcProperties {
          * environments that want a sticky fail-closed signal and manual intervention.
          */
         private boolean autoRecover = true;
+        /**
+         * How long an in-flight CDC subscription waits with availability held steadily ACTIVE
+         * before cutting back from polling to the CDC live-event bus. Applied only to CDC
+         * cutbacks — transitions from ACTIVE to FAILED / INACTIVE switch to polling immediately
+         * so subscribers don't stall on a dead live stream. The debounce prevents thrashing when
+         * the underlying CDC pipeline oscillates (e.g. pgoutput stalls causing repeat
+         * availability flips); each short ACTIVE blip would otherwise tear down polling and
+         * resubscribe to a bus that's about to stop emitting again.
+         * <p>
+         * Default = {@link #interval}, matching the natural rhythm of the effectiveness monitor:
+         * we wait one full monitor window of steady ACTIVE before trusting that CDC has
+         * recovered. Set higher for jittery environments, lower if you want faster CDC recovery.
+         */
+        private Duration activeCutbackDebounce = Duration.ofSeconds(60);
 
         public boolean isEnabled() {
             return enabled;
@@ -869,6 +883,14 @@ public class CdcProperties {
 
         public void setAutoRecover(boolean autoRecover) {
             this.autoRecover = autoRecover;
+        }
+
+        public Duration getActiveCutbackDebounce() {
+            return activeCutbackDebounce;
+        }
+
+        public void setActiveCutbackDebounce(Duration activeCutbackDebounce) {
+            this.activeCutbackDebounce = activeCutbackDebounce;
         }
     }
 }

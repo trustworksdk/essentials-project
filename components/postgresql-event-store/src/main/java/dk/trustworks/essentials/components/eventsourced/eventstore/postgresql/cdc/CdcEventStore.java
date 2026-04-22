@@ -89,8 +89,22 @@ public class CdcEventStore implements EventStore {
     private final CdcProperties.CdcEventBusProperties                         eventBusProperties;
     private final int                                                         backfillBatchSize;
     private final CdcAvailability                                             availability;
+    /**
+     * How long availability must remain ACTIVE before an in-flight live subscription currently
+     * consuming from polling switches back to the CDC bus. See
+     * {@link CdcProperties.CdcHealthCheckProperties#getActiveCutbackDebounce()} for the full
+     * rationale. FAILED/INACTIVE transitions switch to polling immediately; only ACTIVE cutbacks
+     * are debounced.
+     */
+    private final Duration                                                    activeCutbackDebounce;
     private final MeterRegistry                                               meterRegistry;
     private final Counter                                                     fallbackPollCounter;
+    /**
+     * Counts every time an in-flight adaptive-live subscription switches its source between the
+     * CDC bus and classic polling. High values during normal operation indicate availability
+     * thrashing and likely mean the underlying CDC pipeline is unstable.
+     */
+    private final Counter                                                     liveSourceSwitchCounter;
     private final DistributionSummary                                         backfillLoadedSummary;
     private final DistributionSummary                                         backfillQueryRangeSummary;
     private final Counter                                                     liveEventsCounter;
@@ -134,9 +148,14 @@ public class CdcEventStore implements EventStore {
         this.availability = requireNonNull(availability, "availability must not be null");
         requireTrue(cdcProperties.getCdcEventStoreBackfillBatchSize() >= 1, "backfillBatchSize must be >= 1");
         this.backfillBatchSize = cdcProperties.getCdcEventStoreBackfillBatchSize();
+        this.activeCutbackDebounce = requireNonNull(cdcProperties.getHealthCheck(), "cdcProperties.healthCheck must not be null")
+                .getActiveCutbackDebounce();
+        requireNonNull(this.activeCutbackDebounce, "cdcProperties.healthCheck.activeCutbackDebounce must not be null");
+        requireTrue(!this.activeCutbackDebounce.isNegative(), "cdcProperties.healthCheck.activeCutbackDebounce must not be negative");
         this.meterRegistry = meterRegistry.orElse(null);
         if (this.meterRegistry != null) {
             fallbackPollCounter = Counter.builder("essentials.cdc.eventstore.fallback.poll.count").register(this.meterRegistry);
+            liveSourceSwitchCounter = Counter.builder("essentials.cdc.eventstore.live_source.switch.count").register(this.meterRegistry);
             backfillLoadedSummary = DistributionSummary.builder("essentials.cdc.eventstore.backfill.loaded").register(this.meterRegistry);
             backfillQueryRangeSummary = DistributionSummary.builder("essentials.cdc.eventstore.backfill.query_range").register(this.meterRegistry);
             liveEventsCounter = Counter.builder("essentials.cdc.eventstore.live.events").register(this.meterRegistry);
@@ -149,6 +168,7 @@ public class CdcEventStore implements EventStore {
                  .register(this.meterRegistry);
         } else {
             fallbackPollCounter = null;
+            liveSourceSwitchCounter = null;
             backfillLoadedSummary = null;
             backfillQueryRangeSummary = null;
             liveEventsCounter = null;
@@ -199,22 +219,112 @@ public class CdcEventStore implements EventStore {
                 gapHandler
                                                     );
 
-        Flux<PersistedEvent> live = cdcBus.fluxForAggregate(aggregateType)
-                                          .filter(e -> e.globalEventOrder().longValue() > head.longValue())
-                                          .doOnNext(e -> {
-                                              if (liveEventsCounter != null) liveEventsCounter.increment();
-                                          })
-                                          .filter(e -> onlyIncludeEventIfItBelongsToTenant
-                                                  .map(t -> e.tenant()
-                                                             .map(tt -> tt.toString().equals(t.toString()))
-                                                             .orElse(false))
-                                                  .orElse(true));
+        Flux<PersistedEvent> live = buildAdaptiveLiveSource(
+                aggregateType,
+                head.longValue(),
+                pageSize,
+                onlyIncludeEventIfItBelongsToTenant,
+                pollingInterval,
+                subscriptionId,
+                eventStorePollingOptimizerFactory);
 
         return new BackfillThenLiveOrdered(backfillToLiveTransitionTimer, eventBusProperties, backfillLiveBufferSize).ordered(
                 backfill,
                 live,
                 head.longValue()
                                                     );
+    }
+
+    /**
+     * Build the live-event source for an in-flight CDC subscription. The source transparently
+     * switches between the CDC bus (while {@link CdcAvailability} is {@link CdcAvailability.State#ACTIVE
+     * ACTIVE}) and classic polling (while availability is not ACTIVE), so that subscribers
+     * established during healthy CDC continue to receive events even when CDC dies mid-stream.
+     * <p>
+     * Ordering + dedup: an {@link AtomicLong} tracks the highest {@code globalEventOrder} the
+     * subscriber has received. On every source cut-over polling resumes from {@code lastSeen+1};
+     * each downstream event is then gated by a {@code > lastSeen} filter so any overlap between
+     * the outgoing source and the incoming one is dropped rather than double-delivered. The CDC
+     * bus is inherently monotonic per aggregate (events published in order), and classic polling
+     * queries {@code global_event_order ≥ resume} — both sources preserve order, and the filter
+     * guarantees no regressions at the boundary.
+     * <p>
+     * Cutback debounce: FAILED/INACTIVE transitions cut to polling <b>immediately</b> so
+     * subscribers don't stall. Transitions back to ACTIVE are held for
+     * {@link #activeCutbackDebounce} with availability staying ACTIVE throughout; if availability
+     * flips non-ACTIVE again during the debounce window the pending cutback is cancelled. This
+     * prevents thrash when the underlying CDC pipeline oscillates (e.g. pgoutput intermittently
+     * stalling).
+     * <p>
+     * The {@code onlyIncludeEventIfItBelongsToTenant} and other downstream filters are applied
+     * uniformly to whichever source is currently active — callers see one consistent stream.
+     */
+    private Flux<PersistedEvent> buildAdaptiveLiveSource(
+            AggregateType aggregateType,
+            long headInclusive,
+            int pageSize,
+            Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,
+            Optional<Duration> pollingInterval,
+            Optional<SubscriberId> subscriptionId,
+            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory
+                                                        ) {
+        AtomicLong lastSeen = new AtomicLong(headInclusive);
+
+        // Raw state stream replays the current availability on subscribe and emits every
+        // subsequent transition. distinctUntilChanged strips duplicates coming from the replay
+        // sink or back-to-back redundant emissions.
+        Flux<CdcAvailability.State> rawStates = availability.stateChanges().distinctUntilChanged();
+
+        // Debounce applies only to ACTIVE cutbacks. Non-ACTIVE emissions pass straight through so
+        // we never linger on a dead CDC bus when availability has already flipped. switchMap
+        // cancels any pending ACTIVE-debounce mono if a new state arrives, so a quick
+        // ACTIVE → FAILED flip during the debounce window never completes the cutback.
+        Flux<CdcAvailability.State> gatedStates = rawStates
+                .switchMap(state -> state == CdcAvailability.State.ACTIVE
+                        ? Mono.just(state).delayElement(activeCutbackDebounce)
+                        : Mono.just(state))
+                .distinctUntilChanged();
+
+        return gatedStates
+                .switchMap(state -> {
+                    if (liveSourceSwitchCounter != null) liveSourceSwitchCounter.increment();
+                    long resumeFrom = lastSeen.get() + 1;
+                    if (state == CdcAvailability.State.ACTIVE) {
+                        log.debug("[{}] Adaptive live source switching to CDC bus (resumeFrom={})",
+                                  aggregateType, resumeFrom);
+                        return cdcBus.fluxForAggregate(aggregateType)
+                                     .doOnNext(e -> {
+                                         if (liveEventsCounter != null) liveEventsCounter.increment();
+                                     });
+                    }
+                    // Polling fallback — classic event-store pollEvents. We do not call
+                    // availability.fallbackUsed() here because that counter is semantically
+                    // "new subscription established while CDC unavailable"; mid-stream cut-overs
+                    // are a different signal tracked via liveSourceSwitchCounter.
+                    log.debug("[{}] Adaptive live source switching to polling (resumeFrom={}, state={})",
+                              aggregateType, resumeFrom, state);
+                    return eventStore.pollEvents(aggregateType,
+                                                 resumeFrom,
+                                                 Optional.of(pageSize),
+                                                 pollingInterval,
+                                                 onlyIncludeEventIfItBelongsToTenant,
+                                                 subscriptionId,
+                                                 eventStorePollingOptimizerFactory);
+                })
+                // Drop anything at or below the high-water mark. Protects against:
+                //  - events already delivered via the previous source showing up in the new one
+                //    (CDC bus may still have buffered events after a cut-over)
+                //  - polling returning events ≤ headInclusive on the very first query
+                .filter(e -> e.globalEventOrder().longValue() > lastSeen.get())
+                .doOnNext(e -> {
+                    long go = e.globalEventOrder().longValue();
+                    lastSeen.updateAndGet(cur -> Math.max(cur, go));
+                })
+                .filter(e -> onlyIncludeEventIfItBelongsToTenant
+                        .map(t -> e.tenant()
+                                   .map(tt -> tt.toString().equals(t.toString()))
+                                   .orElse(false))
+                        .orElse(true));
     }
 
     private Flux<PersistedEvent> backfillFlux(
