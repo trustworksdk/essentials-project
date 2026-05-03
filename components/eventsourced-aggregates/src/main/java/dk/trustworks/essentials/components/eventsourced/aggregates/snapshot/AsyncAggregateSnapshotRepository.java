@@ -58,8 +58,8 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     private final AggregateSnapshotMeasurementSupport               measurementSupport;
     private final Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory;
 
-    private final AtomicBoolean started = new AtomicBoolean();
-    private volatile Executor   executor;
+    private final    AtomicBoolean started = new AtomicBoolean();
+    private volatile Executor      executor;
 
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                             JSONEventSerializer jsonSerializer,
