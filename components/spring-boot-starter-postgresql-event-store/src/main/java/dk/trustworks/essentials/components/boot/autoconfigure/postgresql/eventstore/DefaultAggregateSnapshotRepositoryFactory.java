@@ -85,7 +85,8 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
                                                                          jsonSerializer,
                                                                          triggerStrategy,
                                                                          deletionStrategy,
-                                                                         AsyncAggregateSnapshotSettings.asynchronous(),
+                                                                         new AsyncAggregateSnapshotSettings(SnapshotExecutionMode.ASYNC_IN_MEMORY,
+                                                                                                            properties.getSnapshots().getWorkerThreads()),
                                                                          unitOfWorkFactory);
             case ASYNC_DURABLE -> new DurableAsyncAggregateSnapshotRepository(eventStore,
                                                                              snapshotStore,

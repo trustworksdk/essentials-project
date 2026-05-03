@@ -2,7 +2,6 @@
  * Copyright 2021-2026 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
@@ -21,28 +20,39 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.awaitility.Awaitility;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.Executor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
 class AsyncAggregateSnapshotRepositoryTest {
+
+    private AsyncAggregateSnapshotRepository repository;
+
+    @AfterEach
+    void cleanup() {
+        if (repository != null && repository.isStarted()) {
+            repository.stop();
+        }
+    }
+
     @Test
-    void aggregate_updated_schedules_async_snapshot_persistence() {
+    void async_dispatch_eventually_invokes_save_snapshot() {
         var snapshotStore = mock(AggregateSnapshotStore.class);
         var jsonSerializer = mock(JSONEventSerializer.class);
         var strategy = mock(AddNewAggregateSnapshotStrategy.class);
         var deletionStrategy = mock(AggregateSnapshotDeletionStrategy.class);
-        var executor = new CapturingExecutor();
-        var repository = new AsyncAggregateSnapshotRepository(snapshotStore,
-                                                              jsonSerializer,
-                                                              strategy,
-                                                              deletionStrategy,
-                                                              AsyncAggregateSnapshotSettings.asynchronous(),
-                                                              executor);
+        repository = new AsyncAggregateSnapshotRepository(snapshotStore,
+                                                          jsonSerializer,
+                                                          strategy,
+                                                          deletionStrategy,
+                                                          new AsyncAggregateSnapshotSettings(SnapshotExecutionMode.ASYNC_IN_MEMORY, 1));
+        repository.start();
 
         var aggregate = new TestAggregate();
         var aggregateType = AggregateType.of("Orders");
@@ -61,15 +71,10 @@ class AsyncAggregateSnapshotRepositoryTest {
 
         repository.aggregateUpdated(aggregate, persistedEvents);
 
-        verify(snapshotStore, never()).saveSnapshot(any(), any(), any(), any(), any());
-        executor.runSingleTask();
-
-        verify(snapshotStore).deleteSnapshotsOlderThan(aggregateType, aggregateId, TestAggregate.class, eventOrder);
-        verify(snapshotStore).saveSnapshot(aggregateType,
-                                           aggregateId,
-                                           TestAggregate.class,
-                                           eventOrder,
-                                           "{\"type\":\"snapshot\"}");
+        Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            verify(snapshotStore).deleteSnapshotsOlderThan(aggregateType, aggregateId, TestAggregate.class, eventOrder);
+            verify(snapshotStore).saveSnapshot(aggregateType, aggregateId, TestAggregate.class, eventOrder, "{\"type\":\"snapshot\"}");
+        });
     }
 
     @SuppressWarnings("unchecked")
@@ -79,16 +84,15 @@ class AsyncAggregateSnapshotRepositoryTest {
         var jsonSerializer = mock(JSONEventSerializer.class);
         var strategy = mock(AddNewAggregateSnapshotStrategy.class);
         var deletionStrategy = mock(AggregateSnapshotDeletionStrategy.class);
-        var executor = new CapturingExecutor();
         var unitOfWorkFactory = mock(UnitOfWorkFactory.class);
         var unitOfWork = mock(UnitOfWork.class);
-        var repository = new AsyncAggregateSnapshotRepository(snapshotStore,
-                                                              jsonSerializer,
-                                                              strategy,
-                                                              deletionStrategy,
-                                                              AsyncAggregateSnapshotSettings.asynchronous(),
-                                                              executor,
-                                                              unitOfWorkFactory);
+        repository = new AsyncAggregateSnapshotRepository(snapshotStore,
+                                                          jsonSerializer,
+                                                          strategy,
+                                                          deletionStrategy,
+                                                          AsyncAggregateSnapshotSettings.asynchronous(),
+                                                          unitOfWorkFactory);
+        repository.start();
 
         var aggregate = new TestAggregate();
         var aggregateType = AggregateType.of("Orders");
@@ -117,17 +121,14 @@ class AsyncAggregateSnapshotRepositoryTest {
         repository.aggregateUpdated(aggregate, persistedEvents);
 
         assertThat(registeredTasks).hasSize(1);
-        executor.assertNoTasks();
+        verify(snapshotStore, never()).saveSnapshot(any(), any(), any(), any(), any());
 
         registeredCallbacks.get(0).afterCommit(unitOfWork, registeredTasks);
 
-        executor.runSingleTask();
-        verify(snapshotStore).deleteSnapshotsOlderThan(aggregateType, aggregateId, TestAggregate.class, eventOrder);
-        verify(snapshotStore).saveSnapshot(aggregateType,
-                                           aggregateId,
-                                           TestAggregate.class,
-                                           eventOrder,
-                                           "{\"type\":\"snapshot\"}");
+        Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            verify(snapshotStore).deleteSnapshotsOlderThan(aggregateType, aggregateId, TestAggregate.class, eventOrder);
+            verify(snapshotStore).saveSnapshot(aggregateType, aggregateId, TestAggregate.class, eventOrder, "{\"type\":\"snapshot\"}");
+        });
     }
 
     @Test
@@ -136,13 +137,12 @@ class AsyncAggregateSnapshotRepositoryTest {
         var jsonSerializer = mock(JSONEventSerializer.class);
         var strategy = mock(AddNewAggregateSnapshotStrategy.class);
         var deletionStrategy = mock(AggregateSnapshotDeletionStrategy.class);
-        var executor = new CapturingExecutor();
-        var repository = new AsyncAggregateSnapshotRepository(snapshotStore,
-                                                              jsonSerializer,
-                                                              strategy,
-                                                              deletionStrategy,
-                                                              AsyncAggregateSnapshotSettings.asynchronous(),
-                                                              executor);
+        repository = new AsyncAggregateSnapshotRepository(snapshotStore,
+                                                          jsonSerializer,
+                                                          strategy,
+                                                          deletionStrategy,
+                                                          AsyncAggregateSnapshotSettings.synchronous());
+        repository.start();
 
         var aggregate = new TestAggregate();
         var aggregateType = AggregateType.of("Orders");
@@ -160,7 +160,6 @@ class AsyncAggregateSnapshotRepositoryTest {
 
         verifyNoMoreInteractions(jsonSerializer);
         verify(snapshotStore, never()).saveSnapshot(any(), any(), any(), any(), any());
-        executor.assertNoTasks();
     }
 
     @Test
@@ -169,11 +168,12 @@ class AsyncAggregateSnapshotRepositoryTest {
         var jsonSerializer = mock(JSONEventSerializer.class);
         var strategy = mock(AddNewAggregateSnapshotStrategy.class);
         var deletionStrategy = mock(AggregateSnapshotDeletionStrategy.class);
-        var repository = new AsyncAggregateSnapshotRepository(snapshotStore,
-                                                              jsonSerializer,
-                                                              strategy,
-                                                              deletionStrategy,
-                                                              AsyncAggregateSnapshotSettings.synchronous());
+        repository = new AsyncAggregateSnapshotRepository(snapshotStore,
+                                                          jsonSerializer,
+                                                          strategy,
+                                                          deletionStrategy,
+                                                          AsyncAggregateSnapshotSettings.synchronous());
+        repository.start();
 
         var aggregate = new TestAggregate();
         var aggregateType = AggregateType.of("Orders");
@@ -188,7 +188,7 @@ class AsyncAggregateSnapshotRepositoryTest {
         when(strategy.shouldANewAggregateSnapshotBeAdded(aggregate, persistedEvents, Optional.of(EventOrder.of(3)))).thenReturn(true);
         when(deletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()).thenReturn(true);
         when(snapshotStore.loadAllSnapshots(aggregateType, aggregateId, TestAggregate.class, false)).thenReturn(List.of(snapshot(EventOrder.of(1)),
-                                                                                                                   snapshot(EventOrder.of(3))));
+                                                                                                                       snapshot(EventOrder.of(3))));
         when(deletionStrategy.resolveSnapshotsToDelete(anyList())).thenAnswer(invocation -> {
             List<AggregateSnapshot<String, TestAggregate>> existingSnapshots = invocation.getArgument(0);
             return existingSnapshots.stream().limit(1);
@@ -214,15 +214,15 @@ class AsyncAggregateSnapshotRepositoryTest {
         var jsonSerializer = mock(JSONEventSerializer.class);
         var strategy = mock(AddNewAggregateSnapshotStrategy.class);
         var deletionStrategy = mock(AggregateSnapshotDeletionStrategy.class);
-        var executor = new CapturingExecutor();
         var meterRegistry = new SimpleMeterRegistry();
-        var repository = new AsyncAggregateSnapshotRepository(snapshotStore,
-                                                              jsonSerializer,
-                                                              strategy,
-                                                              deletionStrategy,
-                                                              AsyncAggregateSnapshotSettings.asynchronous(),
-                                                              executor,
-                                                              Optional.of(meterRegistry));
+        repository = new AsyncAggregateSnapshotRepository(snapshotStore,
+                                                          jsonSerializer,
+                                                          strategy,
+                                                          deletionStrategy,
+                                                          AsyncAggregateSnapshotSettings.synchronous(),
+                                                          Optional.empty(),
+                                                          Optional.of(meterRegistry));
+        repository.start();
 
         var aggregate = new TestAggregate();
         var aggregateType = AggregateType.of("Orders");
@@ -249,27 +249,18 @@ class AsyncAggregateSnapshotRepositoryTest {
                 .isEqualTo(1L);
     }
 
-    private AggregateSnapshot<String, TestAggregate> snapshot(EventOrder eventOrder) {
-        return new AggregateSnapshot<>(AggregateType.of("Orders"),
-                                       "order-1",
-                                       TestAggregate.class,
-                                       null,
-                                       eventOrder);
-    }
-
     @Test
-    void async_persistence_task_exception_does_not_escape_to_executor() {
+    void async_persistence_task_exception_is_caught_and_logged_not_propagated() {
         var snapshotStore = mock(AggregateSnapshotStore.class);
         var jsonSerializer = mock(JSONEventSerializer.class);
         var strategy = mock(AddNewAggregateSnapshotStrategy.class);
         var deletionStrategy = mock(AggregateSnapshotDeletionStrategy.class);
-        var executor = new CapturingExecutor();
-        var repository = new AsyncAggregateSnapshotRepository(snapshotStore,
-                                                              jsonSerializer,
-                                                              strategy,
-                                                              deletionStrategy,
-                                                              AsyncAggregateSnapshotSettings.asynchronous(),
-                                                              executor);
+        repository = new AsyncAggregateSnapshotRepository(snapshotStore,
+                                                          jsonSerializer,
+                                                          strategy,
+                                                          deletionStrategy,
+                                                          new AsyncAggregateSnapshotSettings(SnapshotExecutionMode.ASYNC_IN_MEMORY, 1));
+        repository.start();
 
         var aggregate = new TestAggregate();
         var aggregateType = AggregateType.of("Orders");
@@ -286,38 +277,55 @@ class AsyncAggregateSnapshotRepositoryTest {
         when(jsonSerializer.serialize(any())).thenReturn("{\"type\":\"snapshot\"}");
         doThrow(new IllegalStateException("boom")).when(snapshotStore).saveSnapshot(any(), any(), any(), any(), any());
 
+        // aggregateUpdated must not propagate the persistence-task exception even though the worker
+        // thread will hit it. Submitting a second task afterwards must still succeed — proving the
+        // worker thread did not die.
         repository.aggregateUpdated(aggregate, persistedEvents);
+        Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                verify(snapshotStore).saveSnapshot(any(), any(), any(), any(), any()));
 
-        // The exception thrown inside persistenceTask must NOT escape the executor's runnable.
-        // If it did, a real ThreadPoolExecutor would silently swallow it and could even kill the
-        // worker thread on a single-thread executor.
-        executor.runSingleTask();
+        when(snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType, "order-2", TestAggregate.class)).thenReturn(Optional.empty());
+        var nextEvents = mock(AggregateEventStream.class);
+        when(nextEvents.aggregateType()).thenReturn(aggregateType);
+        when(nextEvents.aggregateId()).thenReturn("order-2");
+        when(nextEvents.eventList()).thenReturn(List.of(persistedEvent));
+        when(strategy.shouldANewAggregateSnapshotBeAdded(aggregate, nextEvents, Optional.empty())).thenReturn(true);
+        repository.aggregateUpdated(aggregate, nextEvents);
+        Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                verify(snapshotStore, atLeast(2)).saveSnapshot(any(), any(), any(), any(), any()));
+    }
 
-        verify(snapshotStore).saveSnapshot(any(), any(), any(), any(), any());
+    @Test
+    void aggregate_updated_throws_when_repository_is_not_started() {
+        var snapshotStore = mock(AggregateSnapshotStore.class);
+        var jsonSerializer = mock(JSONEventSerializer.class);
+        var strategy = mock(AddNewAggregateSnapshotStrategy.class);
+        var deletionStrategy = mock(AggregateSnapshotDeletionStrategy.class);
+        repository = new AsyncAggregateSnapshotRepository(snapshotStore,
+                                                          jsonSerializer,
+                                                          strategy,
+                                                          deletionStrategy,
+                                                          AsyncAggregateSnapshotSettings.synchronous());
+
+        var aggregate = new TestAggregate();
+        var persistedEvents = mock(AggregateEventStream.class);
+
+        try {
+            repository.aggregateUpdated(aggregate, persistedEvents);
+            org.junit.jupiter.api.Assertions.fail("expected IllegalStateException");
+        } catch (IllegalStateException expected) {
+            assertThat(expected).hasMessageContaining("not started");
+        }
+    }
+
+    private AggregateSnapshot<String, TestAggregate> snapshot(EventOrder eventOrder) {
+        return new AggregateSnapshot<>(AggregateType.of("Orders"),
+                                       "order-1",
+                                       TestAggregate.class,
+                                       null,
+                                       eventOrder);
     }
 
     private static final class TestAggregate {
-    }
-
-    private static final class CapturingExecutor implements Executor {
-        private final List<Runnable> tasks = new ArrayList<>();
-
-        @Override
-        public void execute(Runnable command) {
-            tasks.add(command);
-        }
-
-        void runSingleTask() {
-            if (tasks.size() != 1) {
-                throw new AssertionError("Expected exactly 1 queued task but found " + tasks.size());
-            }
-            tasks.remove(0).run();
-        }
-
-        void assertNoTasks() {
-            if (!tasks.isEmpty()) {
-                throw new AssertionError("Expected no queued tasks but found " + tasks.size());
-            }
-        }
     }
 }

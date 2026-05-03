@@ -2,7 +2,6 @@
  * Copyright 2021-2026 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
@@ -20,28 +19,35 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
 import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.shared.Lifecycle;
 import dk.trustworks.essentials.shared.collections.Lists;
+import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.*;
 
 import java.util.*;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Opt-in async-capable {@link AggregateSnapshotRepository} built on top of an {@link AggregateSnapshotStore}.
  * <p>
- * Snapshot scheduling semantics are currently in-memory only for {@link SnapshotExecutionMode#ASYNC_IN_MEMORY}.
+ * The repository is a {@link Lifecycle} bean: {@link #start()} provisions the executor pool sized
+ * by {@link AsyncAggregateSnapshotSettings#workerThreads()}, {@link #stop()} tears it down. The
+ * {@link Lifecycle} contract pairs with {@code DefaultLifecycleManager} so Spring-managed
+ * applications get clean shutdown for free.
+ * <p>
+ * For {@link SnapshotExecutionMode#SYNC}, no executor is needed — tasks run on the calling thread.
+ * For {@link SnapshotExecutionMode#ASYNC_IN_MEMORY}, a fixed-size daemon-threaded executor is used
+ * so a forgotten {@code stop()} doesn't keep the JVM alive.
  */
 @SuppressWarnings("unchecked")
-public class AsyncAggregateSnapshotRepository implements AggregateSnapshotRepository, AutoCloseable {
+public class AsyncAggregateSnapshotRepository implements AggregateSnapshotRepository, Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(AsyncAggregateSnapshotRepository.class);
 
     private final AggregateSnapshotStore                            snapshotStore;
@@ -49,20 +55,12 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     private final AddNewAggregateSnapshotStrategy                   addNewSnapshotStrategy;
     private final AggregateSnapshotDeletionStrategy                 snapshotDeletionStrategy;
     private final AsyncAggregateSnapshotSettings                    settings;
-    private final Executor                                          executor;
-    private final boolean                                           ownsExecutor;
     private final AggregateSnapshotMeasurementSupport               measurementSupport;
     private final Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory;
 
-    /**
-     * Constructs an instance of AsyncAggregateSnapshotRepository.
-     *
-     * @param snapshotStore            the storage mechanism for aggregate snapshots.
-     * @param jsonSerializer           the serializer used to convert events to and from JSON.
-     * @param addNewSnapshotStrategy   the strategy used for adding new aggregate snapshots.
-     * @param snapshotDeletionStrategy the strategy used for deleting stale aggregate snapshots.
-     * @param settings                 the configuration settings for the asynchronous snapshot repository.
-     */
+    private final AtomicBoolean started = new AtomicBoolean();
+    private volatile Executor   executor;
+
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                             JSONEventSerializer jsonSerializer,
                                             AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
@@ -73,50 +71,10 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              addNewSnapshotStrategy,
              snapshotDeletionStrategy,
              settings,
-             defaultExecutor(settings),
-             defaultExecutorOwned(settings),
              Optional.empty(),
              Optional.empty());
     }
 
-    /**
-     * Constructs an instance of AsyncAggregateSnapshotRepository.
-     *
-     * @param snapshotStore            The store responsible for persisting aggregate snapshots.
-     * @param jsonSerializer           The JSON serializer used for serializing and deserializing events.
-     * @param addNewSnapshotStrategy   The strategy used for adding new aggregate snapshots.
-     * @param snapshotDeletionStrategy The strategy used for deleting aggregate snapshots.
-     * @param settings                 The configuration settings for asynchronous aggregate snapshot operations.
-     * @param executor                 The executor used for performing asynchronous tasks.
-     */
-    public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
-                                            JSONEventSerializer jsonSerializer,
-                                            AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
-                                            AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
-                                            AsyncAggregateSnapshotSettings settings,
-                                            Executor executor) {
-        this(snapshotStore,
-             jsonSerializer,
-             addNewSnapshotStrategy,
-             snapshotDeletionStrategy,
-             settings,
-             executor,
-             false,
-             Optional.empty(),
-             Optional.empty());
-    }
-
-    /**
-     * Constructs an instance of AsyncAggregateSnapshotRepository with the provided dependencies
-     * and configurations to handle aggregate snapshot operations asynchronously.
-     *
-     * @param snapshotStore            The storage mechanism for aggregate snapshots.
-     * @param jsonSerializer           The serializer used for converting events to and from JSON format.
-     * @param addNewSnapshotStrategy   The strategy to add new aggregate snapshots.
-     * @param snapshotDeletionStrategy The strategy to handle the deletion of aggregate snapshots.
-     * @param settings                 Configuration settings for the asynchronous snapshot handling.
-     * @param unitOfWorkFactory        Factory for creating instances of UnitOfWork for transactional operations.
-     */
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                             JSONEventSerializer jsonSerializer,
                                             AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
@@ -128,91 +86,16 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              addNewSnapshotStrategy,
              snapshotDeletionStrategy,
              settings,
-             defaultExecutor(settings),
-             defaultExecutorOwned(settings),
              Optional.of(unitOfWorkFactory),
              Optional.empty());
     }
 
-    /**
-     * Constructs a new AsyncAggregateSnapshotRepository with the provided dependencies.
-     *
-     * @param snapshotStore            The store used to persist and retrieve aggregate snapshots.
-     * @param jsonSerializer           The serializer for converting events to and from JSON.
-     * @param addNewSnapshotStrategy   Strategy for determining how new snapshots are added.
-     * @param snapshotDeletionStrategy Strategy for determining how snapshots are deleted.
-     * @param settings                 Configuration settings for the repository.
-     * @param executor                 The executor used for asynchronous operations.
-     * @param unitOfWorkFactory        The factory for creating units of work.
-     */
-    public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
-                                            JSONEventSerializer jsonSerializer,
-                                            AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
-                                            AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
-                                            AsyncAggregateSnapshotSettings settings,
-                                            Executor executor,
-                                            UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory) {
-        this(snapshotStore,
-             jsonSerializer,
-             addNewSnapshotStrategy,
-             snapshotDeletionStrategy,
-             settings,
-             executor,
-             false,
-             Optional.of(unitOfWorkFactory),
-             Optional.empty());
-    }
-
-    /**
-     * Constructs an instance of AsyncAggregateSnapshotRepository.
-     *
-     * @param snapshotStore            the store responsible for managing aggregate snapshots
-     * @param jsonSerializer           the serializer used to serialize and deserialize JSON events
-     * @param addNewSnapshotStrategy   the strategy for adding new aggregate snapshots
-     * @param snapshotDeletionStrategy the strategy for deleting aggregate snapshots
-     * @param settings                 the configuration settings for the async aggregate snapshot repository
-     * @param executor                 the executor used for asynchronous operations
-     * @param meterRegistryOptional    an optional meter registry for tracking metrics
-     */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                             JSONEventSerializer jsonSerializer,
                                             AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
                                             AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
                                             AsyncAggregateSnapshotSettings settings,
-                                            Executor executor,
-                                            Optional<MeterRegistry> meterRegistryOptional) {
-        this(snapshotStore,
-             jsonSerializer,
-             addNewSnapshotStrategy,
-             snapshotDeletionStrategy,
-             settings,
-             executor,
-             false,
-             Optional.empty(),
-             meterRegistryOptional);
-    }
-
-    /**
-     * Constructs an instance of {@code AsyncAggregateSnapshotRepository}, a class responsible for
-     * managing aggregate snapshots asynchronously.
-     *
-     * @param snapshotStore            The store responsible for storing and retrieving aggregate snapshots.
-     * @param jsonSerializer           Serializer to convert events to and from JSON format.
-     * @param addNewSnapshotStrategy   Strategy for determining how new aggregate snapshots are added.
-     * @param snapshotDeletionStrategy Strategy for managing the deletion of aggregate snapshots.
-     * @param settings                 Configuration settings for asynchronous aggregate snapshot operations.
-     * @param executor                 Executor used for asynchronous task execution.
-     * @param unitOfWorkFactory        Factory used to create instances of {@link UnitOfWork}.
-     * @param meterRegistryOptional    Optional MeterRegistry for metric tracking and monitoring.
-     */
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
-                                            JSONEventSerializer jsonSerializer,
-                                            AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
-                                            AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
-                                            AsyncAggregateSnapshotSettings settings,
-                                            Executor executor,
                                             UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
                                             Optional<MeterRegistry> meterRegistryOptional) {
         this(snapshotStore,
@@ -220,53 +103,64 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              addNewSnapshotStrategy,
              snapshotDeletionStrategy,
              settings,
-             executor,
-             false,
              Optional.of(unitOfWorkFactory),
              meterRegistryOptional);
     }
 
-    /**
-     * Constructs an instance of {@code AsyncAggregateSnapshotRepository}.
-     * This repository is responsible for handling aggregate snapshot storage
-     * and management by utilizing the provided strategies and configurations.
-     *
-     * @param snapshotStore            The storage mechanism used for managing aggregate snapshots.
-     *                                 Must not be null.
-     * @param jsonSerializer           The serializer used for converting event data to JSON
-     *                                 and vice versa. Must not be null.
-     * @param addNewSnapshotStrategy   The strategy used to determine how new snapshots
-     *                                 are added to the repository. Must not be null.
-     * @param snapshotDeletionStrategy The strategy used to determine which snapshots
-     *                                 should be deleted. Must not be null.
-     * @param settings                 Configuration settings for the asynchronous snapshot repository.
-     *                                 Must not be null.
-     * @param executor                 The executor used to perform asynchronous operations. Must not be null.
-     * @param ownsExecutor             A boolean indicating whether this repository instance owns the
-     *                                 executor and is responsible for its lifecycle.
-     * @param unitOfWorkFactory        An {@code Optional} containing the factory for
-     *                                 creating {@code UnitOfWork} instances. Must not be null.
-     * @param meterRegistryOptional    An {@code Optional} containing the {@code MeterRegistry}
-     *                                 for recording metrics. Must not be null.
-     */
-    private AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
-                                             JSONEventSerializer jsonSerializer,
-                                             AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
-                                             AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
-                                             AsyncAggregateSnapshotSettings settings,
-                                             Executor executor,
-                                             boolean ownsExecutor,
-                                             Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory,
-                                             Optional<MeterRegistry> meterRegistryOptional) {
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
+                                            JSONEventSerializer jsonSerializer,
+                                            AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
+                                            AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
+                                            AsyncAggregateSnapshotSettings settings,
+                                            Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory,
+                                            Optional<MeterRegistry> meterRegistryOptional) {
         this.snapshotStore = requireNonNull(snapshotStore, "No snapshotStore provided");
         this.snapshotStateAdapter = new DefaultAggregateSnapshotStateAdapter(requireNonNull(jsonSerializer, "No jsonSerializer provided"));
         this.addNewSnapshotStrategy = requireNonNull(addNewSnapshotStrategy, "No addNewSnapshotStrategy provided");
         this.snapshotDeletionStrategy = requireNonNull(snapshotDeletionStrategy, "No snapshotDeletionStrategy provided");
         this.settings = requireNonNull(settings, "No settings provided");
-        this.executor = requireNonNull(executor, "No executor provided");
-        this.ownsExecutor = ownsExecutor;
         this.measurementSupport = new AggregateSnapshotMeasurementSupport(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"));
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+    }
+
+    @Override
+    public void start() {
+        if (!started.compareAndSet(false, true)) return;
+
+        if (settings.mode() == SnapshotExecutionMode.SYNC) {
+            // No executor needed — tasks run inline on the calling thread.
+            executor = Runnable::run;
+            log.info("Started AsyncAggregateSnapshotRepository in SYNC mode");
+            return;
+        }
+        if (settings.mode() == SnapshotExecutionMode.ASYNC_IN_MEMORY) {
+            executor = Executors.newFixedThreadPool(settings.workerThreads(),
+                                                    ThreadFactoryBuilder.builder()
+                                                                        .nameFormat("async-aggregate-snapshot-%d")
+                                                                        .daemon(true)
+                                                                        .build());
+            log.info("Started AsyncAggregateSnapshotRepository in ASYNC_IN_MEMORY mode with {} worker thread(s)",
+                     settings.workerThreads());
+            return;
+        }
+        throw new UnsupportedOperationException("SnapshotExecutionMode '" + settings.mode() + "' isn't supported yet");
+    }
+
+    @Override
+    public void stop() {
+        if (!started.compareAndSet(true, false)) return;
+
+        if (executor instanceof ExecutorService executorService) {
+            executorService.shutdownNow();
+        }
+        executor = null;
+        log.info("Stopped AsyncAggregateSnapshotRepository");
+    }
+
+    @Override
+    public boolean isStarted() {
+        return started.get();
     }
 
     @Override
@@ -295,6 +189,9 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     public <ID, AGGREGATE_IMPL_TYPE> void aggregateUpdated(AGGREGATE_IMPL_TYPE aggregate, AggregateEventStream<ID> persistedEvents) {
         requireNonNull(aggregate, "No aggregate instance supplied");
         requireNonNull(persistedEvents, "No persistedEvents stream supplied");
+        if (!started.get() || executor == null) {
+            throw new IllegalStateException("AsyncAggregateSnapshotRepository is not started — call start() before aggregateUpdated(...)");
+        }
 
         var aggregateType     = persistedEvents.aggregateType();
         var aggregateId       = persistedEvents.aggregateId();
@@ -367,8 +264,8 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                 // Async snapshot persistence is best-effort in ASYNC_IN_MEMORY mode — there is no
                 // retry queue. Surface the failure as a structured ERROR log instead of letting
                 // the executor's default handler dump the stack to stderr (where it is easy to
-                // miss and may also kill the worker thread for a single-thread executor).
-                // Use ASYNC_DURABLE mode if guaranteed retry/delivery is required.
+                // miss and may also kill a worker thread). Use ASYNC_DURABLE mode if guaranteed
+                // retry/delivery is required.
                 log.error("[{}:{}] Failed to persist Aggregate Snapshot asynchronously for '{}' and last_included_event_order {}",
                           aggregateType,
                           aggregateId,
@@ -378,59 +275,12 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
             }
         };
 
+        var executorSnapshot  = executor;
         var currentUnitOfWork = unitOfWorkFactory.flatMap(UnitOfWorkFactory::getCurrentUnitOfWork);
         if (currentUnitOfWork.isPresent()) {
-            currentUnitOfWork.get().registerLifecycleCallbackForResource(asyncDispatchTask, new AfterCommitDispatchLifecycleCallback(executor));
+            currentUnitOfWork.get().registerLifecycleCallbackForResource(asyncDispatchTask, new AfterCommitDispatchLifecycleCallback(executorSnapshot));
         } else {
-            executor.execute(asyncDispatchTask);
-        }
-    }
-
-    private static Executor defaultExecutor(AsyncAggregateSnapshotSettings settings) {
-        if (settings.mode() == SnapshotExecutionMode.SYNC) {
-            return Runnable::run;
-        }
-        if (settings.mode() == SnapshotExecutionMode.ASYNC_IN_MEMORY) {
-            // Use daemon threads so a forgotten close() doesn't block JVM shutdown outside Spring.
-            var threadCounter = new AtomicInteger();
-            return Executors.newSingleThreadExecutor(runnable -> {
-                var thread = new Thread(runnable, "async-aggregate-snapshot-" + threadCounter.incrementAndGet());
-                thread.setDaemon(true);
-                return thread;
-            });
-        }
-        throw new UnsupportedOperationException(msg("SnapshotExecutionMode '{}' isn't supported yet", settings.mode()));
-    }
-
-    /**
-     * True for the executors {@link #defaultExecutor(AsyncAggregateSnapshotSettings)} creates,
-     * which this instance must {@code shutdown()} on {@link #close()}. SYNC mode uses the
-     * shared {@code Runnable::run} reference and must NOT be shut down.
-     */
-    private static boolean defaultExecutorOwned(AsyncAggregateSnapshotSettings settings) {
-        return settings.mode() == SnapshotExecutionMode.ASYNC_IN_MEMORY;
-    }
-
-    /**
-     * Shuts down the {@link ExecutorService} created by this instance, if any.
-     * Spring will invoke this automatically for beans implementing {@link AutoCloseable}.
-     * If a user-supplied {@code Executor} was passed to the constructor, it is left untouched —
-     * the caller owns its lifecycle.
-     */
-    @Override
-    public void close() {
-        if (!ownsExecutor || !(executor instanceof ExecutorService executorService)) {
-            return;
-        }
-        executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
-                log.warn("Async snapshot executor did not terminate within 10 seconds; forcing shutdownNow().");
-                executorService.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
-            Thread.currentThread().interrupt();
+            executorSnapshot.execute(asyncDispatchTask);
         }
     }
 

@@ -104,7 +104,8 @@ public class SnapshotConfiguration {
     @ConditionalOnProperty(prefix = "essentials.eventstore.snapshots", name = "enabled", havingValue = "true")
     @ConditionalOnMissingBean
     public AsyncAggregateSnapshotSettings asyncAggregateSnapshotSettings(EssentialsEventStoreProperties properties) {
-        return new AsyncAggregateSnapshotSettings(properties.getSnapshots().getDefaultMode());
+        return new AsyncAggregateSnapshotSettings(properties.getSnapshots().getDefaultMode(),
+                                                  properties.getSnapshots().getWorkerThreads());
     }
 
     @Bean

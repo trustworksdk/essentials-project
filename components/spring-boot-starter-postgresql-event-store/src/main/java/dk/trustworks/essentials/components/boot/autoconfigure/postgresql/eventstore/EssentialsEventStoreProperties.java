@@ -482,6 +482,7 @@ public class EssentialsEventStoreProperties {
         private       int                                            defaultEveryNEvents      = 10;
         private       SnapshotDeletionMode                           defaultDeletionMode      = SnapshotDeletionMode.DELETE_ALL_HISTORIC;
         private       int                                            defaultKeepLastSnapshots = 1;
+        private       int                                            workerThreads            = 1;
         private final DurableSnapshotProperties                      durable                  = new DurableSnapshotProperties();
         private       Map<String, AggregateSnapshotPolicyProperties> aggregates               = new LinkedHashMap<>();
 
@@ -531,6 +532,15 @@ public class EssentialsEventStoreProperties {
 
         public void setDefaultKeepLastSnapshots(int defaultKeepLastSnapshots) {
             this.defaultKeepLastSnapshots = defaultKeepLastSnapshots;
+        }
+
+        /** Number of worker threads in the {@link SnapshotExecutionMode#ASYNC_IN_MEMORY} executor pool. */
+        public int getWorkerThreads() {
+            return workerThreads;
+        }
+
+        public void setWorkerThreads(int workerThreads) {
+            this.workerThreads = workerThreads;
         }
 
         public DurableSnapshotProperties getDurable() {
