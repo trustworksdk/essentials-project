@@ -24,6 +24,14 @@ import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Default implementation of the {@link ClosingBooksScheduledScanProcessor} interface.
+ * This class is designed to handle the scheduled scanning of open generations of aggregates
+ * in an event-sourced system and apply policies for closing books and opening new generations.
+ *
+ * @param <ID>        the type of the identifier for aggregate generations
+ * @param <AGGREGATE> the type of the aggregate being processed
+ */
 public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements ClosingBooksScheduledScanProcessor {
     private static final Logger log = LoggerFactory.getLogger(DefaultClosingBooksScheduledScanProcessor.class);
 
@@ -34,6 +42,16 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
     private final ClosingBooksCoordinator<ID>                         coordinator;
     private final ClosingBooksManagementMeasurementSupport            measurementSupport;
 
+    /**
+     * Constructs a DefaultClosingBooksScheduledScanProcessor instance with the specified components.
+     * This processor schedules and manages the scanning of closing book aggregates.
+     *
+     * @param aggregateType the type of aggregate being processed
+     * @param generationRepository the repository responsible for accessing open generations of closing books
+     * @param aggregateLoader the loader used to load the aggregate data
+     * @param policy the decision policy applied to the aggregates during processing
+     * @param coordinator the coordinator responsible for managing the overall processing workflow
+     */
     public DefaultClosingBooksScheduledScanProcessor(AggregateType aggregateType,
                                                      ClosingBooksOpenGenerationRepository<ID> generationRepository,
                                                      ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader,
@@ -42,6 +60,17 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
         this(aggregateType, generationRepository, aggregateLoader, policy, coordinator, Optional.empty());
     }
 
+    /**
+     * Constructs a DefaultClosingBooksScheduledScanProcessor instance with the specified components.
+     * This processor schedules and manages the scanning of closing book aggregates.
+     *
+     * @param aggregateType the type of aggregate being processed
+     * @param generationRepository the repository responsible for accessing open generations of closing books
+     * @param aggregateLoader the loader used to load the aggregate data
+     * @param policy the decision policy applied to the aggregates during processing
+     * @param coordinator the coordinator responsible for managing the overall processing workflow
+     * @param meterRegistryOptional an optional registry used to track and measure processing metrics
+     */
     public DefaultClosingBooksScheduledScanProcessor(AggregateType aggregateType,
                                                      ClosingBooksOpenGenerationRepository<ID> generationRepository,
                                                      ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader,

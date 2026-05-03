@@ -38,15 +38,58 @@ import java.lang.annotation.*;
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface AggregateSnapshotPolicy {
+    /**
+     * Indicates whether snapshotting is enabled for the aggregate.
+     *
+     * @return {@code true} if snapshotting is enabled; {@code false} otherwise
+     */
     boolean enabled() default true;
 
+    /**
+     * Specifies the execution mode for creating aggregate snapshots.
+     * The execution mode determines how and when snapshots are persisted.
+     *
+     * @return The snapshot execution mode, which can be one of the following:
+     *         {@code SYNC} for synchronous persistence,
+     *         {@code ASYNC_IN_MEMORY} for asynchronous in-memory persistence,
+     *         or {@code ASYNC_DURABLE} for asynchronous durable persistence.
+     */
     SnapshotExecutionMode mode() default SnapshotExecutionMode.SYNC;
 
+    /**
+     * Defines the interval of events after which a snapshot is triggered.
+     * This determines how frequently snapshots are created in an event-sourced system.
+     *
+     * @return The number of events that must occur before a snapshot is created.
+     *         Defaults to 100.
+     */
     int everyNEvents() default 100;
 
+    /**
+     * Determines the strategy for handling old snapshots in an event-sourced system.
+     * The deletion mode specifies how historical snapshots are managed when new snapshots are created.
+     *
+     * @return The snapshot deletion mode, which can be one of the following:
+     *         {@code DELETE_ALL_HISTORIC} to remove all previously created snapshots,
+     *         or {@code KEEP_LAST_N} to retain a specified number of the most recent snapshots.
+     */
     SnapshotDeletionMode deletionMode() default SnapshotDeletionMode.DELETE_ALL_HISTORIC;
 
+    /**
+     * Specifies the number of most recent snapshots to retain when the snapshot
+     * deletion mode is set to keep a limited number of snapshots.
+     *
+     * @return The number of snapshots to retain. Defaults to 1, meaning only the
+     *         most recent snapshot is kept if a "keep" strategy is used.
+     */
     int keepLastSnapshots() default 1;
 
+    /**
+     * Specifies the type of the aggregate this snapshot policy applies to.
+     * The aggregate type is typically used to identify and differentiate
+     * between various event-sourced aggregates.
+     *
+     * @return The name of the aggregate type as a {@code String}. Defaults to an empty string if not specified.
+     */
     String aggregateType() default "";
 }

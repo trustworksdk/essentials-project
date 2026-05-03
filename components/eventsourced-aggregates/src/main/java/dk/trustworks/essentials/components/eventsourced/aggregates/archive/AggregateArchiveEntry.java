@@ -23,6 +23,34 @@ import java.time.OffsetDateTime;
 import static dk.trustworks.essentials.shared.FailFast.requireNonBlank;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Represents an entry in the archive system for an aggregate. This record encapsulates the
+ * metadata and operational state related to the archiving process of an aggregate.
+ * <p>
+ * Fields:
+ * - aggregateType: The type of the aggregate associated with the archive entry.
+ * - logicalAggregateId: The logical identifier of the aggregate.
+ * - generation: The generation number of the aggregate, which must be a positive value.
+ * - streamAggregateId: The unique identifier of the stream for the aggregate.
+ * - status: The current status of the archive entry, indicating its stage in the archiving process.
+ * - format: The format of the archive, applicable when the status is not IN_PROGRESS.
+ * - archiveLocation: The storage location of the archive, applicable when the status is not IN_PROGRESS.
+ * - eventCount: The number of events included in the archive, applicable when the status is not IN_PROGRESS.
+ * - checksum: The checksum calculated for the archive to verify its integrity.
+ * - closedAt: The timestamp when the aggregate was closed, marking the end of changes to the aggregate.
+ * - archivedAt: The timestamp when the archiving process was completed, applicable when the status is not IN_PROGRESS.
+ * - archiveError: The error message, if any, encountered during the archiving process.
+ * <p>
+ * Validation:
+ * - aggregateType and status must not be null.
+ * - logicalAggregateId and streamAggregateId must not be blank.
+ * - generation must be greater than or equal to 1.
+ * - If the status is not IN_PROGRESS:
+ *   - format must not be null.
+ *   - archiveLocation must not be blank.
+ *   - eventCount must be greater than or equal to 0.
+ *   - archivedAt must not be null.
+ */
 public record AggregateArchiveEntry(
         AggregateType aggregateType,
         String logicalAggregateId,

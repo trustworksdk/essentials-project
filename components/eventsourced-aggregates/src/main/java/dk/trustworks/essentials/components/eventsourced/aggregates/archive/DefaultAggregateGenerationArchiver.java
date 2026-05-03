@@ -33,6 +33,13 @@ import java.util.Optional;
 import static dk.trustworks.essentials.shared.FailFast.requireNonBlank;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The DefaultAggregateGenerationArchiver class provides a concrete implementation of the
+ * {@link AggregateGenerationArchiver}
+ * for archiving specific generations of aggregates. It handles the processing and storage of
+ * aggregate archival data using various dependencies such as archive registry, event store,
+ * and export/destination mechanisms.
+ */
 public class DefaultAggregateGenerationArchiver implements AggregateGenerationArchiver {
     private static final Logger log = LoggerFactory.getLogger(DefaultAggregateGenerationArchiver.class);
 

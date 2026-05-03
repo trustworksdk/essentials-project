@@ -37,20 +37,34 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * to supply the functions that expose their current business period and effective event count.
  */
 public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
-    private static final Logger log = LoggerFactory.getLogger(BuiltInClosingBooksPolicyEvaluator.class);
+    private static final Logger log              = LoggerFactory.getLogger(BuiltInClosingBooksPolicyEvaluator.class);
     private static final String GAP_COUNTER_NAME = "essentials.closing_books.time_boundary_gap_detected";
 
-    private final AggregateType aggregateType;
+    private final AggregateType                 aggregateType;
     private final ClosingBooksDefaultPolicyType defaultPolicy;
-    private final long eventThreshold;
-    private final ClosingBooksTimeBoundary timeBoundary;
-    private final ZoneId zoneId;
-    private final Integer intervalDays;
-    private final Clock clock;
-    private final Optional<MeterRegistry> meterRegistry;
-    private final ToLongFunction<AGGREGATE> eventCountProvider;
-    private final Function<AGGREGATE, String> currentPeriodIdProvider;
+    private final long                          eventThreshold;
+    private final ClosingBooksTimeBoundary      timeBoundary;
+    private final ZoneId                        zoneId;
+    private final Integer                       intervalDays;
+    private final Clock                         clock;
+    private final Optional<MeterRegistry>       meterRegistry;
+    private final ToLongFunction<AGGREGATE>     eventCountProvider;
+    private final Function<AGGREGATE, String>   currentPeriodIdProvider;
 
+    /**
+     * Constructs a new instance of the {@code BuiltInClosingBooksPolicyEvaluator}.
+     *
+     * @param aggregateType      the type of the aggregate being processed; must not be null.
+     * @param defaultPolicy      the default closing books policy to apply; must not be null.
+     * @param eventThreshold     the threshold for the number of events after which a closing book is triggered.
+     * @param timeBoundary       the evaluation boundary for time-based closing books; must not be null.
+     * @param zoneId             the time zone used for date and time calculations; must not be null.
+     * @param intervalDays       the interval in days for evaluating time-based periods; can be null.
+     * @param clock              the clock instance used for obtaining the current time; must not be null.
+     * @param meterRegistry      an optional meter registry for instrumentation and metrics; must not be null.
+     * @param eventCountProvider a function that provides the event count for the given aggregate; must not be null.
+     * @throws IllegalArgumentException if any required parameter is null.
+     */
     public BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
                                               ClosingBooksDefaultPolicyType defaultPolicy,
                                               long eventThreshold,
@@ -72,6 +86,21 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
              (Function<AGGREGATE, String>) null);
     }
 
+    /**
+     * Constructs a new instance of the {@code BuiltInClosingBooksPolicyEvaluator}.
+     *
+     * @param aggregateType             the type of the aggregate being processed; must not be null.
+     * @param defaultPolicy             the default closing books policy to apply; must not be null.
+     * @param eventThreshold            the threshold for the number of events after which a closing book is triggered.
+     * @param timeBoundary              the evaluation boundary for time-based closing books; must not be null.
+     * @param zoneId                    the time zone used for date and time calculations; must not be null.
+     * @param intervalDays              the interval in days for evaluating time-based periods; can be null.
+     * @param clock                     the clock instance used for obtaining the current time; must not be null.
+     * @param meterRegistry             an optional meter registry for instrumentation and metrics; must not be null.
+     * @param eventCountProvider        a function that provides the event count for the given aggregate; must not be null.
+     * @param aggregateTypeWithPeriodId the class type representing aggregates with a closing books period identifier; must not be null.
+     * @throws IllegalArgumentException if any required parameter is null.
+     */
     public <T extends HasClosingBooksPeriodId> BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
                                                                                   ClosingBooksDefaultPolicyType defaultPolicy,
                                                                                   long eventThreshold,
@@ -95,6 +124,22 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         requireNonNull(aggregateTypeWithPeriodId, "No aggregateTypeWithPeriodId provided");
     }
 
+    /**
+     * Constructs a new instance of the BuiltInClosingBooksPolicyEvaluator.
+     *
+     * @param aggregateType           the type of the aggregate being processed; must not be null.
+     * @param defaultPolicy           the default closing books policy to apply; must not be null.
+     * @param eventThreshold          the threshold for the number of events after which a closing book is triggered.
+     * @param timeBoundary            the evaluation boundary for time-based closing books; must not be null.
+     * @param zoneId                  the time zone used for date and time calculations; must not be null.
+     * @param intervalDays            the interval in days for evaluating time-based periods; can be null.
+     * @param clock                   the clock instance used for obtaining the current time; must not be null.
+     * @param meterRegistry           an optional meter registry for instrumentation and metrics; must not be null.
+     * @param eventCountProvider      a function that provides the event count for the given aggregate; must not be null.
+     * @param currentPeriodIdProvider a function that provides the current period identifier for the given aggregate;
+     *                                required when using a time-boundary closing books policy. May be null otherwise.
+     * @throws IllegalArgumentException if any required parameter is null.
+     */
     public BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
                                               ClosingBooksDefaultPolicyType defaultPolicy,
                                               long eventThreshold,
@@ -113,8 +158,8 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         this.meterRegistry = requireNonNull(meterRegistry, "No meterRegistry provided");
         this.eventCountProvider = requireNonNull(eventCountProvider, "No eventCountProvider provided");
         this.currentPeriodIdProvider = requiresCurrentPeriodIdProvider(defaultPolicy)
-                ? requireNonNull(currentPeriodIdProvider, "No currentPeriodIdProvider provided for time-boundary closing-books policy")
-                : currentPeriodIdProvider;
+                                       ? requireNonNull(currentPeriodIdProvider, "No currentPeriodIdProvider provided for time-boundary closing-books policy")
+                                       : currentPeriodIdProvider;
         this.eventThreshold = eventThreshold;
         this.intervalDays = intervalDays;
     }
@@ -167,8 +212,8 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
 
     public <ID> ClosingBooksDecisionPolicy<ID, AGGREGATE> asDecisionPolicy() {
         return context -> context.triggerMode() == ClosingBooksTriggerMode.ON_ACCESS && shouldRolloverOnAccess(context.aggregate())
-                ? ClosingBooksDecision.CLOSE_AND_OPEN_NEXT
-                : ClosingBooksDecision.KEEP_OPEN;
+                          ? ClosingBooksDecision.CLOSE_AND_OPEN_NEXT
+                          : ClosingBooksDecision.KEEP_OPEN;
     }
 
     private boolean eventThresholdReached(AGGREGATE aggregate) {
@@ -213,7 +258,7 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
                                                                  "aggregate_type", aggregateType.toString(),
                                                                  "time_boundary", timeBoundary.name(),
                                                                  "policy_type", defaultPolicy.name())
-                                                     .increment());
+                                                        .increment());
         }
         return evaluation;
     }

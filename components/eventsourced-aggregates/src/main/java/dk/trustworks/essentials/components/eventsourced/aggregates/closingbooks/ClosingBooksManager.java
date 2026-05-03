@@ -160,7 +160,7 @@ public class ClosingBooksManager implements Lifecycle {
             scheduler.shutdownNow();
             scheduler = null;
         }
-        log.info("🛑  Stopped ClosingBooksManager with lock '{}'", lockName);
+        log.info("🛑 Stopped ClosingBooksManager with lock '{}'", lockName);
     }
 
     @Override

@@ -16,6 +16,20 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
+/**
+ * Enum representing the format types supported for aggregate archives.
+ * <p>
+ * The formats define the encoding or structuring mechanism used to
+ * store archived aggregate data. Supported formats are:
+ * <ul>
+ * - JSONL: Represents newline-delimited JSON format, where each line
+ *   contains a valid JSON object.
+ * - PARQUET: Represents the Parquet format, which is a columnar storage
+ *   file format designed for efficient data retrieval.
+ * <p>
+ * Primarily used in conjunction with aggregate archiving processes to
+ * specify the desired output structure.
+ */
 public enum AggregateArchiveFormat {
     JSONL,
     PARQUET

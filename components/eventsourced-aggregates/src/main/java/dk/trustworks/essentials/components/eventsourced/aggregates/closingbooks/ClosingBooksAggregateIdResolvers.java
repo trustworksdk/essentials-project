@@ -29,6 +29,20 @@ public final class ClosingBooksAggregateIdResolvers {
     private ClosingBooksAggregateIdResolvers() {
     }
 
+    /**
+     * Resolves the current stream aggregate ID for a specified aggregate type by combining a logical aggregate ID resolver
+     * and a generation resolver. This method ensures that the provided aggregate type, logical ID resolver, and generation
+     * resolver are not null and uses them to compute the stream aggregate ID.
+     *
+     * @param <SOURCE>                The type of the source object from which the logical aggregate ID is resolved.
+     * @param <LOGICAL_ID>            The type of the logical aggregate ID.
+     * @param aggregateType           The type of the aggregate to resolve the stream ID for. Must not be null.
+     * @param logicalAggregateIdResolver A resolver for determining the logical aggregate ID based on a source object. Must not be null.
+     * @param generationResolver      A resolver for determining the current generation of the aggregate based on the aggregate type
+     *                                and logical aggregate ID. Must not be null.
+     * @return A resolver that takes a source of type {@code SOURCE} and returns an optional string representing the stream
+     *         aggregate ID.
+     */
     public static <SOURCE, LOGICAL_ID> AggregateIdResolver<SOURCE, String> resolveCurrentStreamAggregateId(AggregateType aggregateType,
                                                                                                             AggregateIdResolver<SOURCE, LOGICAL_ID> logicalAggregateIdResolver,
                                                                                                             ClosingBooksGenerationResolver<LOGICAL_ID> generationResolver) {

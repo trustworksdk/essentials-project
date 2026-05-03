@@ -46,12 +46,42 @@ public interface AggregateArchiveRegistry {
                      String streamAggregateId,
                      OffsetDateTime claimedAt);
 
+    /**
+     * Retrieves an archived generation entry for a specific aggregate based on the provided
+     * aggregate type, logical aggregate ID, and generation number. If no matching archived
+     * generation is found, an empty {@code Optional} is returned.
+     *
+     * @param aggregateType The type of the aggregate associated with the archive entry. Must not be null.
+     * @param logicalAggregateId The logical identifier of the aggregate. Must not be blank.
+     * @param generation The generation number of the aggregate. Must be greater than or equal to 1.
+     * @return An {@code Optional} containing the matching {@code AggregateArchiveEntry} if found,
+     *         otherwise an empty {@code Optional}.
+     */
     Optional<AggregateArchiveEntry> findArchivedGeneration(AggregateType aggregateType,
                                                            String logicalAggregateId,
                                                            long generation);
 
+    /**
+     * Retrieves a list of archived generation entries for a specific aggregate based on the
+     * provided aggregate type and logical aggregate ID. The entries represent the metadata
+     * and operational states related to the archiving process of the aggregate's generations.
+     *
+     * @param aggregateType The type of the aggregate associated with the archive entries. Must not be null.
+     * @param logicalAggregateId The logical identifier of the aggregate. Must not be blank.
+     * @return A list of {@code AggregateArchiveEntry} objects matching the specified aggregate type
+     *         and logical aggregate ID. If no archived generations are found, an empty list is returned.
+     */
     List<AggregateArchiveEntry> findArchivedGenerations(AggregateType aggregateType,
                                                         String logicalAggregateId);
 
+    /**
+     * Summarizes archived generations across all aggregates, providing a concise overview of their
+     * archiving status and related metadata.
+     *
+     * @return A list of {@code AggregateArchiveSummary} objects, where each summary represents an
+     *         aggregate type and includes statistics such as the total number of archived generations,
+     *         the number of failed generations, the total count of archived events, and the timestamp
+     *         of the last successful archiving. If no archived generations exist, an empty list is returned.
+     */
     List<AggregateArchiveSummary> summarizeArchivedGenerations();
 }

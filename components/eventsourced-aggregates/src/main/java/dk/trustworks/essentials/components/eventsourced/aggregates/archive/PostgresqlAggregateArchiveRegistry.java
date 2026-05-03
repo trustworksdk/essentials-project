@@ -33,6 +33,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
+/**
+ * The PostgresqlAggregateArchiveRegistry class is an implementation of the AggregateArchiveRegistry
+ * interface that uses a PostgreSQL database as the underlying storage for managing the archival of
+ * aggregate generations in an event-sourcing system. It handles operations such as saving archive
+ * entries, claiming the archival process for specific generations, and retrieving archival metadata.
+ */
 public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegistry {
     private static final Logger log = LoggerFactory.getLogger(PostgresqlAggregateArchiveRegistry.class);
     public static final String DEFAULT_TABLE_NAME = "aggregate_archives";

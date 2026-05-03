@@ -21,7 +21,7 @@ import java.util.Optional;
 /**
  * Functional interface for loading an aggregate of a specific type by its associated
  * stream aggregate identifier.
- *
+ * <p>
  * This interface provides an abstraction for the retrieval of aggregates from some
  * underlying data source or storage mechanism using an identifier.
  *
@@ -29,5 +29,14 @@ import java.util.Optional;
  */
 @FunctionalInterface
 public interface ClosingBooksAggregateLoader<AGGREGATE> {
+
+    /**
+     * Loads an aggregate of the specified type associated with the given stream aggregate identifier.
+     * This method serves as a mechanism for retrieving an aggregate from a data source
+     * or storage based on its unique identifier.
+     *
+     * @param streamAggregateId the unique identifier of the stream aggregate to load
+     * @return an {@code Optional} containing the loaded aggregate if found, or empty if no aggregate is associated with the given identifier
+     */
     Optional<AGGREGATE> load(String streamAggregateId);
 }

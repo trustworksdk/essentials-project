@@ -24,6 +24,12 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
  * and processing batches of aggregated data.
  */
 public interface ClosingBooksScheduledScanProcessor {
+
+    /**
+     * Retrieves the type of aggregate that this processor is responsible for handling.
+     *
+     * @return the aggregate type associated with this processor
+     */
     AggregateType aggregateType();
 
     /**

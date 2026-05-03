@@ -27,6 +27,11 @@ import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Utility class that provides support for measuring and recording metrics related
+ * to aggregate archive generation and related operations. It integrates with an optional
+ * {@link MeterRegistry} to record metrics using Micrometer.
+ */
 class AggregateArchiveMeasurementSupport {
     static final String METRIC_PREFIX = "essentials.aggregate_archive";
 

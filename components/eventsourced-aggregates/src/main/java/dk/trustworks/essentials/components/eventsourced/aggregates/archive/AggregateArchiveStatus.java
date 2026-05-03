@@ -16,10 +16,23 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
+/**
+ * Enum representing the possible statuses of an aggregate archive during its lifecycle.
+ * <p>
+ * - ARCHIVED: Indicates that the archive process has successfully completed, and the
+ *   aggregate's data has been written to storage.
+ * <p>
+ * - FAILED: Indicates that the archive process encountered an error and did not complete successfully.
+ * <p>
+ * - IN_PROGRESS: Indicates that the archive process is currently underway. This status is reserved
+ *   by a worker actively writing the archive. It ensures that duplicate concurrent export operations
+ *   for the same aggregate generation are prevented across different nodes.
+ */
 public enum AggregateArchiveStatus {
+
+    ARCHIVED,
+    FAILED,
     /** Reserved by a worker that is currently writing the archive. Used to prevent duplicate
      *  concurrent exports of the same generation across nodes. */
-    IN_PROGRESS,
-    ARCHIVED,
-    FAILED
+    IN_PROGRESS
 }

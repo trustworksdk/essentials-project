@@ -31,6 +31,15 @@ import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
+/**
+ * Implementation of {@link AggregateArchiveDestination} that writes archive artifacts to the file system.
+ * Each artifact is written to a directory under a specified root directory, with its structure determined by
+ * the aggregate type, logical aggregate ID, and generation information provided in the request.
+ * <p>
+ * Enforces sanitization of path segments to prevent invalid or potentially unsafe paths.
+ * Handles byte counting and checksum computation during the write operation.
+ * Ensures directories are created as needed and removes partial files in case of write errors.
+ */
 public class FileSystemAggregateArchiveDestination implements AggregateArchiveDestination {
     private static final Set<String> FORBIDDEN_PATH_SEGMENTS = Set.of(".", "..");
 

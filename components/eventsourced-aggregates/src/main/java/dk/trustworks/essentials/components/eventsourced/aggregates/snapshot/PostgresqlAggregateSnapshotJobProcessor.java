@@ -59,7 +59,12 @@ public class PostgresqlAggregateSnapshotJobProcessor {
                                                    AggregateSnapshotJobRepository jobRepository,
                                                    HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                    DurableAsyncSnapshotSettings settings) {
-        this(eventStore, snapshotStore, jobRepository, unitOfWorkFactory, settings, Optional.empty());
+        this(eventStore,
+             snapshotStore,
+             jobRepository,
+             unitOfWorkFactory,
+             settings,
+             Optional.empty());
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")

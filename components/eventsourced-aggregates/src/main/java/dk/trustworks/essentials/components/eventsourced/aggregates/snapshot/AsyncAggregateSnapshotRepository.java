@@ -44,24 +44,24 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 public class AsyncAggregateSnapshotRepository implements AggregateSnapshotRepository, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(AsyncAggregateSnapshotRepository.class);
 
-    private final AggregateSnapshotStore             snapshotStore;
-    private final AggregateSnapshotStateAdapter      snapshotStateAdapter;
-    private final AddNewAggregateSnapshotStrategy    addNewSnapshotStrategy;
-    private final AggregateSnapshotDeletionStrategy  snapshotDeletionStrategy;
-    private final AsyncAggregateSnapshotSettings     settings;
-    private final Executor                           executor;
-    private final boolean                            ownsExecutor;
-    private final AggregateSnapshotMeasurementSupport measurementSupport;
+    private final AggregateSnapshotStore                            snapshotStore;
+    private final AggregateSnapshotStateAdapter                     snapshotStateAdapter;
+    private final AddNewAggregateSnapshotStrategy                   addNewSnapshotStrategy;
+    private final AggregateSnapshotDeletionStrategy                 snapshotDeletionStrategy;
+    private final AsyncAggregateSnapshotSettings                    settings;
+    private final Executor                                          executor;
+    private final boolean                                           ownsExecutor;
+    private final AggregateSnapshotMeasurementSupport               measurementSupport;
     private final Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory;
 
     /**
      * Constructs an instance of AsyncAggregateSnapshotRepository.
      *
-     * @param snapshotStore the storage mechanism for aggregate snapshots.
-     * @param jsonSerializer the serializer used to convert events to and from JSON.
-     * @param addNewSnapshotStrategy the strategy used for adding new aggregate snapshots.
+     * @param snapshotStore            the storage mechanism for aggregate snapshots.
+     * @param jsonSerializer           the serializer used to convert events to and from JSON.
+     * @param addNewSnapshotStrategy   the strategy used for adding new aggregate snapshots.
      * @param snapshotDeletionStrategy the strategy used for deleting stale aggregate snapshots.
-     * @param settings the configuration settings for the asynchronous snapshot repository.
+     * @param settings                 the configuration settings for the asynchronous snapshot repository.
      */
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                             JSONEventSerializer jsonSerializer,
@@ -82,12 +82,12 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     /**
      * Constructs an instance of AsyncAggregateSnapshotRepository.
      *
-     * @param snapshotStore The store responsible for persisting aggregate snapshots.
-     * @param jsonSerializer The JSON serializer used for serializing and deserializing events.
-     * @param addNewSnapshotStrategy The strategy used for adding new aggregate snapshots.
+     * @param snapshotStore            The store responsible for persisting aggregate snapshots.
+     * @param jsonSerializer           The JSON serializer used for serializing and deserializing events.
+     * @param addNewSnapshotStrategy   The strategy used for adding new aggregate snapshots.
      * @param snapshotDeletionStrategy The strategy used for deleting aggregate snapshots.
-     * @param settings The configuration settings for asynchronous aggregate snapshot operations.
-     * @param executor The executor used for performing asynchronous tasks.
+     * @param settings                 The configuration settings for asynchronous aggregate snapshot operations.
+     * @param executor                 The executor used for performing asynchronous tasks.
      */
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                             JSONEventSerializer jsonSerializer,
@@ -110,12 +110,12 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
      * Constructs an instance of AsyncAggregateSnapshotRepository with the provided dependencies
      * and configurations to handle aggregate snapshot operations asynchronously.
      *
-     * @param snapshotStore The storage mechanism for aggregate snapshots.
-     * @param jsonSerializer The serializer used for converting events to and from JSON format.
-     * @param addNewSnapshotStrategy The strategy to add new aggregate snapshots.
+     * @param snapshotStore            The storage mechanism for aggregate snapshots.
+     * @param jsonSerializer           The serializer used for converting events to and from JSON format.
+     * @param addNewSnapshotStrategy   The strategy to add new aggregate snapshots.
      * @param snapshotDeletionStrategy The strategy to handle the deletion of aggregate snapshots.
-     * @param settings Configuration settings for the asynchronous snapshot handling.
-     * @param unitOfWorkFactory Factory for creating instances of UnitOfWork for transactional operations.
+     * @param settings                 Configuration settings for the asynchronous snapshot handling.
+     * @param unitOfWorkFactory        Factory for creating instances of UnitOfWork for transactional operations.
      */
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                             JSONEventSerializer jsonSerializer,
@@ -137,13 +137,13 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     /**
      * Constructs a new AsyncAggregateSnapshotRepository with the provided dependencies.
      *
-     * @param snapshotStore The store used to persist and retrieve aggregate snapshots.
-     * @param jsonSerializer The serializer for converting events to and from JSON.
-     * @param addNewSnapshotStrategy Strategy for determining how new snapshots are added.
+     * @param snapshotStore            The store used to persist and retrieve aggregate snapshots.
+     * @param jsonSerializer           The serializer for converting events to and from JSON.
+     * @param addNewSnapshotStrategy   Strategy for determining how new snapshots are added.
      * @param snapshotDeletionStrategy Strategy for determining how snapshots are deleted.
-     * @param settings Configuration settings for the repository.
-     * @param executor The executor used for asynchronous operations.
-     * @param unitOfWorkFactory The factory for creating units of work.
+     * @param settings                 Configuration settings for the repository.
+     * @param executor                 The executor used for asynchronous operations.
+     * @param unitOfWorkFactory        The factory for creating units of work.
      */
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                             JSONEventSerializer jsonSerializer,
@@ -166,13 +166,13 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     /**
      * Constructs an instance of AsyncAggregateSnapshotRepository.
      *
-     * @param snapshotStore the store responsible for managing aggregate snapshots
-     * @param jsonSerializer the serializer used to serialize and deserialize JSON events
-     * @param addNewSnapshotStrategy the strategy for adding new aggregate snapshots
+     * @param snapshotStore            the store responsible for managing aggregate snapshots
+     * @param jsonSerializer           the serializer used to serialize and deserialize JSON events
+     * @param addNewSnapshotStrategy   the strategy for adding new aggregate snapshots
      * @param snapshotDeletionStrategy the strategy for deleting aggregate snapshots
-     * @param settings the configuration settings for the async aggregate snapshot repository
-     * @param executor the executor used for asynchronous operations
-     * @param meterRegistryOptional an optional meter registry for tracking metrics
+     * @param settings                 the configuration settings for the async aggregate snapshot repository
+     * @param executor                 the executor used for asynchronous operations
+     * @param meterRegistryOptional    an optional meter registry for tracking metrics
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
@@ -197,14 +197,14 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
      * Constructs an instance of {@code AsyncAggregateSnapshotRepository}, a class responsible for
      * managing aggregate snapshots asynchronously.
      *
-     * @param snapshotStore The store responsible for storing and retrieving aggregate snapshots.
-     * @param jsonSerializer Serializer to convert events to and from JSON format.
-     * @param addNewSnapshotStrategy Strategy for determining how new aggregate snapshots are added.
+     * @param snapshotStore            The store responsible for storing and retrieving aggregate snapshots.
+     * @param jsonSerializer           Serializer to convert events to and from JSON format.
+     * @param addNewSnapshotStrategy   Strategy for determining how new aggregate snapshots are added.
      * @param snapshotDeletionStrategy Strategy for managing the deletion of aggregate snapshots.
-     * @param settings Configuration settings for asynchronous aggregate snapshot operations.
-     * @param executor Executor used for asynchronous task execution.
-     * @param unitOfWorkFactory Factory used to create instances of {@link UnitOfWork}.
-     * @param meterRegistryOptional Optional MeterRegistry for metric tracking and monitoring.
+     * @param settings                 Configuration settings for asynchronous aggregate snapshot operations.
+     * @param executor                 Executor used for asynchronous task execution.
+     * @param unitOfWorkFactory        Factory used to create instances of {@link UnitOfWork}.
+     * @param meterRegistryOptional    Optional MeterRegistry for metric tracking and monitoring.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
@@ -228,15 +228,26 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
 
     /**
      * Constructs an instance of {@code AsyncAggregateSnapshotRepository}.
+     * This repository is responsible for handling aggregate snapshot storage
+     * and management by utilizing the provided strategies and configurations.
      *
-     * @param snapshotStore The store to manage aggregate snapshots. Must not be null.
-     * @param jsonSerializer The JSON event serializer used for serializing/deserializing snapshots. Must not be null.
-     * @param addNewSnapshotStrategy Strategy for adding new aggregate snapshots. Must not be null.
-     * @param snapshotDeletionStrategy Strategy for deleting aggregate snapshots. Must not be null.
-     * @param settings Configuration settings for the repository. Must not be null.
-     * @param executor The executor used to perform asynchronous operations. Must not be null.
-     * @param unitOfWorkFactory An optional factory for creating units of work. Must not be null.
-     * @param meterRegistryOptional An optional meter registry for capturing metrics. Must not be null.
+     * @param snapshotStore            The storage mechanism used for managing aggregate snapshots.
+     *                                 Must not be null.
+     * @param jsonSerializer           The serializer used for converting event data to JSON
+     *                                 and vice versa. Must not be null.
+     * @param addNewSnapshotStrategy   The strategy used to determine how new snapshots
+     *                                 are added to the repository. Must not be null.
+     * @param snapshotDeletionStrategy The strategy used to determine which snapshots
+     *                                 should be deleted. Must not be null.
+     * @param settings                 Configuration settings for the asynchronous snapshot repository.
+     *                                 Must not be null.
+     * @param executor                 The executor used to perform asynchronous operations. Must not be null.
+     * @param ownsExecutor             A boolean indicating whether this repository instance owns the
+     *                                 executor and is responsible for its lifecycle.
+     * @param unitOfWorkFactory        An {@code Optional} containing the factory for
+     *                                 creating {@code UnitOfWork} instances. Must not be null.
+     * @param meterRegistryOptional    An {@code Optional} containing the {@code MeterRegistry}
+     *                                 for recording metrics. Must not be null.
      */
     private AsyncAggregateSnapshotRepository(AggregateSnapshotStore snapshotStore,
                                              JSONEventSerializer jsonSerializer,
@@ -260,9 +271,9 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
 
     @Override
     public <ID, AGGREGATE_IMPL_TYPE> Optional<AggregateSnapshot<ID, AGGREGATE_IMPL_TYPE>> loadSnapshot(AggregateType aggregateType,
-                                                                                                        ID aggregateId,
-                                                                                                        EventOrder withLastIncludedEventOrderLessThanOrEqualTo,
-                                                                                                        Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
+                                                                                                       ID aggregateId,
+                                                                                                       EventOrder withLastIncludedEventOrderLessThanOrEqualTo,
+                                                                                                       Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
         return snapshotStore.loadSnapshot(aggregateType,
                                           aggregateId,
                                           withLastIncludedEventOrderLessThanOrEqualTo,
@@ -271,9 +282,9 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
 
     @Override
     public <ID, AGGREGATE_IMPL_TYPE> List<AggregateSnapshot<ID, AGGREGATE_IMPL_TYPE>> loadAllSnapshots(AggregateType aggregateType,
-                                                                                                        ID aggregateId,
-                                                                                                        Class<AGGREGATE_IMPL_TYPE> aggregateImplType,
-                                                                                                        boolean includeSnapshotPayload) {
+                                                                                                       ID aggregateId,
+                                                                                                       Class<AGGREGATE_IMPL_TYPE> aggregateImplType,
+                                                                                                       boolean includeSnapshotPayload) {
         return snapshotStore.loadAllSnapshots(aggregateType,
                                               aggregateId,
                                               aggregateImplType,
@@ -285,12 +296,12 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
         requireNonNull(aggregate, "No aggregate instance supplied");
         requireNonNull(persistedEvents, "No persistedEvents stream supplied");
 
-        var aggregateType = persistedEvents.aggregateType();
-        var aggregateId = persistedEvents.aggregateId();
+        var aggregateType     = persistedEvents.aggregateType();
+        var aggregateId       = persistedEvents.aggregateId();
         var aggregateImplType = (Class<AGGREGATE_IMPL_TYPE>) aggregate.getClass();
         var mostRecentlyStoredSnapshotLastIncludedEventOrder = snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType,
-                                                                                                                   aggregateId,
-                                                                                                                   aggregateImplType);
+                                                                                                                  aggregateId,
+                                                                                                                  aggregateImplType);
         if (!shouldWeAddANewAggregateSnapshot(aggregate,
                                               persistedEvents,
                                               aggregateType,
@@ -304,8 +315,8 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                                                                            aggregateId,
                                                                            aggregateImplType);
         var serializedSnapshot = measurementSupport.recordSerializeSnapshot(aggregateType,
-                                                                           aggregateImplType,
-                                                                           () -> snapshotStateAdapter.serializeSnapshotState(aggregate));
+                                                                            aggregateImplType,
+                                                                            () -> snapshotStateAdapter.serializeSnapshotState(aggregate));
 
         Runnable persistenceTask = () -> {
             if (!deleteSnapshotEventOrders.isEmpty()) {
@@ -326,16 +337,16 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                                        serializedSnapshot);
         };
 
-        if (settings.mode == SnapshotExecutionMode.SYNC) {
+        if (settings.mode() == SnapshotExecutionMode.SYNC) {
             persistenceTask.run();
-        } else if (settings.mode == SnapshotExecutionMode.ASYNC_IN_MEMORY) {
+        } else if (settings.mode() == SnapshotExecutionMode.ASYNC_IN_MEMORY) {
             scheduleAsyncAfterCommit(aggregateType,
                                      aggregateId,
                                      aggregateImplType,
                                      lastAppliedEventOrder,
                                      persistenceTask);
         } else {
-            throw new UnsupportedOperationException("SnapshotExecutionMode '" + settings.mode + "' isn't supported yet");
+            throw new UnsupportedOperationException("SnapshotExecutionMode '" + settings.mode() + "' isn't supported yet");
         }
     }
 
@@ -376,10 +387,10 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     }
 
     private static Executor defaultExecutor(AsyncAggregateSnapshotSettings settings) {
-        if (settings.mode == SnapshotExecutionMode.SYNC) {
+        if (settings.mode() == SnapshotExecutionMode.SYNC) {
             return Runnable::run;
         }
-        if (settings.mode == SnapshotExecutionMode.ASYNC_IN_MEMORY) {
+        if (settings.mode() == SnapshotExecutionMode.ASYNC_IN_MEMORY) {
             // Use daemon threads so a forgotten close() doesn't block JVM shutdown outside Spring.
             var threadCounter = new AtomicInteger();
             return Executors.newSingleThreadExecutor(runnable -> {
@@ -388,14 +399,16 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                 return thread;
             });
         }
-        throw new UnsupportedOperationException(msg("SnapshotExecutionMode '{}' isn't supported yet", settings.mode));
+        throw new UnsupportedOperationException(msg("SnapshotExecutionMode '{}' isn't supported yet", settings.mode()));
     }
 
-    /** True for the executors {@link #defaultExecutor(AsyncAggregateSnapshotSettings)} creates,
-     *  which this instance must {@code shutdown()} on {@link #close()}. SYNC mode uses the
-     *  shared {@code Runnable::run} reference and must NOT be shut down. */
+    /**
+     * True for the executors {@link #defaultExecutor(AsyncAggregateSnapshotSettings)} creates,
+     * which this instance must {@code shutdown()} on {@link #close()}. SYNC mode uses the
+     * shared {@code Runnable::run} reference and must NOT be shut down.
+     */
     private static boolean defaultExecutorOwned(AsyncAggregateSnapshotSettings settings) {
-        return settings.mode == SnapshotExecutionMode.ASYNC_IN_MEMORY;
+        return settings.mode() == SnapshotExecutionMode.ASYNC_IN_MEMORY;
     }
 
     /**
@@ -422,8 +435,8 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     }
 
     private <ID, AGGREGATE_IMPL_TYPE> List<EventOrder> resolveSnapshotEventOrdersToDelete(AggregateType aggregateType,
-                                                                                           ID aggregateId,
-                                                                                           Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
+                                                                                          ID aggregateId,
+                                                                                          Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
         if (snapshotDeletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()) {
             var existingSnapshots = snapshotStore.loadAllSnapshots(aggregateType,
                                                                    aggregateId,

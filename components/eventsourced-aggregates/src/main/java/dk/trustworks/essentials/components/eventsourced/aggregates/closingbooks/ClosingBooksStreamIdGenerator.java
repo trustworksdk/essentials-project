@@ -18,6 +18,13 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 
+/**
+ * Functional interface that defines a strategy for generating a stream ID for closing books processes.
+ * Implementations of this interface should provide a mechanism to generate a unique identifier
+ * for streams based on the provided parameters.
+ *
+ * @param <ID> the type of the identifier used in the logical aggregate ID.
+ */
 @FunctionalInterface
 public interface ClosingBooksStreamIdGenerator<ID> {
     String generate(AggregateType aggregateType,

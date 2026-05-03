@@ -38,6 +38,14 @@ public class ClosingBooksCoordinator<ID> {
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>       unitOfWorkFactory;
     private final Clock                                                               clock;
 
+    /**
+     * Constructs a new instance of {@code ClosingBooksCoordinator}.
+     *
+     * @param aggregateType The type of the aggregate being coordinated.
+     * @param generationRepository The repository for managing closing-book generations.
+     * @param streamIdGenerator The generator for creating unique stream IDs for aggregate instances.
+     * @param unitOfWorkFactory The factory for creating instances of {@code HandleAwareUnitOfWork}.
+     */
     public ClosingBooksCoordinator(AggregateType aggregateType,
                                    ClosingBooksGenerationRepository<ID> generationRepository,
                                    ClosingBooksStreamIdGenerator<ID> streamIdGenerator,

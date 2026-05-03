@@ -21,9 +21,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Settings for async aggregate snapshot persistence.
  */
-public final class AsyncAggregateSnapshotSettings {
-    public final SnapshotExecutionMode mode;
-
+public record AsyncAggregateSnapshotSettings(SnapshotExecutionMode mode) {
     public AsyncAggregateSnapshotSettings(SnapshotExecutionMode mode) {
         this.mode = requireNonNull(mode, "No mode provided");
     }

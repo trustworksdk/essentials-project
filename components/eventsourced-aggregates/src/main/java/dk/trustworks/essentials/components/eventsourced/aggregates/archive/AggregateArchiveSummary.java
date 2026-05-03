@@ -22,6 +22,17 @@ import java.time.OffsetDateTime;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Represents a summary of archive-related data for a specific aggregate type.
+ * This record encapsulates details about the number of archived generations,
+ * failed generations, total archived events, and the timestamp of the last archiving operation.
+ *
+ * @param aggregateType           The type of aggregate associated with this archive summary.
+ * @param archivedGenerationCount The count of successfully archived generations.
+ * @param failedGenerationCount   The count of generations that failed during the archiving process.
+ * @param totalArchivedEventCount The total number of events that have been archived.
+ * @param lastArchivedAt          The timestamp indicating when the last archiving operation occurred.
+ */
 public record AggregateArchiveSummary(
         AggregateType aggregateType,
         long archivedGenerationCount,

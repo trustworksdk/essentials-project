@@ -38,6 +38,26 @@ public final class ClosingBooksCommandHandlers {
     private ClosingBooksCommandHandlers() {
     }
 
+    /**
+     * Creates a decider-based command handler for managing operations on aggregates
+     * by evaluating provided commands and deciding resulting events or errors.
+     *
+     * @param <CONFIG>                  The configuration type for the event store.
+     * @param <LOGICAL_ID>              The logical identifier type for aggregates.
+     * @param <COMMAND>                 The type of command to be processed.
+     * @param <EVENT>                   The type of event to be generated.
+     * @param <ERROR>                   The type of error that may occur during command handling.
+     * @param <STATE>                   The type of the aggregate state.
+     * @param eventStore                The event store that provides access to aggregate event streams.
+     * @param aggregateType             The aggregate type for which commands will be handled.
+     * @param logicalAggregateIdFromCommandResolver A resolver that extracts a logical aggregate ID from a command.
+     * @param streamAggregateIdFromEventResolver    A resolver that extracts a stream aggregate ID from an event.
+     * @param generationResolver         A resolver for determining the generation of aggregates based on logical IDs.
+     * @param aggregateSnapshotRepository A repository for handling aggregate snapshots.
+     * @param stateType                  The class type of the aggregate state.
+     * @param decider                    The decider that determines the outcome of a command in terms of events or errors.
+     * @return                           A command handler capable of processing commands and generating corresponding events or errors.
+     */
     public static <CONFIG extends AggregateEventStreamConfiguration,
             LOGICAL_ID,
             COMMAND,

@@ -26,5 +26,18 @@ import java.io.OutputStream;
  */
 @FunctionalInterface
 public interface ArchiveContentWriter {
+
+    /**
+     * Writes archive content to the provided OutputStream and returns the number of records written.
+     * <p>
+     * Implementations are responsible for writing the archive data to the OutputStream.
+     * The number of records written typically corresponds to the count of persisted events.
+     * The OutputStream is owned by the caller, and lifecycle management such as opening
+     * and closing is handled externally.
+     *
+     * @param out the OutputStream to write the archive content to
+     * @return the number of records written to the OutputStream
+     * @throws IOException if an I/O error occurs during the write operation
+     */
     long write(OutputStream out) throws IOException;
 }

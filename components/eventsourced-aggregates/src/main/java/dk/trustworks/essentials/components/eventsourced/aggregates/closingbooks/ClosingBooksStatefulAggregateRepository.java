@@ -25,13 +25,33 @@ import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * This repository provides functionality to manage stateful aggregates with support for multiple generations.
+ * It acts as a wrapper around a delegate {@code StatefulAggregateRepository} and integrates additional
+ * behavior for handling logical aggregate IDs and generation resolution in the context of closing books.
+ *
+ * @param <LOGICAL_ID>          The type of the logical aggregate identifier.
+ * @param <EVENT_TYPE>          The type of events applicable to aggregates managed by this repository.
+ * @param <AGGREGATE_IMPL_TYPE> The specific implementation type of the {@code StatefulAggregate}.
+ *                              This type must extend {@code StatefulAggregate<String, EVENT_TYPE, AGGREGATE_IMPL_TYPE>}.
+ */
 public class ClosingBooksStatefulAggregateRepository<LOGICAL_ID,
-                                                     EVENT_TYPE,
-                                                     AGGREGATE_IMPL_TYPE extends StatefulAggregate<String, EVENT_TYPE, AGGREGATE_IMPL_TYPE>> {
+        EVENT_TYPE,
+        AGGREGATE_IMPL_TYPE extends StatefulAggregate<String, EVENT_TYPE, AGGREGATE_IMPL_TYPE>> {
     private final AggregateType                                                        aggregateType;
     private final StatefulAggregateRepository<String, EVENT_TYPE, AGGREGATE_IMPL_TYPE> delegate;
     private final ClosingBooksGenerationResolver<LOGICAL_ID>                           generationResolver;
 
+    /**
+     * Constructs an instance of ClosingBooksStatefulAggregateRepository.
+     *
+     * @param aggregateType      The type of the aggregate that this repository supports.
+     *                           Must not be null.
+     * @param delegate           The delegate repository for handling stateful aggregates.
+     *                           Must not be null.
+     * @param generationResolver The generation resolver used to manage aggregate generations.
+     *                           Must not be null.
+     */
     public ClosingBooksStatefulAggregateRepository(AggregateType aggregateType,
                                                    StatefulAggregateRepository<String, EVENT_TYPE, AGGREGATE_IMPL_TYPE> delegate,
                                                    ClosingBooksGenerationResolver<LOGICAL_ID> generationResolver) {

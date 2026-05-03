@@ -25,8 +25,22 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param <ID> the type of the identifier for the logical business aggregate
  */
 public interface ClosingBooksLogicalAggregateIdSerializer<ID> {
+
+    /**
+     * Serializes the given {@link LogicalAggregateId} instance into its string representation.
+     *
+     * @param logicalAggregateId the {@link LogicalAggregateId} instance to serialize; must not be null
+     * @return the string representation of the provided {@link LogicalAggregateId}
+     */
     String serialize(LogicalAggregateId<ID> logicalAggregateId);
 
+    /**
+     * Deserializes the provided string representation into a {@link LogicalAggregateId} instance.
+     *
+     * @param serializedLogicalAggregateId the string representation of a {@link LogicalAggregateId};
+     *                                      must not be null
+     * @return a {@link LogicalAggregateId} instance corresponding to the provided serialized string
+     */
     LogicalAggregateId<ID> deserialize(String serializedLogicalAggregateId);
 
     static ClosingBooksLogicalAggregateIdSerializer<String> stringBased() {

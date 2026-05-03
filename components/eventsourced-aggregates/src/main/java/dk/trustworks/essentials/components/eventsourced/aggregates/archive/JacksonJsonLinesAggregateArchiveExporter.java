@@ -25,6 +25,24 @@ import java.nio.charset.StandardCharsets;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * An implementation of the {@link AggregateArchiveExporter} interface that exports aggregate events
+ * in newline-delimited JSON (JSONL) format using the {@link JSONSerializer}.
+ * <p>
+ * This implementation is responsible for streaming persisted events from a provided
+ * {@link AggregateArchiveExportRequest} into an {@link OutputStream}. Each event is serialized
+ * into a JSON object using the supplied {@link JSONSerializer} and written as a single line in the
+ * output stream. The resulting format conforms to JSON Lines (JSONL), where each line of the output
+ * represents one JSON object.
+ * <p>
+ * The lifecycle of the {@link OutputStream} is managed externally, and this implementation should
+ * not close it.
+ * <p>
+ * Usage of this exporter is validated to ensure that required dependencies, such as the
+ * {@link JSONSerializer}, are provided during instantiation and that invalid or null parameters
+ * are not allowed during export. An {@link IllegalArgumentException} is thrown for any missing
+ * required parameters.
+ */
 public class JacksonJsonLinesAggregateArchiveExporter implements AggregateArchiveExporter {
     private final JSONSerializer jsonSerializer;
 

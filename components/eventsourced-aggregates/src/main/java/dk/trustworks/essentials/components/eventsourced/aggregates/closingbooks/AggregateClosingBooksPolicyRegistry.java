@@ -28,9 +28,31 @@ import java.util.*;
  * aggregate implementation classes and can be retrieved as needed.
  */
 public interface AggregateClosingBooksPolicyRegistry {
+
+    /**
+     * Registers the specified {@link AggregateClosingBooksPolicyDescriptor} in the registry.
+     * The descriptor contains details about a specific aggregate implementation type, aggregate type,
+     * and the policy to be applied for closing books for that aggregate.
+     *
+     * @param descriptor the policy descriptor to be registered; must not be null
+     */
     void register(AggregateClosingBooksPolicyDescriptor descriptor);
 
+    /**
+     * Retrieves an {@link AggregateClosingBooksPolicyDescriptor} for the given aggregate implementation type, if one is registered.
+     *
+     * @param aggregateImplementationType the class of the aggregate implementation type for which to retrieve the policy descriptor; must not be null
+     * @return an {@link Optional} containing the policy descriptor if found, or an empty {@link Optional} if no descriptor is registered for the given type
+     */
     Optional<AggregateClosingBooksPolicyDescriptor> findByAggregateImplementationType(Class<?> aggregateImplementationType);
 
+    /**
+     * Retrieves all registered {@link AggregateClosingBooksPolicyDescriptor} instances from the registry.
+     * This method returns a collection of descriptors that represent the policies associated
+     * with various aggregate implementation types, enabling policy management and application
+     * for closing books scenarios.
+     *
+     * @return a collection of all registered {@link AggregateClosingBooksPolicyDescriptor} instances; never null but may be empty
+     */
     Collection<AggregateClosingBooksPolicyDescriptor> getRegisteredPolicies();
 }
