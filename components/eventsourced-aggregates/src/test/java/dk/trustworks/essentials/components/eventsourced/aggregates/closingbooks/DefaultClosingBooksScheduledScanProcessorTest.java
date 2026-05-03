@@ -40,6 +40,7 @@ class DefaultClosingBooksScheduledScanProcessorTest {
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         repository,
                                                         (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
                                                         Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC));
         var currentGeneration = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
 
@@ -76,6 +77,7 @@ class DefaultClosingBooksScheduledScanProcessorTest {
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         repository,
                                                         (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
                                                         Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC));
         var currentGeneration = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
 

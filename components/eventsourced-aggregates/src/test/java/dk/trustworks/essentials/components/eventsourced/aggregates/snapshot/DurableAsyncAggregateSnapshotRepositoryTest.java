@@ -49,7 +49,7 @@ class DurableAsyncAggregateSnapshotRepositoryTest {
         when(strategy.shouldANewAggregateSnapshotBeAdded(aggregate, persistedEvents, Optional.of(EventOrder.of(1)))).thenReturn(true);
         when(eventStore.getAggregateEventStreamConfiguration(aggregateType)).thenReturn(config);
         when(deletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()).thenReturn(false);
-        when(jsonSerializer.serialize(aggregate)).thenReturn("{\"snapshot\":true}");
+        when(jsonSerializer.serialize(any())).thenReturn("{\"snapshot\":true}");
 
         repository.aggregateUpdated(aggregate, persistedEvents);
 
@@ -99,7 +99,7 @@ class DurableAsyncAggregateSnapshotRepositoryTest {
         when(strategy.shouldANewAggregateSnapshotBeAdded(aggregate, persistedEvents, Optional.empty())).thenReturn(true);
         when(eventStore.getAggregateEventStreamConfiguration(aggregateType)).thenReturn(config);
         when(deletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()).thenReturn(false);
-        when(jsonSerializer.serialize(aggregate)).thenReturn("{\"snapshot\":true}");
+        when(jsonSerializer.serialize(any())).thenReturn("{\"snapshot\":true}");
 
         repository.aggregateUpdated(aggregate, persistedEvents);
 

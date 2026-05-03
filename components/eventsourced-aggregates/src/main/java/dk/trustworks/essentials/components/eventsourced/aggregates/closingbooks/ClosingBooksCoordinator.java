@@ -17,6 +17,8 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
@@ -30,43 +32,32 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * opening the first generation on demand, and rolling from one generation to the next.
  */
 public class ClosingBooksCoordinator<ID> {
-    private final AggregateType                          aggregateType;
-    private final ClosingBooksGenerationRepository<ID>   generationRepository;
-    private final ClosingBooksStreamIdGenerator<ID>      streamIdGenerator;
-    private final Clock                                  clock;
+    private final AggregateType                                                       aggregateType;
+    private final ClosingBooksGenerationRepository<ID>                                generationRepository;
+    private final ClosingBooksStreamIdGenerator<ID>                                   streamIdGenerator;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>       unitOfWorkFactory;
+    private final Clock                                                               clock;
 
-    /**
-     * Initializes an instance of {@code ClosingBooksCoordinator} with the specified configurations.
-     *
-     * @param aggregateType the type of the aggregate to be managed
-     * @param generationRepository the repository responsible for handling closing book generation data
-     * @param streamIdGenerator the generator used to create unique stream IDs for closing book operations
-     */
-    public ClosingBooksCoordinator(AggregateType aggregateType,
-                                   ClosingBooksGenerationRepository<ID> generationRepository,
-                                   ClosingBooksStreamIdGenerator<ID> streamIdGenerator) {
-        this(aggregateType,
-             generationRepository,
-             streamIdGenerator,
-             Clock.systemUTC());
-    }
-
-    /**
-     * Constructs a new instance of {@code ClosingBooksCoordinator}, initializing the required
-     * dependencies for managing the lifecycle and operations related to closing book generations.
-     *
-     * @param aggregateType the type of the aggregate to be managed
-     * @param generationRepository the repository responsible for handling closing book generation data
-     * @param streamIdGenerator the generator used to create unique stream IDs for closing book operations
-     * @param clock the clock instance used to provide the current time for generation-related operations
-     */
     public ClosingBooksCoordinator(AggregateType aggregateType,
                                    ClosingBooksGenerationRepository<ID> generationRepository,
                                    ClosingBooksStreamIdGenerator<ID> streamIdGenerator,
+                                   HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+        this(aggregateType,
+             generationRepository,
+             streamIdGenerator,
+             unitOfWorkFactory,
+             Clock.systemUTC());
+    }
+
+    public ClosingBooksCoordinator(AggregateType aggregateType,
+                                   ClosingBooksGenerationRepository<ID> generationRepository,
+                                   ClosingBooksStreamIdGenerator<ID> streamIdGenerator,
+                                   HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    Clock clock) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.generationRepository = requireNonNull(generationRepository, "No generationRepository provided");
         this.streamIdGenerator = requireNonNull(streamIdGenerator, "No streamIdGenerator provided");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.clock = requireNonNull(clock, "No clock provided");
     }
 
@@ -96,23 +87,29 @@ public class ClosingBooksCoordinator<ID> {
     }
 
     /**
-     * Close the current generation and immediately open the next generation.
+     * Close the current generation and immediately open the next generation, atomically.
+     * <p>
+     * The close + open pair runs inside a single {@link HandleAwareUnitOfWork}: a crash or
+     * exception between the two repository calls rolls back the close, leaving the previous
+     * generation {@code OPEN} for safe retry rather than stranding the aggregate with no open
+     * generation.
      *
      * @throws IllegalStateException if no open generation exists
      */
     public AggregateGeneration<ID> closeAndOpenNextGeneration(LogicalAggregateId<ID> logicalAggregateId) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
-
-        var currentGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
-                                                   .orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
-        generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
-        var nextGenerationNumber = currentGeneration.generation() + 1;
-        var nextStreamAggregateId = streamIdGenerator.generate(aggregateType,
-                                                               logicalAggregateId,
-                                                               nextGenerationNumber);
-        return generationRepository.openNextGeneration(aggregateType,
-                                                       logicalAggregateId,
-                                                       nextStreamAggregateId);
+        return unitOfWorkFactory.withUnitOfWork(uow -> {
+            var currentGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
+                                                       .orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
+            generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
+            var nextGenerationNumber = currentGeneration.generation() + 1;
+            var nextStreamAggregateId = streamIdGenerator.generate(aggregateType,
+                                                                   logicalAggregateId,
+                                                                   nextGenerationNumber);
+            return generationRepository.openNextGeneration(aggregateType,
+                                                           logicalAggregateId,
+                                                           nextStreamAggregateId);
+        });
     }
 
     /**
@@ -143,11 +140,20 @@ public class ClosingBooksCoordinator<ID> {
     }
 
     private AggregateGeneration<ID> openFirstGeneration(LogicalAggregateId<ID> logicalAggregateId) {
-        var streamAggregateId = streamIdGenerator.generate(aggregateType,
+        return unitOfWorkFactory.withUnitOfWork(uow -> {
+            // Compute the actual next generation number from any existing closed rows so the
+            // stream-id matches the row inserted by the repository (which also uses MAX+1).
+            var existing = generationRepository.loadGenerations(aggregateType, logicalAggregateId);
+            var nextGeneration = existing.stream()
+                                          .mapToLong(AggregateGeneration::generation)
+                                          .max()
+                                          .orElse(0L) + 1L;
+            var streamAggregateId = streamIdGenerator.generate(aggregateType,
+                                                               logicalAggregateId,
+                                                               nextGeneration);
+            return generationRepository.openNextGeneration(aggregateType,
                                                            logicalAggregateId,
-                                                           1L);
-        return generationRepository.openNextGeneration(aggregateType,
-                                                       logicalAggregateId,
-                                                       streamAggregateId);
+                                                           streamAggregateId);
+        });
     }
 }

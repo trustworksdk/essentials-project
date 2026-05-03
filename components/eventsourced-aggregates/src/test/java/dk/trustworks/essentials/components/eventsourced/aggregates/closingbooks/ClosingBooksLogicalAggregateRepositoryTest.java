@@ -39,7 +39,8 @@ class ClosingBooksLogicalAggregateRepositoryTest {
         var delegate = mock(StatefulAggregateRepository.class);
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         generationRepository,
-                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation);
+                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
+                                                        InlineUnitOfWorkFactories.inline());
         var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
                                                                                                                delegate,
                                                                                                                coordinator,
@@ -63,7 +64,8 @@ class ClosingBooksLogicalAggregateRepositoryTest {
         var delegate = mock(StatefulAggregateRepository.class);
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         generationRepository,
-                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation);
+                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
+                                                        InlineUnitOfWorkFactories.inline());
         var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
                                                                                                                delegate,
                                                                                                                coordinator,
@@ -92,7 +94,8 @@ class ClosingBooksLogicalAggregateRepositoryTest {
         var delegate = mock(StatefulAggregateRepository.class);
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         generationRepository,
-                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation);
+                                                        (type, logicalId, generation) -> logicalId.value() + "#" + generation,
+                                                        InlineUnitOfWorkFactories.inline());
         var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
                                                                                                                delegate,
                                                                                                                coordinator,

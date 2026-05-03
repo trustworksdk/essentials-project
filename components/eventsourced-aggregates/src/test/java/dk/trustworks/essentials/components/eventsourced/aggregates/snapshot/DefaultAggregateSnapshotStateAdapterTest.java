@@ -79,6 +79,43 @@ class DefaultAggregateSnapshotStateAdapterTest {
         assertThat(restored.state().productAndQuantity).isEqualTo(Map.of(productId, 10));
     }
 
+    @Test
+    void deserializes_aggregate_with_required_arg_constructor_without_essentials_immutable_jackson_module() {
+        // Critical regression: aggregates with a required-arg constructor and no @JsonCreator
+        // must deserialize even if the user has NOT registered EssentialsImmutableJacksonModule
+        // (and therefore Jackson alone cannot instantiate the type from "{}"). Objenesis is used
+        // directly by DefaultAggregateSnapshotStateAdapter to bypass the constructor.
+        var jsonMapper = JsonMapper.builder()
+                                   .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                                   .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                                   .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
+                                   .enable(MapperFeature.AUTO_DETECT_FIELDS)
+                                   .build();
+        var serializer = new JacksonJSONEventSerializer(jsonMapper);
+        var adapter = new DefaultAggregateSnapshotStateAdapter(serializer);
+
+        var snapshot = "{\"orderNumber\":42}";
+        var restored = adapter.deserializeSnapshotState(snapshot,
+                                                        RequiredArgConstructorAggregate.class,
+                                                        "order-1",
+                                                        EventOrder.of(1));
+
+        assertThat(restored.orderNumber).isEqualTo(42);
+    }
+
+    /** Aggregate that has only a required-arg constructor, no no-arg constructor, no @JsonCreator —
+     *  the case the original review flagged as silently failing. */
+    public static class RequiredArgConstructorAggregate {
+        public int orderNumber;
+
+        public RequiredArgConstructorAggregate(int orderNumber) {
+            if (orderNumber < 0) {
+                throw new IllegalArgumentException("orderNumber must be >= 0");
+            }
+            this.orderNumber = orderNumber;
+        }
+    }
+
     static ObjectMapper createObjectMapper() {
         var objectMapper = JsonMapper.builder()
                                      .disable(MapperFeature.AUTO_DETECT_GETTERS)

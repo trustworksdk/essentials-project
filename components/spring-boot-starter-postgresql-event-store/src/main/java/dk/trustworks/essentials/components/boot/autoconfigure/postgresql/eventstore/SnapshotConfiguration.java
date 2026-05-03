@@ -116,7 +116,8 @@ public class SnapshotConfiguration {
                                                 durable.getBatchSize(),
                                                 durable.getWorkerThreads(),
                                                 durable.getMaxRetries(),
-                                                durable.getRetryDelay());
+                                                durable.getRetryDelay(),
+                                                durable.getProcessingTimeout());
     }
 
     @Bean
@@ -140,11 +141,13 @@ public class SnapshotConfiguration {
     public PostgresqlAggregateSnapshotJobProcessor aggregateSnapshotJobProcessor(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                                                                                  AggregateSnapshotStore snapshotStore,
                                                                                  AggregateSnapshotJobRepository jobRepository,
+                                                                                 EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                                                  DurableAsyncSnapshotSettings settings,
                                                                                  Optional<MeterRegistry> meterRegistry) {
         return new PostgresqlAggregateSnapshotJobProcessor(eventStore,
                                                            snapshotStore,
                                                            jobRepository,
+                                                           unitOfWorkFactory,
                                                            settings,
                                                            meterRegistry);
     }
@@ -192,49 +195,6 @@ public class SnapshotConfiguration {
     @ConditionalOnMissingBean
     public AggregateSnapshotRepositoryProvider aggregateSnapshotRepositoryProvider(AggregateSnapshotRepositoryFactory factory) {
         return new CachingAggregateSnapshotRepositoryProvider(factory);
-    }
-
-    @Bean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.snapshots", name = "enabled", havingValue = "true")
-    @ConditionalOnBean({
-            ConfigurableEventStore.class,
-            EventStoreUnitOfWorkFactory.class,
-            AggregateSnapshotStore.class,
-            JSONEventSerializer.class
-    })
-    @ConditionalOnMissingBean
-    public AggregateSnapshotRepository aggregateSnapshotRepository(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
-                                                                   EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
-                                                                   AggregateSnapshotStore snapshotStore,
-                                                                   JSONEventSerializer jsonSerializer,
-                                                                   AddNewAggregateSnapshotStrategy triggerStrategy,
-                                                                   AggregateSnapshotDeletionStrategy deletionStrategy,
-                                                                   AsyncAggregateSnapshotSettings asyncSettings,
-                                                                   Optional<AggregateSnapshotJobRepository> jobRepository,
-                                                                   Optional<MeterRegistry> meterRegistry,
-                                                                   EssentialsEventStoreProperties properties) {
-        return switch (asyncSettings.mode) {
-            case SYNC -> new PostgresqlAggregateSnapshotRepository(eventStore,
-                                                                  unitOfWorkFactory,
-                                                                  Optional.ofNullable(properties.getSnapshots().getSnapshotTableName()),
-                                                                  jsonSerializer,
-                                                                  triggerStrategy,
-                                                                  deletionStrategy,
-                                                                  meterRegistry);
-            case ASYNC_IN_MEMORY -> new AsyncAggregateSnapshotRepository(snapshotStore,
-                                                                         jsonSerializer,
-                                                                         triggerStrategy,
-                                                                         deletionStrategy,
-                                                                         asyncSettings,
-                                                                         unitOfWorkFactory);
-            case ASYNC_DURABLE -> new DurableAsyncAggregateSnapshotRepository(eventStore,
-                                                                             snapshotStore,
-                                                                             jobRepository.orElseThrow(() -> new IllegalStateException("AggregateSnapshotJobRepository bean is required for ASYNC_DURABLE snapshot mode")),
-                                                                             jsonSerializer,
-                                                                             triggerStrategy,
-                                                                             deletionStrategy,
-                                                                             meterRegistry);
-        };
     }
 
     private static void markAsInfrastructure(ConfigurableListableBeanFactory beanFactory, String... beanNames) {

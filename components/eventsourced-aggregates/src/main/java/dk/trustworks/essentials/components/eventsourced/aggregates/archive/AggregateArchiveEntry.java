@@ -43,9 +43,11 @@ public record AggregateArchiveEntry(
         if (generation < 1) throw new IllegalArgumentException("generation must be >= 1");
         requireNonBlank(streamAggregateId, "No streamAggregateId provided");
         requireNonNull(status, "No status provided");
-        requireNonNull(format, "No format provided");
-        requireNonBlank(archiveLocation, "No archiveLocation provided");
-        if (eventCount < 0) throw new IllegalArgumentException("eventCount must be >= 0");
-        requireNonNull(archivedAt, "No archivedAt provided");
+        if (status != AggregateArchiveStatus.IN_PROGRESS) {
+            requireNonNull(format, "No format provided");
+            requireNonBlank(archiveLocation, "No archiveLocation provided");
+            if (eventCount < 0) throw new IllegalArgumentException("eventCount must be >= 0");
+            requireNonNull(archivedAt, "No archivedAt provided");
+        }
     }
 }

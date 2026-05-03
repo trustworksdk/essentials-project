@@ -24,6 +24,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 
+import java.time.DateTimeException;
+import java.time.ZoneId;
 import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -35,6 +37,7 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
     private final AggregateClosingBooksPolicyRegistry        closingBooksPolicyRegistry;
     private final AggregateSnapshotConfigurationResolver     snapshotConfigurationResolver;
     private final AggregateClosingBooksConfigurationResolver closingBooksConfigurationResolver;
+    private final EssentialsEventStoreProperties             properties;
     private final Optional<FencedLockManager>                fencedLockManagerOptional;
     private final Set<Class<?>>                              nextGenerationFactoryAggregateTypes;
 
@@ -42,12 +45,14 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
                                                            AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
                                                            AggregateSnapshotConfigurationResolver snapshotConfigurationResolver,
                                                            AggregateClosingBooksConfigurationResolver closingBooksConfigurationResolver,
+                                                           EssentialsEventStoreProperties properties,
                                                            Optional<FencedLockManager> fencedLockManagerOptional,
                                                            List<TypedClosingBooksNextGenerationFactory<?, ?, ?, ?>> nextGenerationFactories) {
         this.snapshotPolicyRegistry = requireNonNull(snapshotPolicyRegistry, "No snapshotPolicyRegistry provided");
         this.closingBooksPolicyRegistry = requireNonNull(closingBooksPolicyRegistry, "No closingBooksPolicyRegistry provided");
         this.snapshotConfigurationResolver = requireNonNull(snapshotConfigurationResolver, "No snapshotConfigurationResolver provided");
         this.closingBooksConfigurationResolver = requireNonNull(closingBooksConfigurationResolver, "No closingBooksConfigurationResolver provided");
+        this.properties = requireNonNull(properties, "No properties provided");
         this.fencedLockManagerOptional = requireNonNull(fencedLockManagerOptional, "No fencedLockManagerOptional provided");
         this.nextGenerationFactoryAggregateTypes = requireNonNull(nextGenerationFactories, "No nextGenerationFactories provided").stream()
                                                                                                                               .map(TypedClosingBooksNextGenerationFactory::aggregateImplementationType)
@@ -76,6 +81,11 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
                          aggregateType);
             }
 
+            warnIfAnnotationIntentSilenced(aggregateImplementationType,
+                                           aggregateType,
+                                           resolvedSnapshotConfiguration.enabled(),
+                                           resolvedClosingBooksConfiguration.enabled());
+
             if (resolvedClosingBooksConfiguration.enabled() &&
                 resolvedClosingBooksConfiguration.triggerMode() == ClosingBooksTriggerMode.SCHEDULED_SCAN &&
                 fencedLockManagerOptional.isEmpty()) {
@@ -89,7 +99,118 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
                                                        resolvedClosingBooksConfiguration.defaultPolicy() + "' for aggregateType '" + aggregateType +
                                                        "' but no TypedClosingBooksNextGenerationFactory is registered");
             }
+
+            if (resolvedClosingBooksConfiguration.enabled()) {
+                validateZoneId(aggregateImplementationType, aggregateType, resolvedClosingBooksConfiguration);
+                if (eventThresholdRequired(resolvedClosingBooksConfiguration.defaultPolicy())
+                        && eventThresholdWasDefaulted(aggregateImplementationType, aggregateType)) {
+                    log.warn("Aggregate '{}' (aggregateType '{}') uses '{}' policy but no event threshold is configured; using default {}. " +
+                             "Set 'essentials.eventstore.closing-books.event-threshold', " +
+                             "'essentials.eventstore.closing-books.aggregates.{}.event-threshold', " +
+                             "or @AggregateClosingBooksPolicy.eventThreshold to override.",
+                             aggregateImplementationType.getName(),
+                             aggregateType,
+                             resolvedClosingBooksConfiguration.defaultPolicy(),
+                             DefaultAggregateClosingBooksConfigurationResolver.DEFAULT_EVENT_THRESHOLD,
+                             aggregateType);
+                }
+                if (resolvedClosingBooksConfiguration.timeBoundary() == ClosingBooksTimeBoundary.EVERY_N_DAYS
+                        && intervalDaysWasDefaulted(aggregateImplementationType, aggregateType)) {
+                    log.warn("Aggregate '{}' (aggregateType '{}') uses time boundary 'EVERY_N_DAYS' but no interval is configured; using default {} days. " +
+                             "Set 'essentials.eventstore.closing-books.interval-days', " +
+                             "'essentials.eventstore.closing-books.aggregates.{}.interval-days', " +
+                             "or @AggregateClosingBooksPolicy.intervalDays to override.",
+                             aggregateImplementationType.getName(),
+                             aggregateType,
+                             DefaultAggregateClosingBooksConfigurationResolver.DEFAULT_INTERVAL_DAYS,
+                             aggregateType);
+                }
+            }
         }
+    }
+
+    private void warnIfAnnotationIntentSilenced(Class<?> aggregateImplementationType,
+                                                AggregateType aggregateType,
+                                                boolean resolvedSnapshotEnabled,
+                                                boolean resolvedClosingBooksEnabled) {
+        var snapshotAnnotationEnabled = snapshotPolicyRegistry.findByAggregateImplementationType(aggregateImplementationType)
+                                                              .map(AggregateSnapshotPolicyDescriptor::policy)
+                                                              .map(AggregateSnapshotPolicy::enabled)
+                                                              .orElse(false);
+        if (snapshotAnnotationEnabled && !resolvedSnapshotEnabled) {
+            log.warn("Aggregate '{}' (aggregateType '{}') has @AggregateSnapshotPolicy(enabled=true) but the resolved configuration disables snapshots; no snapshots will be taken. " +
+                             "Set 'essentials.eventstore.snapshots.enabled=true' to enable globally, " +
+                             "or 'essentials.eventstore.snapshots.aggregates.{}.enabled=true' to enable just this aggregate.",
+                     aggregateImplementationType.getName(),
+                     aggregateType,
+                     aggregateType);
+        }
+
+        var closingBooksAnnotationEnabled = closingBooksPolicyRegistry.findByAggregateImplementationType(aggregateImplementationType)
+                                                                       .map(AggregateClosingBooksPolicyDescriptor::policy)
+                                                                       .map(AggregateClosingBooksPolicy::enabled)
+                                                                       .orElse(false);
+        if (closingBooksAnnotationEnabled && !resolvedClosingBooksEnabled) {
+            log.warn("Aggregate '{}' (aggregateType '{}') has @AggregateClosingBooksPolicy(enabled=true) but the resolved configuration disables closing books; generations will not be opened or closed. " +
+                             "Set 'essentials.eventstore.closing-books.enabled=true' to enable globally, " +
+                             "or 'essentials.eventstore.closing-books.aggregates.{}.enabled=true' to enable just this aggregate.",
+                     aggregateImplementationType.getName(),
+                     aggregateType,
+                     aggregateType);
+        }
+    }
+
+    private void validateZoneId(Class<?> aggregateImplementationType,
+                                AggregateType aggregateType,
+                                ResolvedAggregateClosingBooksConfiguration resolved) {
+        var zoneId = resolved.zoneId();
+        if (zoneId == null || zoneId.isBlank()) {
+            return;
+        }
+        try {
+            ZoneId.of(zoneId);
+        } catch (DateTimeException e) {
+            throw new IllegalStateException("Aggregate '" + aggregateImplementationType.getName() +
+                                                    "' (aggregateType '" + aggregateType + "') has an invalid zoneId '" + zoneId +
+                                                    "'. Set a valid IANA zone via 'essentials.eventstore.closing-books.zone-id', " +
+                                                    "'essentials.eventstore.closing-books.aggregates." + aggregateType + ".zone-id', " +
+                                                    "or @AggregateClosingBooksPolicy.zoneId.", e);
+        }
+    }
+
+    private boolean eventThresholdRequired(ClosingBooksDefaultPolicyType policy) {
+        return policy == ClosingBooksDefaultPolicyType.EVENT_COUNT
+                || policy == ClosingBooksDefaultPolicyType.EVENT_COUNT_OR_TIME_BOUNDARY;
+    }
+
+    private boolean eventThresholdWasDefaulted(Class<?> aggregateImplementationType, AggregateType aggregateType) {
+        var override = properties.getClosingBooks().getAggregates().get(aggregateType.toString());
+        if (override != null && override.getEventThreshold() != null) {
+            return false;
+        }
+        var annotationThreshold = closingBooksPolicyRegistry.findByAggregateImplementationType(aggregateImplementationType)
+                                                            .map(AggregateClosingBooksPolicyDescriptor::policy)
+                                                            .map(AggregateClosingBooksPolicy::eventThreshold)
+                                                            .orElse(0L);
+        if (annotationThreshold > 0) {
+            return false;
+        }
+        return properties.getClosingBooks().getEventThreshold() == null;
+    }
+
+    private boolean intervalDaysWasDefaulted(Class<?> aggregateImplementationType, AggregateType aggregateType) {
+        var override = properties.getClosingBooks().getAggregates().get(aggregateType.toString());
+        if (override != null && override.getIntervalDays() != null) {
+            return false;
+        }
+        var annotationInterval = closingBooksPolicyRegistry.findByAggregateImplementationType(aggregateImplementationType)
+                                                           .map(AggregateClosingBooksPolicyDescriptor::policy)
+                                                           .map(AggregateClosingBooksPolicy::intervalDays)
+                                                           .orElse(0);
+        if (annotationInterval > 0) {
+            return false;
+        }
+        return properties.getClosingBooks().getIntervalDays() == null;
     }
 
     private boolean requiresNextGenerationFactory(ClosingBooksDefaultPolicyType defaultPolicy) {

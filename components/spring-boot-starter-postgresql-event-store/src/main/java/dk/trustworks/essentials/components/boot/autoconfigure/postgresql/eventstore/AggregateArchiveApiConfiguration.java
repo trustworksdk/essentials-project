@@ -22,10 +22,14 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -41,6 +45,7 @@ import java.util.Optional;
 @ConditionalOnProperty(prefix = "essentials.eventstore.archives", name = "enabled", havingValue = "true")
 @EnableConfigurationProperties(EssentialsEventStoreProperties.class)
 public class AggregateArchiveApiConfiguration {
+    private static final Logger log = LoggerFactory.getLogger(AggregateArchiveApiConfiguration.class);
     @Bean
     @ConditionalOnMissingBean
     public AggregateArchiveRegistry aggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
@@ -70,7 +75,25 @@ public class AggregateArchiveApiConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public AggregateArchiveDestination aggregateArchiveDestination(EssentialsEventStoreProperties properties) {
-        return new FileSystemAggregateArchiveDestination(Path.of(properties.getArchives().getFilesystemRootDirectory()));
+        var configuredRoot = Path.of(properties.getArchives().getFilesystemRootDirectory());
+        warnIfArchiveRootIsUnderTmpdir(configuredRoot);
+        return new FileSystemAggregateArchiveDestination(configuredRoot);
+    }
+
+    private static void warnIfArchiveRootIsUnderTmpdir(Path configuredRoot) {
+        var tmpdirProperty = System.getProperty("java.io.tmpdir");
+        if (tmpdirProperty == null || tmpdirProperty.isBlank()) {
+            return;
+        }
+        var tmpdir = Path.of(tmpdirProperty).toAbsolutePath().normalize();
+        var resolvedRoot = configuredRoot.toAbsolutePath().normalize();
+        if (resolvedRoot.startsWith(tmpdir)) {
+            log.warn("Aggregate archive root directory '{}' is under the system temp directory '{}'. " +
+                             "Archives stored here may be removed when the OS cleans up temp space (e.g. on reboot). " +
+                             "Configure 'essentials.eventstore.archives.filesystem-root-directory' to a persistent path.",
+                     resolvedRoot,
+                     tmpdir);
+        }
     }
 
     @Bean
@@ -78,12 +101,14 @@ public class AggregateArchiveApiConfiguration {
     public AggregateGenerationArchiver aggregateGenerationArchiver(AggregateArchiveRegistry aggregateArchiveRegistry,
                                                                    AggregateClosingBooksGenerationAccessProvider generationAccessProvider,
                                                                    ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                                                                   EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                                    AggregateArchiveExporter aggregateArchiveExporter,
                                                                    AggregateArchiveDestination aggregateArchiveDestination,
                                                                    Optional<MeterRegistry> meterRegistryOptional) {
         return new DefaultAggregateGenerationArchiver(aggregateArchiveRegistry,
                                                       generationAccessProvider,
                                                       eventStore,
+                                                      unitOfWorkFactory,
                                                       aggregateArchiveExporter,
                                                       aggregateArchiveDestination,
                                                       meterRegistryOptional);

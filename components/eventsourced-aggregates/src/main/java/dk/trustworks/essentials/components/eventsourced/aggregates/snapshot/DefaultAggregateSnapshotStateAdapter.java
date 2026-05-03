@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.mode
 import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import org.objenesis.ObjenesisStd;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -35,6 +36,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 public class DefaultAggregateSnapshotStateAdapter implements AggregateSnapshotStateAdapter {
     private final JSONEventSerializer jsonSerializer;
+    private final ObjenesisStd        objenesis = new ObjenesisStd();
 
     public DefaultAggregateSnapshotStateAdapter(JSONEventSerializer jsonSerializer) {
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
@@ -54,10 +56,48 @@ public class DefaultAggregateSnapshotStateAdapter implements AggregateSnapshotSt
         requireNonNull(serializedSnapshot, "No serializedSnapshot provided");
         requireNonNull(aggregateImplType, "No aggregateImplType provided");
         requireNonNull(eventOrderOfLastIncludedEvent, "No eventOrderOfLastIncludedEvent provided");
-        var aggregate = jsonSerializer.deserialize("{}", aggregateImplType);
+        var aggregate = newAggregateInstance(aggregateImplType);
         SnapshotRuntimeStateSupport.restore(aggregate, aggregateId, eventOrderOfLastIncludedEvent);
         updateExistingAggregateInstance(aggregate, serializedSnapshot);
         return aggregate;
+    }
+
+    /**
+     * Create a bare instance of the aggregate, bypassing constructors so aggregates with
+     * required-arg constructors (no no-arg ctor / no @JsonCreator) work without forcing the
+     * user to register {@code EssentialsImmutableJacksonModule}.
+     * <p>
+     * Strategy:
+     * <ol>
+     *     <li>Objenesis — bypasses constructors for any concrete non-abstract class. The
+     *         common case for stateful aggregates.</li>
+     *     <li>Fallback to {@link JSONEventSerializer#deserialize(String, Class)} with an empty
+     *         JSON object — handles types Objenesis cannot instantiate (e.g. records when the
+     *         JVM rejects bypass), provided Jackson can build a blank instance.</li>
+     *     <li>If both fail, throw a clear error naming the actionable fixes.</li>
+     * </ol>
+     */
+    private <T> T newAggregateInstance(Class<T> aggregateImplType) {
+        if (aggregateImplType.isInterface() || Modifier.isAbstract(aggregateImplType.getModifiers())) {
+            throw new IllegalArgumentException("Cannot deserialize snapshot into abstract type or interface '" + aggregateImplType.getName() + "'");
+        }
+        try {
+            return objenesis.newInstance(aggregateImplType);
+        } catch (Exception objenesisFailure) {
+            try {
+                return jsonSerializer.deserialize("{}", aggregateImplType);
+            } catch (Exception jacksonFailure) {
+                var error = new IllegalStateException(
+                        "Failed to instantiate aggregate '" + aggregateImplType.getName() + "' for snapshot deserialization. " +
+                                "Tried Objenesis (bypassing constructors) and Jackson with an empty JSON object. " +
+                                "Ensure the aggregate is a concrete non-abstract class. If you cannot make Objenesis work " +
+                                "(e.g. on restricted JVMs), provide a no-arg constructor, a @JsonCreator accepting an empty " +
+                                "payload, or register EssentialsImmutableJacksonModule with your ObjectMapper.",
+                        jacksonFailure);
+                error.addSuppressed(objenesisFailure);
+                throw error;
+            }
+        }
     }
 
     private void updateExistingAggregateInstance(Object aggregate, String serializedSnapshot) {

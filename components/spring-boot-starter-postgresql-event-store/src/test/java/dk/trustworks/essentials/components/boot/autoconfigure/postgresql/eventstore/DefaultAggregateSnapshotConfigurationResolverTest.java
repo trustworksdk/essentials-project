@@ -27,9 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DefaultAggregateSnapshotConfigurationResolverTest {
 
     @Test
-    void annotation_defaults_override_global_defaults() {
+    void annotation_values_override_global_defaults_when_feature_globally_enabled() {
         var properties = new EssentialsEventStoreProperties();
-        properties.getSnapshots().setEnabled(false);
+        properties.getSnapshots().setEnabled(true);
         properties.getSnapshots().setDefaultMode(SnapshotExecutionMode.SYNC);
         properties.getSnapshots().setDefaultEveryNEvents(10);
         properties.getSnapshots().setDefaultDeletionMode(SnapshotDeletionMode.DELETE_ALL_HISTORIC);
@@ -49,6 +49,43 @@ class DefaultAggregateSnapshotConfigurationResolverTest {
         assertThat(resolved.everyNEvents()).isEqualTo(100);
         assertThat(resolved.deletionMode()).isEqualTo(SnapshotDeletionMode.KEEP_LAST_N);
         assertThat(resolved.keepLastSnapshots()).isEqualTo(2);
+    }
+
+    @Test
+    void global_disabled_overrides_annotation_enabled_default() {
+        var properties = new EssentialsEventStoreProperties();
+        properties.getSnapshots().setEnabled(false);
+
+        var registry = new InMemoryAggregateSnapshotPolicyRegistry();
+        registry.register(new AggregateSnapshotPolicyDescriptor(AnnotatedAggregate.class,
+                                                               Optional.of("Orders"),
+                                                               AnnotatedAggregate.class.getAnnotation(AggregateSnapshotPolicy.class)));
+
+        var resolver = new DefaultAggregateSnapshotConfigurationResolver(properties, registry);
+
+        var resolved = resolver.resolve(AggregateType.of("Orders"), AnnotatedAggregate.class);
+
+        assertThat(resolved.enabled()).isFalse();
+    }
+
+    @Test
+    void per_aggregate_override_can_re_enable_when_global_is_disabled() {
+        var properties = new EssentialsEventStoreProperties();
+        properties.getSnapshots().setEnabled(false);
+        var aggregateOverride = new EssentialsEventStoreProperties.AggregateSnapshotPolicyProperties();
+        aggregateOverride.setEnabled(true);
+        properties.getSnapshots().getAggregates().put("Orders", aggregateOverride);
+
+        var registry = new InMemoryAggregateSnapshotPolicyRegistry();
+        registry.register(new AggregateSnapshotPolicyDescriptor(AnnotatedAggregate.class,
+                                                               Optional.of("Orders"),
+                                                               AnnotatedAggregate.class.getAnnotation(AggregateSnapshotPolicy.class)));
+
+        var resolver = new DefaultAggregateSnapshotConfigurationResolver(properties, registry);
+
+        var resolved = resolver.resolve(AggregateType.of("Orders"), AnnotatedAggregate.class);
+
+        assertThat(resolved.enabled()).isTrue();
     }
 
     @Test

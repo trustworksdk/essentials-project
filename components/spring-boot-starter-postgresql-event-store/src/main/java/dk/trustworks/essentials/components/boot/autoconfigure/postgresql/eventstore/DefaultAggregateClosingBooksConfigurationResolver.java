@@ -24,6 +24,11 @@ import java.util.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 public class DefaultAggregateClosingBooksConfigurationResolver implements AggregateClosingBooksConfigurationResolver {
+    /** Substituted when an aggregate's policy needs an event-count threshold but none has been configured. */
+    public static final long    DEFAULT_EVENT_THRESHOLD = 1000L;
+    /** Substituted when an aggregate's time boundary is {@link ClosingBooksTimeBoundary#EVERY_N_DAYS} but no interval has been configured. */
+    public static final int     DEFAULT_INTERVAL_DAYS   = 30;
+
     private final EssentialsEventStoreProperties       properties;
     private final AggregateClosingBooksPolicyRegistry  policyRegistry;
 
@@ -43,10 +48,23 @@ public class DefaultAggregateClosingBooksConfigurationResolver implements Aggreg
         var descriptor = policyRegistry.findByAggregateImplementationType(aggregateImplementationType);
         var aggregatePolicyOverride = resolveAggregateOverride(aggregateType, descriptor);
 
+        // Resolution semantics for enabled:
+        //   1. A per-aggregate property override always wins (escape hatch — lets an operator
+        //      selectively enable specific aggregates even when the feature is globally off).
+        //   2. Otherwise, the global kill switch wins: if `closingBooks.enabled=false` the
+        //      aggregate's annotation cannot force the feature on. This prevents the validator
+        //      and runtime wiring from acting on annotated aggregates when the feature is
+        //      globally disabled.
+        //   3. Otherwise, fall back to the annotation value (default true).
         var enabled = aggregatePolicyOverride.flatMap(override -> Optional.ofNullable(override.getEnabled()))
-                                             .orElseGet(() -> descriptor.map(AggregateClosingBooksPolicyDescriptor::policy)
-                                                                        .map(AggregateClosingBooksPolicy::enabled)
-                                                                        .orElse(closingBooksProperties.isEnabled()));
+                                             .orElseGet(() -> {
+                                                 if (!closingBooksProperties.isEnabled()) {
+                                                     return false;
+                                                 }
+                                                 return descriptor.map(AggregateClosingBooksPolicyDescriptor::policy)
+                                                                  .map(AggregateClosingBooksPolicy::enabled)
+                                                                  .orElse(true);
+                                             });
 
         var triggerMode = aggregatePolicyOverride.flatMap(override -> Optional.ofNullable(override.getTriggerMode()))
                                                  .orElseGet(() -> descriptor.map(AggregateClosingBooksPolicyDescriptor::policy)
@@ -83,13 +101,31 @@ public class DefaultAggregateClosingBooksConfigurationResolver implements Aggreg
                                                                              .filter(value -> value > 0)
                                                                              .orElse(closingBooksProperties.getIntervalDays()));
 
+        Long resolvedEventThreshold;
+        if (eventThresholdRequired(defaultPolicy) && (eventThreshold == null || eventThreshold <= 0)) {
+            resolvedEventThreshold = DEFAULT_EVENT_THRESHOLD;
+        } else {
+            resolvedEventThreshold = eventThreshold;
+        }
+        Integer resolvedIntervalDays;
+        if (timeBoundary == ClosingBooksTimeBoundary.EVERY_N_DAYS && (intervalDays == null || intervalDays <= 0)) {
+            resolvedIntervalDays = DEFAULT_INTERVAL_DAYS;
+        } else {
+            resolvedIntervalDays = intervalDays;
+        }
+
         return new ResolvedAggregateClosingBooksConfiguration(enabled,
                                                               triggerMode,
                                                               defaultPolicy,
-                                                              eventThreshold,
+                                                              resolvedEventThreshold,
                                                               timeBoundary,
                                                               zoneId,
-                                                              intervalDays);
+                                                              resolvedIntervalDays);
+    }
+
+    private static boolean eventThresholdRequired(ClosingBooksDefaultPolicyType policy) {
+        return policy == ClosingBooksDefaultPolicyType.EVENT_COUNT
+                || policy == ClosingBooksDefaultPolicyType.EVENT_COUNT_OR_TIME_BOUNDARY;
     }
 
     private Optional<EssentialsEventStoreProperties.AggregateClosingBooksPolicyProperties> resolveAggregateOverride(

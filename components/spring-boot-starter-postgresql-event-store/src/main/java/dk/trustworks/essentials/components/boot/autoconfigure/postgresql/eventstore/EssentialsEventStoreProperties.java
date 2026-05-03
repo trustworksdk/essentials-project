@@ -549,11 +549,12 @@ public class EssentialsEventStoreProperties {
     public static class DurableSnapshotProperties {
         private boolean  enabled       = true;
         private String   jobTableName  = PostgresqlAggregateSnapshotJobRepository.DEFAULT_TABLE_NAME;
-        private Duration pollInterval  = Duration.ofSeconds(1);
-        private int      batchSize     = 25;
-        private int      workerThreads = 2;
-        private int      maxRetries    = 3;
-        private Duration retryDelay    = Duration.ofSeconds(5);
+        private Duration pollInterval      = Duration.ofSeconds(1);
+        private int      batchSize         = 25;
+        private int      workerThreads     = 2;
+        private int      maxRetries        = 3;
+        private Duration retryDelay        = Duration.ofSeconds(5);
+        private Duration processingTimeout = Duration.ofMinutes(5);
 
         public boolean isEnabled() {
             return enabled;
@@ -609,6 +610,14 @@ public class EssentialsEventStoreProperties {
 
         public void setRetryDelay(Duration retryDelay) {
             this.retryDelay = retryDelay;
+        }
+
+        public Duration getProcessingTimeout() {
+            return processingTimeout;
+        }
+
+        public void setProcessingTimeout(Duration processingTimeout) {
+            this.processingTimeout = processingTimeout;
         }
     }
 

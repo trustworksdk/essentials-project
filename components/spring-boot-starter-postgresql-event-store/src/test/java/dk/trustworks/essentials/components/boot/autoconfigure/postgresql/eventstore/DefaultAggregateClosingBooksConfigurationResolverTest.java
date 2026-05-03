@@ -79,6 +79,41 @@ class DefaultAggregateClosingBooksConfigurationResolverTest {
         assertThat(resolved.zoneId()).isEqualTo("Europe/Copenhagen");
     }
 
+    @Test
+    void global_disabled_overrides_annotation_enabled_default() {
+        var properties = new EssentialsEventStoreProperties();
+        properties.getClosingBooks().setEnabled(false);
+
+        var registry = new InMemoryAggregateClosingBooksPolicyRegistry();
+        registry.register(new AggregateClosingBooksPolicyDescriptor(EnabledByAnnotationAggregate.class,
+                                                                    Optional.of("Invoices"),
+                                                                    EnabledByAnnotationAggregate.class.getAnnotation(AggregateClosingBooksPolicy.class)));
+
+        var resolved = new DefaultAggregateClosingBooksConfigurationResolver(properties, registry)
+                .resolve(AggregateType.of("Invoices"), EnabledByAnnotationAggregate.class);
+
+        assertThat(resolved.enabled()).isFalse();
+    }
+
+    @Test
+    void per_aggregate_override_can_re_enable_when_global_is_disabled() {
+        var properties = new EssentialsEventStoreProperties();
+        properties.getClosingBooks().setEnabled(false);
+        var override = new EssentialsEventStoreProperties.AggregateClosingBooksPolicyProperties();
+        override.setEnabled(true);
+        properties.getClosingBooks().getAggregates().put("Invoices", override);
+
+        var registry = new InMemoryAggregateClosingBooksPolicyRegistry();
+        registry.register(new AggregateClosingBooksPolicyDescriptor(EnabledByAnnotationAggregate.class,
+                                                                    Optional.of("Invoices"),
+                                                                    EnabledByAnnotationAggregate.class.getAnnotation(AggregateClosingBooksPolicy.class)));
+
+        var resolved = new DefaultAggregateClosingBooksConfigurationResolver(properties, registry)
+                .resolve(AggregateType.of("Invoices"), EnabledByAnnotationAggregate.class);
+
+        assertThat(resolved.enabled()).isTrue();
+    }
+
     @AggregateClosingBooksPolicy(aggregateType = "Orders",
                                  enabled = false,
                                  triggerMode = ClosingBooksTriggerMode.EXPLICIT_COMMAND,
@@ -87,5 +122,10 @@ class DefaultAggregateClosingBooksConfigurationResolverTest {
                                  timeBoundary = ClosingBooksTimeBoundary.END_OF_MONTH,
                                  zoneId = "Europe/Copenhagen")
     static class OrdersAggregate {
+    }
+
+    @AggregateClosingBooksPolicy(aggregateType = "Invoices",
+                                 triggerMode = ClosingBooksTriggerMode.SCHEDULED_SCAN)
+    static class EnabledByAnnotationAggregate {
     }
 }

@@ -25,8 +25,11 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.*;
 
 import java.util.*;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -38,7 +41,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * Snapshot scheduling semantics are currently in-memory only for {@link SnapshotExecutionMode#ASYNC_IN_MEMORY}.
  */
 @SuppressWarnings("unchecked")
-public class AsyncAggregateSnapshotRepository implements AggregateSnapshotRepository {
+public class AsyncAggregateSnapshotRepository implements AggregateSnapshotRepository, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(AsyncAggregateSnapshotRepository.class);
 
     private final AggregateSnapshotStore             snapshotStore;
@@ -47,6 +50,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
     private final AggregateSnapshotDeletionStrategy  snapshotDeletionStrategy;
     private final AsyncAggregateSnapshotSettings     settings;
     private final Executor                           executor;
+    private final boolean                            ownsExecutor;
     private final AggregateSnapshotMeasurementSupport measurementSupport;
     private final Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory;
 
@@ -70,6 +74,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              snapshotDeletionStrategy,
              settings,
              defaultExecutor(settings),
+             defaultExecutorOwned(settings),
              Optional.empty(),
              Optional.empty());
     }
@@ -96,6 +101,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              snapshotDeletionStrategy,
              settings,
              executor,
+             false,
              Optional.empty(),
              Optional.empty());
     }
@@ -123,6 +129,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              snapshotDeletionStrategy,
              settings,
              defaultExecutor(settings),
+             defaultExecutorOwned(settings),
              Optional.of(unitOfWorkFactory),
              Optional.empty());
     }
@@ -151,6 +158,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              snapshotDeletionStrategy,
              settings,
              executor,
+             false,
              Optional.of(unitOfWorkFactory),
              Optional.empty());
     }
@@ -180,6 +188,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              snapshotDeletionStrategy,
              settings,
              executor,
+             false,
              Optional.empty(),
              meterRegistryOptional);
     }
@@ -212,6 +221,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
              snapshotDeletionStrategy,
              settings,
              executor,
+             false,
              Optional.of(unitOfWorkFactory),
              meterRegistryOptional);
     }
@@ -234,6 +244,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                                              AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
                                              AsyncAggregateSnapshotSettings settings,
                                              Executor executor,
+                                             boolean ownsExecutor,
                                              Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory,
                                              Optional<MeterRegistry> meterRegistryOptional) {
         this.snapshotStore = requireNonNull(snapshotStore, "No snapshotStore provided");
@@ -242,6 +253,7 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
         this.snapshotDeletionStrategy = requireNonNull(snapshotDeletionStrategy, "No snapshotDeletionStrategy provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.executor = requireNonNull(executor, "No executor provided");
+        this.ownsExecutor = ownsExecutor;
         this.measurementSupport = new AggregateSnapshotMeasurementSupport(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"));
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
@@ -302,9 +314,10 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                                               aggregateImplType,
                                               deleteSnapshotEventOrders);
             } else if (!snapshotDeletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()) {
-                snapshotStore.deleteSnapshots(aggregateType,
-                                              aggregateId,
-                                              aggregateImplType);
+                snapshotStore.deleteSnapshotsOlderThan(aggregateType,
+                                                       aggregateId,
+                                                       aggregateImplType,
+                                                       lastAppliedEventOrder);
             }
             snapshotStore.saveSnapshot(aggregateType,
                                        aggregateId,
@@ -337,7 +350,21 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
                       aggregateId,
                       aggregateImplType.getName(),
                       lastAppliedEventOrder);
-            persistenceTask.run();
+            try {
+                persistenceTask.run();
+            } catch (Throwable t) {
+                // Async snapshot persistence is best-effort in ASYNC_IN_MEMORY mode — there is no
+                // retry queue. Surface the failure as a structured ERROR log instead of letting
+                // the executor's default handler dump the stack to stderr (where it is easy to
+                // miss and may also kill the worker thread for a single-thread executor).
+                // Use ASYNC_DURABLE mode if guaranteed retry/delivery is required.
+                log.error("[{}:{}] Failed to persist Aggregate Snapshot asynchronously for '{}' and last_included_event_order {}",
+                          aggregateType,
+                          aggregateId,
+                          aggregateImplType.getName(),
+                          lastAppliedEventOrder,
+                          t);
+            }
         };
 
         var currentUnitOfWork = unitOfWorkFactory.flatMap(UnitOfWorkFactory::getCurrentUnitOfWork);
@@ -353,9 +380,45 @@ public class AsyncAggregateSnapshotRepository implements AggregateSnapshotReposi
             return Runnable::run;
         }
         if (settings.mode == SnapshotExecutionMode.ASYNC_IN_MEMORY) {
-            return Executors.newSingleThreadExecutor();
+            // Use daemon threads so a forgotten close() doesn't block JVM shutdown outside Spring.
+            var threadCounter = new AtomicInteger();
+            return Executors.newSingleThreadExecutor(runnable -> {
+                var thread = new Thread(runnable, "async-aggregate-snapshot-" + threadCounter.incrementAndGet());
+                thread.setDaemon(true);
+                return thread;
+            });
         }
         throw new UnsupportedOperationException(msg("SnapshotExecutionMode '{}' isn't supported yet", settings.mode));
+    }
+
+    /** True for the executors {@link #defaultExecutor(AsyncAggregateSnapshotSettings)} creates,
+     *  which this instance must {@code shutdown()} on {@link #close()}. SYNC mode uses the
+     *  shared {@code Runnable::run} reference and must NOT be shut down. */
+    private static boolean defaultExecutorOwned(AsyncAggregateSnapshotSettings settings) {
+        return settings.mode == SnapshotExecutionMode.ASYNC_IN_MEMORY;
+    }
+
+    /**
+     * Shuts down the {@link ExecutorService} created by this instance, if any.
+     * Spring will invoke this automatically for beans implementing {@link AutoCloseable}.
+     * If a user-supplied {@code Executor} was passed to the constructor, it is left untouched —
+     * the caller owns its lifecycle.
+     */
+    @Override
+    public void close() {
+        if (!ownsExecutor || !(executor instanceof ExecutorService executorService)) {
+            return;
+        }
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
+                log.warn("Async snapshot executor did not terminate within 10 seconds; forcing shutdownNow().");
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 
     private <ID, AGGREGATE_IMPL_TYPE> List<EventOrder> resolveSnapshotEventOrdersToDelete(AggregateType aggregateType,

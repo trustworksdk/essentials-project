@@ -135,4 +135,35 @@ public interface AggregateSnapshotStore {
                                                    ID aggregateId,
                                                    Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType,
                                                    List<EventOrder> snapshotEventOrdersToDelete);
+
+    /**
+     * Deletes snapshots whose {@code last_included_event_order} is strictly less than
+     * {@code olderThanEventOrder}. This is the safe replacement for the unconditional
+     * "delete all snapshots for this aggregate" variant when racing with concurrent
+     * out-of-order snapshot saves: it guarantees that a worker processing an older
+     * snapshot job cannot remove a snapshot newer than the one it is about to save.
+     *
+     * @param <ID>                            the type of the aggregate identifier
+     * @param <AGGREGATE_IMPL_TYPE>           the type of the aggregate implementation
+     * @param aggregateType                   the type of the aggregate whose snapshots are to be deleted
+     * @param aggregateId                     the identifier of the aggregate instance
+     * @param withAggregateImplementationType the class type of the aggregate implementation
+     * @param olderThanEventOrder             only snapshots with {@code last_included_event_order < olderThanEventOrder}
+     *                                        will be deleted
+     */
+    default <ID, AGGREGATE_IMPL_TYPE> void deleteSnapshotsOlderThan(AggregateType aggregateType,
+                                                                     ID aggregateId,
+                                                                     Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType,
+                                                                     EventOrder olderThanEventOrder) {
+        var older = loadAllSnapshots(aggregateType,
+                                     aggregateId,
+                                     withAggregateImplementationType,
+                                     false).stream()
+                                           .map(snapshot -> snapshot.eventOrderOfLastIncludedEvent)
+                                           .filter(eventOrder -> eventOrder.longValue() < olderThanEventOrder.longValue())
+                                           .toList();
+        if (!older.isEmpty()) {
+            deleteSnapshots(aggregateType, aggregateId, withAggregateImplementationType, older);
+        }
+    }
 }

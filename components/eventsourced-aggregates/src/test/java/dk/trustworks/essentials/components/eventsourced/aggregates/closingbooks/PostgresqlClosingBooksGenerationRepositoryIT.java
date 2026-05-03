@@ -89,6 +89,35 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
     }
 
     @Test
+    void coordinator_close_and_open_next_generation_rolls_back_close_when_open_fails() {
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#1");
+
+        ClosingBooksStreamIdGenerator<String> failingStreamIdGenerator = (type, id, generation) -> {
+            throw new RuntimeException("boom");
+        };
+        var coordinator = new ClosingBooksCoordinator<>(ACCOUNTS,
+                                                        repository,
+                                                        failingStreamIdGenerator,
+                                                        unitOfWorkFactory);
+
+        assertThatThrownBy(() -> coordinator.closeAndOpenNextGeneration(logicalAggregateId))
+                .rootCause()
+                .hasMessage("boom");
+
+        // The close + open were inside one UoW. Since the open path threw, the entire transaction
+        // rolled back — the original generation must still be OPEN, not stuck in CLOSED with no successor.
+        assertThat(repository.resolveCurrentGeneration(ACCOUNTS, logicalAggregateId))
+                .isPresent()
+                .get()
+                .satisfies(current -> {
+                    assertThat(current.generation()).isEqualTo(1);
+                    assertThat(current.isOpen()).isTrue();
+                });
+        assertThat(repository.loadGenerations(ACCOUNTS, logicalAggregateId)).hasSize(1);
+    }
+
+    @Test
     void cannot_open_a_new_generation_while_another_generation_is_open() {
         var logicalAggregateId = new LogicalAggregateId<>("Account-123");
         repository.openNextGeneration(ACCOUNTS,

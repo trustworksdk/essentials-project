@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -29,6 +30,21 @@ import java.util.Optional;
  */
 public interface AggregateArchiveRegistry {
     void save(AggregateArchiveEntry entry);
+
+    /**
+     * Atomically claim ownership of archiving the given generation by inserting an
+     * {@link AggregateArchiveStatus#IN_PROGRESS} marker row. Returns {@code true} if this caller
+     * inserted the claim row, {@code false} if a row already existed (another node owns the
+     * claim, or the generation is already {@code ARCHIVED}/{@code FAILED}).
+     * <p>
+     * Note: stale {@code IN_PROGRESS} rows from crashed workers must currently be cleared by an
+     * operator. Automatic visibility-timeout based reclaim is a planned follow-up.
+     */
+    boolean tryClaim(AggregateType aggregateType,
+                     String logicalAggregateId,
+                     long generation,
+                     String streamAggregateId,
+                     OffsetDateTime claimedAt);
 
     Optional<AggregateArchiveEntry> findArchivedGeneration(AggregateType aggregateType,
                                                            String logicalAggregateId,

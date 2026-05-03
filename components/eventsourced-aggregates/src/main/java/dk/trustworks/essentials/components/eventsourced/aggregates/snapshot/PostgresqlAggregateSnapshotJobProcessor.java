@@ -20,6 +20,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.Co
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import dk.trustworks.essentials.shared.reflection.Classes;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.*;
@@ -50,46 +52,36 @@ public class PostgresqlAggregateSnapshotJobProcessor {
     private final AggregateSnapshotJobRepository                                      jobRepository;
     private final DurableAsyncSnapshotSettings                                        settings;
     private final AggregateSnapshotDurableQueueMeasurementSupport                     measurementSupport;
+    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>       unitOfWorkFactory;
 
-    /**
-     * Constructs a new instance of {@code PostgresqlAggregateSnapshotJobProcessor}.
-     *
-     * @param eventStore The event store used for accessing event streams and performing operations related to aggregate events.
-     * @param snapshotStore The snapshot store used for managing aggregate snapshots during the job processing.
-     * @param jobRepository The repository responsible for managing snapshot job metadata and persistence.
-     * @param settings The configuration settings for processing durable asynchronous snapshot jobs.
-     */
     public PostgresqlAggregateSnapshotJobProcessor(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                    AggregateSnapshotStore snapshotStore,
                                                    AggregateSnapshotJobRepository jobRepository,
+                                                   HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                    DurableAsyncSnapshotSettings settings) {
-        this(eventStore, snapshotStore, jobRepository, settings, Optional.empty());
+        this(eventStore, snapshotStore, jobRepository, unitOfWorkFactory, settings, Optional.empty());
     }
 
-    /**
-     * Constructs a new instance of {@code PostgresqlAggregateSnapshotJobProcessor}.
-     *
-     * @param eventStore The event store used for accessing event streams and performing operations related to aggregate events.
-     * @param snapshotStore The snapshot store used for managing aggregate snapshots during the job processing.
-     * @param jobRepository The repository responsible for managing snapshot job metadata and persistence.
-     * @param settings The configuration settings for processing durable asynchronous snapshot jobs.
-     * @param meterRegistryOptional An optional registry for recording metrics related to snapshot job processing.
-     */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public PostgresqlAggregateSnapshotJobProcessor(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                    AggregateSnapshotStore snapshotStore,
                                                    AggregateSnapshotJobRepository jobRepository,
+                                                   HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                    DurableAsyncSnapshotSettings settings,
                                                    Optional<MeterRegistry> meterRegistryOptional) {
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.snapshotStore = requireNonNull(snapshotStore, "No snapshotStore provided");
         this.jobRepository = requireNonNull(jobRepository, "No jobRepository provided");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.measurementSupport = new AggregateSnapshotDurableQueueMeasurementSupport(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"));
     }
 
     public int processNextBatch(ExecutorService workerExecutor) {
-        var jobs = jobRepository.lockNextBatch(settings.batchSize(), OffsetDateTime.now());
+        var now = OffsetDateTime.now();
+        var jobs = jobRepository.lockNextBatch(settings.batchSize(),
+                                                now,
+                                                now.minus(settings.processingTimeout()));
         jobs.forEach(job -> workerExecutor.submit(() -> processJob(job)));
         return jobs.size();
     }
@@ -97,42 +89,54 @@ public class PostgresqlAggregateSnapshotJobProcessor {
     void processJob(AggregateSnapshotJob job) {
         measurementSupport.recordProcessJob(job, () -> {
             try {
-                var aggregateType = AggregateType.of(job.aggregateType());
-                var config = eventStore.getAggregateEventStreamConfiguration(aggregateType);
-                var aggregateId = config.aggregateIdSerializer.deserialize(job.serializedAggregateId());
-                var aggregateImplementationType = Classes.forName(job.aggregateImplementationType(), getClass().getClassLoader());
-
-                if (job.deleteAllExistingSnapshots()) {
-                    snapshotStore.deleteSnapshots(aggregateType, aggregateId, aggregateImplementationType);
-                } else if (!job.snapshotEventOrdersToDelete().isEmpty()) {
-                    snapshotStore.deleteSnapshots(aggregateType,
-                                                  aggregateId,
-                                                  aggregateImplementationType,
-                                                  job.snapshotEventOrdersToDelete().stream().map(EventOrder::of).toList());
-                }
-
-                snapshotStore.saveSnapshot(aggregateType,
-                                           aggregateId,
-                                           aggregateImplementationType,
-                                           EventOrder.of(job.lastIncludedEventOrder()),
-                                           job.serializedSnapshot());
-                jobRepository.markCompleted(job.jobId());
+                unitOfWorkFactory.usingUnitOfWork(uow -> applyJob(job));
                 measurementSupport.incrementProcessOutcome(job, "completed");
             } catch (Exception e) {
                 var retryCountExceeded = job.attempts() >= settings.maxRetries();
-                var nextAttemptTs = OffsetDateTime.now().plus(settings.retryDelay());
-                jobRepository.markFailed(job.jobId(),
-                                         e.getMessage(),
-                                         retryCountExceeded ? OffsetDateTime.MAX.minusYears(1000) : nextAttemptTs);
+                if (retryCountExceeded) {
+                    jobRepository.markParked(job.jobId(), e.getMessage(), OffsetDateTime.now());
+                } else {
+                    jobRepository.markFailed(job.jobId(),
+                                             e.getMessage(),
+                                             OffsetDateTime.now().plus(settings.retryDelay()));
+                }
                 measurementSupport.incrementProcessOutcome(job, retryCountExceeded ? "retry_exhausted" : "retry_scheduled");
-                log.warn("Failed processing AggregateSnapshotJob '{}' for aggregate '{}:{}' (attempt {} of {})",
+                log.warn("Failed processing AggregateSnapshotJob '{}' for aggregate '{}:{}' (attempt {} of {}){}",
                          job.jobId(),
                          job.aggregateType(),
                          job.serializedAggregateId(),
                          job.attempts(),
                          settings.maxRetries(),
+                         retryCountExceeded ? " — retry budget exhausted, parking" : "",
                          e);
             }
         });
+    }
+
+    private void applyJob(AggregateSnapshotJob job) {
+        var aggregateType = AggregateType.of(job.aggregateType());
+        var config = eventStore.getAggregateEventStreamConfiguration(aggregateType);
+        var aggregateId = config.aggregateIdSerializer.deserialize(job.serializedAggregateId());
+        var aggregateImplementationType = Classes.forName(job.aggregateImplementationType(), getClass().getClassLoader());
+
+        var lastIncludedEventOrder = EventOrder.of(job.lastIncludedEventOrder());
+        if (job.deleteAllExistingSnapshots()) {
+            snapshotStore.deleteSnapshotsOlderThan(aggregateType,
+                                                    aggregateId,
+                                                    aggregateImplementationType,
+                                                    lastIncludedEventOrder);
+        } else if (!job.snapshotEventOrdersToDelete().isEmpty()) {
+            snapshotStore.deleteSnapshots(aggregateType,
+                                          aggregateId,
+                                          aggregateImplementationType,
+                                          job.snapshotEventOrdersToDelete().stream().map(EventOrder::of).toList());
+        }
+
+        snapshotStore.saveSnapshot(aggregateType,
+                                   aggregateId,
+                                   aggregateImplementationType,
+                                   lastIncludedEventOrder,
+                                   job.serializedSnapshot());
+        jobRepository.markCompleted(job.jobId());
     }
 }

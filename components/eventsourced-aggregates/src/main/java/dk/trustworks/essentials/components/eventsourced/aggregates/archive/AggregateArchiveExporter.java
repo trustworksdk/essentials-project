@@ -15,8 +15,25 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
+import java.io.IOException;
+import java.io.OutputStream;
+
+/**
+ * Streams persisted events into an {@link OutputStream} owned by an
+ * {@link AggregateArchiveDestination}. Implementations must consume the
+ * {@link AggregateArchiveExportRequest#persistedEvents()} stream exactly once and write the
+ * encoded bytes directly to the supplied {@link OutputStream} without buffering the entire
+ * payload in memory.
+ */
 public interface AggregateArchiveExporter {
     AggregateArchiveFormat format();
 
-    AggregateArchiveArtifact export(AggregateArchiveExportRequest request);
+    String fileExtension();
+
+    /**
+     * Streams the events in {@code request} as the configured archive format.
+     *
+     * @return the number of events written
+     */
+    long export(AggregateArchiveExportRequest request, OutputStream out) throws IOException;
 }

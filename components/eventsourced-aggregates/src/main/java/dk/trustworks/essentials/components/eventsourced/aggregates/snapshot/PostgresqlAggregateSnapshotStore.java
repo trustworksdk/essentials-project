@@ -230,14 +230,20 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                                                                                                                    last_included_event_order,
                                                                                                                                                    snapshot,
                                                                                                                                                    created_ts
-                                                                                                                                               ) VALUES (
-                                                                                                                                                   :aggregate_impl_type,
-                                                                                                                                                   :aggregate_id,
-                                                                                                                                                   :aggregate_type,
-                                                                                                                                                   :last_included_event_order,
-                                                                                                                                                   :snapshot::jsonb,
-                                                                                                                                                   :created_ts
-                                                                                                                                                ) ON CONFLICT DO NOTHING
+                                                                                                                                               )
+                                                                                                                                               SELECT :aggregate_impl_type,
+                                                                                                                                                      :aggregate_id,
+                                                                                                                                                      :aggregate_type,
+                                                                                                                                                      :last_included_event_order,
+                                                                                                                                                      :snapshot::jsonb,
+                                                                                                                                                      :created_ts
+                                                                                                                                               WHERE NOT EXISTS (
+                                                                                                                                                   SELECT 1 FROM {:tableName}
+                                                                                                                                                   WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                                     AND aggregate_id = :aggregate_id
+                                                                                                                                                     AND last_included_event_order > :last_included_event_order
+                                                                                                                                               )
+                                                                                                                                               ON CONFLICT DO NOTHING
                                                                                                                                                """, arg("tableName", snapshotTableName)))
                                                                                                                 .bind("aggregate_impl_type", aggregateImplType.getName())
                                                                                                                 .bind("aggregate_id", serializedAggregateId)
@@ -248,18 +254,51 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                                                                                 .execute()));
 
         if (rowsUpdated[0] == 1) {
-            log.debug("[{}:{}] Updated Aggregate Snapshot for '{}' and last_included_event_order {}",
+            log.debug("[{}:{}] Saved Aggregate Snapshot for '{}' and last_included_event_order {}",
                       aggregateType,
                       aggregateId,
                       aggregateImplType.getName(),
                       lastIncludedEventOrder);
         } else {
-            log.debug("[{}:{}] No rows updated when trying to update Aggregate Snapshot for '{}' and last_included_event_order {}",
+            log.debug("[{}:{}] Skipped saving Aggregate Snapshot for '{}' at last_included_event_order {} - a newer or equal snapshot already exists",
                       aggregateType,
                       aggregateId,
                       aggregateImplType.getName(),
                       lastIncludedEventOrder);
         }
+    }
+
+    @Override
+    public <ID, AGGREGATE_IMPL_TYPE> void deleteSnapshotsOlderThan(AggregateType aggregateType,
+                                                                    ID aggregateId,
+                                                                    Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType,
+                                                                    EventOrder olderThanEventOrder) {
+        requireNonNull(aggregateType, "No aggregateType supplied");
+        requireNonNull(aggregateId, "No aggregateId supplied");
+        requireNonNull(withAggregateImplementationType, "No withAggregateImplementationType supplied");
+        requireNonNull(olderThanEventOrder, "No olderThanEventOrder supplied");
+
+        var config                = eventStore.getAggregateEventStreamConfiguration(aggregateType);
+        var serializedAggregateId = config.aggregateIdSerializer.serialize(aggregateId);
+        final int[] rowsUpdated = new int[1];
+        measurementSupport.recordDeleteSnapshots(aggregateType,
+                                                 withAggregateImplementationType,
+                                                 "older_than",
+                                                 () -> rowsUpdated[0] = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createUpdate(bind("""
+                                                                                                                                                   DELETE FROM {:tableName}
+                                                                                                                                                   WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                                     AND aggregate_id = :aggregate_id
+                                                                                                                                                     AND last_included_event_order < :older_than_event_order
+                                                                                                                                                   """, arg("tableName", snapshotTableName)))
+                                                                                                                   .bind("aggregate_impl_type", withAggregateImplementationType.getName())
+                                                                                                                   .bind("aggregate_id", serializedAggregateId)
+                                                                                                                   .bind("older_than_event_order", olderThanEventOrder.longValue())
+                                                                                                                   .execute()));
+        log.debug("Deleted {} historic snapshots related to Aggregate '{}' with id '{}' and last_included_event_order < {}",
+                  rowsUpdated[0],
+                  withAggregateImplementationType.getName(),
+                  aggregateId,
+                  olderThanEventOrder);
     }
 
     @Override

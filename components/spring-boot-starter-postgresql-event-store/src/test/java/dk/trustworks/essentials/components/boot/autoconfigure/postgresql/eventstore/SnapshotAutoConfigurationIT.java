@@ -69,10 +69,11 @@ class SnapshotAutoConfigurationIT {
                     ).applyTo(ctx.getEnvironment()));
 
     @Test
-    void sync_snapshot_mode_registers_store_repository_and_metadata_beans() {
+    void sync_snapshot_mode_registers_store_and_provider_beans() {
         contextRunner
                 .withPropertyValues(
                         "essentials.eventstore.snapshots.enabled=true",
+                        "essentials.eventstore.snapshots.default-mode=sync",
                         "essentials.eventstore.snapshots.durable.enabled=false"
                 )
                 .run(ctx -> {
@@ -81,8 +82,13 @@ class SnapshotAutoConfigurationIT {
                     assertThat(ctx).hasSingleBean(AggregateSnapshotConfigurationResolver.class);
                     assertThat(ctx).hasSingleBean(AggregateSnapshotStore.class);
                     assertThat(ctx).hasSingleBean(AggregateSnapshotRepositoryProvider.class);
-                    assertThat(ctx).hasSingleBean(AggregateSnapshotRepository.class);
-                    assertThat(ctx.getBean(AggregateSnapshotRepository.class)).isInstanceOf(PostgresqlAggregateSnapshotRepository.class);
+                    var provider = ctx.getBean(AggregateSnapshotRepositoryProvider.class);
+                    assertThat(provider.resolve(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType.of("Plain"),
+                                                PlainAggregate.class))
+                            // Non-annotated aggregate falls back to global SYNC default.
+                            .isPresent()
+                            .get()
+                            .isInstanceOf(PostgresqlAggregateSnapshotRepository.class);
                     assertThat(ctx).doesNotHaveBean(AggregateSnapshotJobRepository.class);
                     assertThat(ctx).doesNotHaveBean(DurableAsyncSnapshotManager.class);
                 });
@@ -97,14 +103,13 @@ class SnapshotAutoConfigurationIT {
                     assertThat(ctx).hasSingleBean(AggregateSnapshotConfigurationResolver.class);
                     assertThat(ctx).doesNotHaveBean(AggregateSnapshotStore.class);
                     assertThat(ctx).doesNotHaveBean(AggregateSnapshotRepositoryProvider.class);
-                    assertThat(ctx).doesNotHaveBean(AggregateSnapshotRepository.class);
                     assertThat(ctx).doesNotHaveBean(AggregateSnapshotJobRepository.class);
                     assertThat(ctx).doesNotHaveBean(DurableAsyncSnapshotManager.class);
                 });
     }
 
     @Test
-    void durable_snapshot_mode_registers_job_processing_beans_and_durable_repository() {
+    void durable_snapshot_mode_registers_job_processing_beans() {
         contextRunner
                 .withPropertyValues(
                         "essentials.eventstore.snapshots.enabled=true",
@@ -116,24 +121,22 @@ class SnapshotAutoConfigurationIT {
                     assertThat(ctx).hasSingleBean(PostgresqlAggregateSnapshotJobProcessor.class);
                     assertThat(ctx).hasSingleBean(DurableAsyncSnapshotManager.class);
                     assertThat(ctx).hasSingleBean(AggregateSnapshotRepositoryProvider.class);
-                    assertThat(ctx).hasSingleBean(AggregateSnapshotRepository.class);
-                    assertThat(ctx.getBean(AggregateSnapshotRepository.class)).isInstanceOf(DurableAsyncAggregateSnapshotRepository.class);
                 });
     }
 
     @Test
-    void user_provided_snapshot_repository_causes_starter_repository_to_back_off() {
+    void user_provided_snapshot_repository_provider_causes_starter_provider_to_back_off() {
         contextRunner
                 .withPropertyValues(
                         "essentials.eventstore.snapshots.enabled=true",
                         "essentials.eventstore.snapshots.durable.enabled=false"
                 )
-                .withUserConfiguration(UserProvidedSnapshotRepositoryConfiguration.class)
+                .withUserConfiguration(UserProvidedSnapshotRepositoryProviderConfiguration.class)
                 .run(ctx -> {
-                    assertThat(ctx).hasSingleBean(AggregateSnapshotRepository.class);
-                    assertThat(ctx.getBean(AggregateSnapshotRepository.class)).isSameAs(ctx.getBean("customAggregateSnapshotRepository"));
-                    assertThat(ctx).hasSingleBean(AggregateSnapshotStore.class);
                     assertThat(ctx).hasSingleBean(AggregateSnapshotRepositoryProvider.class);
+                    assertThat(ctx.getBean(AggregateSnapshotRepositoryProvider.class))
+                            .isSameAs(ctx.getBean("customAggregateSnapshotRepositoryProvider"));
+                    assertThat(ctx).hasSingleBean(AggregateSnapshotStore.class);
                 });
     }
 
@@ -186,55 +189,10 @@ class SnapshotAutoConfigurationIT {
     }
 
     @Configuration
-    static class UserProvidedSnapshotRepositoryConfiguration {
+    static class UserProvidedSnapshotRepositoryProviderConfiguration {
         @Bean
-        AggregateSnapshotRepository customAggregateSnapshotRepository() {
-            return new AggregateSnapshotRepository() {
-                @Override
-                public <ID, AGGREGATE_IMPL_TYPE> Optional<AggregateSnapshot<ID, AGGREGATE_IMPL_TYPE>> loadSnapshot(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType aggregateType,
-                                                                                                                    ID aggregateId,
-                                                                                                                    Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
-                    return Optional.empty();
-                }
-
-                @Override
-                public <ID, AGGREGATE_IMPL_TYPE> Optional<AggregateSnapshot<ID, AGGREGATE_IMPL_TYPE>> loadSnapshot(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType aggregateType,
-                                                                                                                    ID aggregateId,
-                                                                                                                    dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder withLastIncludedEventOrderLessThanOrEqualTo,
-                                                                                                                    Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
-                    return Optional.empty();
-                }
-
-                @Override
-                public <ID, AGGREGATE_IMPL_TYPE> List<AggregateSnapshot<ID, AGGREGATE_IMPL_TYPE>> loadAllSnapshots(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType aggregateType,
-                                                                                                                    ID aggregateId,
-                                                                                                                    Class<AGGREGATE_IMPL_TYPE> aggregateImplType,
-                                                                                                                    boolean includeSnapshotPayload) {
-                    return List.of();
-                }
-
-                @Override
-                public <ID, AGGREGATE_IMPL_TYPE> void aggregateUpdated(AGGREGATE_IMPL_TYPE aggregate,
-                                                                       dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream<ID> persistedEvents) {
-                }
-
-                @Override
-                public <AGGREGATE_IMPL_TYPE> void deleteAllSnapshots(Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
-                }
-
-                @Override
-                public <ID, AGGREGATE_IMPL_TYPE> void deleteSnapshots(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType aggregateType,
-                                                                      ID aggregateId,
-                                                                      Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType) {
-                }
-
-                @Override
-                public <ID, AGGREGATE_IMPL_TYPE> void deleteSnapshots(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType aggregateType,
-                                                                      ID aggregateId,
-                                                                      Class<AGGREGATE_IMPL_TYPE> withAggregateImplementationType,
-                                                                      List<dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder> snapshotEventOrdersToDelete) {
-                }
-            };
+        AggregateSnapshotRepositoryProvider customAggregateSnapshotRepositoryProvider() {
+            return (aggregateType, aggregateImplementationType) -> Optional.empty();
         }
     }
 
@@ -248,5 +206,9 @@ class SnapshotAutoConfigurationIT {
 
     @AggregateSnapshotPolicy(aggregateType = "Disabled", enabled = false)
     static class DisabledAggregate {
+    }
+
+    /** Used to verify global default behavior — no annotation, so the resolver falls back to global props. */
+    static class PlainAggregate {
     }
 }

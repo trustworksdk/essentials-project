@@ -15,6 +15,13 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
+import java.io.IOException;
+
+/**
+ * A sink for archive artifacts. Implementations open and own the underlying
+ * {@link java.io.OutputStream}, wrap it with checksum/byte-counting decorators, hand it to the
+ * {@link ArchiveContentWriter}, and return the resulting {@link AggregateArchiveWriteResult}.
+ */
 public interface AggregateArchiveDestination {
-    String write(AggregateArchiveWriteRequest request);
+    AggregateArchiveWriteResult write(AggregateArchiveWriteRequest request, ArchiveContentWriter writer) throws IOException;
 }

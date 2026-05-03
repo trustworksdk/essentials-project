@@ -43,10 +43,21 @@ public class DefaultAggregateSnapshotConfigurationResolver implements AggregateS
         var descriptor = policyRegistry.findByAggregateImplementationType(aggregateImplementationType);
         var aggregatePolicyOverride = resolveAggregateOverride(aggregateType, descriptor);
 
+        // Resolution semantics for enabled:
+        //   1. A per-aggregate property override always wins (escape hatch — lets an operator
+        //      selectively enable specific aggregates even when the feature is globally off).
+        //   2. Otherwise, the global kill switch wins: if `snapshots.enabled=false` the
+        //      aggregate's annotation cannot force the feature on.
+        //   3. Otherwise, fall back to the annotation value (default true).
         var enabled = aggregatePolicyOverride.flatMap(override -> Optional.ofNullable(override.getEnabled()))
-                                             .orElseGet(() -> descriptor.map(AggregateSnapshotPolicyDescriptor::policy)
-                                                                        .map(AggregateSnapshotPolicy::enabled)
-                                                                        .orElse(snapshotProperties.isEnabled()));
+                                             .orElseGet(() -> {
+                                                 if (!snapshotProperties.isEnabled()) {
+                                                     return false;
+                                                 }
+                                                 return descriptor.map(AggregateSnapshotPolicyDescriptor::policy)
+                                                                  .map(AggregateSnapshotPolicy::enabled)
+                                                                  .orElse(true);
+                                             });
 
         var mode = aggregatePolicyOverride.flatMap(override -> Optional.ofNullable(override.getMode()))
                                           .orElseGet(() -> descriptor.map(AggregateSnapshotPolicyDescriptor::policy)

@@ -21,6 +21,10 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkLifecycleCallback.BeforeCommitProcessingStatus;
 import dk.trustworks.essentials.shared.collections.Lists;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.*;
@@ -57,6 +61,7 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
     private final AggregateSnapshotMeasurementSupport                                 measurementSupport;
     private final AddNewAggregateSnapshotStrategy                                     addNewSnapshotStrategy;
     private final AggregateSnapshotDeletionStrategy                                   snapshotDeletionStrategy;
+    private final Optional<UnitOfWorkFactory<? extends UnitOfWork>>                   unitOfWorkFactory;
 
     /**
      * Constructs a {@code DurableAsyncAggregateSnapshotRepository} with the specified dependencies.
@@ -80,6 +85,24 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
              jsonSerializer,
              addNewSnapshotStrategy,
              snapshotDeletionStrategy,
+             Optional.empty(),
+             Optional.empty());
+    }
+
+    public DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                                                   AggregateSnapshotStore snapshotStore,
+                                                   AggregateSnapshotJobRepository jobRepository,
+                                                   JSONEventSerializer jsonSerializer,
+                                                   AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
+                                                   AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
+                                                   UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory) {
+        this(eventStore,
+             snapshotStore,
+             jobRepository,
+             jsonSerializer,
+             addNewSnapshotStrategy,
+             snapshotDeletionStrategy,
+             Optional.of(unitOfWorkFactory),
              Optional.empty());
     }
 
@@ -102,6 +125,25 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
                                                    AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
                                                    AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
                                                    Optional<MeterRegistry> meterRegistryOptional) {
+        this(eventStore,
+             snapshotStore,
+             jobRepository,
+             jsonSerializer,
+             addNewSnapshotStrategy,
+             snapshotDeletionStrategy,
+             Optional.empty(),
+             meterRegistryOptional);
+    }
+
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public DurableAsyncAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
+                                                   AggregateSnapshotStore snapshotStore,
+                                                   AggregateSnapshotJobRepository jobRepository,
+                                                   JSONEventSerializer jsonSerializer,
+                                                   AddNewAggregateSnapshotStrategy addNewSnapshotStrategy,
+                                                   AggregateSnapshotDeletionStrategy snapshotDeletionStrategy,
+                                                   Optional<UnitOfWorkFactory<? extends UnitOfWork>> unitOfWorkFactory,
+                                                   Optional<MeterRegistry> meterRegistryOptional) {
         this.eventStore = requireNonNull(eventStore, "No eventStore provided");
         this.snapshotStore = requireNonNull(snapshotStore, "No snapshotStore provided");
         this.jobRepository = requireNonNull(jobRepository, "No jobRepository provided");
@@ -109,6 +151,7 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
         this.measurementSupport = new AggregateSnapshotMeasurementSupport(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"));
         this.addNewSnapshotStrategy = requireNonNull(addNewSnapshotStrategy, "No addNewSnapshotStrategy provided");
         this.snapshotDeletionStrategy = requireNonNull(snapshotDeletionStrategy, "No snapshotDeletionStrategy provided");
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
     }
 
     @Override
@@ -162,8 +205,36 @@ public class DurableAsyncAggregateSnapshotRepository implements AggregateSnapsho
                                            0,
                                            AggregateSnapshotJobStatus.PENDING,
                                            null);
-        jobRepository.enqueue(job);
+        // Defer the enqueue until the user's UnitOfWork commits — mirrors AsyncAggregateSnapshotRepository.
+        // If the user UoW rolls back, no orphan job is left referencing events that were never
+        // committed, regardless of whether the job repository shares the user's UoW factory.
+        var currentUnitOfWork = unitOfWorkFactory.flatMap(UnitOfWorkFactory::getCurrentUnitOfWork);
+        if (currentUnitOfWork.isPresent()) {
+            currentUnitOfWork.get().registerLifecycleCallbackForResource(job, afterCommitEnqueueCallback);
+        } else {
+            jobRepository.enqueue(job);
+        }
     }
+
+    private final UnitOfWorkLifecycleCallback<AggregateSnapshotJob> afterCommitEnqueueCallback = new UnitOfWorkLifecycleCallback<>() {
+        @Override
+        public BeforeCommitProcessingStatus beforeCommit(UnitOfWork unitOfWork, List<AggregateSnapshotJob> jobs) {
+            return BeforeCommitProcessingStatus.COMPLETED;
+        }
+
+        @Override
+        public void afterCommit(UnitOfWork unitOfWork, List<AggregateSnapshotJob> jobs) {
+            jobs.forEach(jobRepository::enqueue);
+        }
+
+        @Override
+        public void beforeRollback(UnitOfWork unitOfWork, List<AggregateSnapshotJob> jobs, Throwable causeOfTheRollback) {
+        }
+
+        @Override
+        public void afterRollback(UnitOfWork unitOfWork, List<AggregateSnapshotJob> jobs, Throwable causeOfTheRollback) {
+        }
+    };
 
     private <ID, AGGREGATE_IMPL_TYPE> boolean shouldSchedule(AGGREGATE_IMPL_TYPE aggregate,
                                                              AggregateEventStream<ID> persistedEvents,

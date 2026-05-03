@@ -21,16 +21,23 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import static dk.trustworks.essentials.shared.FailFast.requireNonBlank;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Metadata describing where and how to write an archive artifact. Carries no payload bytes —
+ * the destination opens its own {@link java.io.OutputStream} and invokes the
+ * {@link ArchiveContentWriter} that is passed alongside this request.
+ */
 public record AggregateArchiveWriteRequest(
         AggregateType aggregateType,
         String logicalAggregateId,
         AggregateGeneration<String> generation,
-        AggregateArchiveArtifact artifact
+        AggregateArchiveFormat format,
+        String fileExtension
 ) {
     public AggregateArchiveWriteRequest {
         requireNonNull(aggregateType, "No aggregateType provided");
         requireNonBlank(logicalAggregateId, "No logicalAggregateId provided");
         requireNonNull(generation, "No generation provided");
-        requireNonNull(artifact, "No artifact provided");
+        requireNonNull(format, "No format provided");
+        requireNonBlank(fileExtension, "No fileExtension provided");
     }
 }

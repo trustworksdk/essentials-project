@@ -33,7 +33,8 @@ class ClosingBooksCoordinatorTest {
         var repository = new InMemoryClosingBooksGenerationResolver<String>();
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         repository,
-                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration);
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline());
 
         var generation = coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
 
@@ -49,7 +50,8 @@ class ClosingBooksCoordinatorTest {
         var repository = new InMemoryClosingBooksGenerationResolver<String>();
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         repository,
-                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration);
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline());
 
         coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
         var nextGeneration = coordinator.closeAndOpenNextGeneration(logicalAggregateId);
@@ -68,6 +70,7 @@ class ClosingBooksCoordinatorTest {
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         repository,
                                                         (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
                                                         Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC));
 
         var generation = coordinator.evaluatePolicy(logicalAggregateId,
@@ -88,6 +91,7 @@ class ClosingBooksCoordinatorTest {
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         repository,
                                                         (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
                                                         Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC));
 
         coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
@@ -109,6 +113,7 @@ class ClosingBooksCoordinatorTest {
         var coordinator = new ClosingBooksCoordinator<>(aggregateType,
                                                         repository,
                                                         (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
                                                         Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC));
 
         coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);

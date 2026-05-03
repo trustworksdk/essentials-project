@@ -2,7 +2,6 @@
  * Copyright 2021-2026 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
@@ -16,10 +15,16 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
-public enum AggregateArchiveStatus {
-    /** Reserved by a worker that is currently writing the archive. Used to prevent duplicate
-     *  concurrent exports of the same generation across nodes. */
-    IN_PROGRESS,
-    ARCHIVED,
-    FAILED
+import java.io.IOException;
+import java.io.OutputStream;
+
+/**
+ * Streaming write callback handed to an {@link AggregateArchiveDestination}. Implementations write
+ * archive content to the supplied {@link OutputStream} and return the number of records written
+ * (typically the persisted-event count). The destination owns the stream lifecycle and will wrap
+ * it with checksum/byte-counting decorators before invocation.
+ */
+@FunctionalInterface
+public interface ArchiveContentWriter {
+    long write(OutputStream out) throws IOException;
 }

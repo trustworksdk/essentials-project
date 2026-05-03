@@ -65,12 +65,14 @@ public class ClosingBooksConfiguration {
                                                                                             AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
                                                                                             AggregateSnapshotConfigurationResolver snapshotConfigurationResolver,
                                                                                             AggregateClosingBooksConfigurationResolver closingBooksConfigurationResolver,
+                                                                                            EssentialsEventStoreProperties properties,
                                                                                             Optional<FencedLockManager> fencedLockManagerOptional,
                                                                                             org.springframework.beans.factory.ObjectProvider<TypedClosingBooksNextGenerationFactory<?, ?, ?, ?>> nextGenerationFactories) {
         return new DefaultAggregateLifecycleConfigurationValidator(snapshotPolicyRegistry,
                                                                   closingBooksPolicyRegistry,
                                                                   snapshotConfigurationResolver,
                                                                   closingBooksConfigurationResolver,
+                                                                  properties,
                                                                   fencedLockManagerOptional,
                                                                   nextGenerationFactories.orderedStream().toList());
     }

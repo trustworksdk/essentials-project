@@ -28,16 +28,19 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.EventId;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class JacksonJsonLinesAggregateArchiveExporterTest {
     @Test
-    void it_exports_persisted_events_as_json_lines() {
+    void it_streams_persisted_events_as_json_lines() throws IOException {
         var jsonSerializer = new JacksonJSONEventSerializer(JsonMapper.builder().findAndAddModules().build());
         var request = new AggregateArchiveExportRequest(AggregateType.of("Orders"),
                                                         "order-1",
@@ -48,16 +51,17 @@ class JacksonJsonLinesAggregateArchiveExporterTest {
                                                                                   GenerationState.CLOSED,
                                                                                   OffsetDateTime.parse("2026-04-01T00:00:00Z"),
                                                                                   Optional.of(OffsetDateTime.parse("2026-04-10T00:00:00Z"))),
-                                                        List.of(createPersistedEvent(jsonSerializer, 0L, 1L),
-                                                                createPersistedEvent(jsonSerializer, 1L, 2L)));
+                                                        Stream.of(createPersistedEvent(jsonSerializer, 0L, 1L),
+                                                                  createPersistedEvent(jsonSerializer, 1L, 2L)));
 
-        var artifact = new JacksonJsonLinesAggregateArchiveExporter(jsonSerializer).export(request);
-        var lines = new String(artifact.content(), StandardCharsets.UTF_8).trim().split("\\R");
+        var sink = new ByteArrayOutputStream();
+        var exporter = new JacksonJsonLinesAggregateArchiveExporter(jsonSerializer);
+        var count = exporter.export(request, sink);
+        var lines = sink.toString(StandardCharsets.UTF_8).trim().split("\\R");
 
-        assertThat(artifact.format()).isEqualTo(AggregateArchiveFormat.JSONL);
-        assertThat(artifact.fileExtension()).isEqualTo("jsonl");
-        assertThat(artifact.eventCount()).isEqualTo(2);
-        assertThat(artifact.checksum()).startsWith("sha256:");
+        assertThat(exporter.format()).isEqualTo(AggregateArchiveFormat.JSONL);
+        assertThat(exporter.fileExtension()).isEqualTo("jsonl");
+        assertThat(count).isEqualTo(2L);
         assertThat(lines).hasSize(2);
         assertThat(lines[0]).contains("\"aggregateType\":\"Orders\"");
         assertThat(lines[0]).contains("\"logicalAggregateId\":\"order-1\"");

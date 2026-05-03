@@ -60,12 +60,12 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
                                                                               generation BIGINT NOT NULL,
                                                                               stream_aggregate_id TEXT NOT NULL,
                                                                               archive_status TEXT NOT NULL,
-                                                                              archive_format TEXT NOT NULL,
-                                                                              archive_location TEXT NOT NULL,
-                                                                              event_count BIGINT NOT NULL,
+                                                                              archive_format TEXT,
+                                                                              archive_location TEXT,
+                                                                              event_count BIGINT,
                                                                               checksum TEXT,
                                                                               closed_ts TIMESTAMP WITH TIME ZONE,
-                                                                              archived_ts TIMESTAMP WITH TIME ZONE NOT NULL,
+                                                                              archived_ts TIMESTAMP WITH TIME ZONE,
                                                                               archive_error TEXT,
                                                                               PRIMARY KEY (aggregate_type, logical_aggregate_id, generation)
                                                                           )
@@ -141,6 +141,43 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
     }
 
     @Override
+    public boolean tryClaim(AggregateType aggregateType,
+                            String logicalAggregateId,
+                            long generation,
+                            String streamAggregateId,
+                            OffsetDateTime claimedAt) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
+        requireNonNull(streamAggregateId, "No streamAggregateId provided");
+        requireNonNull(claimedAt, "No claimedAt provided");
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createUpdate(bind("""
+                                                                                       INSERT INTO {:tableName} (
+                                                                                           aggregate_type,
+                                                                                           logical_aggregate_id,
+                                                                                           generation,
+                                                                                           stream_aggregate_id,
+                                                                                           archive_status,
+                                                                                           archived_ts
+                                                                                       ) VALUES (
+                                                                                           :aggregate_type,
+                                                                                           :logical_aggregate_id,
+                                                                                           :generation,
+                                                                                           :stream_aggregate_id,
+                                                                                           'IN_PROGRESS',
+                                                                                           :claimed_ts
+                                                                                       )
+                                                                                       ON CONFLICT (aggregate_type, logical_aggregate_id, generation)
+                                                                                       DO NOTHING
+                                                                                       """, arg("tableName", tableName)))
+                                                          .bind("aggregate_type", aggregateType.value())
+                                                          .bind("logical_aggregate_id", logicalAggregateId)
+                                                          .bind("generation", generation)
+                                                          .bind("stream_aggregate_id", streamAggregateId)
+                                                          .bind("claimed_ts", claimedAt)
+                                                          .execute()) == 1;
+    }
+
+    @Override
     public Optional<AggregateArchiveEntry> findArchivedGeneration(AggregateType aggregateType,
                                                                   String logicalAggregateId,
                                                                   long generation) {
@@ -199,12 +236,13 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
     }
 
     private AggregateArchiveEntry mapEntry(ResultSet rs) throws SQLException {
+        var rawFormat = rs.getString("archive_format");
         return new AggregateArchiveEntry(AggregateType.of(rs.getString("aggregate_type")),
                                          rs.getString("logical_aggregate_id"),
                                          rs.getLong("generation"),
                                          rs.getString("stream_aggregate_id"),
                                          AggregateArchiveStatus.valueOf(rs.getString("archive_status")),
-                                         AggregateArchiveFormat.valueOf(rs.getString("archive_format")),
+                                         rawFormat == null ? null : AggregateArchiveFormat.valueOf(rawFormat),
                                          rs.getString("archive_location"),
                                          rs.getLong("event_count"),
                                          rs.getString("checksum"),

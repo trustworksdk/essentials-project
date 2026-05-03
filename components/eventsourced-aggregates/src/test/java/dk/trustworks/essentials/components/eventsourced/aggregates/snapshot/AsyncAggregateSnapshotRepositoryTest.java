@@ -57,14 +57,14 @@ class AsyncAggregateSnapshotRepositoryTest {
         when(snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType, aggregateId, TestAggregate.class)).thenReturn(Optional.of(EventOrder.of(1)));
         when(strategy.shouldANewAggregateSnapshotBeAdded(aggregate, persistedEvents, Optional.of(EventOrder.of(1)))).thenReturn(true);
         when(deletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()).thenReturn(false);
-        when(jsonSerializer.serialize(aggregate)).thenReturn("{\"type\":\"snapshot\"}");
+        when(jsonSerializer.serialize(any())).thenReturn("{\"type\":\"snapshot\"}");
 
         repository.aggregateUpdated(aggregate, persistedEvents);
 
         verify(snapshotStore, never()).saveSnapshot(any(), any(), any(), any(), any());
         executor.runSingleTask();
 
-        verify(snapshotStore).deleteSnapshots(aggregateType, aggregateId, TestAggregate.class);
+        verify(snapshotStore).deleteSnapshotsOlderThan(aggregateType, aggregateId, TestAggregate.class, eventOrder);
         verify(snapshotStore).saveSnapshot(aggregateType,
                                            aggregateId,
                                            TestAggregate.class,
@@ -103,7 +103,7 @@ class AsyncAggregateSnapshotRepositoryTest {
         when(snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType, aggregateId, TestAggregate.class)).thenReturn(Optional.of(EventOrder.of(1)));
         when(strategy.shouldANewAggregateSnapshotBeAdded(aggregate, persistedEvents, Optional.of(EventOrder.of(1)))).thenReturn(true);
         when(deletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()).thenReturn(false);
-        when(jsonSerializer.serialize(aggregate)).thenReturn("{\"type\":\"snapshot\"}");
+        when(jsonSerializer.serialize(any())).thenReturn("{\"type\":\"snapshot\"}");
         when(unitOfWorkFactory.getCurrentUnitOfWork()).thenReturn(Optional.of(unitOfWork));
 
         var registeredTasks = new ArrayList<Runnable>();
@@ -122,7 +122,7 @@ class AsyncAggregateSnapshotRepositoryTest {
         registeredCallbacks.get(0).afterCommit(unitOfWork, registeredTasks);
 
         executor.runSingleTask();
-        verify(snapshotStore).deleteSnapshots(aggregateType, aggregateId, TestAggregate.class);
+        verify(snapshotStore).deleteSnapshotsOlderThan(aggregateType, aggregateId, TestAggregate.class, eventOrder);
         verify(snapshotStore).saveSnapshot(aggregateType,
                                            aggregateId,
                                            TestAggregate.class,
@@ -193,7 +193,7 @@ class AsyncAggregateSnapshotRepositoryTest {
             List<AggregateSnapshot<String, TestAggregate>> existingSnapshots = invocation.getArgument(0);
             return existingSnapshots.stream().limit(1);
         });
-        when(jsonSerializer.serialize(aggregate)).thenReturn("{\"type\":\"snapshot\"}");
+        when(jsonSerializer.serialize(any())).thenReturn("{\"type\":\"snapshot\"}");
 
         repository.aggregateUpdated(aggregate, persistedEvents);
 
@@ -236,7 +236,7 @@ class AsyncAggregateSnapshotRepositoryTest {
         when(snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType, aggregateId, TestAggregate.class)).thenReturn(Optional.empty());
         when(strategy.shouldANewAggregateSnapshotBeAdded(aggregate, persistedEvents, Optional.empty())).thenReturn(true);
         when(deletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()).thenReturn(false);
-        when(jsonSerializer.serialize(aggregate)).thenReturn("{\"type\":\"snapshot\"}");
+        when(jsonSerializer.serialize(any())).thenReturn("{\"type\":\"snapshot\"}");
 
         repository.aggregateUpdated(aggregate, persistedEvents);
 
@@ -255,6 +255,45 @@ class AsyncAggregateSnapshotRepositoryTest {
                                        TestAggregate.class,
                                        null,
                                        eventOrder);
+    }
+
+    @Test
+    void async_persistence_task_exception_does_not_escape_to_executor() {
+        var snapshotStore = mock(AggregateSnapshotStore.class);
+        var jsonSerializer = mock(JSONEventSerializer.class);
+        var strategy = mock(AddNewAggregateSnapshotStrategy.class);
+        var deletionStrategy = mock(AggregateSnapshotDeletionStrategy.class);
+        var executor = new CapturingExecutor();
+        var repository = new AsyncAggregateSnapshotRepository(snapshotStore,
+                                                              jsonSerializer,
+                                                              strategy,
+                                                              deletionStrategy,
+                                                              AsyncAggregateSnapshotSettings.asynchronous(),
+                                                              executor);
+
+        var aggregate = new TestAggregate();
+        var aggregateType = AggregateType.of("Orders");
+        var aggregateId = "order-1";
+        var persistedEvent = mock(PersistedEvent.class);
+        when(persistedEvent.eventOrder()).thenReturn(EventOrder.of(3));
+        var persistedEvents = mock(AggregateEventStream.class);
+        when(persistedEvents.aggregateType()).thenReturn(aggregateType);
+        when(persistedEvents.aggregateId()).thenReturn(aggregateId);
+        when(persistedEvents.eventList()).thenReturn(List.of(persistedEvent));
+        when(snapshotStore.findMostRecentLastIncludedEventOrder(aggregateType, aggregateId, TestAggregate.class)).thenReturn(Optional.empty());
+        when(strategy.shouldANewAggregateSnapshotBeAdded(aggregate, persistedEvents, Optional.empty())).thenReturn(true);
+        when(deletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()).thenReturn(false);
+        when(jsonSerializer.serialize(any())).thenReturn("{\"type\":\"snapshot\"}");
+        doThrow(new IllegalStateException("boom")).when(snapshotStore).saveSnapshot(any(), any(), any(), any(), any());
+
+        repository.aggregateUpdated(aggregate, persistedEvents);
+
+        // The exception thrown inside persistenceTask must NOT escape the executor's runnable.
+        // If it did, a real ThreadPoolExecutor would silently swallow it and could even kill the
+        // worker thread on a single-thread executor.
+        executor.runSingleTask();
+
+        verify(snapshotStore).saveSnapshot(any(), any(), any(), any(), any());
     }
 
     private static final class TestAggregate {

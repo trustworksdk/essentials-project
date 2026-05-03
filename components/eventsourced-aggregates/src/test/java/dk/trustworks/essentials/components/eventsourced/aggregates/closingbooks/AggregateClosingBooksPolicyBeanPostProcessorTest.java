@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.support.*;
 
@@ -72,6 +73,34 @@ class AggregateClosingBooksPolicyBeanPostProcessorTest {
         assertThat(registry.getRegisteredPolicies()).isEmpty();
     }
 
+    @Test
+    void registers_policy_for_a_cglib_proxied_aggregate_bean() {
+        var beanFactory = new DefaultListableBeanFactory();
+        beanFactory.registerBeanDefinition("annotatedAggregate", new RootBeanDefinition(ProxyableAnnotatedAggregate.class));
+        var registry = new InMemoryAggregateClosingBooksPolicyRegistry();
+        var postProcessor = new AggregateClosingBooksPolicyBeanPostProcessor(registry, beanFactory);
+
+        var target = new ProxyableAnnotatedAggregate();
+        var factory = new ProxyFactory(target);
+        factory.setProxyTargetClass(true);
+        var proxy = factory.getProxy();
+
+        // Sanity: the proxy class is a CGLIB-generated subclass that doesn't carry the user annotation directly.
+        assertThat(proxy.getClass()).isNotEqualTo(ProxyableAnnotatedAggregate.class);
+        assertThat(proxy.getClass().getAnnotation(AggregateClosingBooksPolicy.class)).isNull();
+
+        postProcessor.postProcessAfterInitialization(proxy, "annotatedAggregate");
+
+        assertThat(registry.findByAggregateImplementationType(ProxyableAnnotatedAggregate.class))
+                .isPresent()
+                .get()
+                .satisfies(descriptor -> {
+                    assertThat(descriptor.aggregateImplementationType()).isEqualTo(ProxyableAnnotatedAggregate.class);
+                    assertThat(descriptor.aggregateType()).contains("Invoices");
+                    assertThat(descriptor.policy().triggerMode()).isEqualTo(ClosingBooksTriggerMode.ON_ACCESS);
+                });
+    }
+
     @AggregateClosingBooksPolicy(aggregateType = "Accounts",
                                  triggerMode = ClosingBooksTriggerMode.SCHEDULED_SCAN,
                                  defaultPolicy = ClosingBooksDefaultPolicyType.EVENT_COUNT,
@@ -79,6 +108,11 @@ class AggregateClosingBooksPolicyBeanPostProcessorTest {
                                  timeBoundary = ClosingBooksTimeBoundary.END_OF_MONTH,
                                  zoneId = "Europe/Copenhagen")
     private static final class AnnotatedAggregate {
+    }
+
+    @AggregateClosingBooksPolicy(aggregateType = "Invoices",
+                                 triggerMode = ClosingBooksTriggerMode.ON_ACCESS)
+    public static class ProxyableAnnotatedAggregate {
     }
 
     private static final class PlainAggregate {

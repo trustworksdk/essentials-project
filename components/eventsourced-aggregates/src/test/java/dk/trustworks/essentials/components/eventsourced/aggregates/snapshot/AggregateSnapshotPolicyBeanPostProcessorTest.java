@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.support.*;
 
@@ -97,6 +98,34 @@ class AggregateSnapshotPolicyBeanPostProcessorTest {
                 .satisfies(descriptor -> assertThat(descriptor.aggregateType()).contains("UpdatedOrders"));
     }
 
+    @Test
+    void registers_policy_for_a_cglib_proxied_aggregate_bean() {
+        var beanFactory = new DefaultListableBeanFactory();
+        beanFactory.registerBeanDefinition("annotatedAggregate", new RootBeanDefinition(ProxyableAnnotatedAggregate.class));
+        var registry = new InMemoryAggregateSnapshotPolicyRegistry();
+        var postProcessor = new AggregateSnapshotPolicyBeanPostProcessor(registry, beanFactory);
+
+        var target = new ProxyableAnnotatedAggregate();
+        var factory = new ProxyFactory(target);
+        factory.setProxyTargetClass(true);
+        var proxy = factory.getProxy();
+
+        // Sanity: the proxy class is a CGLIB-generated subclass that doesn't carry the user annotation directly.
+        assertThat(proxy.getClass()).isNotEqualTo(ProxyableAnnotatedAggregate.class);
+        assertThat(proxy.getClass().getAnnotation(AggregateSnapshotPolicy.class)).isNull();
+
+        postProcessor.postProcessAfterInitialization(proxy, "annotatedAggregate");
+
+        assertThat(registry.findByAggregateImplementationType(ProxyableAnnotatedAggregate.class))
+                .isPresent()
+                .get()
+                .satisfies(descriptor -> {
+                    assertThat(descriptor.aggregateImplementationType()).isEqualTo(ProxyableAnnotatedAggregate.class);
+                    assertThat(descriptor.aggregateType()).contains("Invoices");
+                    assertThat(descriptor.policy().everyNEvents()).isEqualTo(50);
+                });
+    }
+
     @AggregateSnapshotPolicy(
             aggregateType = "Orders",
             mode = SnapshotExecutionMode.ASYNC_DURABLE,
@@ -105,6 +134,10 @@ class AggregateSnapshotPolicyBeanPostProcessorTest {
             keepLastSnapshots = 2
     )
     private static final class AnnotatedAggregate {
+    }
+
+    @AggregateSnapshotPolicy(aggregateType = "Invoices", everyNEvents = 50)
+    public static class ProxyableAnnotatedAggregate {
     }
 
     private static final class PlainAggregate {

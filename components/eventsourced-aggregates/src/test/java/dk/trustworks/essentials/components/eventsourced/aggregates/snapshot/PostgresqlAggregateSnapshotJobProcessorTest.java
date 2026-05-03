@@ -22,6 +22,9 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
+import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
+import dk.trustworks.essentials.shared.functional.CheckedConsumer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -52,6 +55,7 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
         var processor = new PostgresqlAggregateSnapshotJobProcessor(eventStore,
                                                                     snapshotStore,
                                                                     jobRepository,
+                                                                    inlineUnitOfWorkFactory(),
                                                                     new DurableAsyncSnapshotSettings(Duration.ofSeconds(1), 25, 2, 3, Duration.ofSeconds(5)));
         var job = new AggregateSnapshotJob(UUID.randomUUID(),
                                            "Orders",
@@ -69,7 +73,10 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
 
         processor.processJob(job);
 
-        verify(snapshotStore).deleteSnapshots(AggregateType.of("Orders"), "order-1", TestAggregate.class);
+        verify(snapshotStore).deleteSnapshotsOlderThan(AggregateType.of("Orders"),
+                                                        "order-1",
+                                                        TestAggregate.class,
+                                                        EventOrder.of(7));
         verify(snapshotStore).saveSnapshot(AggregateType.of("Orders"),
                                            "order-1",
                                            TestAggregate.class,
@@ -94,6 +101,7 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
         var processor = new PostgresqlAggregateSnapshotJobProcessor(eventStore,
                                                                     snapshotStore,
                                                                     jobRepository,
+                                                                    inlineUnitOfWorkFactory(),
                                                                     new DurableAsyncSnapshotSettings(Duration.ofSeconds(1), 25, 2, 3, Duration.ofSeconds(5)));
         var job = new AggregateSnapshotJob(UUID.randomUUID(),
                                            "Orders",
@@ -140,6 +148,7 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
         var processor = new PostgresqlAggregateSnapshotJobProcessor(eventStore,
                                                                     snapshotStore,
                                                                     jobRepository,
+                                                                    inlineUnitOfWorkFactory(),
                                                                     new DurableAsyncSnapshotSettings(Duration.ofSeconds(1), 25, 2, 3, Duration.ofSeconds(5)));
         var job = new AggregateSnapshotJob(UUID.randomUUID(),
                                            "Orders",
@@ -180,6 +189,7 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
         var processor = new PostgresqlAggregateSnapshotJobProcessor(eventStore,
                                                                     snapshotStore,
                                                                     jobRepository,
+                                                                    inlineUnitOfWorkFactory(),
                                                                     new DurableAsyncSnapshotSettings(Duration.ofSeconds(1), 25, 2, 2, Duration.ofSeconds(5)));
         var job = new AggregateSnapshotJob(UUID.randomUUID(),
                                            "Orders",
@@ -197,7 +207,8 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
 
         processor.processJob(job);
 
-        verify(jobRepository).markFailed(eq(job.jobId()), eq("boom"), argThat(nextAttemptTs -> nextAttemptTs.getYear() > 9000));
+        verify(jobRepository).markParked(eq(job.jobId()), eq("boom"), any(OffsetDateTime.class));
+        verify(jobRepository, never()).markFailed(any(), any(), any());
     }
 
     @Test
@@ -217,6 +228,7 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
         var processor = new PostgresqlAggregateSnapshotJobProcessor(eventStore,
                                                                     snapshotStore,
                                                                     jobRepository,
+                                                                    inlineUnitOfWorkFactory(),
                                                                     new DurableAsyncSnapshotSettings(Duration.ofSeconds(1), 25, 2, 3, Duration.ofSeconds(5)),
                                                                     java.util.Optional.of(meterRegistry));
         var job = new AggregateSnapshotJob(UUID.randomUUID(),
@@ -270,6 +282,7 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
         var processor = new PostgresqlAggregateSnapshotJobProcessor(eventStore,
                                                                     snapshotStore,
                                                                     jobRepository,
+                                                                    inlineUnitOfWorkFactory(),
                                                                     new DurableAsyncSnapshotSettings(Duration.ofSeconds(1), 25, 2, 1, Duration.ofSeconds(5)),
                                                                     java.util.Optional.of(meterRegistry));
         var job = new AggregateSnapshotJob(UUID.randomUUID(),
@@ -296,6 +309,22 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
                 .isNotNull()
                 .extracting(counter -> counter.count())
                 .isEqualTo(1.0d);
+    }
+
+    private static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> inlineUnitOfWorkFactory() {
+        @SuppressWarnings("unchecked")
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> uowFactory = mock(HandleAwareUnitOfWorkFactory.class);
+        var uow = mock(HandleAwareUnitOfWork.class);
+        try {
+            doAnswer(invocation -> {
+                CheckedConsumer<HandleAwareUnitOfWork> consumer = invocation.getArgument(0);
+                consumer.accept(uow);
+                return null;
+            }).when(uowFactory).usingUnitOfWork(any(CheckedConsumer.class));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return uowFactory;
     }
 
     private static final class TestAggregate {

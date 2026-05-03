@@ -17,14 +17,13 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 
-import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 public class JacksonJsonLinesAggregateArchiveExporter implements AggregateArchiveExporter {
     private final JSONSerializer jsonSerializer;
@@ -39,27 +38,26 @@ public class JacksonJsonLinesAggregateArchiveExporter implements AggregateArchiv
     }
 
     @Override
-    public AggregateArchiveArtifact export(AggregateArchiveExportRequest request) {
-        requireNonNull(request, "No request provided");
-        var builder = new StringBuilder();
-        request.persistedEvents()
-               .forEach(event -> builder.append(jsonSerializer.serialize(ArchivedPersistedEventLine.from(request, event)))
-                                        .append('\n'));
-
-        var content = builder.toString().getBytes(StandardCharsets.UTF_8);
-        return new AggregateArchiveArtifact(format(),
-                                            content,
-                                            request.persistedEvents().size(),
-                                            sha256(content),
-                                            "jsonl");
+    public String fileExtension() {
+        return "jsonl";
     }
 
-    private String sha256(byte[] content) {
-        try {
-            return "sha256:" + HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
-        } catch (NoSuchAlgorithmException e) {
-            rethrowIfCriticalError(e);
-            throw new IllegalStateException(msg("Failed to calculate SHA-256 checksum for {}", getClass().getSimpleName()), e);
+    @Override
+    public long export(AggregateArchiveExportRequest request, OutputStream out) throws IOException {
+        requireNonNull(request, "No request provided");
+        requireNonNull(out, "No out provided");
+        // Wrap, but don't close the supplied OutputStream — the destination owns its lifecycle.
+        var writer = new BufferedWriter(new OutputStreamWriter(out, StandardCharsets.UTF_8));
+        long count = 0L;
+        try (var events = request.persistedEvents()) {
+            for (var iterator = events.iterator(); iterator.hasNext(); ) {
+                var event = iterator.next();
+                writer.write(jsonSerializer.serialize(ArchivedPersistedEventLine.from(request, event)));
+                writer.write('\n');
+                count++;
+            }
         }
+        writer.flush();
+        return count;
     }
 }

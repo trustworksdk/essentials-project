@@ -17,9 +17,11 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
 import org.slf4j.*;
+import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.config.*;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.util.Optional;
 
@@ -66,18 +68,19 @@ public class AggregateSnapshotPolicyBeanPostProcessor implements BeanPostProcess
             return bean;
         }
 
-        var policy = bean.getClass().getAnnotation(AggregateSnapshotPolicy.class);
+        var targetClass = AopProxyUtils.ultimateTargetClass(bean);
+        var policy = AnnotationUtils.findAnnotation(targetClass, AggregateSnapshotPolicy.class);
         if (policy == null) {
             return bean;
         }
 
         var aggregateType = policy.aggregateType().isBlank() ? Optional.<String>empty() : Optional.of(policy.aggregateType());
-        var descriptor = new AggregateSnapshotPolicyDescriptor(bean.getClass(),
+        var descriptor = new AggregateSnapshotPolicyDescriptor(targetClass,
                                                                aggregateType,
                                                                policy);
         policyRegistry.register(descriptor);
         log.debug("Registered aggregate snapshot policy for '{}' from bean '{}'",
-                  bean.getClass().getName(),
+                  targetClass.getName(),
                   beanName);
         return bean;
     }

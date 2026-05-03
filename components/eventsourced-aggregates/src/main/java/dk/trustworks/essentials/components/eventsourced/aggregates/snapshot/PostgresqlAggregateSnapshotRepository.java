@@ -275,9 +275,9 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
                                                                                                                    persistedEvents.aggregateId(),
                                                                                                                    aggregateImplType);
         if (shouldWeAddANewAggregateSnapshot(aggregate, persistedEvents, aggregateType, aggregateImplType.getName(), mostRecentlyStoredSnapshotLastIncludedEventOrder)) {
-            deleteHistoricSnapShotsIfNecessary(aggregate, persistedEvents, aggregateType, aggregateImplType);
-
             var lastAppliedEventOrder = Lists.last(persistedEvents.eventList()).get().eventOrder();
+            deleteHistoricSnapShotsIfNecessary(aggregate, persistedEvents, aggregateType, aggregateImplType, lastAppliedEventOrder);
+
             snapshotStore.saveSnapshot(aggregateType,
                                        persistedEvents.aggregateId(),
                                        aggregateImplType,
@@ -317,7 +317,8 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
     private <ID, AGGREGATE_IMPL_TYPE> void deleteHistoricSnapShotsIfNecessary(AGGREGATE_IMPL_TYPE aggregate,
                                                                               AggregateEventStream<ID> persistedEvents,
                                                                               AggregateType aggregateType,
-                                                                              Class<AGGREGATE_IMPL_TYPE> aggregateImplType) {
+                                                                              Class<AGGREGATE_IMPL_TYPE> aggregateImplType,
+                                                                              EventOrder lastAppliedEventOrder) {
         if (snapshotDeletionStrategy.requiresExistingSnapshotDetailsToDetermineWhichAggregateSnapshotsToDelete()) {
             var existingSnapshots = snapshotStore.loadAllSnapshots(aggregateType,
                                                                    persistedEvents.aggregateId(),
@@ -350,9 +351,10 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
                 }
             }
         } else {
-            snapshotStore.deleteSnapshots(aggregateType,
-                                          persistedEvents.aggregateId(),
-                                          aggregateImplType);
+            snapshotStore.deleteSnapshotsOlderThan(aggregateType,
+                                                   persistedEvents.aggregateId(),
+                                                   aggregateImplType,
+                                                   lastAppliedEventOrder);
         }
     }
 

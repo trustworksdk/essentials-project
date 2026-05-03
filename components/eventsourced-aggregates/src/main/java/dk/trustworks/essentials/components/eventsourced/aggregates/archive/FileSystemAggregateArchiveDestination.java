@@ -15,46 +15,121 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.archive;
 
+import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.DigestOutputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.Set;
 
 import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 public class FileSystemAggregateArchiveDestination implements AggregateArchiveDestination {
+    private static final Set<String> FORBIDDEN_PATH_SEGMENTS = Set.of(".", "..");
+
     private final Path rootDirectory;
 
     public FileSystemAggregateArchiveDestination(Path rootDirectory) {
-        this.rootDirectory = requireNonNull(rootDirectory, "No rootDirectory provided");
+        this.rootDirectory = requireNonNull(rootDirectory, "No rootDirectory provided")
+                .toAbsolutePath()
+                .normalize();
     }
 
     @Override
-    public String write(AggregateArchiveWriteRequest request) {
+    public AggregateArchiveWriteResult write(AggregateArchiveWriteRequest request, ArchiveContentWriter writer) throws IOException {
         requireNonNull(request, "No request provided");
-        try {
-            var targetFile = rootDirectory
-                    .resolve(sanitizePathSegment(request.aggregateType().toString()))
-                    .resolve(sanitizePathSegment(request.logicalAggregateId()))
-                    .resolve("generation-" + request.generation().generation() + "." + request.artifact().fileExtension());
-            Files.createDirectories(targetFile.getParent());
-            Files.write(targetFile,
-                        request.artifact().content(),
-                        StandardOpenOption.CREATE,
-                        StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE);
-            return targetFile.toUri().toString();
+        requireNonNull(writer, "No writer provided");
+
+        var fileName = "generation-" + request.generation().generation()
+                + "." + sanitizePathSegment(request.fileExtension());
+        var targetFile = rootDirectory
+                .resolve(sanitizePathSegment(request.aggregateType().toString()))
+                .resolve(sanitizePathSegment(request.logicalAggregateId()))
+                .resolve(fileName)
+                .normalize();
+        if (!targetFile.startsWith(rootDirectory)) {
+            throw new IllegalArgumentException(msg(
+                    "Resolved archive path '{}' escapes root directory '{}'",
+                    targetFile,
+                    rootDirectory));
+        }
+        Files.createDirectories(targetFile.getParent());
+
+        var digest = newSha256();
+        long records;
+        var counting = new ByteCountingOutputStream();
+        try (var fileStream = Files.newOutputStream(targetFile,
+                                                    StandardOpenOption.CREATE,
+                                                    StandardOpenOption.TRUNCATE_EXISTING,
+                                                    StandardOpenOption.WRITE);
+             var digestStream = new DigestOutputStream(fileStream, digest);
+             var bufferedStream = new BufferedOutputStream(digestStream)) {
+            counting.delegate = bufferedStream;
+            records = writer.write(counting);
         } catch (IOException e) {
+            // Best-effort: remove a partial file so a retry can recreate it cleanly.
+            try {
+                Files.deleteIfExists(targetFile);
+            } catch (IOException cleanupFailure) {
+                e.addSuppressed(cleanupFailure);
+            }
             rethrowIfCriticalError(e);
-            throw new IllegalStateException(msg("Failed to write archive artifact for {} generation {}",
-                                                request.logicalAggregateId(),
-                                                request.generation().generation()), e);
+            throw e;
+        }
+
+        return new AggregateArchiveWriteResult(targetFile.toUri().toString(),
+                                                counting.bytesWritten,
+                                                records,
+                                                "sha256:" + HexFormat.of().formatHex(digest.digest()));
+    }
+
+    private static MessageDigest newSha256() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            rethrowIfCriticalError(e);
+            throw new IllegalStateException(msg("Failed to initialise SHA-256 digest"), e);
         }
     }
 
     private String sanitizePathSegment(String rawValue) {
-        return rawValue.replaceAll("[^A-Za-z0-9._-]", "_");
+        requireNonNull(rawValue, "No path segment provided");
+        var sanitized = rawValue.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (sanitized.isEmpty() || FORBIDDEN_PATH_SEGMENTS.contains(sanitized)) {
+            throw new IllegalArgumentException(msg("Invalid path segment: '{}'", rawValue));
+        }
+        return sanitized;
+    }
+
+    /** Counts bytes written by an exporter. The {@code delegate} is set after construction
+     *  because we need a stable reference to hand to the writer while still being able to
+     *  configure the wrapping order in the try-with-resources block. */
+    private static final class ByteCountingOutputStream extends OutputStream {
+        private OutputStream delegate;
+        private long bytesWritten;
+
+        @Override
+        public void write(int b) throws IOException {
+            delegate.write(b);
+            bytesWritten++;
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            delegate.write(b, off, len);
+            bytesWritten += len;
+        }
+
+        @Override
+        public void flush() throws IOException {
+            delegate.flush();
+        }
     }
 }

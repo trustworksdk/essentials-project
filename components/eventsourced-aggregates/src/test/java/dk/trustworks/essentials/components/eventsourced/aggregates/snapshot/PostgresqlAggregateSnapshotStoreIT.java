@@ -166,6 +166,43 @@ class PostgresqlAggregateSnapshotStoreIT {
     }
 
     @Test
+    void save_does_not_overwrite_when_a_newer_snapshot_already_exists() {
+        var orderId = OrderId.random();
+        var jsonSerializer = eventStore.getAggregateEventStreamConfiguration(ORDERS).jsonSerializer;
+
+        snapshotStore.saveSnapshot(ORDERS, orderId, Order.class, EventOrder.of(10),
+                                   jsonSerializer.serialize(new Order(orderId, CustomerId.random(), 1000)));
+        snapshotStore.saveSnapshot(ORDERS, orderId, Order.class, EventOrder.of(5),
+                                   jsonSerializer.serialize(new Order(orderId, CustomerId.random(), 500)));
+
+        assertThat(snapshotStore.findMostRecentLastIncludedEventOrder(ORDERS, orderId, Order.class))
+                .contains(EventOrder.of(10));
+        assertThat(snapshotStore.loadAllSnapshots(ORDERS, orderId, Order.class, false))
+                .singleElement()
+                .extracting(snapshot -> snapshot.eventOrderOfLastIncludedEvent)
+                .isEqualTo(EventOrder.of(10));
+    }
+
+    @Test
+    void delete_snapshots_older_than_only_removes_strictly_older_rows() {
+        var orderId = OrderId.random();
+        var jsonSerializer = eventStore.getAggregateEventStreamConfiguration(ORDERS).jsonSerializer;
+
+        snapshotStore.saveSnapshot(ORDERS, orderId, Order.class, EventOrder.of(1),
+                                   jsonSerializer.serialize(new Order(orderId, CustomerId.random(), 1)));
+        snapshotStore.saveSnapshot(ORDERS, orderId, Order.class, EventOrder.of(5),
+                                   jsonSerializer.serialize(new Order(orderId, CustomerId.random(), 5)));
+        snapshotStore.saveSnapshot(ORDERS, orderId, Order.class, EventOrder.of(9),
+                                   jsonSerializer.serialize(new Order(orderId, CustomerId.random(), 9)));
+
+        snapshotStore.deleteSnapshotsOlderThan(ORDERS, orderId, Order.class, EventOrder.of(5));
+
+        assertThat(snapshotStore.loadAllSnapshots(ORDERS, orderId, Order.class, false))
+                .extracting(snapshot -> snapshot.eventOrderOfLastIncludedEvent)
+                .containsExactlyInAnyOrder(EventOrder.of(5), EventOrder.of(9));
+    }
+
+    @Test
     void delete_all_snapshots_for_aggregate_type() {
         var firstOrderId = OrderId.random();
         var secondOrderId = OrderId.random();
