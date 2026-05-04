@@ -23,6 +23,13 @@ import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Resolves the closing books configuration for aggregates based on global settings and optional per-aggregate overrides.
+ * <p>
+ * This implementation derives the effective configuration for an aggregate by resolving global initialization properties,
+ * aggregate-specific policies, and any overrides defined at runtime. It ensures consistency and provides fallbacks for
+ * missing or invalid configurations based on predefined defaults.
+ */
 public class DefaultAggregateClosingBooksConfigurationResolver implements AggregateClosingBooksConfigurationResolver {
     /** Substituted when an aggregate's policy needs an event-count threshold but none has been configured. */
     public static final long    DEFAULT_EVENT_THRESHOLD = 1000L;

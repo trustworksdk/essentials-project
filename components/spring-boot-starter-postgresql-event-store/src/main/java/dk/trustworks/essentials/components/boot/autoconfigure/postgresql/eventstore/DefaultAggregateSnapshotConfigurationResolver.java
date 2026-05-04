@@ -23,10 +23,21 @@ import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Default implementation of the {@link AggregateSnapshotConfigurationResolver} interface, responsible for resolving
+ * the configuration necessary for managing snapshot-related operations of aggregates in an event-sourcing setup.
+ */
 public class DefaultAggregateSnapshotConfigurationResolver implements AggregateSnapshotConfigurationResolver {
     private final EssentialsEventStoreProperties      properties;
     private final AggregateSnapshotPolicyRegistry     policyRegistry;
 
+    /**
+     * Constructs an instance of DefaultAggregateSnapshotConfigurationResolver that utilizes the provided
+     * properties and policy registry to resolve aggregate snapshot configurations.
+     *
+     * @param properties the configuration properties for the Essentials Event Store, must not be null
+     * @param policyRegistry the registry containing policies for aggregate snapshots, must not be null
+     */
     public DefaultAggregateSnapshotConfigurationResolver(EssentialsEventStoreProperties properties,
                                                          AggregateSnapshotPolicyRegistry policyRegistry) {
         this.properties = requireNonNull(properties, "No properties provided");

@@ -30,7 +30,13 @@ import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Default implementation of the {@code AggregateLifecycleConfigurationValidator} that validates the configuration
+ * of aggregate lifecycles within the application. This class ensures that aggregates adhere to defined policies
+ * and configurations, including snapshotting and closing books.
+ */
 public class DefaultAggregateLifecycleConfigurationValidator implements AggregateLifecycleConfigurationValidator, SmartInitializingSingleton {
+
     private static final Logger log = LoggerFactory.getLogger(DefaultAggregateLifecycleConfigurationValidator.class);
 
     private final AggregateSnapshotPolicyRegistry            snapshotPolicyRegistry;
@@ -41,6 +47,26 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
     private final Optional<FencedLockManager>                fencedLockManagerOptional;
     private final Set<Class<?>>                              nextGenerationFactoryAggregateTypes;
 
+    /**
+     * Constructs a {@code DefaultAggregateLifecycleConfigurationValidator} with the necessary dependencies.
+     * This validator ensures that various configurations comply with the intended lifecycle policies
+     * for aggregates in an event-sourced system.
+     *
+     * @param snapshotPolicyRegistry the registry for managing aggregate snapshot policy descriptors;
+     *                                must not be null
+     * @param closingBooksPolicyRegistry the registry for managing aggregate closing books policy descriptors;
+     *                                    must not be null
+     * @param snapshotConfigurationResolver the resolver for determining snapshot-specific configurations
+     *                                       for aggregates; must not be null
+     * @param closingBooksConfigurationResolver the resolver for determining closing books-specific configurations
+     *                                           for aggregates; must not be null
+     * @param properties the event store properties containing system-level settings; must not be null
+     * @param fencedLockManagerOptional an optional fencing lock manager used for handling concurrency controls;
+     *                                   must not be null
+     * @param nextGenerationFactories a list of typed factories responsible for creating the next-generation
+     *                                implementations of aggregates; must not be null
+     * @throws IllegalArgumentException if any of the provided parameters is null
+     */
     public DefaultAggregateLifecycleConfigurationValidator(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
                                                            AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
                                                            AggregateSnapshotConfigurationResolver snapshotConfigurationResolver,

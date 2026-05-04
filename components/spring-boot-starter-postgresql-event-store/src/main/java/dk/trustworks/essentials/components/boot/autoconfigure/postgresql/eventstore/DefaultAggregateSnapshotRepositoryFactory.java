@@ -28,6 +28,11 @@ import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * A factory implementation for creating instances of {@code AggregateSnapshotRepository}.
+ * This factory provides support for creating repositories in various modes such as
+ * synchronous snapshots, asynchronous in-memory snapshots, and asynchronous durable snapshots.
+ */
 public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnapshotRepositoryFactory {
     private final ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork>               unitOfWorkFactory;
@@ -39,6 +44,20 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
     private final Optional<AggregateSnapshotJobRepository>                                  jobRepository;
     private final Optional<MeterRegistry>                                                   meterRegistry;
 
+    /**
+     * Constructs a {@code DefaultAggregateSnapshotRepositoryFactory} with the specified dependencies.
+     *
+     * @param eventStore the configurable event store used for event streaming
+     * @param unitOfWorkFactory the factory to create instances of unit of work for the event store
+     * @param jsonSerializer the serializer used for serializing and deserializing events
+     * @param snapshotStore the store used for managing aggregate snapshots
+     * @param resolver the resolver for aggregate snapshot configurations
+     * @param durableSettings the settings for managing durable asynchronous snapshots
+     * @param properties the essential event store properties
+     * @param jobRepository the optional repository for managing aggregate snapshot jobs
+     * @param meterRegistry the optional meter registry for monitoring and metrics
+     * @throws IllegalArgumentException if any of the provided parameters is null
+     */
     public DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                                                      EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                      JSONEventSerializer jsonSerializer,

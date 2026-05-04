@@ -38,8 +38,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 public class CachingAggregateSnapshotRepositoryProvider implements AggregateSnapshotRepositoryProvider, Lifecycle {
     private final AggregateSnapshotRepositoryFactory                 factory;
-    private final Map<String, Optional<AggregateSnapshotRepository>> cache = new ConcurrentHashMap<>();
-    private final AtomicBoolean                                       started = new AtomicBoolean();
+    private final Map<String, Optional<AggregateSnapshotRepository>> cache   = new ConcurrentHashMap<>();
+    private final AtomicBoolean                                      started = new AtomicBoolean();
 
     public CachingAggregateSnapshotRepositoryProvider(AggregateSnapshotRepositoryFactory factory) {
         this.factory = requireNonNull(factory, "No factory provided");

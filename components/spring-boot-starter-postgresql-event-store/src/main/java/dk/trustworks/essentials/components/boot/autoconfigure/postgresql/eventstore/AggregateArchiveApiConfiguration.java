@@ -45,7 +45,9 @@ import java.util.Optional;
 @ConditionalOnProperty(prefix = "essentials.eventstore.archives", name = "enabled", havingValue = "true")
 @EnableConfigurationProperties(EssentialsEventStoreProperties.class)
 public class AggregateArchiveApiConfiguration {
+
     private static final Logger log = LoggerFactory.getLogger(AggregateArchiveApiConfiguration.class);
+
     @Bean
     @ConditionalOnMissingBean
     public AggregateArchiveRegistry aggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {

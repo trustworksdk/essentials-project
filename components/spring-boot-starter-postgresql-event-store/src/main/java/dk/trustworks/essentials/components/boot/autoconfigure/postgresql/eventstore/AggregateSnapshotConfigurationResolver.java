@@ -18,7 +18,20 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 
+/**
+ * Interface defining the contract for resolving the configuration required to manage
+ * Aggregate snapshot operations in an event-sourcing setup.
+ */
 public interface AggregateSnapshotConfigurationResolver {
+
+    /**
+     * Resolves and retrieves the snapshot configuration for a specified Aggregate type and its implementation.
+     *
+     * @param aggregateType the type of the aggregate for which the snapshot configuration is being resolved
+     * @param aggregateImplementationType the class type representing the specific implementation of the aggregate
+     * @return the resolved aggregate snapshot configuration containing snapshot settings such as enablement,
+     *         execution mode, and retention policies
+     */
     ResolvedAggregateSnapshotConfiguration resolve(AggregateType aggregateType,
                                                    Class<?> aggregateImplementationType);
 }

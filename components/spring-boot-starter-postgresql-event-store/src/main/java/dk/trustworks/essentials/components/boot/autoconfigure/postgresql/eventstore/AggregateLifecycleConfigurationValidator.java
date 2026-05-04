@@ -16,6 +16,20 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
+/**
+ * Defines the contract for validating the configuration of aggregate lifecycles.
+ * Implementations of this interface are responsible for ensuring that the
+ * lifecycle configurations of aggregates meet the required specifications and
+ * adhere to the defined policies.
+ */
 public interface AggregateLifecycleConfigurationValidator {
+
+    /**
+     * Validates the configurations related to aggregate lifecycles.
+     * This method ensures that the configurations align with the
+     * required specifications and adhere to predefined policies.
+     * Implementations should perform checks and necessary validations
+     * to ensure consistency and correctness of the aggregate lifecycle setup.
+     */
     void validate();
 }
