@@ -175,6 +175,7 @@ public final class PgReplicationSlots {
                     throw new SQLException("Replication slot '" + slotName + "' missing (mode=EXTERNAL)");
                 }
                 validateSlotOrThrow(slotName, slot, expectedPlugin);
+                validateSlotHealthOrThrow(slotName, slot);
                 if (slot.isActive()) {
                     throw new SQLException("Replication slot '" + slotName + "' is already active (active_pid=" +
                                                    slot.activePid + ") (mode=EXTERNAL)");
@@ -185,6 +186,7 @@ public final class PgReplicationSlots {
                     throw new SQLException("Replication slot '" + slotName + "' does not exist (mode=REQUIRE_EXISTING)");
                 }
                 validateSlotOrThrow(slotName, slot, expectedPlugin);
+                validateSlotHealthOrThrow(slotName, slot);
                 if (slot.isActive()) {
                     throw new SQLException("Replication slot '" + slotName + "' is already active (active_pid=" +
                                                    slot.activePid + ") - owned by another logical consumer");
@@ -196,6 +198,7 @@ public final class PgReplicationSlots {
                     return;
                 }
                 validateSlotOrThrow(slotName, slot, expectedPlugin);
+                validateSlotHealthOrThrow(slotName, slot);
                 if (slot.isActive()) {
                     throw new SQLException("Replication slot '" + slotName + "' is already active (active_pid=" +
                                                    slot.activePid + ") - owned by another logical consumer");
@@ -203,6 +206,10 @@ public final class PgReplicationSlots {
             }
             case RECREATE -> {
                 if (slot != null) {
+                    // RECREATE intentionally skips health validation — we're about to drop the
+                    // slot anyway, so a degraded slot here is exactly the case RECREATE is for.
+                    // We still run identity validation so we don't accidentally drop a slot
+                    // that turned out not to be ours.
                     validateSlotOrThrow(slotName, slot, expectedPlugin);
                     if (slot.isActive()) {
                         throw new SQLException("Replication slot '" + slotName + "' is active (active_pid=" +
@@ -216,6 +223,11 @@ public final class PgReplicationSlots {
         }
     }
 
+    /**
+     * Identity validation: confirms the slot is one we can use (logical, expected plugin,
+     * tied to a database, persistent). Throws a descriptive {@link SQLException} otherwise.
+     * Does not look at health/retention state — see {@link #validateSlotHealthOrThrow}.
+     */
     public static void validateSlotOrThrow(String slotName, SlotInfo slot, String expectedPlugin) throws SQLException {
         if (!slot.isLogical()) {
             throw new SQLException("Replication slot '" + slotName + "' is not logical (slot_type=" + slot.slotType + ")");
@@ -229,6 +241,99 @@ public final class PgReplicationSlots {
         }
         if (slot.temporary) {
             throw new SQLException("Replication slot '" + slotName + "' is temporary; expected a persistent slot");
+        }
+    }
+
+    /**
+     * Health validation: fails fast when the slot exists but cannot be used as-is because
+     * PostgreSQL has marked it degraded — most commonly via {@code max_slot_wal_keep_size}
+     * pruning the underlying WAL. Detects three independent server-side signals:
+     * <ul>
+     *   <li>{@code wal_status} not in {@code reserved} (PG ≥ 13): the slot is either
+     *       {@code extended} (over {@code max_wal_size}, will keep growing the disk),
+     *       {@code unreserved} (about to be invalidated), or {@code lost} (already dead).</li>
+     *   <li>{@code conflicting = true} (PG ≥ 16): the slot conflicts with recovery and
+     *       cannot stream further changes.</li>
+     *   <li>{@code invalidation_reason} non-null (PG ≥ 16): the server has explicitly
+     *       invalidated the slot and recorded why.</li>
+     * </ul>
+     * Older PostgreSQL versions report {@code null} for fields they don't support; those
+     * are treated as "unknown, can't verify" and pass. The check therefore has no false
+     * positives on supported servers and no spurious failures on older ones.
+     * <p>
+     * On any failure, the exception message includes ready-to-run remediation SQL —
+     * either {@code SELECT pg_drop_replication_slot('…')} or a pointer to switch the
+     * configured slot mode — so operators don't need to look up the recovery procedure.
+     * Callers that intend to drop the slot themselves (e.g. {@link PgSlotMode#RECREATE})
+     * should not invoke this method.
+     */
+    public static void validateSlotHealthOrThrow(String slotName, SlotInfo slot) throws SQLException {
+        if (slot.walStatus != null && !"reserved".equalsIgnoreCase(slot.walStatus)) {
+            throw new SQLException("Replication slot '" + slotName + "' has wal_status='" + slot.walStatus +
+                                           "' (expected 'reserved'); slot is degraded — PostgreSQL has either " +
+                                           "exceeded max_wal_size (extended), is about to invalidate the slot " +
+                                           "(unreserved), or has already invalidated it (lost). Subscribers will " +
+                                           "fall back to polling automatically. To recover: " +
+                                           "SELECT pg_drop_replication_slot('" + slotName + "'); and restart, " +
+                                           "or set essentials.eventstore.cdc.slot.mode=RECREATE for one boot.");
+        }
+        if (slot.conflicting != null && ("t".equalsIgnoreCase(slot.conflicting) || "true".equalsIgnoreCase(slot.conflicting))) {
+            String reason = slot.invalidationReason == null || slot.invalidationReason.isBlank()
+                            ? "(no reason reported)"
+                            : "(invalidation_reason='" + slot.invalidationReason + "')";
+            throw new SQLException("Replication slot '" + slotName + "' is in a conflicting state " + reason +
+                                           " and can no longer stream changes. Recover with: " +
+                                           "SELECT pg_drop_replication_slot('" + slotName + "'); and restart.");
+        }
+        if (slot.invalidationReason != null && !slot.invalidationReason.isBlank()) {
+            throw new SQLException("Replication slot '" + slotName + "' has been invalidated by PostgreSQL " +
+                                           "(invalidation_reason='" + slot.invalidationReason + "'). Recover with: " +
+                                           "SELECT pg_drop_replication_slot('" + slotName + "'); and restart.");
+        }
+    }
+
+    /**
+     * Checks whether PostgreSQL has a server-side disk safety net configured for replication
+     * slots, returning a ready-to-log advisory string when it does not.
+     * <p>
+     * {@code max_slot_wal_keep_size} (PG 13+) bounds how much WAL the server will retain on
+     * behalf of an unconsumed slot before invalidating it. The default is {@code -1}
+     * (unbounded), which means a stuck or orphaned slot can fill the disk. When that's the
+     * case we recommend setting an explicit value (e.g. {@code 10GB}) so the server has a
+     * fallback when the framework's own slot-growth defenses (idle LSN push, advisory locks,
+     * effectiveness monitor) all fail.
+     * <p>
+     * Returns:
+     * <ul>
+     *   <li>{@link Optional#empty()} when the setting cannot be read (older PG, missing
+     *       privileges) or is already bounded — nothing for the operator to do.</li>
+     *   <li>An {@link Optional} carrying a human-readable advisory string when the setting is
+     *       {@code -1} / unlimited. The caller is expected to log it INFO once per JVM start.
+     *       The string includes both the explanation and a concrete configuration suggestion.</li>
+     * </ul>
+     * Pure read; no side effects on the server.
+     */
+    public static Optional<String> getKeepSizeAdvisoryIfUnbounded(Connection c) {
+        requireNonNull(c, "connection cannot be null");
+        try (var ps = c.prepareStatement("select setting from pg_settings where name = 'max_slot_wal_keep_size'");
+             var rs = ps.executeQuery()) {
+            if (!rs.next()) return Optional.empty();
+            String setting = rs.getString("setting");
+            if (setting == null || setting.isBlank()) return Optional.empty();
+            // pg_settings.setting returns the raw integer value as a string. -1 = unlimited.
+            // Anything else (0, positive integer in MB) means a bound is in place.
+            if (!"-1".equals(setting.trim())) return Optional.empty();
+            return Optional.of(
+                    "PostgreSQL max_slot_wal_keep_size is unbounded (-1, the default). " +
+                            "A stuck or orphaned replication slot can therefore retain WAL until " +
+                            "the disk fills. Consider setting a value (e.g. 10GB) in postgresql.conf " +
+                            "so the server invalidates over-budget slots before they impact the database. " +
+                            "When invalidation fires, subscribers fall back to polling automatically — " +
+                            "no event loss; the slot is just recreated. See cdc.md §5.6.");
+        } catch (SQLException e) {
+            // Best-effort advisory — never fail startup over this. A privilege issue here just
+            // means we don't know whether to advise; silent skip is the right behaviour.
+            return Optional.empty();
         }
     }
 

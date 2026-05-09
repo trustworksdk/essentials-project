@@ -92,6 +92,20 @@ public class WalReplicationTailer implements Lifecycle {
      */
     private final boolean                                                       recreateSlotOnStart;
     private final AtomicBoolean                                                 firstStreamAttempt = new AtomicBoolean(true);
+    /**
+     * One-shot guard for the {@code max_slot_wal_keep_size} startup advisory log. Flipped
+     * to {@code true} after the first successful evaluation so the advisory doesn't repeat
+     * on every reconnect cycle.
+     */
+    private final AtomicBoolean                                                 keepSizeAdvisoryEvaluated = new AtomicBoolean(false);
+
+    /**
+     * Resolved idle-LSN-push cadence in nanoseconds. Captured from
+     * {@link CdcProperties.WalReplicationTailerProperties#getIdleLsnPushInterval()} at
+     * construction time, falling back to {@link #DEFAULT_IDLE_LSN_PUSH_INTERVAL_NANOS}
+     * when unset or non-positive (defensive — this is a load-bearing safety mechanism).
+     */
+    private final long                                                          idleLsnPushIntervalNanos;
 
     /**
      * How often the tailer emits a "CDC heartbeat" INFO log from inside the streamOnce inner
@@ -103,13 +117,12 @@ public class WalReplicationTailer implements Lifecycle {
     private static final long HEARTBEAT_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(15);
 
     /**
-     * How often the tailer force-ack's the stream's current receive LSN when idle (no messages
-     * flowing). Prevents {@code confirmed_flush_lsn} from sticking at the slot's start position
-     * when pgoutput has nothing publication-relevant to emit — without this push, Postgres
-     * retains all WAL past the stuck confirmed_flush_lsn, which empirically correlates with
-     * slot-sender throttling / disconnection under stress.
+     * Default fallback when {@link CdcProperties.WalReplicationTailerProperties#getIdleLsnPushInterval()}
+     * is null or non-positive. See that property's javadoc for the semantics. The actual value
+     * used by the running tailer is captured into {@link #idleLsnPushIntervalNanos} at
+     * construction time, allowing per-tailer tuning.
      */
-    private static final long IDLE_LSN_PUSH_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
+    private static final long DEFAULT_IDLE_LSN_PUSH_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
 
     private ExecutorService executor;
     private Future<?>       loopFuture;
@@ -259,6 +272,16 @@ public class WalReplicationTailer implements Lifecycle {
         requireNonNull(tailerProperties.getReplicationStatusInterval(), "replicationStatusInterval cannot be null");
         requireTrue(tailerProperties.getJitterRatio() > 0.0 && tailerProperties.getJitterRatio() < 0.5, "jitterRatio must be in [0.0..0.5]");
         requireTrue(tailerProperties.getBackOffFactor() > 1, "backOffFactor must be > 1");
+        // Resolve idle-LSN-push cadence — fall back to the safe 30s default if the property is
+        // unset or non-positive. We do not allow disabling: a stuck confirmed_flush_lsn fills
+        // disks. If a future need arises to disable, that should be a separate, explicit knob
+        // rather than overloading this duration.
+        var configuredIdleLsnPushInterval = tailerProperties.getIdleLsnPushInterval();
+        this.idleLsnPushIntervalNanos = configuredIdleLsnPushInterval != null
+                                        && !configuredIdleLsnPushInterval.isZero()
+                                        && !configuredIdleLsnPushInterval.isNegative()
+                                        ? configuredIdleLsnPushInterval.toNanos()
+                                        : DEFAULT_IDLE_LSN_PUSH_INTERVAL_NANOS;
         this.meterRegistry = meterRegistry.orElse(null);
         this.errorHandler = errorHandler.orElseGet(DefaultWalReplicationTailerErrorHandler::new);
         this.walMessageFilter = walMessageFilter.orElseGet(RegexWalMessageFilter::new);
@@ -497,9 +520,10 @@ public class WalReplicationTailer implements Lifecycle {
                 // Track timing for three independent watchdogs:
                 //  - Connected-heartbeat log every HEARTBEAT_INTERVAL_NANOS so operators can see
                 //    whether the tailer is receiving messages or sitting in null-poll zombie-stream.
-                //  - Idle LSN push every IDLE_LSN_PUSH_INTERVAL_NANOS so Postgres can advance
-                //    confirmed_flush_lsn even when pgoutput has nothing to emit (publication
-                //    quiet), preventing WAL retention from growing on idle slots.
+                //  - Idle LSN push every idleLsnPushIntervalNanos (configurable; default 30s)
+                //    so Postgres can advance confirmed_flush_lsn even when pgoutput has nothing
+                //    to emit (publication quiet), preventing WAL retention from growing on idle
+                //    slots.
                 //  - Max-idle detection: if no message arrives for maxIdleDuration, throw a
                 //    StaleReplicationStreamException so the outer reconnect loop fires. Protects
                 //    against silently half-open TCP sockets where readPending() returns null
@@ -520,7 +544,7 @@ public class WalReplicationTailer implements Lifecycle {
                             logConnectedHeartbeat();
                             lastHeartbeatNs = nowNs;
                         }
-                        if (nowNs - lastIdleLsnPushNs >= IDLE_LSN_PUSH_INTERVAL_NANOS) {
+                        if (nowNs - lastIdleLsnPushNs >= idleLsnPushIntervalNanos) {
                             forceIdleLsnPush(stream);
                             lastIdleLsnPushNs = nowNs;
                         }
@@ -748,6 +772,14 @@ public class WalReplicationTailer implements Lifecycle {
                 return;
             }
             PgReplicationSlots.ensureSlot(uow.handle().getConnection(), slotName, pgSlotMode, logicalDecodingPlugin.pluginName());
+
+            // Once-per-JVM advisory: warn the operator if the server has no
+            // max_slot_wal_keep_size backstop. Strictly informational — never fails startup.
+            // Guarded with an AtomicBoolean so reconnects don't repeat the message.
+            if (keepSizeAdvisoryEvaluated.compareAndSet(false, true)) {
+                PgReplicationSlots.getKeepSizeAdvisoryIfUnbounded(uow.handle().getConnection())
+                                  .ifPresent(advisory -> log.info("[{}] {}", slotName, advisory));
+            }
         });
 
         // If we just recreated the slot, the CDC inbox may contain rows from prior sessions
@@ -1164,10 +1196,15 @@ public class WalReplicationTailer implements Lifecycle {
     public Optional<SlotState> getSlotStateSnapshot() {
         try {
             return unitOfWorkFactory.withUnitOfWork(uow -> {
+                // Includes wal_status / inactive_since (added in PG14) so callers can surface
+                // slot-degradation signals as metrics. Falls back to an unknown-status snapshot
+                // when those columns are absent (older servers) — see SlotState.WalStatus.
                 try (var stmt = uow.handle().getConnection().prepareStatement(
                         "SELECT active, " +
                                 "       confirmed_flush_lsn::text AS flush_lsn, " +
-                                "       pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes " +
+                                "       pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes, " +
+                                "       wal_status, " +
+                                "       EXTRACT(EPOCH FROM (now() - inactive_since))::bigint AS inactive_seconds " +
                                 "FROM pg_replication_slots WHERE slot_name = ?")) {
                     stmt.setString(1, slotName);
                     try (var rs = stmt.executeQuery()) {
@@ -1176,7 +1213,9 @@ public class WalReplicationTailer implements Lifecycle {
                                 slotName,
                                 rs.getBoolean("active"),
                                 rs.getString("flush_lsn"),
-                                rs.getLong("lag_bytes")
+                                rs.getLong("lag_bytes"),
+                                SlotState.WalStatus.fromPgValue(rs.getString("wal_status")),
+                                readNullableLong(rs, "inactive_seconds")
                         ));
                     }
                 }
@@ -1187,16 +1226,71 @@ public class WalReplicationTailer implements Lifecycle {
         }
     }
 
+    private static Long readNullableLong(java.sql.ResultSet rs, String column) throws java.sql.SQLException {
+        long v = rs.getLong(column);
+        return rs.wasNull() ? null : v;
+    }
+
     /**
      * Immutable snapshot of a replication slot's server-side state. Returned by
      * {@link #getSlotStateSnapshot()}. {@code lagBytes} is the number of bytes of WAL the server
      * is retaining past {@code confirmedFlushLsn} — a steadily growing value indicates the
      * tailer isn't ack'ing LSN progress back to Postgres.
+     * <p>
+     * {@code walStatus} is the slot's WAL retention health (see {@link WalStatus}).
+     * {@code inactiveSinceSeconds} is the number of seconds the slot has been inactive
+     * (i.e. has no streaming consumer attached); {@code null} when the slot is currently active
+     * or the column isn't available.
      */
     public record SlotState(String slotName,
                             boolean active,
                             String confirmedFlushLsn,
-                            long lagBytes) {
+                            long lagBytes,
+                            WalStatus walStatus,
+                            Long inactiveSinceSeconds) {
+
+        /**
+         * Backward-compat constructor used by any caller that only cares about the original
+         * four fields. Defaults walStatus to {@link WalStatus#UNKNOWN} and leaves
+         * {@code inactiveSinceSeconds} {@code null}.
+         */
+        public SlotState(String slotName, boolean active, String confirmedFlushLsn, long lagBytes) {
+            this(slotName, active, confirmedFlushLsn, lagBytes, WalStatus.UNKNOWN, null);
+        }
+
+        /**
+         * Numerically-ordered encoding of {@code pg_replication_slots.wal_status}. Ordering is
+         * deliberate: higher = more degraded, so a single gauge can drive thresholded alerts
+         * ({@code > 1} = warn, {@code > 2} = page).
+         */
+        public enum WalStatus {
+            UNKNOWN(0),
+            RESERVED(1),
+            EXTENDED(2),
+            UNRESERVED(3),
+            LOST(4);
+
+            private final int code;
+
+            WalStatus(int code) {
+                this.code = code;
+            }
+
+            public int code() {
+                return code;
+            }
+
+            public static WalStatus fromPgValue(String pgValue) {
+                if (pgValue == null) return UNKNOWN;
+                return switch (pgValue.toLowerCase(java.util.Locale.ROOT)) {
+                    case "reserved"   -> RESERVED;
+                    case "extended"   -> EXTENDED;
+                    case "unreserved" -> UNRESERVED;
+                    case "lost"       -> LOST;
+                    default           -> UNKNOWN;
+                };
+            }
+        }
     }
 
     private static byte[] toByteArray(ByteBuffer msg) {

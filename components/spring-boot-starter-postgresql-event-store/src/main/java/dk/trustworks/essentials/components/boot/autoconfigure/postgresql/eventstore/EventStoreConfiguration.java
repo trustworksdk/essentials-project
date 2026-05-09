@@ -740,8 +740,21 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcInboxRepository cdcInboxRepository(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
-                                                 Optional<MeterRegistry> meterRegistry) {
-        return new CdcInboxRepository(eventStoreUnitOfWorkFactory, meterRegistry);
+                                                 Optional<MeterRegistry> meterRegistry,
+                                                 EssentialsEventStoreProperties essentialsProperties,
+                                                 CdcConsumerGroup group,
+                                                 CdcSlotNameProvider slotNameProvider) {
+        var repo = new CdcInboxRepository(eventStoreUnitOfWorkFactory, meterRegistry);
+        // Inbox depth gauges are scoped to a known slot. Register them once here, gated on
+        // INBOX delivery mode (DIRECT bypasses the inbox; the gauges would be permanently 0
+        // and misleading) and the dispatcher's metrics-enabled toggle. The gauges sample on
+        // demand at metrics scrape time — no separate background sampler.
+        var cdc = essentialsProperties.getCdc();
+        if (cdc.getDeliveryMode() == CdcProperties.CdcDeliveryMode.INBOX
+                && cdc.getCdcDispatcher().isInboxMetricsEnabled()) {
+            repo.registerInboxBacklogGauges(getCdcSlotName(essentialsProperties, group, slotNameProvider));
+        }
+        return repo;
     }
 
     /**
@@ -768,6 +781,29 @@ public class EventStoreConfiguration {
                 essentialsProperties.getCdc().getDeliveryMode(),
                 essentialsProperties.getCdc().getHealthCheck(),
                 slotName);
+    }
+
+    /**
+     * Background sampler that publishes the slot's WAL retention health as Micrometer gauges
+     * (lag bytes, active flag, wal_status, inactive_since_seconds). Quietly no-ops when no
+     * {@link MeterRegistry} is present in the context. Also gated by
+     * {@code essentials.eventstore.cdc.slot.metrics-enabled} (default true); disable for
+     * environments that shouldn't run the periodic {@code SELECT FROM pg_replication_slots}
+     * probe.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcSlotMetrics cdcSlotMetrics(WalReplicationTailer walReplicationTailer,
+                                         Optional<MeterRegistry> meterRegistry,
+                                         EssentialsEventStoreProperties essentialsProperties,
+                                         CdcConsumerGroup group,
+                                         CdcSlotNameProvider slotNameProvider) {
+        String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
+        return new CdcSlotMetrics(walReplicationTailer,
+                                  meterRegistry,
+                                  slotName,
+                                  essentialsProperties.getCdc().getSlot());
     }
 
     private DataSource createReplicationDataSource(DataSourceProperties properties) throws SQLException {

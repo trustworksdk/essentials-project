@@ -302,6 +302,24 @@ public class CdcProperties {
          */
         private Duration maxIdleDuration           = Duration.ofMinutes(5);
 
+        /**
+         * How often the tailer force-ack's the replication stream's current receive LSN when
+         * idle (no messages arriving). Prevents {@code confirmed_flush_lsn} from sticking at
+         * the slot's start position when pgoutput has nothing publication-relevant to emit —
+         * without this push, PostgreSQL retains all WAL past the stuck LSN and the slot grows
+         * indefinitely (see {@code cdc.md} §5.2).
+         * <p>
+         * Default {@code 30s} — comfortably under the default PostgreSQL
+         * {@code wal_sender_timeout=60s} so the server-side liveness check never fires before
+         * we ack. Tighten this only if you've reduced {@code wal_sender_timeout} below 60s.
+         * Loosening it past 30s gains nothing and risks sender-timeout disconnects on idle
+         * streams.
+         * <p>
+         * Must be strictly positive; this is a load-bearing safety mechanism and there is no
+         * "disable" mode. If null at startup, the framework falls back to the 30-second default.
+         */
+        private Duration idleLsnPushInterval        = Duration.ofSeconds(30);
+
 
         public static WalReplicationTailerProperties defaults(Duration pollInterval,
                                                               Duration pollBackoffInterval,
@@ -531,6 +549,13 @@ public class CdcProperties {
             this.maxIdleDuration = maxIdleDuration;
         }
 
+        public Duration getIdleLsnPushInterval() {
+            return idleLsnPushInterval;
+        }
+
+        public void setIdleLsnPushInterval(Duration idleLsnPushInterval) {
+            this.idleLsnPushInterval = idleLsnPushInterval;
+        }
     }
 
     public static class PgOutputProperties {
@@ -653,6 +678,17 @@ public class CdcProperties {
         private PoisonPolicy        poisonPolicy        = PoisonPolicy.QUARANTINE_AND_CONTINUE;
         private DispatchedRowPolicy dispatchedRowPolicy = DispatchedRowPolicy.MARK_DISPATCHED;
 
+        /**
+         * Master switch for the {@code essentials.cdc.inbox.received_backlog} and
+         * {@code essentials.cdc.inbox.poison_rows} gauges registered on
+         * {@link CdcInboxRepository}. Default {@code true}; only effective in
+         * {@link CdcDeliveryMode#INBOX} delivery mode (DIRECT mode has no inbox to sample).
+         * <p>
+         * The gauges sample on demand at metrics scrape time, so cadence follows the metrics
+         * backend's scrape interval — no separate sampler runs.
+         */
+        private boolean inboxMetricsEnabled = true;
+
         public static CdcDispatcherProperties defaults() {
             return new CdcDispatcherProperties();
         }
@@ -733,6 +769,14 @@ public class CdcProperties {
 
         public void setDispatchedRowPolicy(DispatchedRowPolicy dispatchedRowPolicy) {
             this.dispatchedRowPolicy = dispatchedRowPolicy;
+        }
+
+        public boolean isInboxMetricsEnabled() {
+            return inboxMetricsEnabled;
+        }
+
+        public void setInboxMetricsEnabled(boolean inboxMetricsEnabled) {
+            this.inboxMetricsEnabled = inboxMetricsEnabled;
         }
     }
 
@@ -895,6 +939,37 @@ public class CdcProperties {
             this.recreateOnStart = recreateOnStart;
         }
 
+        /**
+         * Master switch for the {@code CdcSlotMetrics} background sampler that publishes
+         * {@code essentials.cdc.slot.*} gauges (lag bytes, active flag, wal_status,
+         * inactive_since_seconds) sourced from {@code pg_replication_slots}. Default
+         * {@code true}; disable when you don't want the periodic
+         * {@code SELECT FROM pg_replication_slots} probe.
+         */
+        private boolean metricsEnabled = true;
+
+        /**
+         * How often {@code CdcSlotMetrics} re-samples {@code pg_replication_slots} to refresh
+         * the slot gauges. Default {@code 30s} — frequent enough to drive sub-minute alerts
+         * on slot-lag growth, infrequent enough that the query overhead is negligible.
+         */
+        private Duration metricsInterval = Duration.ofSeconds(30);
+
+        public boolean isMetricsEnabled() {
+            return metricsEnabled;
+        }
+
+        public void setMetricsEnabled(boolean metricsEnabled) {
+            this.metricsEnabled = metricsEnabled;
+        }
+
+        public Duration getMetricsInterval() {
+            return metricsInterval;
+        }
+
+        public void setMetricsInterval(Duration metricsInterval) {
+            this.metricsInterval = metricsInterval;
+        }
     }
 
     /**

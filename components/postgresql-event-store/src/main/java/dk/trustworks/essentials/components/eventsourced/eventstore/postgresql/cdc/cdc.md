@@ -138,13 +138,23 @@ Configured via [`CdcProperties.slot.mode`](CdcProperties.java):
 | `RECREATE`          | Drop + create at startup. Refuses to drop an active slot.                                                                            | Tests, ephemeral envs.              |
 | `EXTERNAL`          | Never touch the slot. Just validate that it exists, is logical, and uses the expected plugin.                                        | Slot managed entirely out-of-band.  |
 
-In all non-`EXTERNAL` modes, [`PgReplicationSlots.ensureSlot`](PgReplicationSlots.java:164)
+In all non-`EXTERNAL` modes, [`PgReplicationSlots.ensureSlot`](PgReplicationSlots.java)
 runs at startup and will **fail fast** with a clear `SQLException` if:
 
-- the slot exists but is **physical** (wrong type),
-- the slot uses an **unexpected plugin** (e.g. wal2json slot but `cdc.plugin=pgoutput`),
-- the slot is **temporary** (expected to be persistent),
-- the slot is currently **active** (some other process is streaming from it).
+- **identity check** — the slot exists but is **physical** (wrong type), uses an
+  **unexpected plugin** (e.g. wal2json slot but `cdc.plugin=pgoutput`), is
+  **temporary** (expected to be persistent), or is currently **active** (some other
+  process is streaming from it);
+- **health check** — the slot exists but is **degraded** at the server side:
+  `wal_status` is `extended`/`unreserved`/`lost` (PG ≥ 13), or `conflicting=true`
+  (PG ≥ 16), or `invalidation_reason` is set (PG ≥ 16). The exception message
+  includes ready-to-run remediation SQL.
+
+`RECREATE` mode skips the health check (it's about to drop the slot anyway), but
+still runs the identity check so the framework doesn't accidentally drop a slot
+owned by another tool. Older PostgreSQL versions that don't expose
+`wal_status`/`conflicting`/`invalidation_reason` columns pass the health check
+unchanged — there is no false-positive on unsupported servers.
 
 There is also a separate opt-in `cdc.slot.recreateOnStart=true` that combines RECREATE
 with **forcibly terminating** any backend currently attached to the slot, then
@@ -269,13 +279,14 @@ Three mechanisms in [`WalReplicationTailer`](WalReplicationTailer.java):
    the bus) is followed by `stream.setFlushedLSN(lsn)` + `forceUpdateStatus()`. The
    server moves `confirmed_flush_lsn` forward immediately.
 
-2. **Idle LSN push** ([`forceIdleLsnPush`](WalReplicationTailer.java:1131)): every
-   30 seconds (`IDLE_LSN_PUSH_INTERVAL_NANOS`), if the stream produced no messages
-   the tailer still pushes the current receive LSN as a flushed ack. This matters
-   because pgoutput with `FOR TABLE <list>` (or pre-filtering) can cause the
-   server to read-and-skip large amounts of WAL without ever delivering a message
-   to the client. Without the idle push, `confirmed_flush_lsn` would stick at the
-   slot's start position and WAL would accumulate even on a perfectly healthy slot.
+2. **Idle LSN push** ([`forceIdleLsnPush`](WalReplicationTailer.java)): every
+   `cdc.walReplicationTailer.idleLsnPushInterval` (default 30s), if the stream
+   produced no messages the tailer still pushes the current receive LSN as a
+   flushed ack. This matters because pgoutput with `FOR TABLE <list>` (or
+   pre-filtering) can cause the server to read-and-skip large amounts of WAL
+   without ever delivering a message to the client. Without the idle push,
+   `confirmed_flush_lsn` would stick at the slot's start position and WAL would
+   accumulate even on a perfectly healthy slot.
 
 3. **Stale-stream reconnect** (`maxIdleDuration`, default 5 min): if no message at
    all has arrived in that window — including the keep-alives that PostgreSQL sends
@@ -336,6 +347,10 @@ invalidation **causes data loss for that slot's consumer**, so the framework's
 fallback to polling becomes load-bearing — but it's preferable to a downed
 database. The CDC pipeline detects an invalidated slot at next reconnect and
 either recreates (per `PgSlotMode`) or fails startup (per `cdc.mode`).
+
+The tailer logs an INFO advisory once per JVM start when the server has
+`max_slot_wal_keep_size = -1` (unbounded — the default), so this isn't easy to
+forget. The check is purely informational: it never fails startup.
 
 ---
 
@@ -437,6 +452,8 @@ All keys live under `cdc.*` in [`CdcProperties`](CdcProperties.java).
 | `cdc.slot.name`                | (derived)            | Optional override of generated name.                                     |
 | `cdc.slot.mode`                | `CREATE_IF_MISSING`  | See §3.3.                                                                |
 | `cdc.slot.recreateOnStart`     | `false`              | **Destructive.** Force-drop and recreate at every startup. Dev/test only.|
+| `cdc.slot.metricsEnabled`      | `true`               | Master switch for `CdcSlotMetrics` (publishes `essentials.cdc.slot.*` gauges).|
+| `cdc.slot.metricsInterval`     | `30s`                | Cadence at which `pg_replication_slots` is re-sampled to refresh slot gauges.|
 
 ### 7.3 `cdc.pgOutput` ([`PgOutputProperties`](CdcProperties.java))
 
@@ -460,6 +477,7 @@ All keys live under `cdc.*` in [`CdcProperties`](CdcProperties.java).
 | `cdc.walReplicationTailer.jitterRatio`                    | `0.2`            | Jitter applied to backoff sleeps.                                                                    |
 | `cdc.walReplicationTailer.backOffFactor`                  | `2`              | Exponential factor.                                                                                  |
 | `cdc.walReplicationTailer.maxIdleDuration`                | `5min`           | Force reconnect if no message arrives in this window. `Duration.ZERO` disables.                      |
+| `cdc.walReplicationTailer.idleLsnPushInterval`            | `30s`            | Cadence at which the tailer force-acks the current receive LSN on an idle stream so `confirmed_flush_lsn` keeps advancing. Tighten only if `wal_sender_timeout` is below 60s; cannot be disabled. |
 | `cdc.walReplicationTailer.includeXids` / `Timestamp` / `Lsn` / `prettyPrint` | (varies) | wal2json slot options.                                                                          |
 
 ### 7.5 `cdc.cdcDispatcher` ([`CdcDispatcherProperties`](CdcProperties.java)) — INBOX mode only
@@ -470,6 +488,7 @@ All keys live under `cdc.*` in [`CdcProperties`](CdcProperties.java).
 | `cdc.cdcDispatcher.batchSize`             | `500`                       | Max rows per dispatcher tick.                                                            |
 | `cdc.cdcDispatcher.poisonPolicy`          | `QUARANTINE_AND_CONTINUE`   | `QUARANTINE_AND_CONTINUE` or `STOP`.                                                     |
 | `cdc.cdcDispatcher.dispatchedRowPolicy`   | `MARK_DISPATCHED`           | `MARK_DISPATCHED` (rely on TTL purge) or `DELETE` (immediate row removal after dispatch).|
+| `cdc.cdcDispatcher.inboxMetricsEnabled`   | `true`                      | Master switch for the `essentials.cdc.inbox.*` backlog/poison gauges. INBOX delivery only. Gauges sample on demand at metrics scrape time. |
 
 ### 7.6 `cdc.eventBus` ([`CdcEventBusProperties`](CdcProperties.java))
 
@@ -516,6 +535,22 @@ All metrics under `essentials.cdc.*` (Micrometer).
 - `essentials.cdc.dispatcher.poll.latency` / `.convert.latency` / `.publish.latency`
 - `essentials.cdc.dispatcher.poll.batch_size` (gauge)
 
+### Inbox
+
+Registered on `CdcInboxRepository` at startup; sample on demand at metrics scrape time (no separate sampler). INBOX delivery only. Tagged `slot=<slotName>`.
+
+- `essentials.cdc.inbox.received_backlog` (gauge — rows in `RECEIVED` status; growing value = dispatcher falling behind tailer)
+- `essentials.cdc.inbox.poison_rows` (gauge — rows in `POISON` status; non-zero value warrants investigation)
+
+### Replication Slot
+
+Sampled every `cdc.slot.metricsInterval` (default 30s) by `CdcSlotMetrics`. Tagged `slot=<slotName>`.
+
+- `essentials.cdc.slot.lag_bytes` (gauge — bytes of WAL retained past `confirmed_flush_lsn`; growing value = stuck slot)
+- `essentials.cdc.slot.active` (gauge: 0/1 — streaming consumer attached)
+- `essentials.cdc.slot.wal_status` (gauge — `0=UNKNOWN`, `1=RESERVED`, `2=EXTENDED`, `3=UNRESERVED`, `4=LOST`; alert `>1` = warn, `>2` = page)
+- `essentials.cdc.slot.inactive_since_seconds` (gauge — seconds the slot has been inactive; `0` while active; combine with `slot.active=0` to detect orphaned slots)
+
 ### EventStore / Bus
 
 - `essentials.cdc.active` (gauge: 0/1)
@@ -531,7 +566,8 @@ All metrics under `essentials.cdc.*` (Micrometer).
 
 ### "Slot is growing — disk usage climbing"
 
-1. `SELECT slot_name, active, wal_status, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS lag, inactive_since FROM pg_replication_slots WHERE slot_name LIKE 'essentials_%';`
+1. Check the `essentials.cdc.slot.*` gauges first (lag_bytes, active, wal_status, inactive_since_seconds) — they're tagged by slot name and updated every `cdc.slot.metricsInterval`. If you want raw detail beyond the gauges:
+   `SELECT slot_name, active, wal_status, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS lag, inactive_since FROM pg_replication_slots WHERE slot_name LIKE 'essentials_%';`
 2. If `active = false`:
    - **The app is running**: tailer didn't acquire the slot — check the JVM and its
      logs. The `slot_lock_acquired` gauge will be 0 too.
@@ -896,54 +932,19 @@ another node acquires the slot.
 (Zookeeper, etcd, etc.) which would defeat the "PostgreSQL is the only
 coordinator" design choice.
 
-### 13.3 Idle LSN push interval is hardcoded
-
-`WalReplicationTailer.IDLE_LSN_PUSH_INTERVAL_NANOS` is a 30-second constant. For
-workloads with very long quiet periods *and* a tight `wal_sender_timeout`, this
-could in principle be tuned tighter — but the default is safe under the default
-PostgreSQL `wal_sender_timeout=60s`.
-
-**Tracked for promotion to a property** in [cdc-improvements.md](cdc-improvements.md).
-
-### 13.4 No server-side `max_slot_wal_keep_size` advisory
-
-The framework does not check whether the PostgreSQL server has
-`max_slot_wal_keep_size` set, nor recommend a value at startup. The runbook
-covers this (§5.6), and operators with managed PostgreSQL may already have it
-configured. A startup INFO log recommending the setting would be a low-cost
-improvement.
-
-### 13.5 Dispatcher SKIP LOCKED contention not metered
+### 13.3 Dispatcher SKIP LOCKED contention not metered
 
 When multiple dispatcher instances poll the inbox concurrently, rows skipped due
 to lock contention on other workers' picks are not exposed as a metric. The
 behaviour is correct (dispatchers self-distribute), but operators sizing a
 cluster cannot easily see whether SKIP LOCKED is actually balancing well.
 
-### 13.6 CdcEventBus is per-JVM
+### 13.4 CdcEventBus is per-JVM
 
 Subscribers on a node only receive events from that node's dispatcher's bus.
 This is **correct**, not broken — it works because the inbox is the shared
 durable buffer and every node's dispatcher will publish every event. But it can
 surprise operators who assume the bus federates across the cluster. See §10.4.
-
-### 13.7 `wal_status` not validated at startup
-
-`PgReplicationSlots.validateSlotOrThrow` checks plugin / type / database /
-temporary but does not check `wal_status` or `conflicting`. A slot that has
-already been invalidated by `max_slot_wal_keep_size` will pass validation and
-fail at stream-start with a less obvious error.
-
-**Tracked for a fail-fast improvement** in [cdc-improvements.md](cdc-improvements.md).
-
-### 13.8 Poison-rows and inbox-backlog observability is thin
-
-Poison rows accumulate in the inbox until TTL purge with no aggregate metric.
-Inbox `RECEIVED` backlog (rows not yet dispatched) is not exposed as a gauge
-either. Operators have to query the table directly to see whether the dispatcher
-is keeping up.
-
-**Tracked as an observability improvement** in [cdc-improvements.md](cdc-improvements.md).
 
 ---
 

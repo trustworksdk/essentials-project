@@ -256,11 +256,14 @@ public class CdcInboxRepository {
 
     /**
      * Counts the number of entries in the CDC inbox table with the specified slot name and status.
+     * Used by {@code CdcInboxMetrics} to publish backlog / poison-row gauges, and by tests for
+     * direct assertions.
      * <p>
-     * For testing purposes.
+     * The query is index-supported by the {@code (slot_name, status, inbox_id)} index created in
+     * {@link CdcSql#getCreateCdcIndexSql()}, so the call is cheap even on large inboxes.
      *
      * @param slotName the name of the slot used to filter records
-     * @param status   the status value used to filter records
+     * @param status   the status value used to filter records (e.g. {@code "RECEIVED"}, {@code "POISON"})
      * @return the count of entries matching the specified slot name and status
      */
     public long countByStatus(String slotName, String status) {
@@ -283,6 +286,47 @@ public class CdcInboxRepository {
      * @param lsn      the Log Sequence Number (LSN) identifying the event
      * @return an {@code Optional<String>} containing the status if the event exists, or an empty {@code Optional} if not found
      */
+    /**
+     * Registers two on-demand Micrometer gauges that expose the inbox depth for {@code slotName}:
+     * <ul>
+     *   <li>{@code essentials.cdc.inbox.received_backlog} — rows in {@code RECEIVED} status,
+     *       i.e. WAL messages persisted by the tailer but not yet dispatched. Steady growth
+     *       indicates the dispatcher is falling behind.</li>
+     *   <li>{@code essentials.cdc.inbox.poison_rows} — rows in {@code POISON} status, i.e.
+     *       WAL messages quarantined after decode failure. Non-zero warrants investigation.</li>
+     * </ul>
+     * Both gauges sample {@link #countByStatus} at scrape time. The query is served by the
+     * existing {@code (slot_name, status, inbox_id)} index as an index-only scan, so the
+     * per-scrape cost is negligible — there is no separate background sampler.
+     * <p>
+     * No-ops when the repository was constructed without a {@link MeterRegistry} or when
+     * the slot name is blank. Callers should not invoke this in DIRECT delivery mode, where
+     * the gauges would read 0 forever and mislead operators. Micrometer deduplicates by
+     * meter identity, so a duplicate call is safe but redundant.
+     */
+    public void registerInboxBacklogGauges(String slotName) {
+        if (meterRegistry == null) return;
+        if (slotName == null || slotName.isBlank()) return;
+
+        Gauge.builder("essentials.cdc.inbox.received_backlog",
+                      this,
+                      repo -> repo.countByStatus(slotName, InboxStatus.RECEIVED.name()))
+             .description("Number of inbox rows in RECEIVED status — WAL messages persisted by the tailer but not yet dispatched. Steady growth = dispatcher falling behind.")
+             .baseUnit("rows")
+             .tag("slot", slotName)
+             .register(meterRegistry);
+
+        Gauge.builder("essentials.cdc.inbox.poison_rows",
+                      this,
+                      repo -> repo.countByStatus(slotName, InboxStatus.POISON.name()))
+             .description("Number of inbox rows in POISON status — WAL messages quarantined after decode failure. Non-zero warrants investigation.")
+             .baseUnit("rows")
+             .tag("slot", slotName)
+             .register(meterRegistry);
+
+        log.info("Registered CDC inbox backlog gauges for slot '{}'", slotName);
+    }
+
     public Optional<String> statusForLsn(String slotName, String lsn) {
         return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
                                                                                 select status from eventstore_cdc_inbox
