@@ -23,7 +23,7 @@ Full-featured Event Store for PostgreSQL with durable subscriptions, gap handlin
 - [In-Memory Projections](#in-memory-projections)
 - [Gap Handling](#gap-handling)
 - [Event Polling](#event-polling)
-- [Hybrid CDC (wal2json)](#hybrid-cdc-wal2json)
+- [CDC](#hybrid-cdc-wal2json)
 - [EventStoreSubscriptionObserver](#eventstoresubscriptionobserver)
 - [Advanced Configuration](#advanced-configuration)
 - [Related Modules](#related-modules)
@@ -2233,7 +2233,7 @@ Slot ownership and safety:
 
 Design details:
 
-- [Hybrid CDC design](src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/hybrid-cdc-eventstore.md)
+- [Hybrid CDC design](src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/cdc.md)
 
 Operational API:
 
