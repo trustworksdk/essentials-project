@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.WalMessageFilter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import org.jdbi.v3.core.Handle;
 
@@ -94,6 +95,30 @@ public interface LogicalDecodingPlugin {
      */
     default boolean preFiltersRawPayloads() {
         return false;
+    }
+
+    /**
+     * Plugin-supplied default raw-payload {@link WalMessageFilter} for use by the tailer when
+     * the caller hasn't provided one explicitly. Each plugin knows the exact filter shape its
+     * payloads need:
+     * <ul>
+     *   <li>{@code wal2json} → {@code DefaultWalMessageFilter} (Jackson-driven, table-name aware).</li>
+     *   <li>{@code pgoutput} → {@code PgOutputRawPayloadFilter} (binary-header peek, table-name aware).</li>
+     * </ul>
+     * Returning {@link Optional#empty()} (the default) means the plugin has no opinion and the
+     * tailer will fall back to a generic last-resort filter — that path is intentionally unwise:
+     * a plugin that opts into raw-payload pre-filtering ({@link #preFiltersRawPayloads()} =
+     * {@code true}) but doesn't supply a default risks dropping every message under the generic
+     * fallback. Override this method whenever {@code preFiltersRawPayloads()} is {@code true}.
+     *
+     * @param eventStreamTableNamesSupplier live supplier of registered event-stream table names.
+     *                                      Filters that need to know "is this WAL message for a
+     *                                      table I care about?" wire it through here so runtime
+     *                                      aggregate registration is observed without rebuilding
+     *                                      the filter.
+     */
+    default Optional<WalMessageFilter> defaultRawPayloadFilter(Supplier<Set<String>> eventStreamTableNamesSupplier) {
+        return Optional.empty();
     }
 
     /**

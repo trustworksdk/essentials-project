@@ -78,6 +78,16 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
         this.aggregateTypeResolver = aggregateTypeResolver;
     }
 
+    /**
+     * Exposes the configured {@link JacksonJSONEventSerializer} so that the owning
+     * {@code Wal2JsonLogicalDecodingPlugin} can supply a properly-wired
+     * {@code DefaultWalMessageFilter} as its default raw-payload filter — without forcing every
+     * plugin call site to plumb the serializer through a separate constructor parameter.
+     */
+    public JacksonJSONEventSerializer getJacksonJSONSerializer() {
+        return jacksonJSONSerializer;
+    }
+
     @Override
     public List<PersistedEvent> convert(String wal2jsonMessage) {
         if (wal2jsonMessage == null || wal2jsonMessage.isBlank()) {

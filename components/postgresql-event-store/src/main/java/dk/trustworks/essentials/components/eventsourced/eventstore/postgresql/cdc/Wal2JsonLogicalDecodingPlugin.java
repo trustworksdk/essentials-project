@@ -18,8 +18,11 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalParserMode;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.WalReplicationTailerProperties;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.JacksonWal2JsonToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.LogicalReplicationToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.DefaultWalMessageFilter;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.WalMessageFilter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import org.jdbi.v3.core.Handle;
@@ -28,6 +31,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -97,5 +102,24 @@ public final class Wal2JsonLogicalDecodingPlugin implements LogicalDecodingPlugi
     @Override
     public boolean preFiltersRawPayloads() {
         return true;
+    }
+
+    /**
+     * wal2json's raw payloads are JSON. The proper default filter is
+     * {@link DefaultWalMessageFilter} — a Jackson-driven, table-name-aware filter that only
+     * persists INSERTs targeting registered event-stream tables. We can construct it here as
+     * long as the converter exposes its underlying serializer (the standard
+     * {@link JacksonWal2JsonToPersistedEventConverter} does); plugins built on a custom
+     * converter implementation that doesn't expose a serializer return
+     * {@link Optional#empty()} so the tailer falls back to its last-resort filter.
+     */
+    @Override
+    public Optional<WalMessageFilter> defaultRawPayloadFilter(Supplier<Set<String>> eventStreamTableNamesSupplier) {
+        requireNonNull(eventStreamTableNamesSupplier, "eventStreamTableNamesSupplier cannot be null");
+        if (converter instanceof JacksonWal2JsonToPersistedEventConverter jacksonConverter) {
+            return Optional.of(new DefaultWalMessageFilter(jacksonConverter.getJacksonJSONSerializer(),
+                                                           eventStreamTableNamesSupplier::get));
+        }
+        return Optional.empty();
     }
 }

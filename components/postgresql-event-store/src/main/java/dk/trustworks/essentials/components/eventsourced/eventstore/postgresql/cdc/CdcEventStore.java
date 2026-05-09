@@ -275,14 +275,26 @@ public class CdcEventStore implements EventStore {
         // sink or back-to-back redundant emissions.
         Flux<CdcAvailability.State> rawStates = availability.stateChanges().distinctUntilChanged();
 
-        // Debounce applies only to ACTIVE cutbacks. Non-ACTIVE emissions pass straight through so
-        // we never linger on a dead CDC bus when availability has already flipped. switchMap
-        // cancels any pending ACTIVE-debounce mono if a new state arrives, so a quick
-        // ACTIVE → FAILED flip during the debounce window never completes the cutback.
+        // Debounce applies only to ACTIVE cutbacks _after_ the initial subscribe — the first
+        // emission is always the current availability replayed on subscribe and reflects steady
+        // state, not a transition, so debouncing it would delay the very first source selection
+        // by activeCutbackDebounce (default 60s). For a subscriber that joins while CDC is
+        // already healthy, that is a 60-second hole in delivery — observed as the
+        // "events published to cdcBus never arrive at subscribers" failure mode in the 2-node
+        // ITs. Subsequent ACTIVE emissions (i.e. genuine FAILED → ACTIVE recoveries) still go
+        // through the debounce so brief flaps don't thrash the source. switchMap cancels any
+        // pending ACTIVE-debounce mono if a new state arrives, so a quick ACTIVE → FAILED flip
+        // during the debounce window never completes the cutback.
+        var firstEmission = new AtomicBoolean(true);
         Flux<CdcAvailability.State> gatedStates = rawStates
-                .switchMap(state -> state == CdcAvailability.State.ACTIVE
-                        ? Mono.just(state).delayElement(activeCutbackDebounce)
-                        : Mono.just(state))
+                .switchMap(state -> {
+                    if (firstEmission.compareAndSet(true, false)) {
+                        return Mono.just(state);
+                    }
+                    return state == CdcAvailability.State.ACTIVE
+                            ? Mono.just(state).delayElement(activeCutbackDebounce)
+                            : Mono.just(state);
+                })
                 .distinctUntilChanged();
 
         return gatedStates

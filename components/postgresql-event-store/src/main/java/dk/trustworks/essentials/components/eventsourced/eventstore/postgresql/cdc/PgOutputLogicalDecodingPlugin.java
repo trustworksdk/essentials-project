@@ -19,6 +19,8 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties.PgOutputProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.PgOutputToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.PgOutputRawPayloadFilter;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.WalMessageFilter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import org.jdbi.v3.core.Handle;
@@ -262,6 +264,20 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
     @Override
     public boolean preFiltersRawPayloads() {
         return true;
+    }
+
+    /**
+     * pgoutput's raw payloads are binary; the dedicated {@link PgOutputRawPayloadFilter}
+     * does a cheap header peek to drop irrelevant messages before they hit the inbox.
+     * Wired here as the plugin-supplied default so callers that pass {@code Optional.empty()}
+     * to the tailer get the right filter instead of the generic last-resort fallback.
+     */
+    @Override
+    public Optional<WalMessageFilter> defaultRawPayloadFilter(Supplier<Set<String>> eventStreamTableNamesSupplier) {
+        requireNonNull(eventStreamTableNamesSupplier, "eventStreamTableNamesSupplier cannot be null");
+        // PgOutputRawPayloadFilter takes Supplier<Collection<String>>; Set is a Collection so
+        // we just adapt with a lambda.
+        return Optional.of(new PgOutputRawPayloadFilter(eventStreamTableNamesSupplier::get));
     }
 
     @Override

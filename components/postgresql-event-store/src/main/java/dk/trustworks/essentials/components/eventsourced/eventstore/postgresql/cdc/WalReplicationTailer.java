@@ -272,10 +272,6 @@ public class WalReplicationTailer implements Lifecycle {
         requireNonNull(tailerProperties.getReplicationStatusInterval(), "replicationStatusInterval cannot be null");
         requireTrue(tailerProperties.getJitterRatio() > 0.0 && tailerProperties.getJitterRatio() < 0.5, "jitterRatio must be in [0.0..0.5]");
         requireTrue(tailerProperties.getBackOffFactor() > 1, "backOffFactor must be > 1");
-        // Resolve idle-LSN-push cadence — fall back to the safe 30s default if the property is
-        // unset or non-positive. We do not allow disabling: a stuck confirmed_flush_lsn fills
-        // disks. If a future need arises to disable, that should be a separate, explicit knob
-        // rather than overloading this duration.
         var configuredIdleLsnPushInterval = tailerProperties.getIdleLsnPushInterval();
         this.idleLsnPushIntervalNanos = configuredIdleLsnPushInterval != null
                                         && !configuredIdleLsnPushInterval.isZero()
@@ -284,7 +280,9 @@ public class WalReplicationTailer implements Lifecycle {
                                         : DEFAULT_IDLE_LSN_PUSH_INTERVAL_NANOS;
         this.meterRegistry = meterRegistry.orElse(null);
         this.errorHandler = errorHandler.orElseGet(DefaultWalReplicationTailerErrorHandler::new);
-        this.walMessageFilter = walMessageFilter.orElseGet(RegexWalMessageFilter::new);
+        this.walMessageFilter = walMessageFilter
+                .or(() -> logicalDecodingPlugin.defaultRawPayloadFilter(this.eventStreamTableNamesSupplier))
+                .orElseGet(RegexWalMessageFilter::new);
         initMetrics();
         if (deliveryMode == CdcDeliveryMode.INBOX) {
             unitOfWorkFactory.usingUnitOfWork(inboxRepository::createTableAndIndexes);
@@ -772,15 +770,22 @@ public class WalReplicationTailer implements Lifecycle {
                 return;
             }
             PgReplicationSlots.ensureSlot(uow.handle().getConnection(), slotName, pgSlotMode, logicalDecodingPlugin.pluginName());
-
-            // Once-per-JVM advisory: warn the operator if the server has no
-            // max_slot_wal_keep_size backstop. Strictly informational — never fails startup.
-            // Guarded with an AtomicBoolean so reconnects don't repeat the message.
-            if (keepSizeAdvisoryEvaluated.compareAndSet(false, true)) {
-                PgReplicationSlots.getKeepSizeAdvisoryIfUnbounded(uow.handle().getConnection())
-                                  .ifPresent(advisory -> log.info("[{}] {}", slotName, advisory));
-            }
         });
+
+        // Once-per-JVM advisory: warn the operator if the server has no
+        // max_slot_wal_keep_size backstop. Strictly informational — never fails startup.
+        // Runs in its own UoW so any failure here cannot roll back the slot creation
+        // above (pg_create_logical_replication_slot is rollback-safe and would be undone
+        // by a tx rollback). Guarded by AtomicBoolean so reconnects don't repeat the log.
+        if (keepSizeAdvisoryEvaluated.compareAndSet(false, true)) {
+            try {
+                unitOfWorkFactory.usingUnitOfWork(advisoryUow ->
+                        PgReplicationSlots.getKeepSizeAdvisoryIfUnbounded(advisoryUow.handle().getConnection())
+                                          .ifPresent(advisory -> log.info("[{}] {}", slotName, advisory)));
+            } catch (Exception e) {
+                log.debug("[{}] Could not evaluate max_slot_wal_keep_size advisory: {}", slotName, e.getMessage());
+            }
+        }
 
         // If we just recreated the slot, the CDC inbox may contain rows from prior sessions
         // that reference now-lost WAL positions AND pgoutput relationIds whose RELATION

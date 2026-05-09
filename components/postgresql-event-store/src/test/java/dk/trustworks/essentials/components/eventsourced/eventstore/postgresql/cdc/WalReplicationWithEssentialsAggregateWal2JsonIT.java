@@ -32,6 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
@@ -119,7 +120,9 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                 Optional.empty(),
                 availability,
                 Optional.empty(),
-                Optional.empty()
+                Optional.empty(),
+                Optional.of(eventStreamTablesSupplier()),
+                false
         );
 
         var dispatcher = new CdcDispatcher(
@@ -205,7 +208,9 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                 Optional.empty(),
                 availability,
                 Optional.empty(),
-                Optional.empty()
+                Optional.empty(),
+                Optional.of(eventStreamTablesSupplier()),
+                false
         );
 
         var dispatcher = new CdcDispatcher(
@@ -290,7 +295,9 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
                 Optional.empty(),
                 availability,
                 Optional.empty(),
-                Optional.empty()
+                Optional.empty(),
+                Optional.of(eventStreamTablesSupplier()),
+                false
         );
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
@@ -319,4 +326,13 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
         tailer.stop();
     }
 
+    /**
+     * Live supplier of registered event-stream table names. Mirrors the production
+     * {@code WalMessageFilter} wiring in Spring autoconfig (which pulls from
+     * {@code persistenceStrategy.getSeparateTablePerEventStreamTableNameAggregates().keySet()})
+     * so {@link DefaultWalMessageFilter} can correctly accept INSERTs for tracked tables.
+     */
+    private static Supplier<Set<String>> eventStreamTablesSupplier() {
+        return () -> Set.of("orders_events");
+    }
 }

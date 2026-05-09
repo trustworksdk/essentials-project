@@ -49,8 +49,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT.createObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -123,7 +125,9 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 Optional.empty(),
                 availability,
                 Optional.empty(),
-                Optional.empty()
+                Optional.empty(),
+                Optional.of(eventStreamTablesSupplier()),
+                false
         );
 
         tailer.startAndAwaitReady(Duration.ofSeconds(10));
@@ -169,7 +173,9 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 Optional.empty(),
                 availability,
                 Optional.empty(),
-                Optional.empty()
+                Optional.empty(),
+                Optional.of(eventStreamTablesSupplier()),
+                false
         );
 
         var dispatcher = new CdcDispatcher(
@@ -276,8 +282,21 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 Optional.empty(),
                 availability,
                 Optional.empty(),
-                Optional.empty()
+                Optional.empty(),
+                Optional.of(eventStreamTablesSupplier()),
+                false
         );
+    }
+
+    /**
+     * Live supplier of registered event-stream table names for this test class. Mirrors the
+     * production {@code WalMessageFilter} wiring (Spring autoconfig pulls
+     * {@code persistenceStrategy.getSeparateTablePerEventStreamTableNameAggregates().keySet()})
+     * so the pgoutput pre-filter can correctly decide which {@code I}/{@code R} messages to
+     * keep.
+     */
+    private static Supplier<Set<String>> eventStreamTablesSupplier() {
+        return () -> Set.of("orders_events");
     }
 
     private void appendOneMoreOrderEvent() {
