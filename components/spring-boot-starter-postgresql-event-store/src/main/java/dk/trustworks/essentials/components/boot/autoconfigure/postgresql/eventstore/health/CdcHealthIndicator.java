@@ -56,11 +56,11 @@ public class CdcHealthIndicator implements HealthIndicator {
         var builder = Health.status(status)
                             .withDetail("state", snapshot.state().name())
                             .withDetail("mode", mode.name())
-                            .withDetail("slot", snapshot.slotName())
-                            .withDetail("reason", snapshot.reason())
+                            .withDetail("slot", snapshot.slotName() == null ? "" : snapshot.slotName())
+                            .withDetail("reason", snapshot.reason() == null ? "" : snapshot.reason())
                             .withDetail("fallbackCount", snapshot.fallbackCount())
                             .withDetail("lastChanged", snapshot.lastChangedEpochMs() == 0
-                                                     ? null
+                                                     ? ""
                                                      : Instant.ofEpochMilli(snapshot.lastChangedEpochMs()).toString());
 
         tailer.ifPresent(t -> {
