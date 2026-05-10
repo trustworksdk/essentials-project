@@ -54,6 +54,33 @@ public class EssentialsPerformanceLabProperties {
      */
     private int producerRateHz = 0;
 
+    /**
+     * Cadence at which {@code SlotLagBoundedScenario} samples {@code pg_replication_slots}
+     * and the framework's {@code essentials.cdc.slot.*} gauges. Default {@code PT5S} —
+     * frequent enough to spot mid-run lag spikes, rare enough that the sampling itself
+     * doesn't load the database.
+     */
+    private Duration slotLagSampleInterval = Duration.ofSeconds(5);
+
+    /**
+     * Pass-criterion threshold for {@code SlotLagBoundedScenario}: the maximum
+     * {@code pg_wal_lsn_diff(current, confirmed_flush)} observed across the run must stay
+     * under this value. Default {@code 100 MiB} — comfortable headroom for a few seconds
+     * of buffered WAL during dispatcher tick gaps; tighten when validating lower-volume
+     * profiles, raise for stress tests.
+     */
+    private long slotLagMaxBytes = 100L * 1024L * 1024L;
+
+    /**
+     * Number of malformed inbox rows {@code PoisonFloodEnduranceScenario} injects via
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcInboxRepository#insertRaw insertRaw}
+     * at scenario start. Default {@code 100} — large enough to detect counting bugs, small
+     * enough that the dispatcher can quarantine them all within a typical scenario duration.
+     * Raise to validate the gauge at scale; {@code 0} disables injection entirely (useful as
+     * a control run when comparing two passes).
+     */
+    private int poisonFloodCount = 100;
+
     public Mode getMode() {
         return mode;
     }
@@ -164,6 +191,30 @@ public class EssentialsPerformanceLabProperties {
 
     public void setProducerRateHz(int producerRateHz) {
         this.producerRateHz = producerRateHz;
+    }
+
+    public Duration getSlotLagSampleInterval() {
+        return slotLagSampleInterval;
+    }
+
+    public void setSlotLagSampleInterval(Duration slotLagSampleInterval) {
+        this.slotLagSampleInterval = slotLagSampleInterval;
+    }
+
+    public long getSlotLagMaxBytes() {
+        return slotLagMaxBytes;
+    }
+
+    public void setSlotLagMaxBytes(long slotLagMaxBytes) {
+        this.slotLagMaxBytes = slotLagMaxBytes;
+    }
+
+    public int getPoisonFloodCount() {
+        return poisonFloodCount;
+    }
+
+    public void setPoisonFloodCount(int poisonFloodCount) {
+        this.poisonFloodCount = poisonFloodCount;
     }
 
     public enum Mode {

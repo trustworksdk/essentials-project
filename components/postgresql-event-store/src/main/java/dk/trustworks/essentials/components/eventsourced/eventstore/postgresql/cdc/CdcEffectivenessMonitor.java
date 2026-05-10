@@ -58,16 +58,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public final class CdcEffectivenessMonitor implements Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(CdcEffectivenessMonitor.class);
 
-    private final WalReplicationTailer    tailer;
-    private final CdcDispatcher           dispatcher;
-    private final CdcAvailability         availability;
-    private final CdcDeliveryMode         deliveryMode;
+    private final WalReplicationTailer     tailer;
+    private final CdcDispatcher            dispatcher;
+    private final CdcAvailability          availability;
+    private final CdcDeliveryMode          deliveryMode;
     private final CdcHealthCheckProperties config;
-    private final String                  slotName;
+    private final String                   slotName;
 
-    private final AtomicBoolean started = new AtomicBoolean(false);
-    private ScheduledExecutorService executor;
-    private Future<?>                scheduled;
+    private final AtomicBoolean            started = new AtomicBoolean(false);
+    private       ScheduledExecutorService executor;
+    private       Future<?>                scheduled;
     /**
      * Subscription to {@link CdcAvailability#stateChanges()} used to kick an immediate baseline
      * capture the moment availability first flips ACTIVE. Without this, a monitor that starts
@@ -76,24 +76,24 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
      * the baseline is captured at the moment of ACTIVE transition and the first scheduled tick
      * at t=interval runs a full evaluation.
      */
-    private Disposable               availabilityStateSubscription;
+    private       Disposable               availabilityStateSubscription;
 
     // Snapshot of counters captured on the last ACTIVE evaluation. Null until the first tick
     // after an ACTIVE transition; reset whenever availability leaves ACTIVE.
     private Snapshot previousSnapshot;
     // When we last marked availability FAILED from this monitor. Used by autoRecover=false to
     // skip subsequent evaluations. Null while monitor is healthy.
-    private Long monitorMarkedFailedAtNanos;
+    private Long     monitorMarkedFailedAtNanos;
     // Tracks whether we previously observed ACTIVE — so we can detect ACTIVE→!ACTIVE transitions
     // and reset the baseline.
-    private boolean prevObservedActive;
+    private boolean  prevObservedActive;
     /**
      * Count of how many consecutive times the monitor has fired {@link #flipFailed(String)}
      * without an intervening successful ACTIVE recovery. Reset to 0 in the "recovery reset"
      * branch of {@link #evaluate()} when availability comes back ACTIVE after a prior fire.
      * Drives the opt-in {@link CdcHealthCheckProperties#isAutoRecreateSlotOnStuck()} self-heal.
      */
-    private long consecutiveFireCount;
+    private long     consecutiveFireCount;
 
     public CdcEffectivenessMonitor(WalReplicationTailer tailer,
                                    CdcDispatcher dispatcher,
@@ -209,10 +209,10 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
 
         var tailerStatus     = tailer.getStatus();
         var dispatcherStatus = dispatcher.getStatus();
-        var current          = new Snapshot(System.nanoTime(),
-                                            tailerStatus.messagesReceived(),
-                                            dispatcherStatus.publishedEvents(),
-                                            dispatcherStatus.ticks());
+        var current = new Snapshot(System.nanoTime(),
+                                   tailerStatus.messagesReceived(),
+                                   dispatcherStatus.publishedEvents(),
+                                   dispatcherStatus.ticks());
 
         // autoRecover=true and we previously fired: the tailer has flipped availability back to
         // ACTIVE, so the stuck-state is (at least for now) cleared. Reset the baseline from the
@@ -240,10 +240,10 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
 
         long elapsedMs             = TimeUnit.NANOSECONDS.toMillis(current.capturedNs - previousSnapshot.capturedNs);
         long messagesReceivedDelta = current.tailerMessagesReceived - previousSnapshot.tailerMessagesReceived;
-        long publishedDelta        = current.dispatcherPublished    - previousSnapshot.dispatcherPublished;
-        long ticksDelta            = current.dispatcherTicks        - previousSnapshot.dispatcherTicks;
+        long publishedDelta        = current.dispatcherPublished - previousSnapshot.dispatcherPublished;
+        long ticksDelta            = current.dispatcherTicks - previousSnapshot.dispatcherTicks;
 
-        String stuckReason         = checkStuckDelivery(messagesReceivedDelta, publishedDelta, elapsedMs);
+        String stuckReason          = checkStuckDelivery(messagesReceivedDelta, publishedDelta, elapsedMs);
         String dispatcherDeadReason = checkDispatcherDead(ticksDelta, elapsedMs);
 
         if (stuckReason != null) {
@@ -351,7 +351,7 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
      */
     private String buildDecodeSuffix() {
         try {
-            var ds = dispatcher.getStatus();
+            var ds     = dispatcher.getStatus();
             var plugin = ds.pluginDiagnostics();
             // -1 fields mean "not reported by the plugin" — render them as a dash so the reader
             // can tell "zero" from "unknown".

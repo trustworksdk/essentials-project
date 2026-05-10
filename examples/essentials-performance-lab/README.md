@@ -466,6 +466,404 @@ Outputs per run:
 - `examples/essentials-performance-lab/target/backpressure/<run-id>/summary.md` — per-case pass/fail
   table plus an invariant-violations section flagging any case that failed.
 
+## Slot validation suite
+
+Six scenarios exercise the slot / inbox / dispatcher pipeline at runtime. Five are
+in-process Java `LabScenario` impls; one is a multi-step bash workflow. Each produces a
+self-contained JSON or Markdown output with PASS/FAIL assertions. Designed to be run
+individually during development and together via the suite scripts for end-to-end
+validation.
+
+| Scenario | Type | What it stresses | Key invariants |
+|---|---|---|---|
+| `slot-lag-bounded` | Java | Steady-rate writes; verifies WAL retention stays bounded | `lagBytesMax` ≤ threshold, slot drains at end, framework gauge agrees with PG |
+| `slot-idle-push` | Java | Zero-write idle period | `confirmed_flush_lsn` advances purely via the P4 idle push (no producer-driven WAL) |
+| `consumer-pause-recovery` | Java | Three-phase normal → dispatcher stopped → resumed | Inbox backlog grows during pause and drains after resume; dispatcher restarts cleanly |
+| `poison-flood` | Java | N malformed inbox rows alongside valid stream | Poison gauge tracks the count exactly; valid delivery rate ≥ 99%; dispatcher keeps running |
+| `slot-invalidation` | Java | Tightens `max_slot_wal_keep_size` + paused dispatcher to force slot loss | `wal_status` reaches non-`reserved`; `CdcAvailability` flips off; events still durable in event store |
+| `pg-restart` (script) | bash | Restarts the PG container mid-run | Tailer reconnects, scenario JSON written, no JVM crash |
+| `orphaned-slot` (script) | bash | Stops the JVM, watches the slot persist | `active=false`, `inactive_since_seconds` grows; `pg_drop_replication_slot` works |
+
+### Quick start
+
+Bring up Postgres once:
+
+```bash
+docker compose -f examples/essentials-performance-lab/docker-compose.yml up -d --build
+```
+
+Then either run scenarios individually (sections below), or hit the suite runner that
+chains the four core slot scenarios:
+
+```bash
+./examples/essentials-performance-lab/scripts/run-slot-suite.sh
+```
+
+Outputs land in `target/slot-suite/<run-id>/<scenario>.json` plus a combined
+`suite-summary.{json,md}`. Tear down compose when done:
+
+```bash
+docker compose -f examples/essentials-performance-lab/docker-compose.yml down -v
+```
+
+### Running individual Java scenarios
+
+All Java scenarios share a uniform invocation shape: pick the scenario name, set CDC
+on, supply a duration, point `metrics-output-file` at where you want the JSON. The
+common knobs (`producer-threads`, `producer-rate-hz`, `aggregate-cardinality`,
+`random-seed`) work the same as in the baseline scenarios.
+
+```bash
+mvn -q -pl examples/essentials-performance-lab -DskipTests \
+    -Dspring-boot.run.profiles=compose \
+    -Dspring-boot.run.arguments="\
+--essentials.lab.scenario=<scenario-name> \
+--essentials.eventstore.cdc.enabled=true \
+--essentials.lab.duration=<ISO-8601 duration, e.g. PT60S> \
+--essentials.lab.metrics-output-file=./target/<scenario>.json" \
+    spring-boot:run
+```
+
+Per-scenario knobs that meaningfully change behaviour:
+
+| Scenario | Knob | Default | Effect |
+|---|---|---|---|
+| `slot-lag-bounded` | `--essentials.lab.slot-lag-max-bytes` | 100 MiB | Pass-criterion threshold for peak lag |
+| `slot-lag-bounded` | `--essentials.lab.slot-lag-sample-interval` | PT5S | How often to sample `pg_replication_slots` |
+| `slot-lag-bounded` | `--essentials.eventstore.cdc.slot.metrics-interval` | PT30S | Set tighter (e.g. PT2S) on short runs so the framework gauge has time to refresh |
+| `slot-idle-push` | `--essentials.eventstore.cdc.wal-replication-tailer.idle-lsn-push-interval` | PT30S | Set tighter (e.g. PT5S) so a 60s test sees multiple pushes |
+| `consumer-pause-recovery` | `--essentials.lab.duration` | (required) | Run divided into thirds — pause is the middle third |
+| `poison-flood` | `--essentials.lab.poison-flood-count` | 100 | Number of malformed rows injected at run start |
+| `slot-invalidation` | `--essentials.lab.aggregate-cardinality` | 1000 | Smaller = more contention per aggregate (more conflicts, less effective WAL); 200–1000 is the sweet spot |
+
+#### Concrete examples
+
+```bash
+# Steady-state lag test, 60s run, tight metrics interval so framework gauge refreshes
+mvn -q -pl examples/essentials-performance-lab -DskipTests \
+  -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="\
+--essentials.lab.scenario=slot-lag-bounded \
+--essentials.eventstore.cdc.enabled=true \
+--essentials.eventstore.cdc.slot.metrics-interval=PT2S \
+--essentials.lab.duration=PT60S \
+--essentials.lab.producer-threads=4 \
+--essentials.lab.producer-rate-hz=1000 \
+--essentials.lab.aggregate-cardinality=5000 \
+--essentials.lab.slot-lag-max-bytes=104857600 \
+--essentials.lab.slot-lag-sample-interval=PT2S \
+--essentials.lab.metrics-output-file=./target/slot-lag.json" \
+  spring-boot:run
+
+# Idle-push validation: 40s of idle time, 5s push cadence so we see ~8 pushes
+mvn -q -pl examples/essentials-performance-lab -DskipTests \
+  -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="\
+--essentials.lab.scenario=slot-idle-push \
+--essentials.eventstore.cdc.enabled=true \
+--essentials.eventstore.cdc.wal-replication-tailer.idle-lsn-push-interval=PT5S \
+--essentials.lab.duration=PT40S \
+--essentials.lab.metrics-output-file=./target/idle-push.json" \
+  spring-boot:run
+
+# Pause/recovery: producer runs through all three phases, dispatcher off for the middle third
+mvn -q -pl examples/essentials-performance-lab -DskipTests \
+  -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="\
+--essentials.lab.scenario=consumer-pause-recovery \
+--essentials.eventstore.cdc.enabled=true \
+--essentials.lab.duration=PT60S \
+--essentials.lab.producer-threads=2 \
+--essentials.lab.producer-rate-hz=200 \
+--essentials.lab.metrics-output-file=./target/pause-recovery.json" \
+  spring-boot:run
+
+# Poison flood: 50 malformed inbox rows, valid stream concurrent
+mvn -q -pl examples/essentials-performance-lab -DskipTests \
+  -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="\
+--essentials.lab.scenario=poison-flood \
+--essentials.eventstore.cdc.enabled=true \
+--essentials.lab.poison-flood-count=50 \
+--essentials.lab.duration=PT30S \
+--essentials.lab.producer-threads=2 \
+--essentials.lab.producer-rate-hz=200 \
+--essentials.lab.metrics-output-file=./target/poison.json" \
+  spring-boot:run
+
+# Slot invalidation: DESTRUCTIVE. Tightens max_slot_wal_keep_size + stops dispatcher.
+# 60s usually enough to push past the 4 MiB bound. Slot ends invalidated; recreate-on-start
+# in application.yml handles the next JVM restart.
+mvn -q -pl examples/essentials-performance-lab -DskipTests \
+  -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="\
+--essentials.lab.scenario=slot-invalidation \
+--essentials.eventstore.cdc.enabled=true \
+--essentials.lab.duration=PT60S \
+--essentials.lab.aggregate-cardinality=200 \
+--essentials.lab.metrics-output-file=./target/slot-invalidation.json" \
+  spring-boot:run
+```
+
+### Running the bash-driven scenarios
+
+These wrap the Java scenarios with external lifecycle steps (Docker actions on the PG
+container) that can't be expressed cleanly in-process. Each script uses env variables
+for tuning — defaults are sensible for a quick smoke.
+
+#### `pg-restart` — survive a Postgres restart mid-run
+
+```bash
+# Default: 90s scenario, restart at t=30s
+./examples/essentials-performance-lab/scripts/run-pg-restart.sh
+
+# Tunable
+DURATION=PT120S RESTART_AT_S=45 RATE_HZ=500 \
+  ./examples/essentials-performance-lab/scripts/run-pg-restart.sh
+```
+
+What happens:
+
+1. The script verifies the PG container is up.
+2. Schedules a background `docker restart` of `essentials-perf-lab-postgres` after
+   `RESTART_AT_S` seconds.
+3. Runs `slot-lag-bounded` against the live PG.
+4. The tailer's reconnect loop picks up the post-restart PG; the scenario keeps
+   running.
+5. Outputs `target/pg-restart/<run-id>/scenario.json` plus `restart-log.txt` showing
+   exactly when the restart fired.
+
+Note: a `verdict=FAIL` here often just means the scenario's strict drain criterion
+(lag drained to ≤ 50% of peak) couldn't be met in the budget after the restart cost
+some seconds — the fact that the JSON was written at all is itself the meaningful
+signal that the tailer reconnected. Inspect `lagBytesEnd` + `walStatusEnd` for the
+actual story.
+
+#### `orphaned-slot` — operator runbook validation
+
+```bash
+# Default: 15s workload, 30s grace, leaves the slot in place for inspection
+./examples/essentials-performance-lab/scripts/run-orphaned-slot.sh
+
+# Auto-cleanup at end (drops any leftover essentials_* slots)
+CLEANUP=true ./examples/essentials-performance-lab/scripts/run-orphaned-slot.sh
+
+# Longer grace to watch inactive_since climb
+GRACE_S=300 ./examples/essentials-performance-lab/scripts/run-orphaned-slot.sh
+```
+
+What happens:
+
+1. Snapshots `pg_replication_slots` before the JVM starts (`slot-state-pre.json`).
+2. Runs the lab app for `WORKLOAD_DURATION` to provision and use the slot.
+3. Snapshots immediately after the JVM exits (`slot-state-post.json`).
+4. Sleeps `GRACE_S` seconds and snapshots again (`slot-state-after-grace.json`).
+5. Writes `run-summary.md` with the lifecycle table and the operator's drop-slot SQL.
+
+Validates the cdc.md §13.1 promise: PostgreSQL keeps the slot around indefinitely after
+the consumer disappears; the operator must drop it manually. A successful run produces
+a summary with `inactive_seconds` growing approximately in lockstep with `GRACE_S`.
+
+### Running the full suite
+
+The `run-slot-suite.sh` script chains the four core in-process scenarios back-to-back
+and writes a single combined verdict file:
+
+```bash
+# Full default suite (~4 min)
+./examples/essentials-performance-lab/scripts/run-slot-suite.sh
+
+# Lighter / faster
+LAG_DURATION=PT30S IDLE_DURATION=PT30S PAUSE_DURATION=PT30S POISON_DURATION=PT15S \
+  ./examples/essentials-performance-lab/scripts/run-slot-suite.sh
+
+# Heavier / longer (overnight CI)
+LAG_DURATION=PT300S IDLE_DURATION=PT300S PAUSE_DURATION=PT300S POISON_DURATION=PT60S \
+RATE_HZ=2000 \
+  ./examples/essentials-performance-lab/scripts/run-slot-suite.sh
+```
+
+Note that `run-slot-suite.sh` does **not** include `slot-invalidation`, `pg-restart`,
+or `orphaned-slot`. Those have side effects (server-side config changes, container
+restarts, leftover slots) that don't fit "run a clean test suite back-to-back". Run
+them individually when you want to validate those specific concerns.
+
+### Output JSON schemas at a glance
+
+Each scenario's JSON output is shaped to be self-describing — `verdict` is always
+`PASS`/`FAIL` so a one-liner like `jq -r '.verdict'` works across all of them. The
+key fields per scenario:
+
+| Scenario | Key fields |
+|---|---|
+| `slot-lag-bounded` | `verdict`, `lagBytesMax`, `lagBytesEnd`, `walStatusEnd`, `frameworkVsPgDriftPct`, `samples[]` |
+| `slot-idle-push` | `verdict`, `confirmedFlushLsnAdvanced`, `idlePushObserved`, `pre`/`afterSeed`/`post` |
+| `consumer-pause-recovery` | `verdict`, `peakBacklog`, `finalBacklog`, `dispatcherRestartedCleanly`, `samples[]` |
+| `poison-flood` | `verdict`, `poisonInjected`, `poisonRowsAtEnd`, `producedValidEvents`, `deliveredValidEvents` |
+| `slot-invalidation` | `verdict`, `walStatusDegraded`, `availabilityFlipped`, `pre`/`mid`/`post`, `runException` |
+
+Existing utility scripts (`summarize-compare.sh`) currently key off the baseline
+scenario shape; they don't pick up these slot-suite JSONs natively. Use the
+suite-summary `.md` instead, or grep `verdict` directly.
+
+### Multi-instance chaos scenarios
+
+The following two scenarios run two app JVMs concurrently against the same PG to
+exercise the framework's advisory-lock leader election. Activated via Docker
+Compose's `chaos` profile and a containerised app image.
+
+| Scenario | Type | What it stresses | Key invariants |
+|---|---|---|---|
+| `multi-tailer-leadership` (script) | bash + 2 containers | Steady state with both apps + graceful stop | exactly-one active streamer; failover on SIGTERM is near-instant |
+| `tailer-kill-failover` (script) | bash + 2 containers | SIGKILL the leader | failover under SIGKILL within `wal_sender_timeout` (default 60s) |
+
+#### One-time setup: build the app image
+
+The chaos profile needs a runnable Docker image. The `Dockerfile` in this directory
+copies a pre-built fat JAR into a slim runtime base — Maven runs on the host (uses
+your local repo cache, no repeat downloads), Docker just adds a `COPY` step.
+
+```bash
+./examples/essentials-performance-lab/scripts/build-app-image.sh
+```
+
+Subsequent rebuilds after a code change: same command (the script does
+`mvn package` + `docker build`).
+
+If you only changed the Dockerfile / compose YAML and don't need a fresh JAR:
+
+```bash
+SKIP_MVN=true ./examples/essentials-performance-lab/scripts/build-app-image.sh
+```
+
+#### Run the scenarios
+
+Both scripts spin up the chaos profile (`perf-lab-app-1` + `perf-lab-app-2`),
+observe the slot, perform the destructive action, measure failover, and tear
+down. PG must already be running.
+
+```bash
+# Bring up PG once
+docker compose -f examples/essentials-performance-lab/docker-compose.yml up -d --build
+
+# Build the app image (one-time per code change)
+./examples/essentials-performance-lab/scripts/build-app-image.sh
+
+# Graceful failover (SIGTERM via docker stop)
+./examples/essentials-performance-lab/scripts/run-multi-tailer-leadership.sh
+
+# Hard failover (SIGKILL via docker kill)
+./examples/essentials-performance-lab/scripts/run-tailer-kill-failover.sh
+```
+
+Tunable env variables:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `OBSERVATION_S` (multi-tailer) | 20 | Seconds to verify exactly-one-active before failover |
+| `FAILOVER_TIMEOUT_S` (multi-tailer) | 15 | Budget for graceful-stop failover |
+| `HOLD_S` (kill-failover) | 10 | Seconds to confirm leader is stable before SIGKILL |
+| `FAILOVER_TIMEOUT_S` (kill-failover) | 90 | Budget under SIGKILL — bounded by `wal_sender_timeout` (default 60s) |
+| `CHAOS_DURATION` (compose env) | PT3600S | Long enough that the script controls when the JVMs exit |
+| `CHAOS_RATE_HZ` (compose env) | 50 | Light producer load — enough to keep the tailer connected, not so much it swamps a laptop |
+| `CHAOS_SCENARIO` (compose env) | slot-lag-bounded | Which scenario the chaos containers run |
+
+Outputs:
+
+- `target/multi-tailer-leadership/<run-id>/{summary.md, timeline.txt, samples.csv}`
+- `target/tailer-kill-failover/<run-id>/{summary.md, timeline.txt}`
+
+Each `summary.md` contains a per-invariant verdict table plus the full timeline so
+you can see exactly when each phase started, when the kill/stop fired, and how long
+failover took.
+
+#### Observed failover times (reference)
+
+On a healthy compose setup these scenarios should produce:
+
+| Scenario | Typical failover time | Why |
+|---|---|---|
+| `multi-tailer-leadership` (graceful) | 1–10 s | Spring Boot shutdown hook closes the JDBC connection; PG releases the advisory lock immediately; standby acquires on next backoff retry (250 ms – 5 s). |
+| `tailer-kill-failover` (SIGKILL) | 1–60 s | TCP RST + `wal_sender_timeout` (default 60 s). Docker's hard kill closes the socket cleanly so PG often detects within seconds; on a real host network the full 60 s budget can apply. |
+
+A `verdict=FAIL` here usually means either:
+- `app-1` didn't reach `Started` before the test killed it (Spring cold-start
+  exceeded `start_period`). Crank `CHAOS_DURATION` and the healthcheck
+  `start_period`, or rebuild the image after a `mvn clean`.
+- `wal_sender_timeout` is set higher than the test budget. Check
+  `SHOW wal_sender_timeout;` in PG; tune the script's `FAILOVER_TIMEOUT_S`
+  accordingly.
+
+#### Architecture notes
+
+- Both apps run with `essentials.eventstore.cdc.slot.recreate-on-start=true`
+  inherited from `application.yml`. The `firstStreamAttempt` AtomicBoolean ensures
+  the recreate only fires on each JVM's *first* successful lock acquisition; after
+  the standby takes over, it does its own recreate then streams. Subscribers stay
+  correct via the polling fallback during the cutover.
+- Both compose services use `restart: on-failure:5`, mirroring K8s's
+  `RestartPolicy: Always` on a Deployment. When two JVMs start truly concurrently
+  (compose's `depends_on: postgres-wal2json: service_healthy` releases both apps
+  within tens of milliseconds), they race on `CREATE TABLE IF NOT EXISTS
+  transient_subscriber_gaps` — PG's `IF NOT EXISTS` isn't atomic against
+  concurrent DDL and one session loses with a unique-constraint violation. The
+  loser's container exits with the error; compose restarts it; on the second
+  startup the table exists so the same DDL is a clean no-op. Net effect: the lab
+  reproduces the production-K8s self-heal behaviour rather than working around
+  it. Same race has likely been silently absorbed by K8s rolling deployments for
+  years; the framework-side fix (`pg_advisory_xact_lock` around bootstrap DDL) is
+  tracked as **P6** in [cdc-improvements.md](../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/cdc-improvements.md).
+- The chaos scripts identify which container holds the leader by looking up
+  `pg_stat_activity.client_addr` against each container's docker-network IP. That
+  removes a hardcoded "leader = app-1" assumption and works regardless of which
+  container starts first.
+
+## Slot-lag / WAL retention validation
+
+The `slot-lag-bounded` scenario drives a steady-rate write workload for the configured
+`duration` and samples `pg_replication_slots` every `slot-lag-sample-interval` (default
+`PT5S`). Verifies five invariants in its JSON output:
+
+| Field | Pass when… |
+|---|---|
+| `lagBoundedOk` | `lagBytesMax` ≤ `essentials.lab.slot-lag-max-bytes` (default 100 MiB) |
+| `lagDrainedOk` | `lagBytesEnd` ≤ `lagBytesMax / 2` — the slot drained at run-end |
+| `walStatusOk`  | `pg_replication_slots.wal_status` = `reserved` throughout |
+| `deliveryOk`   | `produced` = `delivered` — no event loss via CDC |
+| `driftOk`      | framework's `essentials.cdc.slot.lag_bytes` gauge agrees with PG within 5% |
+
+The `driftOk` check is the canary: if our P1 gauges ever lie about retention, this
+scenario catches it before operators rely on a wrong number in production dashboards.
+
+### Ad-hoc single run
+
+```bash
+mvn -q -pl examples/essentials-performance-lab -DskipTests -Dspring-boot.run.profiles=compose \
+  -Dspring-boot.run.arguments="--essentials.lab.scenario=slot-lag-bounded \
+--essentials.eventstore.cdc.enabled=true \
+--essentials.lab.duration=PT120S --essentials.lab.producer-threads=4 \
+--essentials.lab.producer-rate-hz=1000 --essentials.lab.aggregate-cardinality=5000 \
+--essentials.lab.slot-lag-max-bytes=104857600 --essentials.lab.slot-lag-sample-interval=PT5S \
+--essentials.lab.metrics-output-file=./target/slot-lag-single.json" \
+  spring-boot:run
+```
+
+Output JSON includes `pre`/`post` slot snapshots, the full `samples` time-series, and the
+five assertion booleans plus an aggregate `verdict` (PASS/FAIL).
+
+### Matrix
+
+```bash
+docker compose -f examples/essentials-performance-lab/docker-compose.yml up -d --build
+./examples/essentials-performance-lab/scripts/run-slot-lag-matrix.sh
+```
+
+Sweeps `idle-lsn-push-interval`, `slot.metrics-interval`, and dispatcher batch size. Outputs:
+
+- `target/slot-lag/<run-id>/<case>.json` — full per-case scenario output
+- `target/slot-lag/<run-id>/summary.json` + `summary.md` — verdict + lag table per case,
+  plus a recommended slot-tuning profile (lowest sustained avg lag among PASS cases).
+
 ### Progress heartbeat
 
 Long drain phases can take minutes. To keep the operator informed the scenario emits a

@@ -25,3 +25,86 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  # === chaos profile (multi-instance app) ============================================
+  # Activated via `docker compose --profile chaos up`. Two perf-lab app instances run
+  # against the same PG, share the same replication slot name, and compete for the
+  # framework's advisory lock. Used by the tailer-kill-failover and multi-tailer-
+  # leadership chaos scripts. Outside the chaos profile these services don't start —
+  # the default workflow (running scenarios via `mvn spring-boot:run` on the host) is
+  # unaffected.
+  #
+  # Build prerequisite: a fat JAR at examples/essentials-performance-lab/target/
+  # essentials-performance-lab-DEV-SNAPSHOT.jar. Run `mvn -pl examples/essentials-
+  # performance-lab package -DskipTests` first, or use scripts/build-app-image.sh
+  # which does both steps.
+  perf-lab-app-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: essentials/perf-lab-app:DEV-SNAPSHOT
+    container_name: essentials-perf-lab-app-1
+    profiles: ["chaos"]
+    depends_on:
+      postgres-wal2json:
+        condition: service_healthy
+    # Self-heal on framework-init crashes — matches the production K8s setup where
+    # RestartPolicy: Always (Deployments default) silently absorbs first-startup races
+    # like the `CREATE TABLE IF NOT EXISTS` collision two pods occasionally hit when
+    # they boot truly concurrently. Without this, compose's tighter inter-container
+    # release timing surfaces the race that K8s' natural pod-startup spread + restart
+    # policy hides. The framework-side fix (pg_advisory_xact_lock around bootstrap DDL)
+    # is tracked as P6 in cdc-improvements.md; this restart policy is the deployment-
+    # level mirror of how the issue is handled in prod today. Capped at 5 attempts so a
+    # genuine bug doesn't crashloop forever.
+    restart: on-failure:5
+    environment:
+      # Each instance gets a unique node name for log readability. The slot name itself
+      # is identical across instances (derived from the consumer-group default), so the
+      # advisory lock decides who streams.
+      ESSENTIALS_LAB_NODE_NAME: node-1
+      ESSENTIALS_LAB_SCENARIO: ${CHAOS_SCENARIO:-slot-lag-bounded}
+      # Chaos scenarios are observation-driven — the script kills containers when ready
+      # rather than waiting for the scenario to elapse. Long duration so the JVM stays
+      # alive until the script is done.
+      ESSENTIALS_LAB_DURATION: ${CHAOS_DURATION:-PT3600S}
+      # Light load — enough to keep the tailer connected and the inbox flowing, low
+      # enough not to swamp the operator's PG when running locally.
+      ESSENTIALS_LAB_PRODUCER_RATE_HZ: ${CHAOS_RATE_HZ:-50}
+      ESSENTIALS_LAB_PRODUCER_THREADS: "1"
+      ESSENTIALS_LAB_AGGREGATE_CARDINALITY: "500"
+      ESSENTIALS_LAB_RANDOM_SEED: "42"
+      # Tight metrics interval so /actuator/prometheus reflects the slot's true state
+      # within seconds — the chaos scripts query this gauge to verify which instance
+      # holds the lock.
+      ESSENTIALS_EVENTSTORE_CDC_SLOT_METRICS_INTERVAL: "PT2S"
+      # Spring Boot reads SPRING_DATASOURCE_URL etc. from the environment; the
+      # Dockerfile sets the default to use the docker-network DNS name.
+      JAVA_OPTS: "-Xms256m -Xmx512m"
+
+  perf-lab-app-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: essentials/perf-lab-app:DEV-SNAPSHOT
+    container_name: essentials-perf-lab-app-2
+    profiles: ["chaos"]
+    depends_on:
+      postgres-wal2json:
+        condition: service_healthy
+    # Same restart-on-failure policy as app-1; see that service for rationale. With
+    # both apps starting truly concurrently (no inter-app dependency), the loser of
+    # the bootstrap-DDL race gets restarted by compose, and on second startup the
+    # tables already exist so `CREATE TABLE IF NOT EXISTS` is a clean no-op. This
+    # reproduces production K8s behaviour rather than working around it.
+    restart: on-failure:5
+    environment:
+      ESSENTIALS_LAB_NODE_NAME: node-2
+      ESSENTIALS_LAB_SCENARIO: ${CHAOS_SCENARIO:-slot-lag-bounded}
+      ESSENTIALS_LAB_DURATION: ${CHAOS_DURATION:-PT3600S}
+      ESSENTIALS_LAB_PRODUCER_RATE_HZ: ${CHAOS_RATE_HZ:-50}
+      ESSENTIALS_LAB_PRODUCER_THREADS: "1"
+      ESSENTIALS_LAB_AGGREGATE_CARDINALITY: "500"
+      ESSENTIALS_LAB_RANDOM_SEED: "43"
+      ESSENTIALS_EVENTSTORE_CDC_SLOT_METRICS_INTERVAL: "PT2S"
+      JAVA_OPTS: "-Xms256m -Xmx512m"

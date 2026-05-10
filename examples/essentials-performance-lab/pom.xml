@@ -67,6 +67,19 @@
             <version>${spring-boot.version}</version>
         </dependency>
         <dependency>
+            <!--
+              Required so the actuator endpoints are reachable over HTTP — without a web
+              starter the app boots as a non-web Spring Boot application and /actuator/health
+              returns nothing. The chaos compose profile depends on /actuator/health for the
+              container healthcheck (so app-2 can wait for app-1's framework init to complete
+              before booting and racing on CREATE TABLE IF NOT EXISTS). Adds Tomcat to the
+              classpath; negligible footprint compared to the rest of the lab dependencies.
+            -->
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+            <version>${spring-boot.version}</version>
+        </dependency>
+        <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
             <version>1.5.25</version>
@@ -140,6 +153,20 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <version>${spring-boot.version}</version>
+                <!--
+                  Bind `repackage` so `mvn package` produces a runnable fat JAR with the
+                  Spring Boot launcher manifest. The lab inherits from essentials' parent
+                  POM rather than spring-boot-starter-parent, so this binding isn't picked
+                  up implicitly. Required for the chaos-profile docker images that copy
+                  the JAR into a slim runtime container and invoke `java -jar`.
+                -->
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

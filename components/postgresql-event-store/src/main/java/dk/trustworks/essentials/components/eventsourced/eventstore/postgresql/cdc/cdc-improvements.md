@@ -158,6 +158,124 @@ server-side backstop (P5).
 
 ---
 
+## P6 — Bootstrap-DDL race against concurrent app startups
+
+### What
+
+Wrap every `CREATE TABLE IF NOT EXISTS` (and `CREATE INDEX IF NOT EXISTS`) in
+the framework's startup path with a `pg_advisory_xact_lock(<deterministic key>)`
+so two JVMs starting truly concurrently can't race each other into a duplicate-
+catalog-row error.
+
+### Why
+
+PostgreSQL's `CREATE TABLE IF NOT EXISTS` is **not atomic** against concurrent
+execution from different sessions. Two sessions both reading `pg_class`, both
+seeing "doesn't exist", both committing → one wins, the other gets:
+
+```
+ERROR: duplicate key value violates unique constraint "pg_type_typname_nsp_index"
+Detail: Key (typname, typnamespace)=(transient_subscriber_gaps, 2200) already exists.
+```
+
+The loser's JVM crashes during framework init. The race window is tens of
+milliseconds — short enough that K8s' natural pod-startup spread + `RestartPolicy:
+Always` typically hides it (the failed pod restarts once, second time around the
+table exists, `IF NOT EXISTS` is a no-op, container starts clean). Operators see
+"pod restarted 1× during deployment", which is invisible in normal observability.
+
+The race has **likely been silently absorbed by K8s rolling deployments for
+years** with no production impact. Discovered when the perf-lab's `chaos` compose
+profile released two JVMs within tens of milliseconds (`depends_on: pg:
+service_healthy` is a tighter sync point than K8s' typical scheduling) and
+without `restart` policy.
+
+### Affected components
+
+Every framework component that creates its own table at startup. Surveyed:
+
+| File | Tables created |
+|---|---|
+| [`PostgresqlEventStreamGapHandler`](../../../../../../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/gap/PostgresqlEventStreamGapHandler.java) | `transient_subscriber_gaps`, `permanent_gaps` |
+| [`PostgresqlDurableSubscriptionRepository`](../../../../../../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/subscription/PostgresqlDurableSubscriptionRepository.java) | `durable_subscriptions` |
+| [`CdcSql`](CdcSql.java) (via `CdcInboxRepository`) | `eventstore_cdc_inbox` |
+| `PostgresqlFencedLockStorage` | `fenced_locks` |
+| `PostgresqlDurableQueuesStatistics` + `DurableQueuesSql` | `durable_queues`, queue-stats tables |
+| `ExecutorScheduledJobRepository` | scheduler tables |
+| `SeparateTablePerAggregateTypePersistenceStrategy` | per-aggregate `*_events` (one per `addAggregateEventStreamConfiguration`) |
+
+Seven components, all with the same shape: `unitOfWork.handle().execute("CREATE
+TABLE IF NOT EXISTS …")`. Each runs in a transactional unit-of-work so adding
+the advisory lock as the first statement in the same UoW costs one extra round-
+trip per startup.
+
+### Fix shape
+
+Add a helper to `PostgresqlUtil`:
+
+```java
+/**
+ * Deterministic lock key for framework bootstrap DDL — ensures concurrent JVM
+ * startups serialise their CREATE TABLE IF NOT EXISTS calls so PG's non-atomic
+ * IF NOT EXISTS can't lose to duplicate-catalog errors. Held only for the
+ * duration of the bootstrap transaction, released automatically on commit.
+ */
+public static final long ESSENTIALS_BOOTSTRAP_LOCK_KEY = 0xE55E_4711_B007_DDL5L;
+
+public static void executeBootstrapDdl(Handle handle, String sql) {
+    handle.execute("SELECT pg_advisory_xact_lock(?)", ESSENTIALS_BOOTSTRAP_LOCK_KEY);
+    handle.execute(sql);
+}
+```
+
+Replace each call site:
+
+```java
+// before
+handle.execute("CREATE TABLE IF NOT EXISTS …");
+
+// after
+PostgresqlUtil.executeBootstrapDdl(handle, "CREATE TABLE IF NOT EXISTS …");
+```
+
+Single-key approach (one constant for all framework bootstrap) means concurrent
+JVMs serialise their entire framework init through one lock — held for
+milliseconds, only at startup, only on the rare path where two instances start
+genuinely concurrently. Negligible cost; the alternative (per-table keys) gains
+parallelism that nobody needs in practice.
+
+### Why a fenced lock won't work here
+
+Circular: `fenced_locks` is one of the tables that needs creating. `pg_advisory_xact_lock`
+is the right primitive — built into PG, no schema dependency, transaction-scoped
+(auto-released on commit), available before any framework table exists.
+
+### Priority
+
+Lower than P1–P5 because:
+- Production K8s deployments have been running this without issue for years
+  (`RestartPolicy: Always` + natural pod-startup spread = invisible).
+- The perf-lab works around it via `restart: on-failure:5` in the chaos compose
+  profile, mirroring the production K8s self-heal behaviour.
+
+Higher-than-zero because:
+- The fix is genuinely small (~1 helper + 7 one-line call-site changes).
+- Removes a class of "weird single-pod restart on deployment" noise that wastes
+  operator attention.
+- Future deployment tooling that has tighter pod-release timing (e.g. blue-green
+  rollouts that bring up the whole new colour at once) would surface it again.
+
+### Out of scope of this fix
+
+- Renaming or restructuring the affected tables — they stay where they are.
+- Changing the framework's transaction-or-autocommit semantics — `executeBootstrapDdl`
+  works inside the existing UoW transaction.
+- Per-component lock keys — explicitly avoided in favour of one shared key for
+  the whole framework bootstrap; coordination overhead is irrelevant at startup-
+  only millisecond timescales.
+
+---
+
 ## Explicitly out of scope
 
 These were considered and deliberately left in [cdc.md](cdc.md) §13 rather than
