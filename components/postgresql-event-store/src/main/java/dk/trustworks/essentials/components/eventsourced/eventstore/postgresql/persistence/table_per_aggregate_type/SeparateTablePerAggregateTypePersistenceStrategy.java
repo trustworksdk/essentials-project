@@ -327,6 +327,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         eventStreamConfiguration.eventStreamTableColumnNames.validate();
 
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            PostgresqlUtil.acquireBootstrapLock(unitOfWork.handle());
             Optional<String> eventTable = unitOfWork.handle().createQuery("SELECT to_regclass(:tableName)")
                                                     .bind("tableName", eventStreamConfiguration.eventStreamTableName)
                                                     .mapTo(String.class)

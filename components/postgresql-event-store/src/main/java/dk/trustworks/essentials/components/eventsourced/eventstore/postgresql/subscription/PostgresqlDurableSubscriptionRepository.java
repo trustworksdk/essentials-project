@@ -122,6 +122,7 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
         jdbi.registerArgument(new SubscriberIdArgumentFactory());
         jdbi.registerColumnMapper(new SubscriberIdColumnMapper());
         unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
             uow.handle().execute("CREATE TABLE IF NOT EXISTS " + this.durableSubscriptionsTableName + " (\n" +
                                          "subscriber_id TEXT NOT NULL,\n" +
                                          "aggregate_type TEXT NOT NULL,\n" +

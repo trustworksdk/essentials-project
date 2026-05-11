@@ -48,16 +48,6 @@ services:
     depends_on:
       postgres-wal2json:
         condition: service_healthy
-    # Self-heal on framework-init crashes — matches the production K8s setup where
-    # RestartPolicy: Always (Deployments default) silently absorbs first-startup races
-    # like the `CREATE TABLE IF NOT EXISTS` collision two pods occasionally hit when
-    # they boot truly concurrently. Without this, compose's tighter inter-container
-    # release timing surfaces the race that K8s' natural pod-startup spread + restart
-    # policy hides. The framework-side fix (pg_advisory_xact_lock around bootstrap DDL)
-    # is tracked as P6 in cdc-improvements.md; this restart policy is the deployment-
-    # level mirror of how the issue is handled in prod today. Capped at 5 attempts so a
-    # genuine bug doesn't crashloop forever.
-    restart: on-failure:5
     environment:
       # Each instance gets a unique node name for log readability. The slot name itself
       # is identical across instances (derived from the consumer-group default), so the
@@ -92,12 +82,6 @@ services:
     depends_on:
       postgres-wal2json:
         condition: service_healthy
-    # Same restart-on-failure policy as app-1; see that service for rationale. With
-    # both apps starting truly concurrently (no inter-app dependency), the loser of
-    # the bootstrap-DDL race gets restarted by compose, and on second startup the
-    # tables already exist so `CREATE TABLE IF NOT EXISTS` is a clean no-op. This
-    # reproduces production K8s behaviour rather than working around it.
-    restart: on-failure:5
     environment:
       ESSENTIALS_LAB_NODE_NAME: node-2
       ESSENTIALS_LAB_SCENARIO: ${CHAOS_SCENARIO:-slot-lag-bounded}

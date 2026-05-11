@@ -151,15 +151,57 @@ operators can reason about the trade-off without leaving the log line.
 | 4 | Configurable idle LSN push interval           | ✅ done   | ~30 min      | Tight `wal_sender_timeout` hitting the hardcoded 30s.        |
 | 5 | Advisory log for `max_slot_wal_keep_size`     | ✅ done   | ~30 min      | Operator forgets the server-side disk safety net.            |
 
-All five items now ✅ delivered. The framework's slot-growth risk is now
+All six items now ✅ delivered. The framework's slot-growth risk is now
 observable (P1 + P3), fail-fast on existing-slot startup (P2), tunable for
-non-default `wal_sender_timeout` setups (P4), and self-advisory about the
-server-side backstop (P5).
+non-default `wal_sender_timeout` setups (P4), self-advisory about the
+server-side backstop (P5), and concurrent-startup-safe at the framework-DDL
+level (P6).
 
 ---
 
-## P6 — Bootstrap-DDL race against concurrent app startups
+## P6 — Bootstrap-DDL race against concurrent app startups ✅ DONE
 
+Implemented as
+[`PostgresqlUtil.acquireBootstrapLock(Handle)`](../../../../../../../components/foundation/src/main/java/dk/trustworks/essentials/components/foundation/postgresql/PostgresqlUtil.java)
++ a single call at the top of each affected component's bootstrap UoW.
+
+The helper acquires a transaction-scoped advisory lock keyed on
+`ESSENTIALS_BOOTSTRAP_LOCK_KEY` (`0xE55E_4711_B007_DD15L`). One lock per UoW
+protects every `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`,
+`CREATE OR REPLACE FUNCTION`, and trigger-creation statement inside that UoW.
+Lock auto-released on commit; held only for milliseconds at startup.
+
+Updated call sites (all 7 framework components from the original survey):
+
+| File | Type |
+|---|---|
+| `PostgresqlEventStreamGapHandler.createGapHandlingTablesAndIndexes` | event-stream gap tables |
+| `PostgresqlDurableSubscriptionRepository` constructor block | durable_subscriptions |
+| `PostgresqlFencedLockStorage.initializeLockStorage` | fenced_locks + indexes |
+| `CdcInboxRepository.createTableAndIndexes` | eventstore_cdc_inbox |
+| `ExecutorScheduledJobRepository.initializeTable` | scheduled jobs |
+| `PostgresqlDurableQueues.initializeQueueTables` | durable_queues + many indexes |
+| `PostgresqlDurableQueuesStatistics.initializeQueueTables` | stats table + indexes + trigger function |
+| `SeparateTablePerAggregateTypePersistenceStrategy.initializeEventStorageFor` | per-aggregate `*_events` (covers the to_regclass → CREATE TABLE check-then-create race) |
+
+Note the persistence-strategy site uses a check-then-create pattern
+(`SELECT to_regclass(...)` followed by `CREATE TABLE` without `IF NOT EXISTS`),
+so the race manifested differently there (`relation … already exists` rather
+than the duplicate-key error). The advisory lock fixes both shapes.
+
+Verified end-to-end via the perf-lab chaos compose profile:
+
+- Pre-fix: both app containers boot concurrently, one crashes on the bootstrap
+  race, compose `restart: on-failure:5` self-heals it on second startup, both
+  apps end up running with `RestartCount=1` on the loser.
+- Post-fix: both app containers boot concurrently, neither crashes,
+  `RestartCount=0` on both, zero `duplicate key value` / `relation already exists`
+  errors in either log.
+
+The `restart: on-failure:5` workaround was removed from the chaos compose
+profile since the framework now serializes correctly.
+
+### Original spec
 ### What
 
 Wrap every `CREATE TABLE IF NOT EXISTS` (and `CREATE INDEX IF NOT EXISTS`) in

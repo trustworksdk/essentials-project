@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
 import io.micrometer.core.instrument.*;
@@ -91,6 +92,7 @@ public class CdcInboxRepository {
 
     public void createTableAndIndexes() {
         unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
             uow.handle().execute(cdcSql.buildCreateCdcTableSql());
             log.info("Ensured Table '{}' exists", cdcSql.getCdcTableName());
             uow.handle().execute(cdcSql.getCreateCdcIndexSql());

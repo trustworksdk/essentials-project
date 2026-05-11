@@ -131,6 +131,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
 
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
             var handle = unitOfWork.handle();
+            PostgresqlUtil.acquireBootstrapLock(handle);
             var jdbi   = handle.getJdbi();
             jdbi.registerArgument(new AggregateTypeArgumentFactory());
             jdbi.registerColumnMapper(new AggregateTypeColumnMapper());

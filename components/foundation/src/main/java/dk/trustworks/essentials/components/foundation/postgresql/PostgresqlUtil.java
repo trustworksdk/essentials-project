@@ -215,6 +215,59 @@ public final class PostgresqlUtil {
                               long lagBytes) {
     }
 
+    /**
+     * Deterministic advisory-lock key used by {@link #acquireBootstrapLock(Handle)} so every
+     * framework component's bootstrap DDL serialises behind the same lock. The value is
+     * arbitrary — it just needs to be (1) constant across the entire framework and (2) unlikely
+     * to collide with an application's own advisory-lock keys. Pattern: 0xE55E ("ESSE"),
+     * 0x4711 (sentinel), 0xB007 ("BOOT"), 0xDD15 ("DDL15ish").
+     */
+    public static final long ESSENTIALS_BOOTSTRAP_LOCK_KEY = 0xE55E_4711_B007_DD15L;
+
+    /**
+     * Acquire the framework's bootstrap advisory lock inside the current transaction. All
+     * subsequent {@code CREATE TABLE IF NOT EXISTS} / {@code CREATE INDEX IF NOT EXISTS}
+     * statements in the same transaction are protected against concurrent execution from
+     * other JVMs by this single lock acquisition. The lock is released automatically when
+     * the transaction commits.
+     * <p>
+     * Why this exists: PG's {@code IF NOT EXISTS} is <b>not atomic</b> against concurrent
+     * sessions. Two JVMs starting truly simultaneously can both observe "doesn't exist" in
+     * {@code pg_class}, both commit the catalog write, and one ends up with:
+     * <pre>
+     * ERROR: duplicate key value violates unique constraint "pg_type_typname_nsp_index"
+     * </pre>
+     * The race window is small (tens of ms), so production K8s deployments with natural pod-
+     * startup spread + {@code RestartPolicy: Always} typically absorb it silently — the loser
+     * pod restarts once, the second time the tables exist, all is well. Tighter inter-process
+     * release timing (e.g. compose's {@code depends_on: service_healthy}, or future blue-green
+     * deployments that release a whole colour simultaneously) surfaces it.
+     * <p>
+     * Why an advisory lock and not the framework's {@code fenced_locks} table: {@code fenced_locks}
+     * is itself one of the tables that needs creating. {@code pg_advisory_xact_lock} requires
+     * no schema, is transaction-scoped (auto-released on commit), and is available during the
+     * earliest framework bootstrap.
+     * <p>
+     * <b>Must be called inside an open transaction.</b> The lock is {@code pg_advisory_xact_lock},
+     * not {@code pg_advisory_lock}. Outside a transaction, autocommit releases the lock between
+     * statements and the protection is gone. The framework's UoW pattern provides the
+     * transaction naturally; callers that bypass UoW must wrap explicitly.
+     * <p>
+     * Typical use:
+     * <pre>
+     * unitOfWorkFactory.usingUnitOfWork(uow -> {
+     *     var handle = uow.handle();
+     *     PostgresqlUtil.acquireBootstrapLock(handle);
+     *     handle.execute("CREATE TABLE IF NOT EXISTS …");
+     *     handle.execute("CREATE INDEX IF NOT EXISTS …");
+     * });
+     * </pre>
+     */
+    public static void acquireBootstrapLock(Handle handle) {
+        requireNonNull(handle, "No handle provided");
+        handle.execute("SELECT pg_advisory_xact_lock(?)", ESSENTIALS_BOOTSTRAP_LOCK_KEY);
+    }
+
     public static boolean isOutputPluginUsable(Handle handle, String pluginName) {
         // Requires a role with sufficient privileges to create replication slots
         // (often needs REPLICATION role or superuser depending on setup).

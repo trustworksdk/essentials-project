@@ -801,18 +801,15 @@ A `verdict=FAIL` here usually means either:
   the recreate only fires on each JVM's *first* successful lock acquisition; after
   the standby takes over, it does its own recreate then streams. Subscribers stay
   correct via the polling fallback during the cutover.
-- Both compose services use `restart: on-failure:5`, mirroring K8s's
-  `RestartPolicy: Always` on a Deployment. When two JVMs start truly concurrently
-  (compose's `depends_on: postgres-wal2json: service_healthy` releases both apps
-  within tens of milliseconds), they race on `CREATE TABLE IF NOT EXISTS
-  transient_subscriber_gaps` — PG's `IF NOT EXISTS` isn't atomic against
-  concurrent DDL and one session loses with a unique-constraint violation. The
-  loser's container exits with the error; compose restarts it; on the second
-  startup the table exists so the same DDL is a clean no-op. Net effect: the lab
-  reproduces the production-K8s self-heal behaviour rather than working around
-  it. Same race has likely been silently absorbed by K8s rolling deployments for
-  years; the framework-side fix (`pg_advisory_xact_lock` around bootstrap DDL) is
-  tracked as **P6** in [cdc-improvements.md](../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/cdc-improvements.md).
+- Both compose services run with no restart policy and no inter-app dependency
+  — both JVMs start truly concurrently. The framework's
+  `PostgresqlUtil.acquireBootstrapLock(handle)` (delivered as **P6** in
+  [cdc-improvements.md](../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/cdc-improvements.md))
+  serializes their `CREATE TABLE IF NOT EXISTS` calls behind a transaction-scoped
+  PG advisory lock, so the loser of the bootstrap race waits a few ms then sees
+  the table exists and proceeds normally. Prior to P6 the compose profile used
+  `restart: on-failure:5` to mirror the K8s-equivalent self-heal behaviour; that
+  workaround is no longer needed.
 - The chaos scripts identify which container holds the leader by looking up
   `pg_stat_activity.client_addr` against each container's docker-network IP. That
   removes a hardcoded "leader = app-1" assumption and works regardless of which

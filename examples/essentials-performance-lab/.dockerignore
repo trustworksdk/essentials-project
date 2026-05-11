@@ -1,0 +1,18 @@
+# Keep the Docker build context lean — only what the Dockerfile's COPY commands actually
+# reference. The host already produces the fat JAR via `mvn package`; we don't need
+# sources, IDE files, git history, or any docker/ scripts inside the image.
+.git
+.idea
+.vscode
+src
+scripts
+docker
+docs
+*.md
+*.iml
+*.log
+target/classes
+target/generated-sources
+target/maven-status
+target/surefire-reports
+target/test-classes

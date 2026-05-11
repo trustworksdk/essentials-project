@@ -212,6 +212,7 @@ public class PostgresqlDurableQueuesStatistics implements DurableQueuesStatistic
         PostgresqlUtil.checkIsValidTableOrColumnName(durableQueueTableName);
         PostgresqlUtil.checkIsValidTableOrColumnName(statsQueueTableName);
         unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
             uow.handle().getJdbi().registerArgument(new QueueNameArgumentFactory());
             uow.handle().getJdbi().registerColumnMapper(new QueueNameColumnMapper());
             uow.handle().getJdbi().registerArgument(new QueueEntryIdArgumentFactory());
