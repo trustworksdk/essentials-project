@@ -151,11 +151,14 @@ operators can reason about the trade-off without leaving the log line.
 | 4 | Configurable idle LSN push interval           | ✅ done   | ~30 min      | Tight `wal_sender_timeout` hitting the hardcoded 30s.        |
 | 5 | Advisory log for `max_slot_wal_keep_size`     | ✅ done   | ~30 min      | Operator forgets the server-side disk safety net.            |
 
-All six items now ✅ delivered. The framework's slot-growth risk is now
+P1–P6 + P8 are ✅ delivered. The framework's slot-growth risk is now
 observable (P1 + P3), fail-fast on existing-slot startup (P2), tunable for
 non-default `wal_sender_timeout` setups (P4), self-advisory about the
-server-side backstop (P5), and concurrent-startup-safe at the framework-DDL
-level (P6).
+server-side backstop (P5), concurrent-startup-safe at the framework-DDL
+level (P6), and the dispatcher's poll query has an opt-in framework-level
+per-statement timeout (P8). P7 (consumer-group-scoped resume points) is
+partially delivered via `CdcConsumerGroup.namespaced(...)` — full
+schema-level scoping deferred.
 
 ---
 
@@ -315,6 +318,156 @@ Higher-than-zero because:
 - Per-component lock keys — explicitly avoided in favour of one shared key for
   the whole framework bootstrap; coordination overhead is irrelevant at startup-
   only millisecond timescales.
+
+---
+
+## P7 — Consumer-group-scoped subscription resume points
+
+### What
+
+`durable_subscriptions` is keyed on `(subscriber_id, aggregate_type)` only.
+Multi-group deployments that share a PostgreSQL database can collide on the
+same row if their applications happen to use the same `SubscriberId` — one
+overwrites the other's resume point, the loser mysteriously rewinds. See
+`cdc.md` §3.2 "Namespacing subscriber IDs" for the operator workaround.
+
+### Why
+
+Multi-group deployments are a documented and supported pattern (`cdc.md`
+§3.2: bounded-context-per-deployment, isolated WAL retention, independent
+delivery). The `durable_subscriptions` schema predates the consumer-group
+concept and isn't aware of it. Collisions are silent at write time and only
+surface as "subscriber rewound after another deployment restarted" — typically
+diagnosed in week 3 of multi-group production.
+
+### Two non-breaking fix paths
+
+**Path A — Cooperative API helper (already delivered)**
+
+[`CdcConsumerGroup.namespaced(SubscriberId)`](CdcConsumerGroup.java) returns
+a `SubscriberId` prefixed with the active group name. Applications opt in per
+subscription. Completely non-breaking:
+
+- No schema change, no migration.
+- Existing applications continue to work as before.
+- New applications use the helper; the prefix is symmetrical (applied on both
+  the subscribe call and the resume-point write), so reads and writes line up.
+
+What this doesn't do: it doesn't *prevent* collisions, it just makes the right
+pattern available and ergonomic. An application that forgets to call
+`namespaced` still collides as before. Good enough for "documented gotcha with
+a fix on hand"; not enough for "framework guarantees isolation".
+
+**Path B — Schema-level scope-by-group (deferred)**
+
+Add a `consumer_group` column to `durable_subscriptions`, repoint the primary
+key to `(consumer_group, subscriber_id, aggregate_type)`, default the column
+to empty string so existing rows continue to match. Two ways to roll it out
+non-breakingly:
+
+1. *Opt-in flag*: `essentials.eventstore.subscription.scope-by-group` (default
+   `false`). When `false`, the framework writes/reads `consumer_group = ''`
+   exactly like today. When `true`, the framework writes/reads
+   `consumer_group = <CdcConsumerGroup.name>`. Operators flip the flag during
+   a deliberate migration; first deploy creates the column + flips the writes,
+   subsequent deploys observe consistent group-scoped rows.
+
+2. *Auto-detect & dual-read during a migration window*: write to the new
+   schema, read from both old (no group) and new (group-scoped) rows, prefer
+   the newer of the two. After all deployments have written at least once,
+   delete the legacy rows. More invasive operationally; safer in
+   bake-the-database environments where you can't easily coordinate flag
+   flips across deployments.
+
+In either case the migration is *opt-in* — vanilla deployments unaffected.
+
+### Why Path A is already done and Path B is deferred
+
+Path A is `4 lines of code in one file + documentation`. Cheap. Mirrors the
+"Spring autoconfig wires one bean per JVM, decorate your subscriber IDs with
+it" pattern operators already use for slot names. Delivered today.
+
+Path B is `schema migration + dispatcher read path + write path + flag wiring
++ migration runbook + test matrix`. Real engineering work for a problem that
+operators already handle ergonomically once they know about it. Deferred to
+when there's enough operational demand to justify the migration complexity —
+the current state is "documented, helper exists, applications opt in".
+
+### Out of scope (still)
+
+- Auto-prefixing without the application's involvement (i.e. wrapping every
+  `SubscriberId` passed to `EventStoreSubscriptionManager` through
+  `CdcConsumerGroup.namespaced` transparently). Would be silently breaking for
+  any upgrade from a version that didn't do this — every subscriber would
+  rewind to `FIRST_GLOBAL_EVENT_ORDER` on the upgrade because the resume row
+  it looks for has a different key now. Could be made safe via dual-read but
+  that's effectively Path B with no operator visibility into the change.
+
+---
+
+## P8 — Configurable dispatcher poll-query timeout ✅ DONE
+
+Implemented as the
+[`cdc.cdcDispatcher.queryTimeout`](CdcProperties.java) property + an overload
+`CdcInboxRepository.fetchNextBatch(slotName, batchSize, queryTimeoutSeconds)`
+that applies `setQueryTimeout` only when the configured value is positive.
+
+### Why
+
+Before P8, the dispatcher's `SELECT … FOR UPDATE SKIP LOCKED` poll query had
+no framework-level timeout. It inherited whatever the deployment stack
+provided:
+
+| Layer | Default | Effect |
+|---|---|---|
+| `Statement.setQueryTimeout` | 0 | Not set by framework |
+| PG `statement_timeout` GUC | 0 | Server-side; only effective if explicitly configured |
+| pgjdbc `socketTimeout` URL param | 0 | Only catches TCP-level hangs |
+| Hikari `connectionTimeout` | 30s | Acquiring a pool connection only — doesn't bound a running query |
+
+For typical Spring Boot + Hikari setups this is fine — `SKIP LOCKED` is
+non-blocking, the dispatcher-dead detector (see `cdc.md` health-check
+section) catches genuinely hung executors within ~2 minutes, and subscribers
+fall back to polling during the gap. But there's no client-side way to
+*bound* per-tick latency at the framework level.
+
+### What
+
+New property: `cdc.cdcDispatcher.queryTimeout` (default `PT0S` = no
+framework-imposed timeout). When set to a positive duration the framework
+calls `setQueryTimeout(seconds)` on the underlying `Statement`; the query is
+cancelled server-side if it exceeds the budget, surfaces as `PSQLException`
+SQLState `57014`, and the dispatcher's existing tick-error path retries on
+the next `pollInterval`.
+
+Sub-second values are rounded *up* to 1 second (PG's statement-timeout
+machinery doesn't resolve below seconds).
+
+### Non-breaking by design
+
+Default `PT0S` exactly preserves prior behaviour. Existing deployments are
+unaffected. Operators who want a per-tick SLA, can't configure
+`statement_timeout` server-side (managed PG), or want defence-in-depth
+against connection-pool exhaustion via leaked threads can opt in by setting
+the property.
+
+### Surface area
+
+| File | Change |
+|---|---|
+| `CdcProperties.CdcDispatcherProperties` | New `queryTimeout: Duration` field + getter/setter |
+| `CdcInboxRepository` | New overload `fetchNextBatch(slot, batch, timeoutSeconds)`; original 2-arg form delegates with `0` |
+| `CdcDispatcher` | Captures the timeout from properties, rounds to seconds (up), passes to `fetchNextBatch` |
+
+Three files. Single-property addition. Zero risk to existing call sites.
+
+### What it doesn't cover
+
+This timeout applies only to the `fetchNextBatch` poll. The dispatcher's
+per-row updates (`markPoison`, `markDispatched`, `deleteDispatched`) are
+short point-writes against an indexed PK and don't realistically hang. If a
+future use case demands bounding those too, the same property could be
+extended to wrap the per-row writes via the same `setQueryTimeout` pattern.
 
 ---
 

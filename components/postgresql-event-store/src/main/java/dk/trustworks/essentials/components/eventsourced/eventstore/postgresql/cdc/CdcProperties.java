@@ -679,6 +679,31 @@ public class CdcProperties {
         private DispatchedRowPolicy dispatchedRowPolicy = DispatchedRowPolicy.MARK_DISPATCHED;
 
         /**
+         * Per-statement timeout applied to the dispatcher's
+         * {@code fetchNextBatch} poll query against {@code eventstore_cdc_inbox}. When
+         * set to a positive duration the dispatcher wraps the query in
+         * {@code Statement.setQueryTimeout(seconds)}; a query that exceeds the budget is
+         * cancelled server-side and the dispatcher catches the resulting
+         * {@code PSQLException} via its normal "tick failure → retry next tick" path
+         * (visible in {@code essentials.cdc.dispatcher.tick.failures}).
+         * <p>
+         * Default {@link Duration#ZERO} = <b>no timeout</b>, matching prior behaviour:
+         * the query inherits whatever the database / driver / pool layers provide
+         * (PostgreSQL's {@code statement_timeout} GUC, pgjdbc's {@code socketTimeout} URL
+         * parameter, etc.). Most deployments don't need to set this — Hikari's default
+         * config plus a per-role {@code statement_timeout} typically suffices.
+         * <p>
+         * Set this when you want a framework-level bound that's independent of the
+         * deployment's PG / JDBC configuration — for instance to keep dispatcher tick
+         * latency under a known SLA, or as a defence-in-depth against a hung PG that
+         * leaks dispatcher executor threads.
+         * <p>
+         * Granularity: seconds (rounded up). PG's statement-timeout machinery has the
+         * same granularity, so sub-second values aren't meaningful at the protocol level.
+         */
+        private Duration queryTimeout = Duration.ZERO;
+
+        /**
          * Master switch for the {@code essentials.cdc.inbox.received_backlog} and
          * {@code essentials.cdc.inbox.poison_rows} gauges registered on
          * {@link CdcInboxRepository}. Default {@code true}; only effective in
@@ -777,6 +802,14 @@ public class CdcProperties {
 
         public void setInboxMetricsEnabled(boolean inboxMetricsEnabled) {
             this.inboxMetricsEnabled = inboxMetricsEnabled;
+        }
+
+        public Duration getQueryTimeout() {
+            return queryTimeout;
+        }
+
+        public void setQueryTimeout(Duration queryTimeout) {
+            this.queryTimeout = queryTimeout;
         }
     }
 

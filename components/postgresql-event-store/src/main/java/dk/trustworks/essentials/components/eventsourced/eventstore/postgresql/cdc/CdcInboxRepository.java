@@ -225,30 +225,55 @@ public class CdcInboxRepository {
      * @return a list of {@link InboxRow} objects representing the events in the requested batch
      */
     public List<InboxRow> fetchNextBatch(String slotName, int batchSize) {
+        return fetchNextBatch(slotName, batchSize, 0);
+    }
+
+    /**
+     * Same as {@link #fetchNextBatch(String, int)} but with a per-statement timeout in
+     * seconds. {@code 0} means no timeout (defers to PG / JDBC / pool defaults — see
+     * {@link CdcProperties.CdcDispatcherProperties#getQueryTimeout()}); any positive value
+     * is applied to the underlying {@link java.sql.Statement} via
+     * {@link org.jdbi.v3.core.statement.SqlStatement#setQueryTimeout(int)}.
+     * <p>
+     * Server-side cancellation surfaces as a {@code PSQLException} with SQL state
+     * {@code 57014} ("query canceled"). The dispatcher's tick-error handler treats it as a
+     * normal tick failure and retries on the next {@code pollInterval}, so no special
+     * client-side handling is needed here.
+     */
+    public List<InboxRow> fetchNextBatch(String slotName, int batchSize, int queryTimeoutSeconds) {
         long startNs = System.nanoTime();
-        var rows = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
-                                                                                    SELECT inbox_id,
-                                                                                           slot_name,
-                                                                                           lsn,
-                                                                                           received_at,
-                                                                                           payload_bytes,
-                                                                                           status,
-                                                                                           error
-                                                                                                FROM eventstore_cdc_inbox
-                                                                                                WHERE slot_name = :slot
-                                                                                                  AND status = 'RECEIVED'
-                                                                                                ORDER BY inbox_id
-                                                                                                limit :limit
-                                                                                                FOR UPDATE skip locked
-                                                                                    """)
-                                                              .bind("slot", slotName)
-                                                              .bind("limit", batchSize)
-                                                              .map((rs, ctx) -> new InboxRow(
-                                                                      rs.getLong("inbox_id"),
-                                                                      rs.getString("lsn"),
-                                                                      rs.getBytes("payload_bytes")
-                                                              ))
-                                                              .list());
+        var rows = unitOfWorkFactory.withUnitOfWork(uow -> {
+            var query = uow.handle().createQuery("""
+                                                  SELECT inbox_id,
+                                                         slot_name,
+                                                         lsn,
+                                                         received_at,
+                                                         payload_bytes,
+                                                         status,
+                                                         error
+                                                              FROM eventstore_cdc_inbox
+                                                              WHERE slot_name = :slot
+                                                                AND status = 'RECEIVED'
+                                                              ORDER BY inbox_id
+                                                              limit :limit
+                                                              FOR UPDATE skip locked
+                                                  """)
+                                    .bind("slot", slotName)
+                                    .bind("limit", batchSize);
+            if (queryTimeoutSeconds > 0) {
+                // Jdbi setQueryTimeout(seconds) delegates to PreparedStatement#setQueryTimeout,
+                // which on pgjdbc translates to a server-side cancel request when the budget
+                // expires. Resulting PSQLException (SQLState 57014) propagates up to the
+                // dispatcher's tick-error handler.
+                query.setQueryTimeout(queryTimeoutSeconds);
+            }
+            return query.map((rs, ctx) -> new InboxRow(
+                                  rs.getLong("inbox_id"),
+                                  rs.getString("lsn"),
+                                  rs.getBytes("payload_bytes")
+                          ))
+                          .list();
+        });
         if (meterRegistry != null) {
             fetchNextBatchLatencyTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS);
             fetchNextBatchSizeSummary.record(rows.size());

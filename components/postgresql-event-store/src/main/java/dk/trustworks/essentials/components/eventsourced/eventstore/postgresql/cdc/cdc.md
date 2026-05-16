@@ -111,9 +111,237 @@ validated against PostgreSQL's identifier rules.
 
 Override the consumer-group via [`CdcProperties.slot.group`](CdcProperties.java) when
 you want multiple independent CDC pipelines (e.g. one per bounded context) sharing the
-same database.
+same database. See the next section for what that looks like in practice.
 
-### 3.2 Slot ownership & contention
+### 3.2 Consumer groups — multiple independent CDC pipelines on one database
+
+A **consumer group** is an opaque label that scopes one CDC pipeline end-to-end. The
+group name flows into the replication-slot name (§3.1), the advisory lock that fences
+the tailer (§3.3), and the `slot_name` column every dispatcher uses to claim its own
+inbox rows. Different groups have different slot names → different advisory locks →
+different tailers → genuinely independent delivery. They can share the same PostgreSQL
+database, the same pgoutput publication, and the same physical inbox table without
+coordination.
+
+The pattern fits when you want one of:
+
+- **One pipeline per bounded context.** `orders` and `billing` deployments each
+  consume their own slot. A backlog in `orders` (slow dispatcher, paused for
+  maintenance, etc.) only retains WAL behind the `orders` slot — `billing`'s slot
+  keeps draining. **Blast-radius isolation** at the WAL-retention level.
+- **Independent deployment lifecycles.** Roll out a new version of the `analytics`
+  pipeline without touching `orders`. Each group has its own
+  `CdcEffectivenessMonitor`, its own backoff state, its own `essentials.cdc.slot.*`
+  metrics.
+- **Read-replica style: one fast pipeline, one slow.** A real-time projection
+  pipeline alongside a daily-batch analytics pipeline. They consume the same WAL,
+  at independent rates, without one starving the other.
+
+What's per-group vs shared:
+
+| Resource | Scope | Why |
+|---|---|---|
+| Replication slot | **per group** | Slot name = `essentials_<group>_<db>`; each group's tailer holds its own slot's lock and ack cycle |
+| Advisory lock (tailer leadership) | **per group** | Lock key derived from slot name; multiple groups never contend |
+| `CdcEffectivenessMonitor` | **per group** | Each group's monitor watches its own slot; one stuck group doesn't fail the others |
+| `essentials.cdc.slot.*` / `inbox.*` metrics | **per group** (tagged by slot) | Dashboards filter by `slot=essentials_<group>_<db>` |
+| pgoutput publication | **shared by default** | Publication just enumerates tables; both groups can subscribe to the same `essentials_cdc_publication` |
+| `eventstore_cdc_inbox` table | **shared physical table, partitioned by `slot_name` column** | Every row carries its `slot_name`; dispatchers filter to their own slot via `WHERE slot_name = ?`. The `(slot_name, status, inbox_id)` index makes this an index-only scan. |
+| Event-stream tables (`*_events`) | **shared** | The database's source of truth — every group consumes the same WAL, sees the same INSERTs |
+| `CdcEventBus` (in-memory) | **per JVM** | Each deployment has its own bus; cross-group fan-out goes through the WAL, not the bus |
+
+Each consumer group **requires its own deployment** — Spring autoconfig wires
+exactly one `CdcConsumerGroup` bean per application context. Two groups in the
+same JVM isn't supported; spin up two deployments instead.
+
+#### Config example — `orders` and `billing` side by side
+
+Both pipelines target the same PostgreSQL `events_db`. Each runs as its own
+deployment / Helm chart / docker-compose service, with only `cdc.slot.group`
+differing.
+
+`orders` deployment (`application.yml`):
+
+```yaml
+essentials:
+  eventstore:
+    cdc:
+      enabled: true
+      mode: AUTO
+      plugin: pgoutput
+      slot:
+        group: orders            # → slot 'essentials_orders_events_db'
+      pg-output:
+        publication-name: essentials_cdc_publication  # shared
+```
+
+`billing` deployment (`application.yml`):
+
+```yaml
+essentials:
+  eventstore:
+    cdc:
+      enabled: true
+      mode: AUTO
+      plugin: pgoutput
+      slot:
+        group: billing           # → slot 'essentials_billing_events_db'
+      pg-output:
+        publication-name: essentials_cdc_publication  # same publication — fine
+```
+
+Result on the server side:
+
+```sql
+SELECT slot_name, plugin, active, active_pid FROM pg_replication_slots WHERE slot_name LIKE 'essentials_%';
+--   essentials_orders_events_db   | pgoutput | t | 12345
+--   essentials_billing_events_db  | pgoutput | t | 12346
+```
+
+Both slots advance independently. The inbox table:
+
+```sql
+SELECT slot_name, count(*) FROM eventstore_cdc_inbox GROUP BY slot_name;
+--   essentials_orders_events_db   | 42  -- orders backlog
+--   essentials_billing_events_db  | 0   -- billing keeps up
+```
+
+#### Tuning the membership scope
+
+By default both deployments share the same `essentials_cdc_publication` covering
+every event-stream table the framework knows about. The pgoutput plugin filters
+per-row on the *client* side — each deployment's tailer ignores rows for tables
+it doesn't care about (the `PgOutputRawPayloadFilter` from §2 uses the live
+`eventStreamTableNamesSupplier` of the JVM's registered aggregates).
+
+If you'd rather move that filter to the *server* side, give each group its own
+publication and register only the relevant tables:
+
+```yaml
+# orders deployment
+essentials:
+  eventstore:
+    cdc:
+      pg-output:
+        publication-name: essentials_orders_publication
+        publication:
+          auto-manage: true
+          mode: FOR_TABLE_LIST    # only orders_events lands in this publication
+```
+
+Trade-off: per-group publications cost a bit more on the PostgreSQL side
+(WAL-sender filters twice — once per slot's publication, once per row) but
+shrink the network bytes per slot and avoid the client doing the discard work.
+Useful if your `billing` deployment is on a slow link or if you need
+fine-grained pgoutput-level isolation. For typical multi-bounded-context
+deployments on the same cluster, the shared publication is fine.
+
+#### Gotchas
+
+- **A decommissioned group leaves an orphaned slot.** If `analytics` deployment
+  is removed without first dropping its slot, `essentials_analytics_events_db`
+  persists in `pg_replication_slots` and grows WAL forever. Same orphaned-slot
+  story as §13.1; the `essentials.cdc.slot.inactive_since_seconds` gauge plus
+  the runbook drop-slot SQL apply per group. The
+  [`run-orphaned-slot.sh`](../../../../examples/essentials-performance-lab/scripts/run-orphaned-slot.sh)
+  perf-lab scenario validates the lifecycle for a single group; the same shape
+  works per group.
+- **Subscriber resume-points are NOT per-group.** The `durable_subscriptions`
+  table is keyed on `(subscriber_id, aggregate_type)`, not on the consumer
+  group. Two deployments that share a `SubscriberId` will collide on resume-
+  point writes — they overwrite each other's positions and one mysteriously
+  rewinds. **Always namespace subscriber IDs by group name in multi-group
+  deployments.** See "Namespacing subscriber IDs" below for the recommended
+  pattern; framework-level scope-by-group is tracked as **P7** in
+  [cdc-improvements.md](cdc-improvements.md).
+- **Backfill polls the same `*_events` table.** Both groups doing initial
+  backfill at the same time means duplicate read load on the source table. For
+  large historical windows, stagger group starts or use replica reads — but
+  steady-state delivery has no read amplification on the source.
+- **Slot-recreate-on-start is per-group.** Setting `cdc.slot.recreate-on-start=true`
+  in the `orders` deployment only drops `essentials_orders_events_db`, not
+  `essentials_billing_events_db`. Each group manages its own slot lifecycle.
+
+#### Namespacing subscriber IDs
+
+The `durable_subscriptions` table is keyed on `(subscriber_id, aggregate_type)`
+— **no consumer group dimension**. Two deployments sharing the same database
+that both register a `SubscriberId.of("realtime-projector")` for the same
+`AggregateType` will collide on the same row. They overwrite each other's
+resume points. Symptoms: one deployment's projector mysteriously rewinds to an
+older position every time the other deployment writes its resume point.
+Typically caught in week 3 of multi-group production after an unusual restart
+ordering.
+
+The framework provides [`CdcConsumerGroup.namespaced(SubscriberId)`](CdcConsumerGroup.java)
+to prefix any subscriber ID with the active consumer group's name. Use it on
+every subscription in any deployment that *could ever* run alongside another
+consumer group (i.e. always — the cost is zero, the safety is real):
+
+```java
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcConsumerGroup;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+
+@Component
+class RealtimeProjector {
+    private final EventStoreSubscriptionManager subscriptionManager;
+    private final CdcConsumerGroup              consumerGroup;
+
+    public RealtimeProjector(EventStoreSubscriptionManager subscriptionManager,
+                             CdcConsumerGroup consumerGroup) {
+        this.subscriptionManager = subscriptionManager;
+        this.consumerGroup       = consumerGroup;
+    }
+
+    @PostConstruct
+    void start() {
+        subscriptionManager.subscribeToAggregateEventsAsynchronously(
+            // "realtime-projector" → "orders.realtime-projector" in the orders deployment,
+            // "billing.realtime-projector" in the billing deployment. Two deployments,
+            // two rows in durable_subscriptions, zero collision.
+            consumerGroup.namespaced(SubscriberId.of("realtime-projector")),
+            ORDERS,
+            GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
+            this::onEvent);
+    }
+}
+```
+
+What it produces, with a default `cdc.slot.group=default`:
+
+| Application call | Stored as |
+|---|---|
+| `consumerGroup.namespaced(SubscriberId.of("realtime-projector"))` | `SubscriberId.of("default.realtime-projector")` |
+| `consumerGroup.namespaced(SubscriberId.of("audit-stream"))` | `SubscriberId.of("default.audit-stream")` |
+
+And in `orders` deployment (`cdc.slot.group=orders`):
+
+| Application call | Stored as |
+|---|---|
+| `consumerGroup.namespaced(SubscriberId.of("realtime-projector"))` | `SubscriberId.of("orders.realtime-projector")` |
+
+If you're migrating an existing single-group deployment to start using
+`namespaced`, the change is **breaking for resume points**: the new prefixed
+subscriber ID won't find the old row in `durable_subscriptions` and will start
+fresh. Two safe migration options:
+
+1. **Replay-tolerant migration**: switch to `namespaced` IDs, accept that
+   subscribers replay from `FIRST_GLOBAL_EVENT_ORDER` on the first deploy.
+   Fine for idempotent projectors.
+2. **One-time SQL backfill**: before switching code, copy the existing rows
+   to the namespaced form:
+   ```sql
+   INSERT INTO durable_subscriptions (subscriber_id, aggregate_type,
+                                      resume_from_and_including_global_eventorder,
+                                      last_updated)
+   SELECT 'default.' || subscriber_id, aggregate_type,
+          resume_from_and_including_global_eventorder, last_updated
+   FROM durable_subscriptions
+   WHERE subscriber_id NOT LIKE '%.%';
+   ```
+   Replace `'default.'` with your actual group name.
+
+### 3.3 Slot ownership & contention
 
 A logical replication slot can have **at most one active reader** at a time. With
 multiple JVMs in a cluster, the framework picks one tailer per slot via a PostgreSQL
@@ -127,7 +355,7 @@ multiple JVMs in a cluster, the framework picks one tailer per slot via a Postgr
 
 The slot's `active_pid` column is **not** used for ownership — only for diagnostics.
 
-### 3.3 Slot lifecycle modes (`PgSlotMode`)
+### 3.4 Slot lifecycle modes (`PgSlotMode`)
 
 Configured via [`CdcProperties.slot.mode`](CdcProperties.java):
 
@@ -162,7 +390,7 @@ dropping and re-creating it. Destructive — appropriate only for dev/test/perf-
 environments. Never enable in production: any unacknowledged WAL changes are silently
 discarded.
 
-### 3.4 Slot validation diagnostics
+### 3.5 Slot validation diagnostics
 
 `SlotInfo` (returned by `PgReplicationSlots.findSlot`) exposes everything from
 `pg_replication_slots`: `slotType`, `plugin`, `database`, `activePid`,
@@ -450,7 +678,7 @@ All keys live under `cdc.*` in [`CdcProperties`](CdcProperties.java).
 | ------------------------------ | -------------------- | ------------------------------------------------------------------------ |
 | `cdc.slot.group`               | `default`            | Consumer-group name; feeds slot-name generation.                         |
 | `cdc.slot.name`                | (derived)            | Optional override of generated name.                                     |
-| `cdc.slot.mode`                | `CREATE_IF_MISSING`  | See §3.3.                                                                |
+| `cdc.slot.mode`                | `CREATE_IF_MISSING`  | See §3.4.                                                                |
 | `cdc.slot.recreateOnStart`     | `false`              | **Destructive.** Force-drop and recreate at every startup. Dev/test only.|
 | `cdc.slot.metricsEnabled`      | `true`               | Master switch for `CdcSlotMetrics` (publishes `essentials.cdc.slot.*` gauges).|
 | `cdc.slot.metricsInterval`     | `30s`                | Cadence at which `pg_replication_slots` is re-sampled to refresh slot gauges.|
@@ -488,6 +716,7 @@ All keys live under `cdc.*` in [`CdcProperties`](CdcProperties.java).
 | `cdc.cdcDispatcher.batchSize`             | `500`                       | Max rows per dispatcher tick.                                                            |
 | `cdc.cdcDispatcher.poisonPolicy`          | `QUARANTINE_AND_CONTINUE`   | `QUARANTINE_AND_CONTINUE` or `STOP`.                                                     |
 | `cdc.cdcDispatcher.dispatchedRowPolicy`   | `MARK_DISPATCHED`           | `MARK_DISPATCHED` (rely on TTL purge) or `DELETE` (immediate row removal after dispatch).|
+| `cdc.cdcDispatcher.queryTimeout`          | `PT0S` (no timeout)         | Per-statement timeout on the dispatcher's `fetchNextBatch` poll query. `Duration.ZERO` defers to PG/JDBC/pool defaults; a positive value applies `Statement.setQueryTimeout(seconds)` and bounds the per-tick latency at the framework level. |
 | `cdc.cdcDispatcher.inboxMetricsEnabled`   | `true`                      | Master switch for the `essentials.cdc.inbox.*` backlog/poison gauges. INBOX delivery only. Gauges sample on demand at metrics scrape time. |
 
 ### 7.6 `cdc.eventBus` ([`CdcEventBusProperties`](CdcProperties.java))
@@ -511,6 +740,226 @@ All keys live under `cdc.*` in [`CdcProperties`](CdcProperties.java).
 | `cdc.healthCheck.activeCutbackDebounce`                 | `60s`       | Steady-ACTIVE window before cutting back from polling to CDC.                       |
 | `cdc.healthCheck.autoRecreateSlotOnStuck`               | `false`     | Opt-in self-heal: drop+recreate slot after N consecutive fires.                     |
 | `cdc.healthCheck.recreateSlotAfterConsecutiveFires`     | `3`         | N for the rule above.                                                              |
+
+#### Tuning `messagesReceivedThreshold` and `dispatcherIdleGracePeriod`
+
+The two thresholds that gate the effectiveness monitor's two detectors deserve
+a longer explanation — they're the difference between a useful "page me when
+CDC is genuinely broken" signal and a noisy "page me whenever traffic is
+quiet" signal.
+
+##### `messagesReceivedThreshold` (default `1000`)
+
+Used by the **stuck-delivery** detector ([`checkStuckDelivery`](CdcEffectivenessMonitor.java)).
+At each evaluation tick the monitor computes two deltas over the elapsed window:
+
+- `messagesReceivedDelta` — count of raw pgoutput/wal2json messages the tailer
+  pulled off the replication stream since the previous tick. **Note: this is
+  pgoutput protocol messages, not application events.** A single committed
+  transaction with one row insert produces 3 messages (`B` Begin, `I` Insert,
+  `C` Commit). 1 000 messages ≈ ~300 small transactions of WAL activity.
+- `publishedDelta` — count of `PersistedEvent`s the dispatcher emitted to the
+  CDC bus in the same window.
+
+The detector fires only when **both** conditions hold:
+
+```
+messagesReceivedDelta >= messagesReceivedThreshold   AND   publishedDelta == 0
+```
+
+The threshold is the "is the system busy enough that I trust this signal?"
+gate. Without it, the second condition (`publishedDelta == 0`) would fire
+constantly on idle systems where the tailer legitimately has nothing to do —
+the alarm would say "stuck" every time you go to lunch.
+
+**A quiet WAL stream cannot trigger this detector.** If the tailer received
+fewer than `messagesReceivedThreshold` messages in the window, the check
+returns early — regardless of how long the quiet period lasts, and regardless
+of whether the dispatcher published anything. The detector is *only* meaningful
+when there's enough recent traffic to expect dispatcher activity.
+
+| Workload character | Default `1000` behaviour | Suggested tuning |
+|---|---|---|
+| High-volume (≥ 100 events/s sustained) | Fires within seconds of a real outage | Leave at default |
+| Medium (10–100 events/s) | Fires within tens of seconds | Leave at default; consider `200`–`500` if you want faster detection |
+| Low (1–10 events/s) | Can take minutes to accumulate 1000 messages; outage detected late | Lower to `100`–`200` so the detector is responsive when there *is* something to deliver |
+| Spiky / mostly idle (< 1 event/s for long periods) | Almost never fires — alarm only on the rare burst | Either accept the late detection OR rely on the **dispatcher-dead** detector instead (see below) |
+
+**Failure modes**:
+
+- *Too low* (say `10`): false positives during dispatcher backpressure. A
+  legitimate ten-second pause in publishing during a GC pause or DB hiccup
+  looks like "stuck delivery" to the monitor and trips a fallback-to-polling
+  cycle. Visible as oscillating `essentials.cdc.fallback.poll.count` even
+  when CDC is fundamentally healthy.
+- *Too high* (say `100_000`): real CDC outages go undetected on low-volume
+  systems. The slot lag grows silently until either an operator notices or
+  `wal_status` flips degraded.
+
+The default `1000` is calibrated for typical event-sourced workloads
+(dozens to hundreds of events per second). Adjust based on the table above.
+
+##### `dispatcherIdleGracePeriod` (default `120s`)
+
+Used by the **dispatcher-dead** detector ([`checkDispatcherDead`](CdcEffectivenessMonitor.java)).
+Catches the failure mode where the dispatcher's `ScheduledExecutorService`
+has stalled — thread died, blocked indefinitely on a DB call, executor was
+shut down by another component.
+
+The check at each evaluation tick:
+
+```
+effectiveGrace = max(healthCheck.interval, dispatcherIdleGracePeriod)
+if  elapsedMs >= effectiveGrace  AND  ticksDelta == 0:
+    declare dispatcher dead
+```
+
+Two things to notice:
+
+1. **`max(interval, …)`**: setting `dispatcherIdleGracePeriod` *below* the
+   evaluation `interval` is a no-op. The framework refuses to evaluate
+   dispatcher-dead more aggressively than the monitor's own tick cadence.
+   With default `interval=60s` and `dispatcherIdleGracePeriod=120s`, the
+   effective grace is `120s` — meaning two consecutive monitor evaluations
+   must both observe zero ticks before flagging.
+2. **`ticksDelta == 0`**: the dispatcher's tick counter increments **on a
+   timer, not in response to WAL activity**. The dispatcher's scheduled task
+   runs every `cdc.cdcDispatcher.pollInterval` (default 20 ms) and increments
+   the tick counter on every iteration — whether the inbox had rows to fetch
+   or returned zero. On a fully idle system with no WAL traffic the dispatcher
+   still ticks ~50 times per second, doing empty-result fetches each time. So
+   "zero ticks for two whole minutes" is **not** "no work to do" — it's
+   "the executor itself stopped running."
+
+The grace period exists to tolerate scheduler jitter — one health-check
+window might legitimately see zero ticks if the dispatcher was blocked on a
+long DB call exactly across the boundary. Requiring two consecutive windows
+of total silence is what makes this signal reliable.
+
+**A quiet WAL stream cannot trigger this detector either.** The tick counter
+keeps incrementing on the dispatcher's internal timer regardless of WAL
+volume. Zero ticks means the timer itself stopped firing — thread died,
+executor was shut down externally, GC pause indefinitely long — not "the
+inbox was empty."
+
+| Operational scenario | Default `120s` behaviour | Suggested tuning |
+|---|---|---|
+| Production with on-call alerting | Detects dispatcher death within 1–2 monitor windows (60–120s) — fast enough that automated fallback to polling means no subscriber notices | Leave at default |
+| Latency-sensitive deployment | Slightly faster detection wanted | Lower to `60s` (= interval); single bad window flags. Accept slightly higher false-positive rate |
+| Lab / chaos testing | Want to *force* the detector to fire | Lower to `10s` + lower `interval` to `5s` to compress test runtime |
+| Slow / contended database | Long-running queries occasionally pause the dispatcher for tens of seconds | Raise to `180s`–`300s` so transient slowness doesn't trip the alarm |
+
+**Failure modes**:
+
+- *Too low* (say `30s`): one slow DB query that blocks the dispatcher tick
+  for half a minute trips the alarm. Subscribers cut to polling; CDC then
+  comes back; bus reconnects; rinse-repeat. Manifests as oscillation in
+  `essentials.cdc.eventstore.live_source.switch.count`.
+- *Too high* (say `1800s`): genuine dispatcher death goes undetected for half
+  an hour. Subscribers don't notice (polling fallback works) but
+  CDC-bus-bound dashboards go dark. Slot lag is still bounded as long as the
+  *tailer* is healthy.
+
+The default `120s` is the conservative midpoint: long enough to absorb
+multi-second scheduler hiccups, short enough that a real failure surfaces
+within an alerting cycle.
+
+##### How the two detectors complement each other
+
+| Detector | Catches | Doesn't catch |
+|---|---|---|
+| Stuck delivery (`messagesReceivedThreshold`) | "Bytes are flowing but events aren't being published" — publication misconfig, pgoutput silently dropping inserts, conversion dropping every row | "Dispatcher isn't running" (no bytes flowing through it either, so `messagesReceivedDelta` is 0 and the threshold gate skips) |
+| Dispatcher dead (`dispatcherIdleGracePeriod`) | "Dispatcher executor stopped ticking" — thread died, executor shut down, blocked indefinitely | "Dispatcher is ticking but dropping events" — ticks > 0, threshold gate fires, but the OTHER detector catches it |
+
+Running both means you cover the two distinct ways the dispatcher path can
+fail. They're cheap (run once per `healthCheck.interval`, two small subtractions
+each) and orthogonal — keep both on.
+
+##### Common misconception: "won't these fire when the WAL is quiet?"
+
+No — and the design is deliberate.
+
+- **Stuck delivery** is *gated* by `messagesReceivedThreshold`. If the tailer
+  received fewer than the threshold's worth of pgoutput/wal2json messages in
+  the window, the check returns early. The detector only fires when there's
+  enough recent WAL traffic to make "dispatcher published 0" a meaningful
+  contradiction.
+- **Dispatcher dead** watches the dispatcher's **scheduled tick counter**,
+  which is independent of WAL volume. The dispatcher's executor runs every
+  ~20 ms regardless of inbox contents and bumps the counter each time —
+  empty-result fetches still count. A quiet WAL means the dispatcher does
+  thousands of `LIMIT 0` fetches per minute, all of which increment the tick
+  counter. The detector fires only when the counter genuinely stops moving
+  for two-plus monitor windows, which only happens if the executor itself
+  has died.
+
+If you've configured CDC for a low-volume / mostly-idle workload and want
+*some* form of "is CDC even alive?" signal, the right metric isn't the
+effectiveness monitor — it's the slot-health gauges from §8 (`essentials.cdc.slot.active`
+should be `1`, `essentials.cdc.slot.lag_bytes` should be bounded). Those
+work regardless of traffic level. The effectiveness monitor is for "CDC
+*looks* active but isn't actually delivering" — a different failure mode
+that, by definition, needs traffic to detect.
+
+#### Bounding the dispatcher's per-tick query latency
+
+The detectors above react *after the fact* — they notice that the dispatcher
+hasn't ticked in a while. They don't *bound* how long a single tick can run.
+For that, set `cdc.cdcDispatcher.queryTimeout`.
+
+Default is `PT0S` ("no framework-imposed timeout"), in which case the
+dispatcher's `fetchNextBatch` query inherits whatever the deployment's lower
+layers provide:
+
+| Layer | Default if you do nothing | Affects `fetchNextBatch`? |
+|---|---|---|
+| `Statement.setQueryTimeout` | 0 (unlimited) | Not set by framework when `queryTimeout=PT0S` |
+| PostgreSQL `statement_timeout` GUC | 0 (unlimited) | Yes if set per-role / per-DB / `postgresql.conf` |
+| pgjdbc URL `socketTimeout` param | 0 (wait forever) | Yes if set on the JDBC URL |
+| HikariCP `connectionTimeout` | 30s | No — only governs *acquiring* a pool connection, not a query already in flight |
+| HikariCP `validationTimeout` | 5s | No — only the connection-validation query |
+
+For most Spring Boot + Hikari deployments the implicit defaults are fine —
+`SELECT … FOR UPDATE SKIP LOCKED` is non-blocking by design (SKIP LOCKED
+avoids row-lock waits), so the realistic ways for this query to hang are
+"PG itself hung" or "network partitioned silently". Both are rare; both are
+caught by the dispatcher-dead detector within ~2 minutes, after which
+subscribers fall back to polling and no events are lost.
+
+Set `queryTimeout` when one of the following applies:
+
+- **You want a known per-tick SLA.** With `cdc.cdcDispatcher.queryTimeout=PT5S`,
+  a hung dispatcher query is cancelled by PG after 5 seconds; the dispatcher's
+  next tick fires on the configured `pollInterval` and tries again. Tail
+  latency stays bounded regardless of PG-side hiccups.
+- **You can't set `statement_timeout` server-side.** Managed-PG deployments
+  sometimes restrict GUCs at the database level; the framework property gives
+  you the same protection from the client side.
+- **Defence-in-depth against thread leakage.** Without a timeout, a hung
+  query holds the dispatcher's pool connection until the JVM restarts. A
+  per-statement timeout caps that pinning.
+
+When the timeout fires:
+
+- PostgreSQL cancels the statement server-side (`PSQLException`, SQL state
+  `57014` — "query canceled").
+- The dispatcher's tick-error path catches it and treats it as a normal tick
+  failure: increments `essentials.cdc.dispatcher.tick.failures`, logs a WARN,
+  and retries on the next `pollInterval`.
+- No subscriber impact — the dispatcher just tries again in 20 ms (default
+  `pollInterval`).
+
+Granularity is **seconds** (the framework rounds sub-second durations *up* to
+1 second, since PG's statement-timeout machinery doesn't resolve below
+seconds anyway). Setting `PT0.5S` gives you a 1-second effective timeout, not
+500 ms.
+
+| Workload character | Suggested `queryTimeout` |
+|---|---|
+| Latency-sensitive (real-time projections) | `PT5S` — strict SLA, willing to retry frequently |
+| Standard (default Spring Boot + Hikari) | `PT0S` — rely on `statement_timeout` GUC + pgjdbc defaults |
+| Hostile environment (slow / flaky network to PG) | `PT15S`–`PT30S` — bounded but tolerant |
+| Lab / chaos testing | `PT2S` — surface timeout behaviour during fault injection |
 
 ---
 
@@ -644,16 +1093,23 @@ Implications:
 
 ### 10.2 Multiple slots — sharded tailers across nodes
 
-Setting different `cdc.slot.group` values (e.g. `orders`, `billing`, `default`)
-produces independent slots, each with its own advisory lock. With multiple nodes,
-this naturally distributes tailer load: each slot is grabbed by whichever node
-acquires its lock first, and they spread across the cluster without explicit
-coordination.
+When you run multiple **consumer groups** (see §3.2 — typically one per bounded-
+context deployment, e.g. `orders`, `billing`, `analytics`), each group's slot has
+its own advisory lock. In a multi-node cluster the slots distribute naturally:
+each slot is grabbed by whichever node of *its own deployment* acquires the lock
+first. Different groups' slots don't compete with each other, so two slots can
+end up on the same node or on different nodes — race-driven, no coordination.
+
+This is **not** a load-balancing primitive across nodes of the same deployment:
+all nodes of `orders` share one slot (one tailer wins, the rest are standbys).
+What it distributes is *the set of distinct slots across the cluster*. If you
+want true tailer parallelism within one deployment you'd need separate consumer
+groups for the same data — not a supported pattern.
 
 There is **no built-in load balancer** that tries to even out slots-per-node. In
-practice the spread is good enough — locks are independent and acquisition is
-race-driven — but a deliberate operator can pin slots to specific nodes via
-configuration profiles if needed.
+practice the spread is good enough for two or three groups; a deliberate
+operator can pin a group's tailer to specific nodes via deployment-level
+constraints (k8s node-affinity, etc.) if needed.
 
 ### 10.3 Dispatcher — runs per node, parallel-safe
 

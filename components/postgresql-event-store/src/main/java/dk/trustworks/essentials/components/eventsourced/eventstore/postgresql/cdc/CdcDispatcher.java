@@ -59,6 +59,12 @@ public final class CdcDispatcher implements Lifecycle {
     private final String                                                        slotName;
     private final Duration                                                      pollInterval;
     private final int                                                           batchSize;
+    /**
+     * Per-statement timeout in seconds applied to {@link CdcInboxRepository#fetchNextBatch}.
+     * {@code 0} means no framework-imposed timeout (defers to PG/JDBC/pool defaults).
+     * Captured at construction from {@code CdcDispatcherProperties.queryTimeout}.
+     */
+    private final int                                                           queryTimeoutSeconds;
     private final PoisonPolicy                                                  poisonPolicy;
     private final DispatchedRowPolicy                                           dispatchedRowPolicy;
     private final CdcDeliveryMode                                               deliveryMode;
@@ -136,6 +142,13 @@ public final class CdcDispatcher implements Lifecycle {
         this.pollInterval = requireNonNull(cdcDispatcherProperties.getPollInterval(), "pollInterval cannot be null");
         requireTrue(cdcDispatcherProperties.getBatchSize() >= 1, "batchSize has to be 1 or greater");
         this.batchSize = cdcDispatcherProperties.getBatchSize();
+        // Round seconds *up* so any positive sub-second budget still applies a 1s timeout
+        // rather than silently degrading to "no timeout". Zero (default) means no framework
+        // timeout — the query inherits whatever PG/JDBC/pool defaults provide.
+        var configuredQueryTimeout = cdcDispatcherProperties.getQueryTimeout();
+        this.queryTimeoutSeconds = configuredQueryTimeout == null || configuredQueryTimeout.isZero() || configuredQueryTimeout.isNegative()
+                                   ? 0
+                                   : (int) Math.max(1L, (configuredQueryTimeout.toMillis() + 999L) / 1000L);
         this.poisonPolicy = requireNonNull(cdcDispatcherProperties.getPoisonPolicy(), "poisonPolicy cannot be null");
         this.dispatchedRowPolicy = requireNonNull(cdcDispatcherProperties.getDispatchedRowPolicy(), "dispatchedRowPolicy cannot be null");
         this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
@@ -289,7 +302,7 @@ public final class CdcDispatcher implements Lifecycle {
         if (ticksCounter != null) ticksCounter.increment();
 
         long pollStartNs = System.nanoTime();
-        var  batch       = inbox.fetchNextBatch(slotName, batchSize);
+        var  batch       = inbox.fetchNextBatch(slotName, batchSize, queryTimeoutSeconds);
         lastBatchSize.set(batch.size());
         if (pollTimer != null) pollTimer.record(System.nanoTime() - pollStartNs, TimeUnit.NANOSECONDS);
         if (fetchedBatchSizeSummary != null) fetchedBatchSizeSummary.record(batch.size());
