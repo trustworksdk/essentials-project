@@ -28,8 +28,6 @@ public final class PgReplicationSlots {
     private PgReplicationSlots() {
     }
 
-    public static final String DEFAULT_PLUGIN = Wal2JsonLogicalDecodingPlugin.PLUGIN_NAME;
-
     public static final class SlotInfo {
         public final String  slotName;
         public final String  slotType;
