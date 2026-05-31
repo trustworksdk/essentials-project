@@ -44,12 +44,18 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyAwareEventStorePollingOptimizer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyEpochSource;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyPollingSettings;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
+import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
@@ -63,6 +69,8 @@ import io.micrometer.tracing.Tracer;
 import io.micrometer.tracing.propagation.Propagator;
 import org.jdbi.v3.core.Jdbi;
 import org.postgresql.ds.PGSimpleDataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
@@ -80,6 +88,7 @@ import java.net.URI;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
@@ -106,6 +115,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 @ConditionalOnClass(name = "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore")
 @EnableConfigurationProperties(EssentialsEventStoreProperties.class)
 public class EventStoreConfiguration {
+    private static final Logger log = LoggerFactory.getLogger(EventStoreConfiguration.class);
 
     /**
      * The Local EventBus where the {@link EventStore} publishes {@link PersistedEvents} locally
@@ -174,21 +184,176 @@ public class EventStoreConfiguration {
                                                                        FencedLockManager fencedLockManager,
                                                                        DurableSubscriptionRepository durableSubscriptionRepository,
                                                                        EssentialsEventStoreProperties eventStoreProperties,
-                                                                       EssentialsComponentsProperties essentialsComponentsProperties) {
+                                                                       EssentialsComponentsProperties essentialsComponentsProperties,
+                                                                       Optional<NotifyEpochSource> notifyEpochSource,
+                                                                       AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy) {
+        var subscriptionManagerProps = eventStoreProperties.getSubscriptionManager();
+
+        warnIfCdcAndNotifyPollingBothEnabled(eventStoreProperties);
+
+        var optimizerFactory = buildPollingOptimizerFactory(subscriptionManagerProps,
+                                                            notifyEpochSource,
+                                                            persistenceStrategy);
+
         return EventStoreSubscriptionManager.builder()
                                             .setEventStore(eventStore)
                                             .setFencedLockManager(fencedLockManager)
                                             .setDurableSubscriptionRepository(durableSubscriptionRepository)
-                                            .setEventStorePollingBatchSize(eventStoreProperties.getSubscriptionManager().getEventStorePollingBatchSize())
-                                            .setEventStorePollingInterval(eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval())
-                                            .setSnapshotResumePointsEvery(eventStoreProperties.getSubscriptionManager().getSnapshotResumePointsEvery())
+                                            .setEventStorePollingBatchSize(subscriptionManagerProps.getEventStorePollingBatchSize())
+                                            .setEventStorePollingInterval(subscriptionManagerProps.getEventStorePollingInterval())
+                                            .setSnapshotResumePointsEvery(subscriptionManagerProps.getSnapshotResumePointsEvery())
                                             .setStartLifeCycles(essentialsComponentsProperties.getLifeCycles().isStartLifeCycles())
-                                            .setEventStorePollingOptimizerFactory(eventSteamName -> new JitteredEventStorePollingOptimizer(eventSteamName,
-                                                                                                                                           eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval().toMillis(),
-                                                                                                                                           (long) (eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval().toMillis() * 0.5d),
-                                                                                                                                           eventStoreProperties.getSubscriptionManager().getMaxEventStorePollingInterval().toMillis(),
-                                                                                                                                           0.1d))
+                                            .setEventStorePollingOptimizerFactory(optimizerFactory)
                                             .build();
+    }
+
+    /**
+     * Build the per-subscription {@link EventStorePollingOptimizer} factory.
+     * <ul>
+     *   <li>If notify-polling is enabled <em>and</em> a {@link NotifyEpochSource} is
+     *       present in the context, return a factory that produces
+     *       {@link NotifyAwareEventStorePollingOptimizer}s keyed on the underlying
+     *       event-stream table.</li>
+     *   <li>Otherwise (or when a key can't be resolved to an event-stream table —
+     *       e.g. a custom subscription log name not produced by
+     *       {@code PostgresqlEventStore#pollEvents}), fall back to the existing
+     *       {@link JitteredEventStorePollingOptimizer}.</li>
+     * </ul>
+     * The factory receives the {@code eventStreamLogName} the framework chose for the
+     * subscription — for PostgresqlEventStore subscriptions this is
+     * {@code "EventStream:<aggregateType>:<subscriberId>"} (see
+     * {@code PostgresqlEventStore#pollEvents}). We parse the aggregate type from this
+     * name and resolve the event-stream table name via the persistence strategy. A
+     * malformed key or unknown aggregate type degrades gracefully to a jittered
+     * optimizer (preserving existing behaviour) — that's safer than returning
+     * {@link EventStorePollingOptimizer#None()} which would remove all backoff and
+     * peg the DB.
+     */
+    private Function<String, EventStorePollingOptimizer> buildPollingOptimizerFactory(
+            EssentialsEventStoreProperties.EventStoreSubscriptionManagerProperties subscriptionManagerProps,
+            Optional<NotifyEpochSource> notifyEpochSource,
+            AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy) {
+        var notifyPollingProps = subscriptionManagerProps.getNotifyPolling();
+        var jitteredFactory    = buildJitteredOptimizerFactory(subscriptionManagerProps);
+
+        if (!notifyPollingProps.isEnabled()) {
+            return jitteredFactory;
+        }
+        if (notifyEpochSource.isEmpty()) {
+            log.warn("Notify-polling is enabled but no NotifyEpochSource bean is present — "
+                             + "falling back to jittered polling optimizer for all subscriptions.");
+            return jitteredFactory;
+        }
+
+        var notifySettings = new NotifyPollingSettings(true,
+                                                       notifyPollingProps.getInitialDelay(),
+                                                       notifyPollingProps.getMaxDelay(),
+                                                       notifyPollingProps.getBackoffMultiplier());
+        var epochSource = notifyEpochSource.get();
+        log.info("Notify-aware polling optimizer enabled: initialDelay={} maxDelay={} backoffMultiplier={}",
+                 notifySettings.initialDelay(), notifySettings.maxDelay(), notifySettings.backoffMultiplier());
+
+        return eventStreamLogName -> {
+            var aggregateType = parseAggregateTypeFromLogName(eventStreamLogName);
+            if (aggregateType == null) {
+                log.warn("Could not parse aggregate type from event stream log name='{}' — "
+                                 + "using jittered optimizer for this subscription.", eventStreamLogName);
+                return jitteredFactory.apply(eventStreamLogName);
+            }
+            var configOpt = persistenceStrategy.findAggregateEventStreamConfiguration(aggregateType);
+            if (configOpt.isEmpty()) {
+                log.warn("No event-stream configuration registered for aggregateType='{}' "
+                                 + "(parsed from log name='{}') — using jittered optimizer for this subscription.",
+                         aggregateType, eventStreamLogName);
+                return jitteredFactory.apply(eventStreamLogName);
+            }
+            var tableName = configOpt.get().eventStreamTableName;
+            log.debug("Creating NotifyAwareEventStorePollingOptimizer for logName='{}' aggregateType='{}' table='{}'",
+                      eventStreamLogName, aggregateType, tableName);
+            return new NotifyAwareEventStorePollingOptimizer(epochSource, tableName, notifySettings);
+        };
+    }
+
+    /**
+     * The legacy/default factory: a {@link JitteredEventStorePollingOptimizer} per
+     * subscription. Preserves pre-S1 behaviour and is used as the fallback whenever
+     * notify-polling is disabled or its prerequisites aren't met.
+     */
+    private Function<String, EventStorePollingOptimizer> buildJitteredOptimizerFactory(
+            EssentialsEventStoreProperties.EventStoreSubscriptionManagerProperties subscriptionManagerProps) {
+        long pollingIntervalMs    = subscriptionManagerProps.getEventStorePollingInterval().toMillis();
+        long maxPollingIntervalMs = subscriptionManagerProps.getMaxEventStorePollingInterval().toMillis();
+        return eventStreamLogName -> new JitteredEventStorePollingOptimizer(eventStreamLogName,
+                                                                            pollingIntervalMs,
+                                                                            (long) (pollingIntervalMs * 0.5d),
+                                                                            maxPollingIntervalMs,
+                                                                            0.1d);
+    }
+
+    /**
+     * Parse the {@link AggregateType} from a subscription log name of the form
+     * {@code "EventStream:<aggregateType>:<subscriberId>"} (the format
+     * {@code PostgresqlEventStore#pollEvents} uses). Returns {@code null} if the name
+     * doesn't match the expected shape — callers fall back to the jittered optimizer
+     * in that case.
+     */
+    private static AggregateType parseAggregateTypeFromLogName(String eventStreamLogName) {
+        if (eventStreamLogName == null) return null;
+        String[] parts = eventStreamLogName.split(":", 3);
+        if (parts.length < 2 || parts[1].isBlank()) return null;
+        return AggregateType.of(parts[1]);
+    }
+
+    /**
+     * Coexistence WARN: CDC INBOX already delivers a notify-equivalent wake-up via its
+     * dispatcher, so enabling both wake-up paths adds DB load (extra trigger fire per
+     * insert, extra LISTEN connection) for no gain in liveness. Operators can still
+     * enable both intentionally during migration windows — hence WARN, not fail.
+     */
+    private void warnIfCdcAndNotifyPollingBothEnabled(EssentialsEventStoreProperties eventStoreProperties) {
+        var notifyPollingEnabled = eventStoreProperties.getSubscriptionManager().getNotifyPolling().isEnabled();
+        var cdcEnabled           = eventStoreProperties.getCdc().isEnabled();
+        if (notifyPollingEnabled && cdcEnabled) {
+            log.warn("Both CDC (essentials.eventstore.cdc.enabled) and notify-polling "
+                             + "(essentials.eventstore.subscription-manager.notify-polling.enabled) are enabled. "
+                             + "These are alternative wake-up mechanisms — running both adds DB load "
+                             + "(per-insert trigger fire + extra LISTEN connection) without improving liveness. "
+                             + "Pick one for production.");
+        }
+    }
+
+    /**
+     * S1: NOTIFY-driven polling wake-up. Bridges the framework's
+     * {@link MultiTableChangeListener} (which publishes {@link TableChangeNotification}s
+     * onto the EventBus returned by {@link MultiTableChangeListener#getEventBus()})
+     * into per-table epoch counters that {@link NotifyAwareEventStorePollingOptimizer}
+     * reads to know when to wake from backoff.
+     * <p>
+     * Conditional on {@code essentials.eventstore.subscription-manager.notify-polling.enabled=true}.
+     * Subscribes to the change-listener's own EventBus (not the EventStore's) — guaranteed
+     * to receive the table-change events regardless of which bus the EventStore uses.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.subscription-manager.notify-polling", name = "enabled", havingValue = "true")
+    @ConditionalOnMissingBean
+    public NotifyEpochSource notifyEpochSource(MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
+        return new NotifyEpochSource(multiTableChangeListener.getEventBus());
+    }
+
+    /**
+     * S1: bootstrap bean that wires the persistence strategy's {@code NotifyTriggerInstaller}
+     * so that every event-stream table (existing and future) gets a {@code pg_notify}
+     * trigger and is registered with the shared {@link MultiTableChangeListener}.
+     * See {@link EventStoreNotifyPollingBootstrap} for the full lifecycle and rationale.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.subscription-manager.notify-polling", name = "enabled", havingValue = "true")
+    @ConditionalOnMissingBean
+    public EventStoreNotifyPollingBootstrap eventStoreNotifyPollingBootstrap(
+            Jdbi jdbi,
+            AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy,
+            MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
+        return new EventStoreNotifyPollingBootstrap(jdbi, persistenceStrategy, multiTableChangeListener);
     }
 
     @Bean

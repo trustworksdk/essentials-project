@@ -1402,6 +1402,15 @@ This is **correct**, not broken — it works because the inbox is the shared
 durable buffer and every node's dispatcher will publish every event. But it can
 surprise operators who assume the bus federates across the cluster. See §10.4.
 
+Federating the bus across nodes (rsocket, Hazelcast, Redis, NATS, …) was
+considered and rejected — the inbox already provides durable, ordered,
+multi-node fan-out with no service-discovery or leader-election layer. For
+teams that find CDC operationally heavy *or* that see high DB load from plain
+polling, the relevant alternative isn't bus federation — it's
+[`NOTIFY-driven polling wake-up`](../subscription/subscription-improvements.md)
+(S1), which keeps polling's operational simplicity while making it
+event-driven (near-zero idle query load, no slot, no `wal_level=logical`).
+
 ---
 
 ## 14. Appendix — File Map
