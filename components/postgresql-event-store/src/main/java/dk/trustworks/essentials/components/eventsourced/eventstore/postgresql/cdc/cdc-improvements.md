@@ -150,6 +150,7 @@ operators can reason about the trade-off without leaving the log line.
 | 3 | Inbox backlog + poison gauges                 | ✅ done   | half-day     | Silent dispatcher fall-behind; silent decode-failure stream. |
 | 4 | Configurable idle LSN push interval           | ✅ done   | ~30 min      | Tight `wal_sender_timeout` hitting the hardcoded 30s.        |
 | 5 | Advisory log for `max_slot_wal_keep_size`     | ✅ done   | ~30 min      | Operator forgets the server-side disk safety net.            |
+| 9 | CDC direct push-latency fix (warm-up cutover)  | ✅ done   | ~1 day       | Subscriptions established during CDC warm-up were silently pinned to polling for life. |
 
 P1–P6 + P8 are ✅ delivered. The framework's slot-growth risk is now
 observable (P1 + P3), fail-fast on existing-slot startup (P2), tunable for
@@ -158,7 +159,16 @@ server-side backstop (P5), concurrent-startup-safe at the framework-DDL
 level (P6), and the dispatcher's poll query has an opt-in framework-level
 per-statement timeout (P8). P7 (consumer-group-scoped resume points) is
 partially delivered via `CdcConsumerGroup.namespaced(...)` — full
-schema-level scoping deferred.
+schema-level scoping deferred. P9 is now **fixed**: the original
+"polling-with-priming" hypothesis was refuted — CDC direct *is* a true bus
+push, but the old [`CdcEventStore.pollEvents`](CdcEventStore.java) early-returned
+plain polling for any subscription established while availability was non-`ACTIVE`
+(the common startup ordering, since `CdcAvailability` starts `INACTIVE` and the
+tailer flips it `ACTIVE` only after connecting) and never re-entered — so such a
+subscriber polled for its whole life. The fix returns the adaptive live source
+seeded at the resume point even when inactive: it polls (identical timing) while
+non-`ACTIVE` and cuts over to the bus on `INACTIVE→ACTIVE`, debounced like the
+existing recovery cutover — see the P9 entry.
 
 ---
 
@@ -468,6 +478,235 @@ per-row updates (`markPoison`, `markDispatched`, `deleteDispatched`) are
 short point-writes against an indexed PK and don't realistically hang. If a
 future use case demands bounding those too, the same property could be
 extended to wrap the per-row writes via the same `setQueryTimeout` pattern.
+
+---
+
+## P9 — CDC direct push-latency investigation
+
+**Status:** ✅ **fixed.** Root cause found by code analysis (the perf-lab bypass comparison
+was not needed; the code path is conclusive); the original hypothesis below is **refuted**.
+The fix ships in [`CdcEventStore.pollEvents`](CdcEventStore.java) and is covered by unit +
+Testcontainers ITs — see [The fix (delivered)](#the-fix--delivered). Triggered by perf-lab
+data captured during the [S1 notify-polling spec](../subscription/subscription-improvements.md).
+
+### What we observed
+
+Four perf-lab runs of the `baseline-polling-vs-cdc-compare` scenario (see S1's
+"Empirical measurements" section for the full numbers) consistently show CDC
+direct mode delivering p95 latency that is **essentially tied with plain
+jittered polling**, not the sub-100 ms push speed CDC's architecture would
+suggest:
+
+| Workload | plain-polling p95 | cdcDirect p95 | "push advantage" |
+|---|---:|---:|---:|
+| 1 Hz, S1 max-delay=1s | 320 ms | 319 ms | 0 ms |
+| 1 Hz, S1 max-delay=200ms | 334 ms | 314 ms | 20 ms |
+| 0.1 Hz, S1 max-delay=1s | 1088 ms | 1039 ms | 49 ms |
+| 0.1 Hz, S1 max-delay=5s | 1030 ms | 1012 ms | 18 ms |
+
+CDC direct is supposed to push via the EventBus immediately after the WAL
+tailer decodes a row change. Tens of ms p95 would be expected; instead the
+latency tracks whichever polling interval is in the path (~300 ms on the 1 Hz
+runs, ~1 s on the idle runs where the baseline's polling cap is reached).
+
+### What we already know about the latency budget
+
+Logical-replication clients are pull-based by protocol — `PGReplicationStream`
+delivers rows when the client calls `read()`/`readPending()`. So *of course*
+the tailer polls; the question is at what cadence, and the framework already
+makes that tunable via existing properties:
+
+| Stage | Property | Default |
+|---|---|---|
+| WAL tailer poll | `cdc.wal2-json-tailer.poll-interval` | 25 ms |
+| Dispatcher poll | `cdc.cdc-dispatcher.poll-interval` | 20 ms |
+
+The framework also ships an existing tuning script
+([`run-cdc-tuning-matrix.sh`](../../../../../../../../examples/essentials-performance-lab/scripts/run-cdc-tuning-matrix.sh))
+that sweeps these cadences down to 10 ms in a `throughput-bias` case.
+
+**Those defaults set a floor of ~45 ms for the combined poll latency.** With
+observed CDC direct p95 of ~320 ms (at 1 Hz workloads) and ~1000 ms (at 0.1 Hz
+idle workloads), that leaves **~275 ms unaccounted at 1 Hz** and **~955 ms
+unaccounted at 0.1 Hz** — far more than tightening the existing knobs could
+ever close. The bottleneck isn't poll cadence at the WAL or dispatcher layer;
+those are already tight. Something else is in the path.
+
+### The original hypothesis (REFUTED — kept for the record)
+
+> **The subscriber poll path is still active in CDC direct mode.** I.e. CDC pushes
+> to the EventBus, but `subscribeToAggregateEventsAsynchronously` still spins a
+> poll loop against the event-store table — the actual delivery to the handler
+> happens via the poll loop, and the CDC push just primes the polling optimizer
+> (via the EventBus) to take the next poll sooner.
+
+This is **wrong** in two ways, both established by reading the delivery path:
+
+1. The CDC push does **not** merely "prime the polling optimizer". The
+   `NotifyAwareEventStorePollingOptimizer` epoch is fed by the *trigger-based*
+   LISTEN/NOTIFY path ([`NotifyEpochSource`](../subscription/notify/NotifyEpochSource.java)),
+   which is independent of CDC. A CDC-direct push to the bus does not advance that
+   epoch at all.
+2. The managed subscription path **is** wired to consume the CDC bus as a true
+   push — when the subscription is established while CDC is `ACTIVE`. The
+   `EventStoreSubscriptionManager` is given the `@Primary` `CdcEventStore`
+   decorator (see `EventStoreConfiguration.eventStoreSubscriptionManager(...)` →
+   `.setEventStore(...)`), so `subscribeToAggregateEventsAsynchronously` flows
+   through [`CdcEventStore.pollEvents`](CdcEventStore.java), whose live source is
+   `cdcBus.fluxForAggregate(aggregateType)` (a push) when availability is `ACTIVE`.
+
+So CDC direct is *not* "polling with priming". It is a genuine push — **but only
+for subscriptions that are established while CDC is already `ACTIVE`.** That
+caveat is the whole story.
+
+### Findings — resolved by code analysis
+
+The unexplained latency budget is caused by an **establishment-time gate**, not
+by anything in steady-state delivery:
+
+[`CdcEventStore.pollEvents`](CdcEventStore.java) begins with
+
+```java
+if (!availability.isActive()) {
+    availability.fallbackUsed();
+    if (fallbackPollCounter != null) fallbackPollCounter.increment();
+    return eventStore.pollEvents(...);   // <-- plain delegate polling, terminal
+}
+```
+
+When a subscription is established while CDC is **not** `ACTIVE`, `pollEvents`
+early-returns the *plain delegate polling flux* and never builds the adaptive
+live source at all. There is no later re-entry: that subscription polls **for its
+entire lifetime** and never consumes the CDC bus, even after CDC becomes `ACTIVE`
+seconds later.
+
+`CdcAvailability` starts in state `INACTIVE`
+([`CdcAvailability.java:63`](CdcAvailability.java)); the WAL tailer only flips it
+to `ACTIVE` once it has connected and begun streaming — a few seconds into
+application boot. Long-lived subscriptions registered at startup therefore
+subscribe **while `INACTIVE`**, hit the early-return, and are pinned to polling.
+
+### Why the perf-lab data looks the way it does
+
+[`BaselinePollingVsCdcScenario`](../../../../../../../../examples/essentials-performance-lab/src/main/java/dk/trustworks/essentials/examples/perflab/scenario/BaselinePollingVsCdcScenario.java)
+subscribes all subscribers at the very top of `run()` — i.e. immediately at app
+boot, before the tailer has connected. So in **every** CDC leg, the measured
+subscriptions were established while `INACTIVE` and ran the whole measurement on
+the polling fallback. That is exactly why:
+
+- CDC-direct p95 tracks plain-polling p95 (it *is* plain polling for that
+  subscription);
+- CDC inbox and CDC direct track each other (both legs' subscriptions are equally
+  pinned to polling — the inbox/direct distinction is downstream of a bus the
+  subscription never reaches);
+- the ~275–955 ms "unaccounted" budget is just the polling backoff, as expected.
+
+The `mode=cdc-active` label in the JSON is **misleading**: `detectMode()` checks
+`cdcAvailability.isActive()` at *snapshot time* (end of run, when CDC is up), not
+how the subscription was actually delivering. The subscription was plain-polling
+throughout regardless of that label.
+
+### The fix (delivered)
+
+[`CdcEventStore.pollEvents`](CdcEventStore.java) no longer terminally early-returns
+plain polling when availability is non-`ACTIVE` at subscribe time. Instead it returns
+the **adaptive live source seeded at the resume point** (`buildAdaptiveLiveSource` with
+`lastSeen = resume - 1`):
+
+```java
+if (!availability.isActive()) {
+    availability.fallbackUsed();                       // signal preserved
+    if (fallbackPollCounter != null) fallbackPollCounter.increment();
+    return buildAdaptiveLiveSource(aggregateType, fromInclusiveGlobalOrder - 1, ...);
+}
+```
+
+Why this shape (and not the heavier "backfill-then-bus on every cutover"):
+
+- **While non-`ACTIVE`, the adaptive source's fallback branch *is*
+  `eventStore.pollEvents(resume, ...)`** — no head snapshot, no backfill, no
+  `BackfillThenLiveOrdered` wrapper. So a subscription whose CDC never comes up (and the
+  re-delivery cadence after a poison reset) is byte-for-byte the old plain-polling
+  behaviour. This was the key constraint: don't perturb the never-`ACTIVE` path.
+- **On the `INACTIVE→ACTIVE` transition the source cuts over to the CDC bus**, debounced
+  by `activeCutbackDebounce` exactly like the already-shipping in-flight `FAILED→ACTIVE`
+  recovery cutover. The debounce lets polling drain to head before the switch to the
+  non-replaying multicast bus, so the cut-over carries **no new gap risk** beyond what
+  the recovery path already accepts. (A first attempt that wrapped the inactive path in
+  `backfill + BackfillThenLiveOrdered` was discarded — it added a gap-handoff nobody
+  needs here and, by re-delivering catch-up batches faster, perturbed the never-`ACTIVE`
+  timing; see the resume-point note below.)
+
+So a subscriber registered at startup now polls during warm-up (unchanged) and then
+transparently upgrades to bus push once CDC goes `ACTIVE`, instead of being pinned to
+polling for life.
+
+#### The poison-reset resume-point observation (and why it was a test-robustness fix)
+
+Routing the inactive path through the adaptive source surfaced two ITs
+(`CdcEventStoreSubscriptionParity_IT#batched_async_subscription_rewinds_after_poison_reset…`
+and `SubscriptionResetOnPoisonNotifierIT#resets_resume_point_in_db_immediately_after_poison…`).
+Investigation (per-100 ms sampling of the durable resume point) showed this was **not a
+correctness regression**:
+
+- A poison reset rewinds the durable resume point via a **synchronous** `saveResumePoint`
+  inside `overrideResumePoint` — so the DB holds the reset value the instant the reset
+  completes (crash-safe). Re-processing then re-advances it, and the periodic (1 s)
+  snapshot persists the higher, correct value shortly after.
+- The reset value is therefore a short-lived durable transient. Both the original and the
+  fixed code reach it; the original kept it observable for ~150–200 ms, the fix ~50–100 ms
+  (a snapshot-grid timing shift). Awaitility's default 100 ms `pollDelay` made the
+  *next* assertion land just after the window under the fix.
+
+The guarantee (synchronous durable rewind + correct re-delivery) holds in both. The fix
+was to make the assertions observe the synchronously-persisted reset value promptly via
+`pollDelay(Duration.ZERO)` instead of racing the snapshot — a test-robustness change, not
+a behavioural one. No change to the resume-point persistence path was needed.
+
+#### Tests
+
+- Unit: `CdcEventStoreAdaptiveLiveSourceTest#warmup_subscription_established_while_inactive_cuts_over_to_cdc_bus_when_active`
+  (subscribe `INACTIVE` → `active()` → delivered via the bus). The five existing
+  active-at-subscribe / recovery / dedup cases are unchanged and still pass.
+  `CdcEventStoreFallbackTest` updated for the new inactive delivery path.
+- IT: `CdcEventStoreSubscriptionParity_IT` (9), `SubscriptionResetOnPoisonNotifierIT` (3),
+  `CdcEventStoreFallbackIT` (2) all green; the full `cdc` package shows no new failures
+  introduced by this change.
+
+#### Perf-lab follow-up (done)
+
+[`BaselinePollingVsCdcScenario`](../../../../../../../../examples/essentials-performance-lab/src/main/java/dk/trustworks/essentials/examples/perflab/scenario/BaselinePollingVsCdcScenario.java)
+previously subscribed at the very top of `run()` — before the tailer connected — so the
+measured subscribers spent the whole window on the polling fallback, and `detectMode()`
+mislabelled the run `cdc-active` because it read `isActive()` at *snapshot* time. Both are
+fixed:
+
+- `awaitCdcActiveBeforeSubscribe()` blocks (bounded, 60 s) until `CdcAvailability` is
+  `ACTIVE` before subscribing on CDC legs, so the subscription is established directly on
+  the bus-push path. Non-CDC legs don't wait.
+- `detectMode(subscribedWhileCdcActive)` now reports the path the subscription actually
+  used (`cdc-active` only when it subscribed on the bus, else `cdc-fallback`).
+
+Empirical confirmation (smoke run, 10 Hz / 1 s window — indicative, not a benchmark):
+
+| Leg | p95 | mode |
+|---|---:|---|
+| polling | 152 ms | polling |
+| notify-polling | 116 ms | polling-notify |
+| cdc inbox | 159 ms | cdc-active |
+| **cdc direct** | **33 ms** | cdc-active |
+
+CDC direct now delivers true sub-100 ms push (~33 ms p95, ~4–5× below polling) instead of
+tracking the polling latency it showed before the fix — the headline P9 claim, validated
+end-to-end. (CDC inbox carries the extra dispatcher poll-and-republish hop, so it sits
+nearer polling at this rate; a longer idle-workload run is the place to characterise it.)
+
+### Priority
+
+Medium. Not blocking any open user issue, but the pre-fix behaviour was actively
+misleading: the docs sell CDC as the push-based sub-100 ms option, yet any subscriber that
+registered during application boot (the overwhelmingly common case) was silently pinned to
+polling for its whole life. Now fixed for real deployments.
 
 ---
 

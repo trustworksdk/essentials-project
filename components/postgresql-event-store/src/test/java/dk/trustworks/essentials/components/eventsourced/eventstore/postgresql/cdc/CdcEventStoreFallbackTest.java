@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
@@ -36,13 +37,22 @@ import static org.mockito.Mockito.*;
 
 class CdcEventStoreFallbackTest {
 
+    /**
+     * When CDC is not ACTIVE at subscribe time the subscription must still be delivered via
+     * delegate polling, and the fallback signal must be recorded. Since P9 the inactive path no
+     * longer terminally early-returns plain polling — it returns the adaptive live source seeded at
+     * the resume point, whose fallback branch IS {@code eventStore.pollEvents(resume, ...)} while
+     * availability stays non-ACTIVE (and would transparently cut over to the CDC bus if it became
+     * ACTIVE). Delivery timing while inactive is unchanged (no head snapshot, no backfill). This
+     * asserts the inactive-at-subscribe delivery contract still holds end-to-end.
+     */
     @Test
     void pollEvents_falls_back_to_delegate_when_cdc_inactive() {
         EventStore delegate = mock(EventStore.class);
         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
         EventStreamGapHandler<?> gapHandler = mock(EventStreamGapHandler.class);
 
-        var availability = new CdcAvailability();
+        var availability = new CdcAvailability(); // stays INACTIVE → fallback-to-polling path
         var cdcEventStore = new CdcEventStore(
                 delegate,
                 unitOfWorkFactory,
@@ -52,9 +62,14 @@ class CdcEventStoreFallbackTest {
                 availability
         );
 
-        var expected = Flux.just(mock(PersistedEvent.class));
+        // The adaptive source applies a `globalOrder > lastSeen` ordering filter and a tenant
+        // filter to the live (here: polling-fallback) events, so the event needs those fields.
+        var liveEvent = mock(PersistedEvent.class);
+        when(liveEvent.globalEventOrder()).thenReturn(GlobalEventOrder.of(1));
+        when(liveEvent.aggregateType()).thenReturn(AggregateType.of("orders"));
+        when(liveEvent.tenant()).thenReturn(Optional.empty());
         when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any()))
-                .thenReturn(expected);
+                .thenReturn(Flux.just(liveEvent));
 
         var result = cdcEventStore.pollEvents(
                 AggregateType.of("orders"),
@@ -66,10 +81,13 @@ class CdcEventStoreFallbackTest {
                 Optional.of((Function<String, EventStorePollingOptimizer>) name -> null)
         );
 
-        var first = result.blockFirst(Duration.ofSeconds(1));
+        var first = result.blockFirst(Duration.ofSeconds(2));
         assertThat(first).isNotNull();
+        assertThat(first.globalEventOrder()).isEqualTo(GlobalEventOrder.of(1));
 
-        verify(delegate, times(1)).pollEvents(any(), anyLong(), any(), any(), any(), any(), any());
+        // Delivery while inactive is served by the delegate poll (the adaptive source's fallback
+        // branch), and the fallback signal is recorded exactly once.
+        verify(delegate, atLeastOnce()).pollEvents(any(), anyLong(), any(), any(), any(), any(), any());
         assertThat(availability.getFallbackCount()).isEqualTo(1);
     }
 }

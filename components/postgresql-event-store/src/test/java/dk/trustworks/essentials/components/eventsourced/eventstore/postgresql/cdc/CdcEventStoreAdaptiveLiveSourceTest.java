@@ -127,6 +127,38 @@ class CdcEventStoreAdaptiveLiveSourceTest {
     }
 
     @Test
+    void warmup_subscription_established_while_inactive_cuts_over_to_cdc_bus_when_active() throws Exception {
+        // Regression for cdc-improvements.md P9. A subscription established while CDC is still
+        // warming up (INACTIVE at subscribe time — the common startup ordering) must NOT be pinned
+        // to polling for life: once availability becomes ACTIVE the adaptive source must cut over
+        // to the CDC bus. Before the fix, pollEvents terminally early-returned plain delegate
+        // polling for any inactive-at-subscribe subscription and never re-entered, so bus events
+        // never arrived.
+        Duration debounce = Duration.ofMillis(200);
+        var fx = fixture(debounce);
+
+        // Polling fallback is the live source while INACTIVE; keep it empty so nothing is delivered
+        // until the cut-over to the bus.
+        var pollingSink = Sinks.many().unicast().<PersistedEvent>onBackpressureBuffer();
+        stubPollingSource(fx, pollingSink.asFlux());
+
+        // Subscribe while availability is still INACTIVE (NOT calling active() first).
+        var received = subscribe(fx);
+
+        // CDC finishes warming up and becomes ACTIVE for the first time. Give the cut-over debounce
+        // time to fire (the warm-up ACTIVE transition is debounced like a recovery so polling can
+        // drain to head before switching to the non-replaying bus).
+        fx.availability.active("slot");
+        Thread.sleep(debounce.toMillis() + 200);
+
+        // Events published to the bus after the cut-over must now reach the subscriber.
+        fx.bus.publish(List.of(event(1), event(2), event(3)));
+
+        await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 3);
+        assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
     void cuts_back_to_cdc_after_debounce_with_sustained_active() throws Exception {
         Duration debounce = Duration.ofMillis(200);
         var fx = fixture(debounce);

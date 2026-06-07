@@ -32,23 +32,36 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.examples.perflab.EssentialsPerformanceLabProperties;
 import jakarta.annotation.PostConstruct;
+import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.SqlLogger;
+import org.jdbi.v3.core.statement.SqlStatements;
+import org.jdbi.v3.core.statement.StatementContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.sql.SQLException;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.concurrent.locks.LockSupport;
 
 @Component
 public class BaselinePollingVsCdcScenario implements LabScenario {
     private static final Logger log = LoggerFactory.getLogger(BaselinePollingVsCdcScenario.class);
 
     private static final AggregateType ORDERS = AggregateType.of("LabOrders");
+    /**
+     * The event-stream table the scenario reads/writes. The standard naming convention
+     * lowercases the aggregate-type name and appends {@code _events}, so this stays in
+     * sync with {@link #ORDERS}.
+     */
+    private static final String ORDERS_TABLE = ORDERS.toString().toLowerCase() + "_events";
 
     private final EventStore eventStore;
     private final ConfigurableEventStore<?> configurableEventStore;
@@ -56,19 +69,25 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
     private final Optional<CdcAvailability> cdcAvailability;
     private final ObjectMapper objectMapper;
+    private final Environment environment;
+    private final Jdbi jdbi;
 
     public BaselinePollingVsCdcScenario(EventStore eventStore,
                                         ConfigurableEventStore<?> configurableEventStore,
                                         EventStoreSubscriptionManager subscriptionManager,
                                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                         Optional<CdcAvailability> cdcAvailability,
-                                        ObjectMapper objectMapper) {
+                                        ObjectMapper objectMapper,
+                                        Environment environment,
+                                        Jdbi jdbi) {
         this.eventStore = eventStore;
         this.configurableEventStore = configurableEventStore;
         this.subscriptionManager = subscriptionManager;
         this.unitOfWorkFactory = unitOfWorkFactory;
         this.cdcAvailability = cdcAvailability;
         this.objectMapper = objectMapper;
+        this.environment = environment;
+        this.jdbi = jdbi;
     }
 
     @Override
@@ -101,6 +120,14 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
         var startFrom = currentHighWatermark().map(GlobalEventOrder::increment)
                                               .orElse(GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER);
 
+        // For CDC legs, wait for the WAL tailer to bring availability to ACTIVE before subscribing,
+        // so the subscription is established directly on the CDC bus (push) path. Subscribing while
+        // still INACTIVE would spend the warm-up + activeCutbackDebounce window on the polling
+        // fallback before cutting over (see cdc-improvements.md P9), contaminating the latency
+        // measurement with polling latency. Bounded wait; if CDC never activates we subscribe
+        // anyway and the run self-labels cdc-fallback.
+        boolean subscribedWhileCdcActive = awaitCdcActiveBeforeSubscribe();
+
         for (int i = 0; i < properties.getSubscriberCount(); i++) {
             var subscriberId = SubscriberId.of("lab-baseline-" + i + "-" + UUID.randomUUID());
             var subscription = subscriptionManager.subscribeToAggregateEventsAsynchronously(
@@ -117,21 +144,29 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
             waitForDeliveries(warmupProduced * properties.getSubscriberCount(), collector, TimeUnit.SECONDS.toMillis(10));
 
             collector.reset();
+            // Attach the event-store SELECT counter for the measurement window ONLY.
+            // We don't care about warmup or catchup queries — only steady-state poll rate.
+            // The counter wraps any existing SqlLogger so trace logging keeps working.
+            var queryCounter = EventStoreSelectCounter.installOn(jdbi, ORDERS_TABLE);
             var measurementStartedAtNanos = System.nanoTime();
             var measurementProduced = runProducerPhase(properties.getDuration(), properties, properties.getRandomSeed() + 10_000, collector, 1);
             var producerStoppedAtNanos = System.nanoTime();
 
             long expectedDeliveries = measurementProduced * properties.getSubscriberCount();
             var catchup = waitForDeliveries(expectedDeliveries, collector, Math.max(TimeUnit.SECONDS.toMillis(10), properties.getDuration().toMillis()));
+            // Snapshot the counter and restore the previous logger before building the
+            // snapshot so the JSON includes only measurement-window queries.
+            var dbLoad = queryCounter.snapshotAndUninstall();
 
-            var snapshot = collector.snapshot(detectMode(),
+            var snapshot = collector.snapshot(detectMode(subscribedWhileCdcActive),
                                               measurementProduced,
                                               expectedDeliveries,
                                               properties,
                                               measurementStartedAtNanos,
                                               producerStoppedAtNanos,
                                               catchup,
-                                              cdcAvailability.map(CdcAvailability::snapshot));
+                                              cdcAvailability.map(CdcAvailability::snapshot),
+                                              dbLoad);
             var json = toJson(snapshot);
 
             log.info("Baseline scenario metrics: {}", json);
@@ -151,10 +186,53 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
         }
     }
 
-    private String detectMode() {
+    private String detectMode(boolean subscribedWhileCdcActive) {
         boolean cdcWrapper = eventStore.getClass().getSimpleName().contains("CdcEventStore");
-        if (!cdcWrapper) return "polling";
-        return cdcAvailability.map(CdcAvailability::isActive).orElse(false) ? "cdc-active" : "cdc-fallback";
+        if (cdcWrapper) {
+            // Report the path the subscription actually used, NOT the instantaneous availability.
+            // A subscription established while CDC was ACTIVE delivers via the CDC bus (push); one
+            // established while INACTIVE runs on the polling fallback (until a later cut-over). The
+            // old check read isActive() at snapshot time — which is ACTIVE by end-of-run even when
+            // the subscription spent the whole measurement window polling (the P9 mislabel).
+            return subscribedWhileCdcActive ? "cdc-active" : "cdc-fallback";
+        }
+        // Pure polling subscriber path. Differentiate S1 notify-driven polling so child
+        // runs of the comparison scenario self-label correctly without the parent having
+        // to track which flag it set.
+        boolean notifyPolling = Boolean.parseBoolean(
+                environment.getProperty("essentials.eventstore.subscription-manager.notify-polling.enabled",
+                                        "false"));
+        return notifyPolling ? "polling-notify" : "polling";
+    }
+
+    /**
+     * For CDC legs, block until {@link CdcAvailability} reports ACTIVE (the WAL tailer has
+     * connected and the CDC bus is being fed) so subscriptions are established on the push path
+     * rather than the polling fallback. Returns {@code true} if ACTIVE was observed; {@code false}
+     * for non-CDC legs (nothing to wait for) or if CDC did not activate within the bound (the
+     * caller then subscribes on the polling fallback and the run self-labels {@code cdc-fallback}).
+     */
+    private boolean awaitCdcActiveBeforeSubscribe() {
+        if (cdcAvailability.isEmpty()) {
+            return false; // non-CDC leg — nothing to wait for
+        }
+        var availability  = cdcAvailability.get();
+        var deadlineNanos = System.nanoTime() + Duration.ofSeconds(60).toNanos();
+        while (System.nanoTime() < deadlineNanos) {
+            if (availability.isActive()) {
+                log.info("CDC availability is ACTIVE — establishing subscriptions on the CDC bus (push) path");
+                return true;
+            }
+            try {
+                Thread.sleep(100L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        log.warn("CDC availability did not reach ACTIVE within 60s — establishing subscriptions on the polling "
+                 + "fallback path; latency for this run reflects polling, not CDC push");
+        return false;
     }
 
     private Optional<GlobalEventOrder> currentHighWatermark() {
@@ -175,6 +253,17 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
         var appendRetriedConflicts = new AtomicLong();
         long deadlineNanos = System.nanoTime() + phaseDuration.toNanos();
 
+        // Producer-rate throttle. producerRateHz is the GLOBAL target across all threads;
+        // dividing by thread count gives each thread its own pacing interval. 0 = unthrottled.
+        // Necessary for "quiet workload" measurements where we need the subscriber to be idle
+        // most of the time so the wake-up mechanism (jitter vs NOTIFY vs CDC push) becomes
+        // the dominant latency contributor instead of subscriber backpressure. Accepts
+        // fractional Hz (e.g. 0.1 = 1 event/10s) — see EssentialsPerformanceLabProperties.
+        double producerRateHz        = Math.max(0.0d, properties.getProducerRateHz());
+        long   perThreadIntervalNanos = producerRateHz > 0
+                ? (long) (1_000_000_000.0d * properties.getProducerThreads() / producerRateHz)
+                : 0L;
+
         var executor = Executors.newFixedThreadPool(properties.getProducerThreads(), runnable -> {
             var thread = new Thread(runnable, "lab-producer-" + phaseIndex);
             thread.setDaemon(true);
@@ -189,7 +278,21 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
                 if (producerIndex >= aggregateCardinality) {
                     return;
                 }
+                // Stagger thread start across the per-thread interval so all N threads
+                // don't fire on the same tick — keeps the inter-arrival distribution
+                // closer to the configured rate at low Hz.
+                long nextAppendAtNanos = System.nanoTime()
+                                         + (perThreadIntervalNanos > 0
+                                                    ? perThreadIntervalNanos * producerIndex / properties.getProducerThreads()
+                                                    : 0L);
                 while (System.nanoTime() < deadlineNanos) {
+                    if (perThreadIntervalNanos > 0) {
+                        long waitNanos = nextAppendAtNanos - System.nanoTime();
+                        if (waitNanos > 0) {
+                            LockSupport.parkNanos(waitNanos);
+                        }
+                        nextAppendAtNanos += perThreadIntervalNanos;
+                    }
                     var aggregateId = "order-" + nextAggregateIndex(random,
                                                                     producerIndex,
                                                                     properties.getProducerThreads(),
@@ -357,7 +460,8 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
                                  long measurementStartedAtNanos,
                                  long producerStoppedAtNanos,
                                  DeliveryCatchup catchup,
-                                 Optional<CdcAvailability.Snapshot> cdcSnapshot) {
+                                 Optional<CdcAvailability.Snapshot> cdcSnapshot,
+                                 EventStoreSelectCounter.Snapshot dbLoad) {
             long[] sortedLatencies;
             synchronized (latenciesNanos) {
                 sortedLatencies = latenciesNanos.stream().mapToLong(Long::longValue).toArray();
@@ -374,6 +478,14 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
             var timeToFirstDeliveryMs = firstDelivery == Long.MAX_VALUE ? -1L : Math.max(0L, TimeUnit.NANOSECONDS.toMillis(firstDelivery - measurementStartedAtNanos));
             var producerWindowMs = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(Math.max(0L, producerStoppedAtNanos - measurementStartedAtNanos)));
             var catchupMs = catchup.caughtUp() ? catchup.elapsedMs() : -1L;
+            // Use the actual measurement window (producer start → catchup end) for the
+            // DB-load per-second metric so the rate isn't skewed by a long quiet tail
+            // or by warmup leaking in.
+            var dbLoadWindowMillis = Math.max(1L, producerWindowMs + Math.max(0L, catchupMs));
+            var selectsPerSecond = dbLoad.selectCount() * 1_000.0d / dbLoadWindowMillis;
+            var selectsPerSecondPerSubscriber = properties.getSubscriberCount() == 0
+                    ? selectsPerSecond
+                    : selectsPerSecond / properties.getSubscriberCount();
 
             return new BaselineMetrics(
                     mode,
@@ -402,6 +514,12 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
                     catchup.caughtUp(),
                     finalLagEvents,
                     completionPct,
+                    properties.getProducerRateHz(),
+                    ORDERS_TABLE,
+                    dbLoad.selectCount(),
+                    selectsPerSecond,
+                    selectsPerSecondPerSubscriber,
+                    dbLoadWindowMillis,
                     cdcSnapshot.orElse(null)
             );
         }
@@ -454,6 +572,18 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
                                    boolean caughtUpWithinTimeout,
                                    long deliveryLagEventsEnd,
                                    double deliveryCompletionPct,
+                                   /** Configured target producer rate, events/sec (0 = unthrottled, fractional allowed). Pinned in JSON so a regression that drops the throttle is visible. */
+                                   double producerTargetRateHz,
+                                   /** Table name the {@link #eventStoreSelectsDuringMeasurement} counter was filtered to. */
+                                   String eventStoreTable,
+                                   /** Total SELECTs against {@link #eventStoreTable} during the measurement window — the proxy for subscription polling load. */
+                                   long eventStoreSelectsDuringMeasurement,
+                                   /** {@link #eventStoreSelectsDuringMeasurement} / {@link #eventStoreSelectsWindowMs}. The headline DB-load metric S1 reduces. */
+                                   double eventStoreSelectsPerSecond,
+                                   /** {@link #eventStoreSelectsPerSecond} divided by configured subscriber count — comparable across subscriberCount values. */
+                                   double eventStoreSelectsPerSecondPerSubscriber,
+                                   /** Window the SELECT counter was attached for (producer phase + catchup). */
+                                   long eventStoreSelectsWindowMs,
                                    CdcAvailability.Snapshot cdc) {
     }
 
@@ -463,5 +593,92 @@ public class BaselinePollingVsCdcScenario implements LabScenario {
     private record LabOrderPlaced(String aggregateId,
                                   long sequence,
                                   long appendedAtNanos) {
+    }
+
+    /**
+     * Jdbi {@link SqlLogger} that counts {@code SELECT} statements referencing a given
+     * event-stream table — the proxy for "how often are subscribers polling the event
+     * store" and the headline metric the S1 NOTIFY-driven wake-up feature is designed
+     * to reduce on quiet systems.
+     * <p>
+     * Wraps (rather than replaces) the previously-installed {@link SqlLogger} so the
+     * framework's {@code SqlExecutionTimeLogger} trace logging keeps working while the
+     * counter is attached. {@link #snapshotAndUninstall()} restores the previous logger
+     * to keep the side-effect contained to the measurement window.
+     * <p>
+     * Filter rationale: we want subscription-poll selects only, not appends. So we
+     * gate on (a) the rendered SQL contains the table name (case-insensitive) and
+     * (b) the statement is a {@code SELECT}. INSERTs and UPDATEs into the same table
+     * (writes by producers, framework metadata updates) are excluded.
+     */
+    static final class EventStoreSelectCounter implements SqlLogger {
+        private final Jdbi      jdbi;
+        private final SqlLogger previous;
+        private final String    tableNameLower;
+        private final AtomicLong selectCount = new AtomicLong();
+
+        private EventStoreSelectCounter(Jdbi jdbi, SqlLogger previous, String tableName) {
+            this.jdbi = jdbi;
+            this.previous = previous;
+            this.tableNameLower = tableName.toLowerCase(Locale.ROOT);
+        }
+
+        /**
+         * Install a fresh counter on {@code jdbi}, wrapping whatever {@link SqlLogger} is
+         * currently configured. The returned counter MUST be uninstalled via
+         * {@link #snapshotAndUninstall()} to restore the prior logger — leaking the
+         * counter would slowly grow a chain of wrappers across runs.
+         */
+        static EventStoreSelectCounter installOn(Jdbi jdbi, String tableName) {
+            var existing = jdbi.getConfig(SqlStatements.class).getSqlLogger();
+            var counter  = new EventStoreSelectCounter(jdbi, existing, tableName);
+            jdbi.setSqlLogger(counter);
+            return counter;
+        }
+
+        @Override
+        public void logBeforeExecution(StatementContext context) {
+            if (previous != null) previous.logBeforeExecution(context);
+        }
+
+        @Override
+        public void logAfterExecution(StatementContext context) {
+            try {
+                var sql = context.getRenderedSql();
+                if (sql != null) {
+                    var lower = sql.toLowerCase(Locale.ROOT);
+                    if (lower.contains(tableNameLower)) {
+                        // Use indexOf+regionMatches-style check rather than startsWith
+                        // because Jdbi sometimes prepends whitespace/comments.
+                        var trimmed = lower.stripLeading();
+                        if (trimmed.startsWith("select")) {
+                            selectCount.incrementAndGet();
+                        }
+                    }
+                }
+            } finally {
+                if (previous != null) previous.logAfterExecution(context);
+            }
+        }
+
+        @Override
+        public void logException(StatementContext context, SQLException ex) {
+            if (previous != null) previous.logException(context, ex);
+        }
+
+        /**
+         * Snapshot the count and restore the previous {@link SqlLogger} on the Jdbi
+         * instance. Safe to call multiple times — subsequent calls return the same
+         * count and the restore is a no-op (the previous-logger reference is captured
+         * at install time).
+         */
+        Snapshot snapshotAndUninstall() {
+            jdbi.setSqlLogger(previous);
+            return new Snapshot(selectCount.get(), tableNameLower);
+        }
+
+        record Snapshot(long selectCount, String tableName) {
+            static final Snapshot ZERO = new Snapshot(0L, "n/a");
+        }
     }
 }

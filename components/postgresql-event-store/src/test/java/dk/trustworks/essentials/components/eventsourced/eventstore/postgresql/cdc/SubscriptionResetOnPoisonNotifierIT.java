@@ -260,7 +260,12 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
         assertThat(resetLatch.await(10, TimeUnit.SECONDS)).isTrue();
         assertThat(resets).contains(2L);
 
+        // pollDelay(ZERO): the reset persists the rewound resume point synchronously, so the DB
+        // holds 2 the instant the reset completes; re-processing then re-advances it and the 1s
+        // snapshot persists the higher value. Observe from t=0 so the synchronously-persisted reset
+        // value is caught deterministically regardless of re-delivery speed.
         await()
+                  .pollDelay(Duration.ZERO)
                   .atMost(Duration.ofSeconds(5))
                   .pollInterval(Duration.ofMillis(50))
                   .untilAsserted(() -> {
@@ -461,8 +466,13 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
 
         // --- Then ---------------------------------------------------------------
 
-        // 1) Durable resume point must be persisted immediately to 5
+        // 1) Durable resume point must be persisted immediately to 5.
+        // pollDelay(ZERO): the reset persists the rewound resume point synchronously, so the DB
+        // holds 5 the instant the reset completes; re-processing then re-advances it and the 1s
+        // snapshot persists the higher value. Observe from t=0 so the synchronously-persisted reset
+        // value is caught deterministically regardless of re-delivery speed.
         Awaitility.await()
+                  .pollDelay(Duration.ZERO)
                   .atMost(Duration.ofSeconds(5))
                   .pollInterval(Duration.ofMillis(50))
                   .untilAsserted(() -> {

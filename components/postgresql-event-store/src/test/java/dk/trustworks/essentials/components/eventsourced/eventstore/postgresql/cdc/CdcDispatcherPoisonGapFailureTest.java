@@ -65,7 +65,7 @@ class CdcDispatcherPoisonGapFailureTest {
                 "0/ABCDEF",
                 "{\"not\":\"parseable\"}".getBytes()
         );
-        when(inbox.fetchNextBatch(eq(SLOT), anyInt()))
+        when(inbox.fetchNextBatch(eq(SLOT), anyInt(), anyInt()))
                 .thenReturn(List.of(row))
                 .thenReturn(List.of());
 
@@ -126,7 +126,7 @@ class CdcDispatcherPoisonGapFailureTest {
         var plugin = mock(LogicalDecodingPlugin.class);
 
         // First tick: fetch blows up with a transient DB-like error. Second tick: normal empty fetch.
-        when(inbox.fetchNextBatch(eq(SLOT), anyInt()))
+        when(inbox.fetchNextBatch(eq(SLOT), anyInt(), anyInt()))
                 .thenThrow(new RuntimeException("simulated DB failure"))
                 .thenReturn(List.of());
 
@@ -175,7 +175,7 @@ class CdcDispatcherPoisonGapFailureTest {
 
         var startingInactive = new CdcAvailability(); // INACTIVE by default
 
-        when(inbox.fetchNextBatch(eq(SLOT), anyInt())).thenReturn(List.of());
+        when(inbox.fetchNextBatch(eq(SLOT), anyInt(), anyInt())).thenReturn(List.of());
 
         var dispatcher = new CdcDispatcher(
                 inbox,
@@ -195,7 +195,7 @@ class CdcDispatcherPoisonGapFailureTest {
         // fault or increment any failure counter.
         dispatcher.tick();
         dispatcher.tick();
-        verify(inbox, never()).fetchNextBatch(any(), anyInt());
+        verify(inbox, never()).fetchNextBatch(any(), anyInt(), anyInt());
         assertThat(dispatcher.getStatus().ticks()).isZero();
         assertThat(dispatcher.getStatus().tickFailures()).isZero();
 
@@ -204,7 +204,7 @@ class CdcDispatcherPoisonGapFailureTest {
 
         // Next tick must now attempt to fetch the inbox batch, proving the dispatcher self-heals.
         dispatcher.tick();
-        verify(inbox, atLeastOnce()).fetchNextBatch(eq(SLOT), anyInt());
+        verify(inbox, atLeastOnce()).fetchNextBatch(eq(SLOT), anyInt(), anyInt());
         assertThat(dispatcher.getStatus().ticks()).isEqualTo(1L);
         assertThat(dispatcher.getStatus().tickFailures()).isZero();
     }

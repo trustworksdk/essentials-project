@@ -188,13 +188,14 @@ public class CdcEventStore implements EventStore {
         if (!availability.isActive()) {
             availability.fallbackUsed();
             if (fallbackPollCounter != null) fallbackPollCounter.increment();
-            return eventStore.pollEvents(aggregateType,
-                                         fromInclusiveGlobalOrder,
-                                         loadEventsByGlobalOrderBatchSize,
-                                         pollingInterval,
-                                         onlyIncludeEventIfItBelongsToTenant,
-                                         subscriptionId,
-                                         eventStorePollingOptimizerFactory);
+            return buildAdaptiveLiveSource(
+                    aggregateType,
+                    fromInclusiveGlobalOrder - 1,
+                    loadEventsByGlobalOrderBatchSize.orElse(backfillBatchSize),
+                    onlyIncludeEventIfItBelongsToTenant,
+                    pollingInterval,
+                    subscriptionId,
+                    eventStorePollingOptimizerFactory);
         }
 
         var resume = GlobalEventOrder.of(fromInclusiveGlobalOrder);
@@ -270,21 +271,7 @@ public class CdcEventStore implements EventStore {
                                                         ) {
         AtomicLong lastSeen = new AtomicLong(headInclusive);
 
-        // Raw state stream replays the current availability on subscribe and emits every
-        // subsequent transition. distinctUntilChanged strips duplicates coming from the replay
-        // sink or back-to-back redundant emissions.
         Flux<CdcAvailability.State> rawStates = availability.stateChanges().distinctUntilChanged();
-
-        // Debounce applies only to ACTIVE cutbacks _after_ the initial subscribe — the first
-        // emission is always the current availability replayed on subscribe and reflects steady
-        // state, not a transition, so debouncing it would delay the very first source selection
-        // by activeCutbackDebounce (default 60s). For a subscriber that joins while CDC is
-        // already healthy, that is a 60-second hole in delivery — observed as the
-        // "events published to cdcBus never arrive at subscribers" failure mode in the 2-node
-        // ITs. Subsequent ACTIVE emissions (i.e. genuine FAILED → ACTIVE recoveries) still go
-        // through the debounce so brief flaps don't thrash the source. switchMap cancels any
-        // pending ACTIVE-debounce mono if a new state arrives, so a quick ACTIVE → FAILED flip
-        // during the debounce window never completes the cutback.
         var firstEmission = new AtomicBoolean(true);
         Flux<CdcAvailability.State> gatedStates = rawStates
                 .switchMap(state -> {
@@ -309,10 +296,7 @@ public class CdcEventStore implements EventStore {
                                          if (liveEventsCounter != null) liveEventsCounter.increment();
                                      });
                     }
-                    // Polling fallback — classic event-store pollEvents. We do not call
-                    // availability.fallbackUsed() here because that counter is semantically
-                    // "new subscription established while CDC unavailable"; mid-stream cut-overs
-                    // are a different signal tracked via liveSourceSwitchCounter.
+
                     log.debug("[{}] Adaptive live source switching to polling (resumeFrom={}, state={})",
                               aggregateType, resumeFrom, state);
                     return eventStore.pollEvents(aggregateType,

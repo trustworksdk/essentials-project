@@ -333,8 +333,15 @@ class CdcEventStoreSubscriptionParity_IT extends AbstractLogicalReplicationPostg
         var notifier = new SubscriptionResetOnPoisonNotifier(eventStoreSubscriptionManager, durableSubscriptionRepository);
         notifier.onPoison(ORDERS, List.of(GlobalEventOrder.of(5L)), "it-poison-batched");
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(resets).contains(5L));
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+        // pollDelay(ZERO): the poison reset rewinds the durable resume point via a *synchronous*
+        // saveResumePoint inside overrideResumePoint, so the DB holds the reset value the instant
+        // the reset completes. Re-processing then re-advances the resume point, and the periodic
+        // (1s) snapshot persists that higher value shortly after. We must therefore observe the
+        // rewind promptly — awaitility's default 100ms pollDelay can miss the window when
+        // re-delivery is fast (e.g. the CDC-backed subscription's adaptive source). Checking from
+        // t=0 catches the synchronously-persisted reset value deterministically.
+        await().pollDelay(Duration.ZERO).atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(resets).contains(5L));
+        await().pollDelay(Duration.ZERO).atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             var resume = durableSubscriptionRepository.getResumePoint(subscriberId, ORDERS).orElseThrow().getResumeFromAndIncluding().longValue();
             assertThat(resume).isLessThanOrEqualTo(5L);
         });
