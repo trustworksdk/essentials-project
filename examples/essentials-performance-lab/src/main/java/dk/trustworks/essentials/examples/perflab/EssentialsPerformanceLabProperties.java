@@ -44,15 +44,20 @@ public class EssentialsPerformanceLabProperties {
     private long subscriberHandlerDelayMs = 0;
     /**
      * Target aggregate production rate across all producer threads, in events per second.
-     * {@code 0} (default) means unthrottled — each producer appends as fast as the event store
+     * {@code 0.0} (default) means unthrottled — each producer appends as fast as the event store
      * allows.
      * <p>
      * Primarily used by the {@code backpressure} scenario: with a slow subscriber, an unthrottled
      * producer accumulates a backlog that takes orders of magnitude longer to drain than the
      * measurement window. Setting a rate proportional to the subscriber's drain capacity
      * (e.g. {@code 2 × 1000 / handlerDelayMs}) keeps the pressure real but bounded.
+     * <p>
+     * Fractional values are supported so truly-idle workloads can be expressed precisely:
+     * {@code 0.1} = 1 event every 10 seconds, {@code 0.0167} ≈ 1 event/minute. This matters
+     * for the S1 NOTIFY-driven wake-up measurement, where the design point is workloads with
+     * inter-arrival ≫ maxDelay — impossible to express with integer Hz.
      */
-    private int producerRateHz = 0;
+    private double producerRateHz = 0.0d;
 
     /**
      * Cadence at which {@code SlotLagBoundedScenario} samples {@code pg_replication_slots}
@@ -185,11 +190,11 @@ public class EssentialsPerformanceLabProperties {
         this.subscriberHandlerDelayMs = subscriberHandlerDelayMs;
     }
 
-    public int getProducerRateHz() {
+    public double getProducerRateHz() {
         return producerRateHz;
     }
 
-    public void setProducerRateHz(int producerRateHz) {
+    public void setProducerRateHz(double producerRateHz) {
         this.producerRateHz = producerRateHz;
     }
 

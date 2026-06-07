@@ -39,6 +39,10 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "essentials.lab.subscriber-count=1",
                 "essentials.lab.aggregate-cardinality=10",
                 "essentials.lab.random-seed=7",
+                // Throttle producer so the smoke run also exercises the quiet-workload
+                // path. 10 Hz over 1 s = ~10 events per leg; enough to verify the
+                // counter advances, low enough to leave subscribers idle most of the time.
+                "essentials.lab.producer-rate-hz=10",
                 "essentials.eventstore.cdc.enabled=false",
                 "essentials.lab.metrics-output-file=target/perf-lab-smoke/baseline-compare.json"
         })
@@ -70,12 +74,47 @@ class BaselineComparisonScenarioSmokeIT {
         assertThat(output).exists();
 
         var json = objectMapper.readTree(Files.readString(output));
+
+        // All four legs present.
         assertThat(json.has("polling")).isTrue();
-        assertThat(json.has("cdc")).isTrue();
+        assertThat(json.has("notifyPolling")).isTrue();
+        assertThat(json.has("cdc")).isTrue();        // backward-compat alias for cdcInbox
         assertThat(json.has("cdcInbox")).isTrue();
         assertThat(json.has("cdcDirect")).isTrue();
-        assertThat(json.has("delta")).isTrue();
+
+        // Deltas against polling for every non-baseline leg.
+        assertThat(json.has("delta")).isTrue();      // backward-compat alias for deltaInbox
+        assertThat(json.has("deltaNotifyPolling")).isTrue();
         assertThat(json.has("deltaInbox")).isTrue();
         assertThat(json.has("deltaDirect")).isTrue();
+
+        // The notify-polling leg should self-label as 'polling-notify' (proves the wiring
+        // actually flipped — a regression in the autoconfig would leave mode='polling' here
+        // and quietly produce identical numbers to the polling baseline).
+        assertThat(json.get("notifyPolling").get("mode").asText()).isEqualTo("polling-notify");
+        // The plain-polling leg should self-label as 'polling' (no S1 wake-up active).
+        assertThat(json.get("polling").get("mode").asText()).isEqualTo("polling");
+
+        // Producer-rate throttle is round-tripped from parent → child → JSON. Catches
+        // regressions where the comparison scenario silently drops the new property.
+        // producerRateHz is double-typed (fractional Hz supported); the comparison value
+        // is the configured 10.0.
+        assertThat(json.get("polling").get("producerTargetRateHz").asDouble()).isEqualTo(10.0d);
+        assertThat(json.get("notifyPolling").get("producerTargetRateHz").asDouble()).isEqualTo(10.0d);
+
+        // DB-load counter is wired and producing non-negative values. Don't assert
+        // specific counts — even at 10 Hz over 1s the polling subscriber may or may not
+        // have completed a poll cycle, depending on JVM warmup. We just need to know the
+        // counter advanced at all on the polling leg (where polls definitely happen) and
+        // that the field exists on every leg.
+        assertThat(json.get("polling").get("eventStoreSelectsDuringMeasurement").asLong()).isGreaterThanOrEqualTo(0L);
+        assertThat(json.get("polling").get("eventStoreSelectsPerSecond").asDouble()).isGreaterThanOrEqualTo(0.0d);
+        assertThat(json.get("polling").get("eventStoreSelectsPerSecondPerSubscriber").asDouble()).isGreaterThanOrEqualTo(0.0d);
+        assertThat(json.get("polling").get("eventStoreTable").asText()).isEqualTo("laborders_events");
+        assertThat(json.get("notifyPolling").has("eventStoreSelectsDuringMeasurement")).isTrue();
+
+        // Deltas include the new DB-load diffs.
+        assertThat(json.get("deltaNotifyPolling").has("eventStoreSelectsPerSecondDiff")).isTrue();
+        assertThat(json.get("deltaNotifyPolling").has("eventStoreSelectsPerSecondPerSubscriberDiff")).isTrue();
     }
 }

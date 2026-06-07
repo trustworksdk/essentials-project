@@ -316,11 +316,13 @@ public class SlotLagBoundedScenario implements LabScenario {
         long deadlineNanos  = System.nanoTime() + phaseDuration.toNanos();
 
         // Throttle to producerRateHz (per-thread share) when set; unthrottled means each thread
-        // appends as fast as the event store allows.
-        long perThreadRateHz = properties.getProducerRateHz() <= 0
-                               ? 0L
-                               : Math.max(1L, properties.getProducerRateHz() / Math.max(1, properties.getProducerThreads()));
-        long perThreadIntervalNanos = perThreadRateHz <= 0L ? 0L : TimeUnit.SECONDS.toNanos(1) / perThreadRateHz;
+        // appends as fast as the event store allows. producerRateHz is fractional-Hz capable
+        // (e.g. 0.1 = 1 event/10s); compute the per-thread interval in nanoseconds directly
+        // from the double to preserve sub-Hz precision rather than rounding to integer Hz first.
+        double producerRateHz       = Math.max(0.0d, properties.getProducerRateHz());
+        long   perThreadIntervalNanos = producerRateHz <= 0.0d
+                ? 0L
+                : (long) (1_000_000_000.0d * Math.max(1, properties.getProducerThreads()) / producerRateHz);
 
         var executor = Executors.newFixedThreadPool(properties.getProducerThreads(), runnable -> {
             var thread = new Thread(runnable, "lab-slot-lag-producer");

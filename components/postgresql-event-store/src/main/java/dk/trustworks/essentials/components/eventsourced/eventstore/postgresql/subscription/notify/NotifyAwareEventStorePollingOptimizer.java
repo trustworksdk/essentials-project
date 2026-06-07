@@ -101,7 +101,7 @@ public final class NotifyAwareEventStorePollingOptimizer implements EventStorePo
                              (long) Math.ceil(currentDelayMs * settings.backoffMultiplier()));
         currentDelayMs = Math.min(maxDelayMs, next);
         if (log.isTraceEnabled()) {
-            log.trace("Table='{}' no-events poll → delay ramped to {} ms (cap {} ms)",
+            log.trace("Table='{}' no-events poll → delay ramped to '{}' ms (cap '{}' ms)",
                       tableName, currentDelayMs, maxDelayMs);
         }
     }
@@ -115,7 +115,7 @@ public final class NotifyAwareEventStorePollingOptimizer implements EventStorePo
         // baseline and wakes us up.
         lastSeenEpoch = epochSource.currentEpoch(tableName);
         if (log.isTraceEnabled()) {
-            log.trace("Table='{}' events-returned poll → delay reset to {} ms; epoch baseline now {}",
+            log.trace("Table='{}' events-returned poll → delay reset to '{}' ms; epoch baseline now '{}'",
                       tableName, currentDelayMs, lastSeenEpoch);
         }
     }

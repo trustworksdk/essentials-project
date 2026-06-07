@@ -145,12 +145,12 @@ public class BackpressureScenario implements LabScenario {
 
     @Override
     public void run(EssentialsPerformanceLabProperties properties) throws Exception {
-        long handlerDelayMs = Math.max(0L, properties.getSubscriberHandlerDelayMs());
-        int  producerRateHz = Math.max(0, properties.getProducerRateHz());
+        long   handlerDelayMs = Math.max(0L, properties.getSubscriberHandlerDelayMs());
+        double producerRateHz = Math.max(0.0d, properties.getProducerRateHz());
         if (handlerDelayMs == 0) {
             log.warn("[backpressure] essentials.lab.subscriber-handler-delay-ms is 0 — this run won't exercise any backpressure. Set a non-zero value (e.g. 50) to simulate a slow subscriber.");
         }
-        if (handlerDelayMs > 0 && producerRateHz == 0) {
+        if (handlerDelayMs > 0 && producerRateHz == 0.0d) {
             log.warn("[backpressure] essentials.lab.producer-rate-hz is 0 (unthrottled) with a slow subscriber (delay={}ms). "
                              + "The producer will outpace the subscriber and accumulate a backlog that may take far longer than the measurement window to drain. "
                              + "For a drainable matrix case, try producerRateHz ≈ 2 × 1000 / handlerDelayMs (= {} eps here).",
@@ -410,9 +410,9 @@ public class BackpressureScenario implements LabScenario {
         var appendRetriedConflicts = new AtomicLong();
         long deadlineNanos = System.nanoTime() + phaseDuration.toNanos();
 
-        int  producerRateHz         = Math.max(0, properties.getProducerRateHz());
-        long perThreadIntervalNanos = producerRateHz > 0
-                ? 1_000_000_000L * properties.getProducerThreads() / producerRateHz
+        double producerRateHz         = Math.max(0.0d, properties.getProducerRateHz());
+        long   perThreadIntervalNanos = producerRateHz > 0
+                ? (long) (1_000_000_000.0d * properties.getProducerThreads() / producerRateHz)
                 : 0L;
 
         var executor = Executors.newFixedThreadPool(properties.getProducerThreads(), runnable -> {
@@ -670,7 +670,7 @@ public class BackpressureScenario implements LabScenario {
 
         BackpressureMetrics snapshot(String mode,
                                      long handlerDelayMs,
-                                     int producerRateHz,
+                                     double producerRateHz,
                                      long catchupBudgetMs,
                                      int backpressureBufferSize,
                                      long produced,
@@ -747,7 +747,7 @@ public class BackpressureScenario implements LabScenario {
     private record BackpressureMetrics(String mode,
                                        String capturedAt,
                                        long handlerDelayMs,
-                                       int producerRateHz,
+                                       double producerRateHz,
                                        long catchupBudgetMs,
                                        int backpressureBufferSize,
                                        long producedEvents,

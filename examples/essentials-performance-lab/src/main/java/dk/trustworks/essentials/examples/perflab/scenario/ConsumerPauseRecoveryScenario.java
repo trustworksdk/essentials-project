@@ -303,10 +303,10 @@ public class ConsumerPauseRecoveryScenario implements LabScenario {
      * two scenarios produce comparable WAL volumes when run with the same knobs.
      */
     private Thread startProducer(EssentialsPerformanceLabProperties properties, long totalDurationMs) {
-        long perThreadRateHz = properties.getProducerRateHz() <= 0
-                               ? 0L
-                               : Math.max(1L, properties.getProducerRateHz() / Math.max(1, properties.getProducerThreads()));
-        long perThreadIntervalNanos = perThreadRateHz <= 0L ? 0L : TimeUnit.SECONDS.toNanos(1) / perThreadRateHz;
+        double producerRateHz       = Math.max(0.0d, properties.getProducerRateHz());
+        long   perThreadIntervalNanos = producerRateHz <= 0.0d
+                ? 0L
+                : (long) (1_000_000_000.0d * Math.max(1, properties.getProducerThreads()) / producerRateHz);
 
         var thread = new Thread(() -> {
             var random       = new Random(properties.getRandomSeed());
