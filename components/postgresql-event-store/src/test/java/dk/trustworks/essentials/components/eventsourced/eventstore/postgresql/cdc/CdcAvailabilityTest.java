@@ -26,16 +26,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CdcAvailabilityTest {
 
     @Test
-    void failed_increments_generic_and_reason_tagged_failure_counters() {
+    void failed_increments_reason_tagged_failure_counter() {
         var meterRegistry = new SimpleMeterRegistry();
         var availability = new CdcAvailability(Optional.of(meterRegistry));
 
         availability.failed("slot_a", "wal2json missing");
 
         assertThat(availability.getState()).isEqualTo(CdcAvailability.State.FAILED);
-        assertThat(meterRegistry.counter("essentials.cdc.start_failures_total").count()).isEqualTo(1.0);
+        // The start-failure counter is always reason-tagged (a "none" baseline series is registered
+        // at startup) so a single Prometheus-compatible meter name carries every failure reason.
         assertThat(meterRegistry.counter("essentials.cdc.start_failures_total", "reason", "wal2json_missing").count())
                 .isEqualTo(1.0);
+        assertThat(meterRegistry.counter("essentials.cdc.start_failures_total", "reason", "none").count())
+                .isEqualTo(0.0);
     }
 
     @Test

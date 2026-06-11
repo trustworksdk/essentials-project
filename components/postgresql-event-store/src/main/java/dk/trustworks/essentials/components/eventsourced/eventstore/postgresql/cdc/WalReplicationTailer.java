@@ -739,17 +739,6 @@ public class WalReplicationTailer implements Lifecycle {
         }
     }
 
-    /**
-     * Delegate to {@link LogicalDecodingPlugin#prepare(Handle, Supplier)} on a control-plane
-     * connection. Plugins use this hook to bootstrap server-side state they need (pgoutput,
-     * for instance, optionally creates and maintains its publication here). Default plugin
-     * behaviour is a no-op; exceptions inside the plugin should be caught and logged by the
-     * plugin — we don't double-wrap here.
-     */
-    private void preparePlugin() {
-        unitOfWorkFactory.usingUnitOfWork(uow -> logicalDecodingPlugin.prepare(uow.handle(), eventStreamTableNamesSupplier));
-    }
-
     private void ensureReplicationSlot() {
         boolean performingRecreate = recreateSlotOnStart && firstStreamAttempt.compareAndSet(true, false);
 

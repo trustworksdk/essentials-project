@@ -31,7 +31,8 @@ import reactor.test.StepVerifier;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.*;
+import java.util.function.LongSupplier;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.WalReplicationWithEssentialsAggregateWal2JsonIT.ORDERS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -218,6 +219,44 @@ public class BackfillThenLiveOrderedTest {
         for (int i = 0; i < collected.size(); i++) {
             assertThat(collected.get(i)).isEqualTo((long) (i + 1));
         }
+    }
+
+    /**
+     * Race fix: the head snapshot must be taken only AFTER the live source has been subscribed, never
+     * before. Reading head first opens a window in which an event published to the hot, no-replay CDC
+     * bus reaches neither backfill (capped at head) nor a late bus subscriber — stalling expectedNext
+     * forever. This pins the read-after-attach ordering.
+     */
+    @Test
+    void head_snapshot_is_taken_only_after_live_source_is_subscribed() {
+        AtomicBoolean liveSubscribed              = new AtomicBoolean(false);
+        AtomicBoolean headReadBeforeLiveSubscribe = new AtomicBoolean(false);
+        AtomicInteger headReads                   = new AtomicInteger(0);
+
+        Flux<PersistedEvent> backfill = Flux.just(pe(1), pe(2), pe(3));
+        // never-completing live so the only terminal signal is take(3) on the backfill events
+        Flux<PersistedEvent> live = Flux.<PersistedEvent>never()
+                                        .doOnSubscribe(s -> liveSubscribed.set(true));
+
+        LongSupplier headSnapshot = () -> {
+            headReads.incrementAndGet();
+            if (!liveSubscribed.get()) {
+                headReadBeforeLiveSubscribe.set(true);
+            }
+            return 3L;
+        };
+
+        Flux<PersistedEvent> ordered = CdcEventStore.BackfillThenLiveOrdered.orderedWithoutMetrics(
+                backfill, live, headSnapshot, new CdcProperties.CdcEventBusProperties());
+
+        StepVerifier.create(ordered.take(3))
+                    .expectNextMatches(e -> e.globalEventOrder().longValue() == 1L)
+                    .expectNextMatches(e -> e.globalEventOrder().longValue() == 2L)
+                    .expectNextMatches(e -> e.globalEventOrder().longValue() == 3L)
+                    .verifyComplete();
+
+        assertThat(headReadBeforeLiveSubscribe).as("head must be read only after live attach").isFalse();
+        assertThat(headReads.get()).as("head snapshot is taken exactly once").isEqualTo(1);
     }
 
     private static PersistedEvent pe(long globalOrder) {

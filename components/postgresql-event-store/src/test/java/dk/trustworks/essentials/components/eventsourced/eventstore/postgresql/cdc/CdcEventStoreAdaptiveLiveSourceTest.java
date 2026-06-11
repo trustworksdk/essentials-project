@@ -25,6 +25,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.SubscriberId;
+import dk.trustworks.essentials.components.foundation.types.Tenant;
 import dk.trustworks.essentials.shared.functional.CheckedSupplier;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Flux;
@@ -43,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -222,6 +224,52 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         assertThat(globalOrders(received)).containsExactly(1L, 2L, 3L);
     }
 
+    @Test
+    void tenant_filtered_subscriber_receives_matching_and_tenant_less_events() throws Exception {
+        // Regression: the tenant gate must mirror the base store's SQL predicate
+        // "({tenant} IS NULL OR {tenant} = :tenant)" — a tenant-less event belongs to every tenant.
+        // Previously the gate mapped an absent event-tenant to false, dropping such events outright.
+        var fx = fixture(Duration.ofMillis(100));
+        fx.availability.active("slot");
+
+        var received = subscribe(fx, Optional.of(new TestTenant("acme")));
+
+        fx.bus.publish(List.of(
+                event(1),                  // tenant-less     -> must be delivered (IS NULL)
+                tenantEvent(2, "acme")     // matching tenant -> delivered (= :tenant)
+                                                  ));
+
+        await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 2);
+        assertThat(globalOrders(received)).containsExactly(1L, 2L);
+    }
+
+    @Test
+    void tenant_filter_excludes_interleaved_other_tenant_events_without_stalling_ordering() throws Exception {
+        // Regression: tenant filtering must be applied to the ORDERED OUTPUT, not upstream of
+        // BackfillThenLiveOrdered's strict expectedNext drain. An other-tenant event sitting in the
+        // MIDDLE of the global-order sequence must be excluded WITHOUT stalling the events after it —
+        // the common multi-tenant case where tenants interleave in global_event_order. With the filter
+        // misplaced upstream of the drain, event 3 (globex) would punch a hole and events 4 & 5 would
+        // never be delivered.
+        var fx = fixture(Duration.ofMillis(100));
+        fx.availability.active("slot");
+
+        var received = subscribe(fx, Optional.of(new TestTenant("acme")));
+
+        fx.bus.publish(List.of(
+                event(1),                  // tenant-less     -> delivered
+                tenantEvent(2, "acme"),    // matching tenant -> delivered
+                tenantEvent(3, "globex"),  // other tenant    -> excluded (mid-sequence — must not stall)
+                event(4),                  // tenant-less     -> delivered (proves no stall)
+                tenantEvent(5, "acme")     // matching tenant -> delivered
+                                                  ));
+
+        await().atMost(Duration.ofSeconds(2)).until(() -> received.size() >= 4);
+        // Let any erroneously-admitted other-tenant event surface before asserting exact contents.
+        Thread.sleep(200);
+        assertThat(globalOrders(received)).containsExactly(1L, 2L, 4L, 5L);
+    }
+
     // -------- fixture plumbing --------
 
     private static PersistedEvent event(long globalOrder) {
@@ -230,6 +278,22 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         when(e.aggregateType()).thenReturn(ORDERS);
         when(e.tenant()).thenReturn(Optional.empty());
         return e;
+    }
+
+    private static PersistedEvent tenantEvent(long globalOrder, String tenantId) {
+        var e = mock(PersistedEvent.class);
+        when(e.globalEventOrder()).thenReturn(GlobalEventOrder.of(globalOrder));
+        when(e.aggregateType()).thenReturn(ORDERS);
+        // doReturn avoids the wildcard-capture mismatch on Optional<? extends Tenant>
+        doReturn(Optional.of(new TestTenant(tenantId))).when(e).tenant();
+        return e;
+    }
+
+    private record TestTenant(String id) implements Tenant {
+        @Override
+        public String toString() {
+            return id;
+        }
     }
 
     @SuppressWarnings("unchecked")
@@ -272,13 +336,17 @@ class CdcEventStoreAdaptiveLiveSourceTest {
     }
 
     private static List<PersistedEvent> subscribe(Fixture fx) {
+        return subscribe(fx, Optional.empty());
+    }
+
+    private static List<PersistedEvent> subscribe(Fixture fx, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
         var received = new CopyOnWriteArrayList<PersistedEvent>();
         fx.cdcEventStore.pollEvents(
                 ORDERS,
                 1L, // fromInclusive — head snapshot above returns 0, so live filter starts at > 0
                 Optional.empty(),
                 Optional.of(Duration.ofMillis(50)),
-                Optional.empty(),
+                onlyIncludeEventIfItBelongsToTenant,
                 Optional.of(SubscriberId.of("test-sub")),
                 Optional.of((Function<String, EventStorePollingOptimizer>) name -> null)
         ).subscribe(received::add);

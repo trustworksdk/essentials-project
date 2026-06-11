@@ -282,9 +282,11 @@ public final class PostgresqlUtil {
             log.warn("Failed to create replication slot for output plugin '{}' -> '{}'", pluginName, e.getMessage());
             try {
                 handle.execute("select pg_drop_replication_slot(?)", slot);
-            } catch (Exception ignore) {
-                log.warn("Failed to create replication slot for output plugin '{}' -> '{}'", pluginName, e.getMessage());
-                // ignore
+            } catch (Exception cleanupFailure) {
+                // Best-effort cleanup: if slot creation failed the slot typically never existed, so a
+                // drop failure here is expected — log at debug with the actual cleanup cause, not the
+                // outer creation failure.
+                log.debug("Failed to drop probe replication slot '{}' for plugin '{}': {}", slot, pluginName, cleanupFailure.getMessage());
             }
             return false;
         }

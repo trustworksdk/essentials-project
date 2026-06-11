@@ -24,9 +24,11 @@ import dk.trustworks.essentials.shared.functional.CheckedConsumer;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.time.Duration;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -207,6 +209,110 @@ class CdcDispatcherPoisonGapFailureTest {
         verify(inbox, atLeastOnce()).fetchNextBatch(eq(SLOT), anyInt(), anyInt());
         assertThat(dispatcher.getStatus().ticks()).isEqualTo(1L);
         assertThat(dispatcher.getStatus().tickFailures()).isZero();
+    }
+
+    /**
+     * Regression: after the STOP poison-policy path flips {@code stopping=true} and re-throws (killing
+     * further ticks), a later {@code stop()} — e.g. application shutdown — must still shut the executor
+     * down and clear {@code started}. The old code guarded stop() on {@code stopping.compareAndSet},
+     * so this call became a no-op: the executor leaked and isStarted()/getStatus() kept reporting a
+     * running dispatcher that was permanently dead.
+     */
+    @Test
+    void stop_cleans_up_even_after_STOP_poison_policy_already_flipped_stopping() {
+        var inbox = mock(CdcInboxRepository.class);
+        @SuppressWarnings("unchecked")
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> uowFactory = mock(HandleAwareUnitOfWorkFactory.class);
+        var gapHandler = mock(EventStreamGapHandler.class);
+        var plugin = mock(LogicalDecodingPlugin.class);
+
+        var row = new CdcInboxRepository.InboxRow(1L, "0/ABCDEF", "{\"x\":1}".getBytes());
+        when(inbox.fetchNextBatch(eq(SLOT), anyInt(), anyInt())).thenReturn(List.of(row));
+        // decode fails → with poisonPolicy=STOP the dispatcher flips `stopping` and re-throws.
+        when(plugin.decode(any(byte[].class)))
+                .thenThrow(new RuntimeException("simulated conversion failure"));
+
+        var props = CdcProperties.CdcDispatcherProperties.defaults();
+        props.setPoisonPolicy(PoisonPolicy.STOP);
+
+        var dispatcher = new CdcDispatcher(
+                inbox,
+                uowFactory,
+                gapHandler,
+                plugin,
+                Optional.empty(),
+                events -> { /* no-op */ },
+                SLOT,
+                props,
+                CdcProperties.CdcDeliveryMode.INBOX,
+                ignoreAvailability(),
+                Optional.empty()
+        );
+
+        dispatcher.start();
+
+        // The scheduled tick hits the STOP path: stopping=true, dispatcher dead — but still reports started.
+        await().atMost(Duration.ofSeconds(2)).until(() -> dispatcher.getStatus().stopping());
+        assertThat(dispatcher.isStarted()).isTrue();
+
+        // stop() must still perform cleanup despite stopping already being true.
+        dispatcher.stop();
+
+        assertThat(dispatcher.isStarted()).isFalse();
+        assertThat(dispatcher.getStatus().started()).isFalse();
+    }
+
+    /**
+     * Regression: a transient emit failure (e.g. {@link CdcNonSerializedEmitException} from a lost
+     * concurrent-emission race, or {@link CdcBusOverflowException} from backpressure) must NOT be
+     * treated as a conversion failure. The event decoded fine; poisoning the row would permanently
+     * drop live-tail delivery of that global order. The row must stay RECEIVED for the next tick.
+     */
+    @Test
+    void transient_emit_failure_does_not_poison_the_row() {
+        var inbox = mock(CdcInboxRepository.class);
+        @SuppressWarnings("unchecked")
+        HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> uowFactory = mock(HandleAwareUnitOfWorkFactory.class);
+        var gapHandler = mock(EventStreamGapHandler.class);
+        var plugin = mock(LogicalDecodingPlugin.class);
+
+        var row = new CdcInboxRepository.InboxRow(1L, "0/ABCDEF", "{\"ok\":1}".getBytes());
+        when(inbox.fetchNextBatch(eq(SLOT), anyInt(), anyInt()))
+                .thenReturn(List.of(row))
+                .thenReturn(List.of());
+
+        // decode succeeds → a healthy event...
+        var decoded = List.of(mock(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent.class));
+        when(plugin.decode(any(byte[].class))).thenReturn(decoded);
+
+        // ...but publishing it to the bus loses a concurrent-emission race (transient).
+        var dispatcher = new CdcDispatcher(
+                inbox,
+                uowFactory,
+                gapHandler,
+                plugin,
+                Optional.empty(),
+                events -> { throw new CdcNonSerializedEmitException("simulated non-serialized race"); },
+                SLOT,
+                CdcProperties.CdcDispatcherProperties.defaults(),
+                CdcProperties.CdcDeliveryMode.INBOX,
+                ignoreAvailability(),
+                Optional.empty()
+        );
+
+        dispatcher.tick();
+
+        // The row is NOT poisoned and NOT acknowledged — it stays RECEIVED for the next tick.
+        verify(inbox, never()).markPoison(any(), any(), any());
+        verify(inbox, never()).markDispatched(anyLong());
+        verify(inbox, never()).deleteDispatched(anyLong());
+        verify(gapHandler, never()).registerPermanentGaps(any(), anyList(), anyString());
+
+        var status = dispatcher.getStatus();
+        assertThat(status.conversionFailures()).isZero();
+        assertThat(status.poisonRows()).isZero();
+        assertThat(status.tickFailures()).isZero();
+        assertThat(status.stopping()).isFalse();
     }
 
     private static CdcAvailability ignoreAvailability() {

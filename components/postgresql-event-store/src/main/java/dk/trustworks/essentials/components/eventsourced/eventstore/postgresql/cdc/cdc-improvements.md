@@ -151,6 +151,7 @@ operators can reason about the trade-off without leaving the log line.
 | 4 | Configurable idle LSN push interval           | ✅ done   | ~30 min      | Tight `wal_sender_timeout` hitting the hardcoded 30s.        |
 | 5 | Advisory log for `max_slot_wal_keep_size`     | ✅ done   | ~30 min      | Operator forgets the server-side disk safety net.            |
 | 9 | CDC direct push-latency fix (warm-up cutover)  | ✅ done   | ~1 day       | Subscriptions established during CDC warm-up were silently pinned to polling for life. |
+| 10 | Gap-tolerant live drain (permanent rollback gaps) | proposed | ~1 day | Live-tail delivery stalls forever on a rolled-back `global_event_order` hole. |
 
 P1–P6 + P8 are ✅ delivered. The framework's slot-growth risk is now
 observable (P1 + P3), fail-fast on existing-slot startup (P2), tunable for
@@ -707,6 +708,62 @@ Medium. Not blocking any open user issue, but the pre-fix behaviour was actively
 misleading: the docs sell CDC as the push-based sub-100 ms option, yet any subscriber that
 registered during application boot (the overwhelmingly common case) was silently pinned to
 polling for its whole life. Now fixed for real deployments.
+
+---
+
+## P10 — Gap-tolerant live drain in `BackfillThenLiveOrdered`
+
+**What.** [`BackfillThenLiveOrdered`](CdcEventStore.java)'s drain advances
+`expectedNext` strictly by `+1` (`buffer.remove(next); next++`). It has no way to
+skip a `global_event_order` value that will *never* arrive on the live stream, so
+a permanently-missing order in the live tail parks `expectedNext` on it forever —
+subsequent events pile into the buffer up to `backpressureBufferSize`, then the
+dispatcher hits the (transient) overflow path and re-processes the same batch each
+tick.
+
+**Why it happens.** `global_event_order` is a Postgres `IDENTITY` allocated at
+INSERT, *before* commit. A rolled-back transaction therefore leaves a permanent
+hole: that value is never committed, produces no data WAL, and so never reaches
+the CDC bus. If such a hole lands in the live region (`> head`) of an active
+subscription, the live drain stalls. It does **not** self-heal: CDC stays globally
+healthy, so availability never flips to polling and the
+[`CdcEffectivenessMonitor`](CdcEffectivenessMonitor.java) (which compares
+tailer-received vs. published counts) never fires — the stall is confined to the
+one affected subscriber.
+
+**Scope / why it isn't already covered.**
+
+- The **backfill** phase (`≤ head`) is gap-handler-aware and emits *directly*
+  through the merge, bypassing `expectedNext`, so holes in the catch-up range
+  never stall — only holes in the live tail matter.
+- The classic **polling** path already tolerates this: the event-stream gap
+  handler promotes transient→permanent gaps after a timeout (default 120s) and
+  skips them. The CDC **live** drain has no equivalent.
+- The head-snapshot race fix (warm-up cutover + read-head-after-attach) and the
+  multi-tenant tenant-filter relocation both removed *other* ways the drain could
+  stall, but neither touched the core strict-contiguity assumption — a rolled-back
+  hole is genuinely absent from the all-tenant committed stream too.
+
+**Where.** The drain `IntSupplier` inside
+[`CdcEventStore.BackfillThenLiveOrdered`](CdcEventStore.java) — marked
+"⚠️ CRITICAL ORDERING COMPONENT — do NOT simplify", so any change here needs care.
+
+**Sketch.** Add a stall detector to the drain: when `backfillDone`, the buffer is
+non-empty, `buffer.firstKey() > expectedNext`, and no drain progress has happened
+for a threshold, resolve `[expectedNext, buffer.firstKey()-1]` against the
+event-stream gap handler (or a bounded one-shot poll) to classify each missing
+order — **advance `expectedNext` past confirmed-permanent gaps; keep waiting on
+still-transient ones**. The gap-handler awareness is mandatory: a naive
+poll-and-skip would advance past a transient gap that is merely committing late and
+is about to arrive on the bus, silently dropping it — strictly worse than the stall.
+
+### Priority
+
+Low–Medium. Real but rare: needs an actual rolled-back (or otherwise skipped)
+sequence value to land exactly in the live tail a subscriber is consuming. Blast
+radius is one subscriber until something independently flips availability to
+polling. Worth fixing because, when it does hit, it is silent and self-perpetuating
+— but lower ROI than the delivered items above.
 
 ---
 

@@ -30,12 +30,12 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
  * poisoned, permanently losing live-tail delivery for that event even though polling fallback
  * could still catch it via the event store.
  * <p>
- * Extending {@link IllegalStateException} (rather than {@link RuntimeException} directly) keeps
- * source-compatibility with existing {@code catch (IllegalStateException)} / {@code catch (Exception)}
- * sites that pre-date the distinction; we just need the type-narrow catch in the dispatcher to
- * intercept it before the generic handler.
+ * Extends {@link CdcTransientEmitException} (itself an {@link IllegalStateException}) so the dispatcher
+ * can intercept all transient emit failures with one type-narrow catch before the generic
+ * conversion-failure handler, while remaining source-compatible with existing
+ * {@code catch (IllegalStateException)} / {@code catch (Exception)} sites.
  */
-public class CdcBusOverflowException extends IllegalStateException {
+public class CdcBusOverflowException extends CdcTransientEmitException {
     public CdcBusOverflowException(String message) {
         super(message);
     }

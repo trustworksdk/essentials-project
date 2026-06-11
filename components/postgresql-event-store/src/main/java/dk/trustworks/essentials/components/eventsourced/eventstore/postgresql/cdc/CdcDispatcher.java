@@ -248,8 +248,7 @@ public final class CdcDispatcher implements Lifecycle {
         // NOTE: we deliberately do NOT check availability.isActive() here. Spring's Lifecycle
         // ordering is not guaranteed — in practice the dispatcher's start() runs before the
         // tailer has connected and transitioned availability to ACTIVE. Checking here strands
-        // the dispatcher permanently in the "inactive at startup" case (observed in perf-lab
-        // with 248k RECEIVED / 0 DISPATCHED rows because the tailer started later).
+        // the dispatcher permanently in the "inactive at startup" case.
         //
         // Instead, the scheduler is always started and each tick() performs the liveness check.
         // Cost is one cheap availability read per pollInterval while CDC is inactive; correctness
@@ -332,21 +331,21 @@ public final class CdcDispatcher implements Lifecycle {
                     inboxRowsWithEmptyDecodeCount.incrementAndGet();
                 }
                 acknowledgeDispatchedRow(row.inboxId());
-            } catch (CdcBusOverflowException overflow) {
-                // Transient backpressure — NOT a conversion failure. The event decoded fine;
-                // the CDC bus couldn't accept it because subscribers are behind producers. We
-                // intentionally:
+            } catch (CdcTransientEmitException transientEmit) {
+                // Transient emit failure — NOT a conversion failure. The event decoded fine; the CDC
+                // bus couldn't accept it right now, either because subscribers are behind producers
+                // (FAIL_OVERFLOW) or a concurrent emitter held the serialized-access window
+                // (FAIL_NON_SERIALIZED). We intentionally:
                 //   - don't bump conversionFailureCount / poisonRowsCount
                 //   - don't mark the row POISON (would skip the event forever in CDC live-tail)
-                //   - don't advance to the next row in this batch (they'd all hit the same
-                //     backpressure; better to let the bus drain and retry whole batch next tick)
+                //   - don't advance to the next row in this batch (they'd likely hit the same
+                //     condition; better to let the bus settle and retry the whole batch next tick)
                 //   - leave the row as RECEIVED so the next tick re-processes it
                 //
-                // Subscribers meanwhile keep pulling from the bus at their own pace — once the
-                // bus's in-memory buffer has headroom, the next dispatcher tick will push this
-                // row through.
-                log.warn("[{}] CDC bus backpressure — inboxId={} lsn={} will be retried next tick: {}",
-                         slotName, row.inboxId(), row.lsn(), overflow.getMessage());
+                // Subscribers meanwhile keep pulling from the bus at their own pace — once the bus
+                // has headroom (or the contending emitter releases), the next tick pushes it through.
+                log.warn("[{}] CDC bus transient emit failure — inboxId={} lsn={} will be retried next tick: {}",
+                         slotName, row.inboxId(), row.lsn(), transientEmit.getMessage());
                 return;
             } catch (Exception e) {
                 conversionFailureCount.incrementAndGet();
@@ -420,12 +419,16 @@ public final class CdcDispatcher implements Lifecycle {
 
     @Override
     public void stop() {
-        if (!started.get()) {
+        // Use `started` as the single idempotency guard, NOT `stopping`. The STOP poison-policy path
+        // flips `stopping` true and re-throws (so the scheduler suppresses further ticks) but does NOT
+        // shut the executor down. Guarding stop() on `stopping` would make this call a no-op in exactly
+        // that case — leaking the ScheduledExecutorService and leaving `started` stuck true, so
+        // isStarted()/getStatus() keep reporting a running dispatcher that is permanently dead. Gating
+        // on the started→stopped CAS instead guarantees cleanup runs regardless of how `stopping` was set.
+        if (!started.compareAndSet(true, false)) {
             return;
         }
-        if (!stopping.compareAndSet(false, true)) {
-            return;
-        }
+        stopping.set(true);
         log.info("[{}] ⏹ Stopping CDC dispatcher", slotName);
 
         try {
@@ -436,7 +439,6 @@ public final class CdcDispatcher implements Lifecycle {
             if (executor != null) {
                 executor.shutdownNow();
             }
-            started.set(false);
         }
         log.info("[{}] 🛑 CDC dispatcher stopped", slotName);
     }

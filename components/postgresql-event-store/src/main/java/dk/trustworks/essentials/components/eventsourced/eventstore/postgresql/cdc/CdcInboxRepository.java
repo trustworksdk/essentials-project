@@ -25,6 +25,9 @@ import org.slf4j.*;
 
 import java.util.*;
 
+import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
+import static dk.trustworks.essentials.shared.MessageFormatter.bind;
+
 /**
  * This repository class provides operations to manage the CDC (Change Data Capture) inbox table,
  * which is responsible for storing event messages.
@@ -61,9 +64,22 @@ public class CdcInboxRepository {
 
     public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                               Optional<MeterRegistry> meterRegistry) {
+        this(unitOfWorkFactory, meterRegistry, CdcSql.DEFAULT_CDC_TABLE_NAME);
+    }
+
+    public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                              String cdcInboxTableName) {
+        this(unitOfWorkFactory, Optional.empty(), cdcInboxTableName);
+    }
+
+    public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                              Optional<MeterRegistry> meterRegistry,
+                              String cdcInboxTableName) {
         this.unitOfWorkFactory = unitOfWorkFactory;
         this.meterRegistry = meterRegistry.orElse(null);
-        this.cdcSql = new CdcSql(CdcSql.DEFAULT_CDC_TABLE_NAME);
+        // CdcSql validates the name via PostgresqlUtil.checkIsValidTableOrColumnName, so it is safe to
+        // interpolate getCdcTableName() into the statements below (see sql()).
+        this.cdcSql = new CdcSql(cdcInboxTableName);
         if (this.meterRegistry != null) {
             insertLatencyTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.inbox.insert.latency").register(this.meterRegistry);
             markPoisonLatencyTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.inbox.mark_poison.latency").register(this.meterRegistry);
@@ -101,6 +117,15 @@ public class CdcInboxRepository {
     }
 
     /**
+     * Interpolate the configured (and validated) inbox table name into a statement template. Templates
+     * use the {@code {:table}} placeholder; Jdbi named parameters ({@code :slot} etc.) are left intact
+     * because {@link dk.trustworks.essentials.shared.MessageFormatter#bind} only replaces {@code {:name}}.
+     */
+    private String sql(String template) {
+        return bind(template, arg("table", cdcSql.getCdcTableName()));
+    }
+
+    /**
      * idempotent insert; returns true if inserted, false if already existed
      */
     public boolean insertIfAbsent(String slotName, String lsn, String payloadJson) {
@@ -113,11 +138,11 @@ public class CdcInboxRepository {
     public boolean insertIfAbsent(String slotName, String lsn, byte[] payloadBytes) {
         long startNs = System.nanoTime();
         boolean inserted = unitOfWorkFactory.withUnitOfWork(uow -> {
-            int updated = uow.handle().createUpdate("""
-                                                    insert into eventstore_cdc_inbox(slot_name, lsn, payload_bytes, status)
+            int updated = uow.handle().createUpdate(sql("""
+                                                    insert into {:table}(slot_name, lsn, payload_bytes, status)
                                                     values (:slot, :lsn, :payloadBytes, 'RECEIVED')
                                                     on conflict (slot_name, lsn) do nothing
-                                                    """)
+                                                    """))
                              .bind("slot", slotName)
                              .bind("lsn", lsn)
                              .bind("payloadBytes", payloadBytes)
@@ -144,11 +169,11 @@ public class CdcInboxRepository {
      */
     public void markPoison(String slotName, String lsn, String error) {
         long startNs = System.nanoTime();
-        unitOfWorkFactory.usingUnitOfWork(uowh -> uowh.handle().createUpdate("""
-                                                                             update eventstore_cdc_inbox
+        unitOfWorkFactory.usingUnitOfWork(uowh -> uowh.handle().createUpdate(sql("""
+                                                                             update {:table}
                                                                              set status='POISON', error=:err
                                                                              where slot_name=:slot and lsn=:lsn
-                                                                             """)
+                                                                             """))
                                                       .bind("slot", slotName)
                                                       .bind("lsn", lsn)
                                                       .bind("err", error)
@@ -166,11 +191,11 @@ public class CdcInboxRepository {
      */
     public void markDispatched(long inboxId) {
         long startNs = System.nanoTime();
-        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
-                                                                           update eventstore_cdc_inbox
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate(sql("""
+                                                                           update {:table}
                                                                            set status='DISPATCHED'
                                                                            where inbox_id=:id
-                                                                           """)
+                                                                           """))
                                                     .bind("id", inboxId)
                                                     .execute());
         if (meterRegistry != null) {
@@ -193,10 +218,10 @@ public class CdcInboxRepository {
      * and operators need to see how much was discarded.
      */
     public int deleteAllForSlot(String slotName) {
-        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createUpdate("""
-                                                                                 delete from eventstore_cdc_inbox
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createUpdate(sql("""
+                                                                                 delete from {:table}
                                                                                  where slot_name=:slot
-                                                                                 """)
+                                                                                 """))
                                                           .bind("slot", slotName)
                                                           .execute());
     }
@@ -205,10 +230,10 @@ public class CdcInboxRepository {
      * Deletes an already dispatched row from the CDC inbox.
      */
     public void deleteDispatched(long inboxId) {
-        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
-                                                                           delete from eventstore_cdc_inbox
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate(sql("""
+                                                                           delete from {:table}
                                                                            where inbox_id=:id
-                                                                           """)
+                                                                           """))
                                                     .bind("id", inboxId)
                                                     .execute());
         if (meterRegistry != null) {
@@ -243,7 +268,7 @@ public class CdcInboxRepository {
     public List<InboxRow> fetchNextBatch(String slotName, int batchSize, int queryTimeoutSeconds) {
         long startNs = System.nanoTime();
         var rows = unitOfWorkFactory.withUnitOfWork(uow -> {
-            var query = uow.handle().createQuery("""
+            var query = uow.handle().createQuery(sql("""
                                                   SELECT inbox_id,
                                                          slot_name,
                                                          lsn,
@@ -251,13 +276,13 @@ public class CdcInboxRepository {
                                                          payload_bytes,
                                                          status,
                                                          error
-                                                              FROM eventstore_cdc_inbox
+                                                              FROM {:table}
                                                               WHERE slot_name = :slot
                                                                 AND status = 'RECEIVED'
                                                               ORDER BY inbox_id
                                                               limit :limit
                                                               FOR UPDATE skip locked
-                                                  """)
+                                                  """))
                                     .bind("slot", slotName)
                                     .bind("limit", batchSize);
             if (queryTimeoutSeconds > 0) {
@@ -294,10 +319,10 @@ public class CdcInboxRepository {
      * @return the count of entries matching the specified slot name and status
      */
     public long countByStatus(String slotName, String status) {
-        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
-                                                                                select count(*) from eventstore_cdc_inbox
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql("""
+                                                                                select count(*) from {:table}
                                                                                 where slot_name=:slot and status=:status
-                                                                                """)
+                                                                                """))
                                                           .bind("slot", slotName)
                                                           .bind("status", status)
                                                           .mapTo(long.class)
@@ -355,10 +380,10 @@ public class CdcInboxRepository {
     }
 
     public Optional<String> statusForLsn(String slotName, String lsn) {
-        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery("""
-                                                                                select status from eventstore_cdc_inbox
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql("""
+                                                                                select status from {:table}
                                                                                 where slot_name=:slot and lsn=:lsn
-                                                                                """)
+                                                                                """))
                                                           .bind("slot", slotName)
                                                           .bind("lsn", lsn)
                                                           .mapTo(String.class)
@@ -377,11 +402,11 @@ public class CdcInboxRepository {
      * @param status      the status of the event to be recorded in the table
      */
     public void insertRaw(String slotName, String lsn, String payloadJson, String status) {
-        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate("""
-                                                                           insert into eventstore_cdc_inbox(slot_name, lsn, payload_bytes, status)
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate(sql("""
+                                                                           insert into {:table}(slot_name, lsn, payload_bytes, status)
                                                                            values (:slot, :lsn, :payloadBytes, :status)
                                                                            on conflict (slot_name, lsn) do nothing
-                                                                           """)
+                                                                           """))
                                                     .bind("slot", slotName)
                                                     .bind("lsn", lsn)
                                                     .bind("payloadBytes", payloadJson.getBytes(java.nio.charset.StandardCharsets.UTF_8))

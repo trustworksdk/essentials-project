@@ -145,18 +145,82 @@ public final class PgReplicationSlots {
         boolean dropped = false;
         if (existing != null) {
             if (existing.isActive()) {
-                try (var term = c.prepareStatement(
-                        "select pg_terminate_backend(active_pid) " +
-                                "from pg_replication_slots where slot_name = ? and active_pid is not null")) {
-                    term.setString(1, slotName);
-                    term.execute();
-                }
+                terminateSlotBackend(c, slotName);
+                // pg_terminate_backend only *signals* the walsender; the backend may still hold the
+                // slot for a short window after the call returns. Wait (bounded) for active_pid to
+                // clear so the drop below doesn't fail with "replication slot ... is active for PID",
+                // which would abort this auto-heal and delay recovery until the next monitor fire.
+                waitUntilSlotInactive(c, slotName);
             }
-            dropSlot(c, slotName);
+            dropSlotToleratingStillActive(c, slotName);
             dropped = true;
         }
         createLogicalSlot(c, slotName, plugin);
         return dropped;
+    }
+
+    /** Number of times to poll for the slot's backend to release it after pg_terminate_backend. */
+    private static final int  SLOT_DEACTIVATION_POLL_ATTEMPTS = 5;
+    /** Delay between deactivation polls (and the single drop retry). 5 x 200ms ≈ 1s worst case. */
+    private static final long SLOT_DEACTIVATION_POLL_DELAY_MS  = 200L;
+
+    private static void terminateSlotBackend(Connection c, String slotName) throws SQLException {
+        try (var term = c.prepareStatement(
+                "select pg_terminate_backend(active_pid) " +
+                        "from pg_replication_slots where slot_name = ? and active_pid is not null")) {
+            term.setString(1, slotName);
+            term.execute();
+        }
+    }
+
+    /**
+     * Poll the slot until its {@code active_pid} clears (or it disappears), bounded by
+     * {@link #SLOT_DEACTIVATION_POLL_ATTEMPTS}. Best-effort: if it is still active after the budget,
+     * we proceed to the drop anyway (which retries once — see {@link #dropSlotToleratingStillActive}).
+     */
+    private static void waitUntilSlotInactive(Connection c, String slotName) throws SQLException {
+        for (int attempt = 0; attempt < SLOT_DEACTIVATION_POLL_ATTEMPTS; attempt++) {
+            SlotInfo slot = findSlot(c, slotName);
+            if (slot == null || !slot.isActive()) {
+                return;
+            }
+            sleep(SLOT_DEACTIVATION_POLL_DELAY_MS);
+        }
+    }
+
+    private static void dropSlotToleratingStillActive(Connection c, String slotName) throws SQLException {
+        try {
+            dropSlot(c, slotName);
+        } catch (SQLException e) {
+            if (!isSlotStillActive(e)) {
+                throw e;
+            }
+            // The terminated backend hadn't fully released the slot yet — give it one more grace
+            // period and retry the drop once before surfacing the failure to the caller.
+            sleep(SLOT_DEACTIVATION_POLL_DELAY_MS);
+            dropSlot(c, slotName);
+        }
+    }
+
+    /**
+     * Detects the "replication slot is active" failure PostgreSQL raises as {@code object_in_use}
+     * (SQLState {@code 55006}) with a message like {@code replication slot "x" is active for PID N}.
+     */
+    private static boolean isSlotStillActive(SQLException e) {
+        if ("55006".equals(e.getSQLState())) {
+            return true;
+        }
+        String msg = e.getMessage();
+        return msg != null && msg.toLowerCase(Locale.ROOT).contains("is active for pid");
+    }
+
+    private static void sleep(long millis) throws SQLException {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new SQLException("Interrupted while waiting for the replication slot's backend to release it", ie);
+        }
     }
 
     public static void ensureSlot(Connection c, String slotName, PgSlotMode mode, String expectedPlugin) throws SQLException {

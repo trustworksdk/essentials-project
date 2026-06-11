@@ -90,4 +90,33 @@ class CdcEventStoreFallbackTest {
         verify(delegate, atLeastOnce()).pollEvents(any(), anyLong(), any(), any(), any(), any(), any());
         assertThat(availability.getFallbackCount()).isEqualTo(1);
     }
+
+    /**
+     * CdcEventStore is a decorator: the highest/lowest global-order lookups must delegate to the
+     * wrapped store. findLowestGlobalEventOrderPersisted previously returned Optional.empty()
+     * unconditionally, making callers see "no events persisted" even when events existed.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void findHighest_and_findLowest_global_event_order_delegate_to_wrapped_store() {
+        EventStore delegate = mock(EventStore.class);
+        var cdcEventStore = new CdcEventStore(
+                delegate,
+                mock(EventStoreUnitOfWorkFactory.class),
+                mock(EventStreamGapHandler.class),
+                new CdcEventBus(),
+                new CdcProperties(),
+                new CdcAvailability()
+        );
+
+        var orders = AggregateType.of("orders");
+        when(delegate.findHighestGlobalEventOrderPersisted(orders)).thenReturn(Optional.of(GlobalEventOrder.of(42)));
+        when(delegate.findLowestGlobalEventOrderPersisted(orders)).thenReturn(Optional.of(GlobalEventOrder.of(7)));
+
+        assertThat(cdcEventStore.findHighestGlobalEventOrderPersisted(orders)).contains(GlobalEventOrder.of(42));
+        assertThat(cdcEventStore.findLowestGlobalEventOrderPersisted(orders)).contains(GlobalEventOrder.of(7));
+
+        verify(delegate).findHighestGlobalEventOrderPersisted(orders);
+        verify(delegate).findLowestGlobalEventOrderPersisted(orders);
+    }
 }

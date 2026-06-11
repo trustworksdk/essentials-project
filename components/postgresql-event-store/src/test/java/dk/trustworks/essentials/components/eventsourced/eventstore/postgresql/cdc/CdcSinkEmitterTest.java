@@ -108,6 +108,46 @@ class CdcSinkEmitterTest {
     }
 
     @Test
+    void non_serialized_exhaustion_with_fail_fast_throws_transient_not_generic() {
+        @SuppressWarnings("unchecked")
+        Sinks.Many<PersistedEvent> sink = mock(Sinks.Many.class);
+        when(sink.tryEmitNext(any())).thenReturn(Sinks.EmitResult.FAIL_NON_SERIALIZED);
+
+        // Exhausting the non-serialized budget under FAIL_FAST must throw a TRANSIENT emit exception
+        // (so the dispatcher retries the row), NOT a generic IllegalStateException (which the
+        // dispatcher would treat as a conversion failure and poison a healthy row).
+        assertThatThrownBy(() ->
+            CdcSinkEmitter.tryEmit(sink, pe(11),
+                                   /*nonSerializedMaxRetries*/ 3,
+                                   /*overflowMaxRetries*/ 0,
+                                   CdcProperties.CdcOverflowPolicy.FAIL_FAST,
+                                   "test",
+                                   LoggerFactory.getLogger(CdcSinkEmitterTest.class))
+        ).isInstanceOf(CdcTransientEmitException.class)
+         .isInstanceOf(CdcNonSerializedEmitException.class)
+         .hasMessageContaining("non-serialized emit retries exhausted")
+         .hasMessageContaining("globalOrder=11");
+
+        verify(sink, times(3)).tryEmitNext(any());
+    }
+
+    @Test
+    void non_serialized_exhaustion_with_log_and_drop_does_not_throw() {
+        @SuppressWarnings("unchecked")
+        Sinks.Many<PersistedEvent> sink = mock(Sinks.Many.class);
+        when(sink.tryEmitNext(any())).thenReturn(Sinks.EmitResult.FAIL_NON_SERIALIZED);
+
+        // LOG_AND_DROP escape hatch must still apply to non-serialized exhaustion — warn, no throw.
+        CdcSinkEmitter.tryEmit(sink, pe(12),
+                               3, 0,
+                               CdcProperties.CdcOverflowPolicy.LOG_AND_DROP,
+                               "test",
+                               LoggerFactory.getLogger(CdcSinkEmitterTest.class));
+
+        verify(sink, times(3)).tryEmitNext(any());
+    }
+
+    @Test
     void zero_subscriber_is_dropped_silently() {
         @SuppressWarnings("unchecked")
         Sinks.Many<PersistedEvent> sink = mock(Sinks.Many.class);

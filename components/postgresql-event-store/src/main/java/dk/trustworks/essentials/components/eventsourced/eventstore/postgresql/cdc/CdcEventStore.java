@@ -200,40 +200,76 @@ public class CdcEventStore implements EventStore {
 
         var resume = GlobalEventOrder.of(fromInclusiveGlobalOrder);
 
-        // "head snapshot": highest persisted at subscription start
-        var head = unitOfWorkFactory.withUnitOfWork(() -> eventStore.findHighestGlobalEventOrderPersisted(aggregateType))
-                                    .orElse(GlobalEventOrder.of(fromInclusiveGlobalOrder - 1));
-
         int pageSize = loadEventsByGlobalOrderBatchSize.orElse(backfillBatchSize);
-
-        log.debug("[{}] CDC poll for starting from '{}' (head snapshot: '{}' with batch size '{}')", aggregateType, resume, head, backfillBatchSize);
 
         Optional<SubscriptionGapHandler> gapHandler =
                 subscriptionId.map(eventStreamGapHandler::gapHandlerFor);
 
+        // CDC race-safety: the "head" snapshot MUST be read only AFTER the live CDC-bus subscription
+        // has been established — never before. The per-aggregate bus sink is a hot multicast that does
+        // not replay history to late subscribers, so any event published in the window between a head
+        // snapshot and the live attach would be delivered by neither backfill (capped at head) nor the
+        // bus, stalling BackfillThenLiveOrdered forever on expectedNext (it never self-heals while CDC
+        // stays globally healthy). By deferring this read until BackfillThenLiveOrdered has subscribed
+        // the live source (see ordered(...)), we guarantee:
+        //   - any event published BEFORE the attach is already persisted, hence ≤ head and covered by
+        //     backfill (whose upper bound is this same late head);
+        //   - any event published AFTER the attach is captured by the live subscription.
+        // The read is memoized so backfill's upper bound and the ordering boundary share one value.
+        long noHead = Long.MIN_VALUE;
+        AtomicLong headBox = new AtomicLong(noHead);
+        LongSupplier headSnapshot = () -> {
+            long existing = headBox.get();
+            if (existing != noHead) return existing;
+            long read = unitOfWorkFactory.withUnitOfWork(() -> eventStore.findHighestGlobalEventOrderPersisted(aggregateType))
+                                         .map(GlobalEventOrder::longValue)
+                                         .orElse(fromInclusiveGlobalOrder - 1);
+            headBox.compareAndSet(noHead, read);
+            long head = headBox.get();
+            log.debug("[{}] CDC poll starting from '{}' (head snapshot: '{}' with batch size '{}')", aggregateType, resume, head, pageSize);
+            return head;
+        };
+
         Flux<PersistedEvent> backfill = backfillFlux(
                 aggregateType,
                 resume,
-                head,
+                headSnapshot,
                 pageSize,
                 onlyIncludeEventIfItBelongsToTenant,
                 gapHandler
                                                     );
 
+        // The live source's high-water mark starts at resume-1 (not head) because head is not yet
+        // known at assembly. BackfillThenLiveOrdered's expectedNext (= head+1) is the authoritative
+        // backfill→live boundary and drops any bus event ≤ head as a duplicate, so the lower base only
+        // means a marginally wider dedup window — never double-delivery.
+        //
+        // Tenant filtering is applied to the ORDERED OUTPUT below, NOT to this live source. The drain in
+        // BackfillThenLiveOrdered advances expectedNext strictly by 1, so any event removed upstream of
+        // it — e.g. an other-tenant event sitting between two events this subscriber wants — would punch
+        // a hole the drain waits on forever (in a multi-tenant deployment, tenants interleave in
+        // global_event_order, so this is the common case). The live source must therefore deliver the
+        // contiguous all-tenant stream; we pass Optional.empty() here (bus is all-tenant anyway, and its
+        // polling-fallback now loads all-tenant) and filter once on the ordered output. Backfill above
+        // keeps its efficient SQL-level tenant filter because it bypasses the drain (emitted straight
+        // through the merge), and the output filter is idempotent on it.
         Flux<PersistedEvent> live = buildAdaptiveLiveSource(
                 aggregateType,
-                head.longValue(),
+                fromInclusiveGlobalOrder - 1,
                 pageSize,
-                onlyIncludeEventIfItBelongsToTenant,
+                Optional.empty(),
                 pollingInterval,
                 subscriptionId,
                 eventStorePollingOptimizerFactory);
 
-        return new BackfillThenLiveOrdered(backfillToLiveTransitionTimer, eventBusProperties, backfillLiveBufferSize).ordered(
-                backfill,
-                live,
-                head.longValue()
-                                                    );
+        Flux<PersistedEvent> ordered =
+                new BackfillThenLiveOrdered(backfillToLiveTransitionTimer, eventBusProperties, backfillLiveBufferSize).ordered(
+                        backfill,
+                        live,
+                        headSnapshot
+                                                                                                                            );
+
+        return filterByTenant(ordered, onlyIncludeEventIfItBelongsToTenant);
     }
 
     /**
@@ -316,24 +352,53 @@ public class CdcEventStore implements EventStore {
                     long go = e.globalEventOrder().longValue();
                     lastSeen.updateAndGet(cur -> Math.max(cur, go));
                 })
-                .filter(e -> onlyIncludeEventIfItBelongsToTenant
-                        .map(t -> e.tenant()
-                                   .map(tt -> tt.toString().equals(t.toString()))
-                                   .orElse(false))
-                        .orElse(true));
+                // Tenant gate (see eventBelongsToTenant). Safe to apply in-line here only because the
+                // pollEvents ACTIVE path passes Optional.empty() when this source feeds the
+                // BackfillThenLiveOrdered drain (it filters the ordered OUTPUT instead). This gate
+                // therefore only ever fires on the polling-fallback return path, where dropping events
+                // cannot stall any downstream strict-contiguity ordering.
+                .filter(e -> eventBelongsToTenant(e, onlyIncludeEventIfItBelongsToTenant));
+    }
+
+    /**
+     * Tenant predicate mirroring the base store's SQL "({tenantColumn} IS NULL OR {tenantColumn} =
+     * :tenant)": a tenant-less event belongs to every tenant (absent event-tenant ⇒ kept), and an absent
+     * subscriber tenant filter keeps everything.
+     */
+    private static boolean eventBelongsToTenant(PersistedEvent e, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        return onlyIncludeEventIfItBelongsToTenant
+                .map(t -> e.tenant()
+                           .map(tt -> tt.toString().equals(t.toString()))
+                           .orElse(true))
+                .orElse(true);
+    }
+
+    /**
+     * Apply the subscriber tenant filter to a stream. Used on the ordered output of the CDC ACTIVE path:
+     * filtering must happen AFTER ordering, because removing events upstream of BackfillThenLiveOrdered's
+     * strict-contiguity drain would punch holes it waits on forever.
+     */
+    private static Flux<PersistedEvent> filterByTenant(Flux<PersistedEvent> source, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        if (onlyIncludeEventIfItBelongsToTenant.isEmpty()) {
+            return source;
+        }
+        return source.filter(e -> eventBelongsToTenant(e, onlyIncludeEventIfItBelongsToTenant));
     }
 
     private Flux<PersistedEvent> backfillFlux(
             AggregateType aggregateType,
             GlobalEventOrder fromInclusive,
-            GlobalEventOrder headInclusive,
+            LongSupplier headInclusive,
             int pageSize,
             Optional<Tenant> tenant,
             Optional<SubscriptionGapHandler> gapHandler
                                              ) {
         return Flux.create(sink -> {
             var  next = new AtomicLong(fromInclusive.longValue());
-            long head = headInclusive.longValue();
+            // Read at subscription time: by the time backfill is subscribed (via the merge inside
+            // BackfillThenLiveOrdered.ordered), the head snapshot has already been taken AFTER the
+            // live bus attach, and is memoized — so backfill and the ordering boundary agree.
+            long head = headInclusive.getAsLong();
 
             var scheduler = reactor.core.scheduler.Schedulers
                     .newSingle("CDC-Backfill-" + aggregateType, true);
@@ -435,7 +500,7 @@ public class CdcEventStore implements EventStore {
 
     @Override
     public Optional<GlobalEventOrder> findLowestGlobalEventOrderPersisted(AggregateType aggregateType) {
-        return Optional.empty();
+        return eventStore.findLowestGlobalEventOrderPersisted(aggregateType);
     }
 
     @Override
@@ -536,16 +601,33 @@ public class CdcEventStore implements EventStore {
                                                           Flux<PersistedEvent> live,
                                                           long headInclusive,
                                                           CdcProperties.CdcEventBusProperties eventBusProperties) {
-            return new BackfillThenLiveOrdered(null, eventBusProperties, null).ordered(backfill, live, headInclusive);
+            return new BackfillThenLiveOrdered(null, eventBusProperties, null).ordered(backfill, live, () -> headInclusive);
         }
 
+        /** Test seam: drive {@link #ordered} with a deferred head supplier to assert read-after-attach ordering. */
+        static Flux<PersistedEvent> orderedWithoutMetrics(Flux<PersistedEvent> backfill,
+                                                          Flux<PersistedEvent> live,
+                                                          LongSupplier headSnapshot,
+                                                          CdcProperties.CdcEventBusProperties eventBusProperties) {
+            return new BackfillThenLiveOrdered(null, eventBusProperties, null).ordered(backfill, live, headSnapshot);
+        }
+
+        /**
+         * @param headSnapshot supplies the backfill→live boundary — the highest global order persisted at
+         *                     subscription start. Invoked exactly once, and deliberately only AFTER the live
+         *                     source has been subscribed (i.e. the CDC bus is attached). This ordering is the
+         *                     race fix: the bus is a hot multicast with no history replay for late subscribers,
+         *                     so reading head before attaching would let an event slip through the gap between
+         *                     the two and stall the pipeline forever on expectedNext. See {@code pollEvents}.
+         */
         Flux<PersistedEvent> ordered(
                 Flux<PersistedEvent> backfill,
                 Flux<PersistedEvent> live,
-                long headInclusive
+                LongSupplier headSnapshot
                                     ) {
             requireNonNull(backfill, "backfill");
             requireNonNull(live, "live");
+            requireNonNull(headSnapshot, "headSnapshot");
 
             int bufferSize              = eventBusProperties.getBackpressureBufferSize();
             int nonSerializedMaxRetries = eventBusProperties.getNonSerializedMaxRetries();
@@ -559,7 +641,10 @@ public class CdcEventStore implements EventStore {
                 // Bounded by the BaseSubscriber demand contract below: outstanding-demand + buffer.size() <= bufferSize.
                 NavigableMap<Long, PersistedEvent> buffer = new ConcurrentSkipListMap<>();
 
-                AtomicLong    expectedNext          = new AtomicLong(headInclusive + 1);
+                // Initialised from the head snapshot below, AFTER the live source is attached. No live
+                // event can be observed before then (initial demand is held at 0 until that point), so
+                // the placeholder is never used in an ordering decision.
+                AtomicLong    expectedNext          = new AtomicLong();
                 AtomicBoolean backfillDone          = new AtomicBoolean(false);
                 AtomicBoolean liveDone              = new AtomicBoolean(false);
                 long          backfillToLiveStartNs = System.nanoTime();
@@ -605,7 +690,11 @@ public class CdcEventStore implements EventStore {
                 BaseSubscriber<PersistedEvent> liveSub = new BaseSubscriber<PersistedEvent>() {
                     @Override
                     protected void hookOnSubscribe(Subscription subscription) {
-                        request(bufferSize);
+                        // Deliberately request nothing here. We must attach to the live source (so the bus
+                        // starts retaining events for us) BEFORE the head snapshot is taken, but must not let
+                        // events flow until expectedNext is initialised from that snapshot. The initial
+                        // bufferSize demand is released right after the head read, below. Until then the bus
+                        // holds events in its own bounded backpressure buffer — nothing is lost.
                     }
 
                     @Override
@@ -641,6 +730,21 @@ public class CdcEventStore implements EventStore {
                     }
                 };
                 live.subscribe(liveSub);
+
+                // The live source (CDC bus) is now attached. Only now is it safe to snapshot head: any
+                // event the bus delivers from here on is captured by liveSub, and any event published
+                // before this attach is already persisted, hence ≤ head and covered by backfill. Reading
+                // head before the attach would open a window in which an event reaches neither source.
+                long head;
+                try {
+                    head = headSnapshot.getAsLong();
+                } catch (RuntimeException headReadFailure) {
+                    liveSub.dispose();
+                    return Flux.error(headReadFailure);
+                }
+                expectedNext.set(head + 1);
+                // Release the initial demand now that expectedNext is established (see hookOnSubscribe).
+                liveSub.request(bufferSize);
 
                 Flux<PersistedEvent> backfillWithGate =
                         backfill.doOnComplete(() -> {

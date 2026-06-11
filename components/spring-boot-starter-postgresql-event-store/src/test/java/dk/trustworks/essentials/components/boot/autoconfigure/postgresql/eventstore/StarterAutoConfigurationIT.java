@@ -166,8 +166,8 @@ public class StarterAutoConfigurationIT {
                     availability.failed("slot-it", "wal2json plugin not usable");
                     assertThat(meterRegistry.get("essentials.cdc.active").gauge().value()).isEqualTo(0.0d);
 
-                    assertThat(meterRegistry.get("essentials.cdc.start_failures_total").counter().count())
-                            .isGreaterThanOrEqualTo(1.0d);
+                    // start_failures_total is always reason-tagged; the per-reason series carries
+                    // the failure (a "none" baseline series is registered at startup).
                     assertThat(meterRegistry.get("essentials.cdc.start_failures_total")
                                             .tag("reason", "wal2json_plugin_not_usable")
                                             .counter()

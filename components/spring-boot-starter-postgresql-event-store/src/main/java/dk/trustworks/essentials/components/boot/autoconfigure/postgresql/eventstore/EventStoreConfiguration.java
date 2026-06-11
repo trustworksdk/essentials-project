@@ -909,12 +909,15 @@ public class EventStoreConfiguration {
                                                  EssentialsEventStoreProperties essentialsProperties,
                                                  CdcConsumerGroup group,
                                                  CdcSlotNameProvider slotNameProvider) {
-        var repo = new CdcInboxRepository(eventStoreUnitOfWorkFactory, meterRegistry);
+        var cdc = essentialsProperties.getCdc();
+        // Use the configured inbox table name so the repository reads/writes the SAME table the
+        // @TTLJob (essentials.eventstore.cdc.inbox-table-name) cleans. Passing the default here would
+        // let a custom-named TTL job clean a table the repository never touches, leaking rows.
+        var repo = new CdcInboxRepository(eventStoreUnitOfWorkFactory, meterRegistry, cdc.getInboxTableName());
         // Inbox depth gauges are scoped to a known slot. Register them once here, gated on
         // INBOX delivery mode (DIRECT bypasses the inbox; the gauges would be permanently 0
         // and misleading) and the dispatcher's metrics-enabled toggle. The gauges sample on
         // demand at metrics scrape time — no separate background sampler.
-        var cdc = essentialsProperties.getCdc();
         if (cdc.getDeliveryMode() == CdcProperties.CdcDeliveryMode.INBOX
                 && cdc.getCdcDispatcher().isInboxMetricsEnabled()) {
             repo.registerInboxBacklogGauges(getCdcSlotName(essentialsProperties, group, slotNameProvider));

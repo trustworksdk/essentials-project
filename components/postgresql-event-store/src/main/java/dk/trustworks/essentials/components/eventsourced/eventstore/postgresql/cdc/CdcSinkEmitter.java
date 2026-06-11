@@ -61,7 +61,7 @@ final class CdcSinkEmitter {
             if (result == Sinks.EmitResult.FAIL_NON_SERIALIZED) {
                 nonSerializedAttempts++;
                 if (nonSerializedAttempts >= nonSerializedMaxRetries) {
-                    handleFailure(event, result, overflowPolicy, context, "non-serialized emit retries exhausted", log);
+                    handleNonSerializedFailure(event, overflowPolicy, context, log);
                     return;
                 }
                 Thread.onSpinWait();
@@ -112,6 +112,28 @@ final class CdcSinkEmitter {
             return;
         }
         throw new CdcBusOverflowException(message);
+    }
+
+    /**
+     * Dedicated handler for {@code FAIL_NON_SERIALIZED} after the spin-retry budget is exhausted. A
+     * concurrent emitter held the sink's serialized-access window — the event is fine, so this is a
+     * transient race, not a conversion failure. Throws {@link CdcNonSerializedEmitException} (a
+     * {@link CdcTransientEmitException}) so the {@code CdcDispatcher} retries the inbox row next tick
+     * rather than poisoning it. Honors the {@link CdcOverflowPolicy#LOG_AND_DROP} escape hatch.
+     */
+    private static void handleNonSerializedFailure(PersistedEvent event,
+                                                   CdcOverflowPolicy overflowPolicy,
+                                                   String context,
+                                                   Logger log) {
+        String message = "[" + context + "] non-serialized emit retries exhausted"
+                + " (emitResult=FAIL_NON_SERIALIZED"
+                + ", globalOrder=" + event.globalEventOrder()
+                + ", aggregateType=" + event.aggregateType() + ")";
+        if (overflowPolicy == CdcOverflowPolicy.LOG_AND_DROP) {
+            log.warn(message);
+            return;
+        }
+        throw new CdcNonSerializedEmitException(message);
     }
 
     private static void handleFailure(PersistedEvent event,

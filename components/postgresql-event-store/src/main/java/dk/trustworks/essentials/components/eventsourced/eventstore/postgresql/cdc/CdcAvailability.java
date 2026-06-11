@@ -67,7 +67,6 @@ public final class CdcAvailability {
     private final AtomicLong              fallbackCount      = new AtomicLong(0);
 
     private final Counter fallbackCounter;
-    private final Counter startFailuresCounter;
     private final MeterRegistry meterRegistry;
 
     /**
@@ -89,10 +88,16 @@ public final class CdcAvailability {
             Gauge.builder("essentials.cdc.active", state, s -> s.get() == State.ACTIVE ? 1.0 : 0.0)
                  .register(this.meterRegistry);
             fallbackCounter = Counter.builder("essentials.cdc.fallback_total").register(this.meterRegistry);
-            startFailuresCounter = Counter.builder("essentials.cdc.start_failures_total").register(this.meterRegistry);
+            // Pre-register the start-failure counter with a baseline reason tag so the series is
+            // visible from startup. Every registration of this meter must share the same tag keys —
+            // Prometheus-backed registries reject same-named meters whose tag key sets differ — so
+            // the per-reason increments in incrementStartFailureReason() use the same "reason" key.
+            // The total is recoverable as sum(essentials.cdc.start_failures_total) across reasons.
+            Counter.builder("essentials.cdc.start_failures_total")
+                   .tag("reason", "none")
+                   .register(this.meterRegistry);
         } else {
             fallbackCounter = null;
-            startFailuresCounter = null;
         }
         // Seed the replay sink with the initial state so subscribers that connect before any
         // transition (which is the common case) still get a starting value to drive source
@@ -111,7 +116,6 @@ public final class CdcAvailability {
 
     public void failed(String slot, String reason) {
         set(State.FAILED, slot, reason);
-        if (startFailuresCounter != null) startFailuresCounter.increment();
         incrementStartFailureReason(reason);
     }
 
