@@ -822,6 +822,7 @@ public class CdcProperties {
         private int               overflowMaxRetries      = 20;
         private double            queuedTaskCapFactor     = 1.5d;
         private CdcOverflowPolicy overflowPolicy          = CdcOverflowPolicy.FAIL_FAST;
+        private Duration          liveDrainStallThreshold = Duration.ofSeconds(180);
 
         public int getBackpressureBufferSize() {
             return backpressureBufferSize;
@@ -865,6 +866,32 @@ public class CdcProperties {
 
         public void setOverflowPolicy(CdcOverflowPolicy overflowPolicy) {
             this.overflowPolicy = overflowPolicy;
+        }
+
+        /**
+         * How long {@code CdcEventStore.BackfillThenLiveOrdered}'s live-tail drain may stay parked on a
+         * missing {@code global_event_order} before it is treated as a stall and the subscription is
+         * recovered (see {@link CdcLiveDrainStalledException} and {@code cdc/cdc-improvements.md} §P10).
+         * <p>
+         * The drain advances {@code expectedNext} strictly by {@code +1}; a permanent hole in the live
+         * tail (e.g. a rolled-back {@code IDENTITY} value that never reaches the WAL) would otherwise
+         * stall the affected subscriber forever. On expiry the pipeline re-subscribes and resumes the
+         * gap-handler-aware backfill from the hole, which classifies it (transient → wait/recover,
+         * permanent → skip).
+         * <p>
+         * <b>Must exceed the gap-promotion window</b> (the {@code PostgresqlEventStreamGapHandler}
+         * transient→permanent promotion timeout, default 120s) so a genuinely transient gap — an event
+         * merely committing late — has had its full chance to commit and arrive on the bus before a
+         * restart is triggered; otherwise the recovery would fire on gaps that were about to resolve on
+         * their own. Default {@code 180s}. Set to {@link Duration#ZERO} to disable stall detection
+         * (restores the strict-contiguity-only behaviour).
+         */
+        public Duration getLiveDrainStallThreshold() {
+            return liveDrainStallThreshold;
+        }
+
+        public void setLiveDrainStallThreshold(Duration liveDrainStallThreshold) {
+            this.liveDrainStallThreshold = liveDrainStallThreshold;
         }
     }
 

@@ -31,7 +31,10 @@ import dk.trustworks.essentials.types.LongRange;
 import io.micrometer.core.instrument.Timer;
 import org.reactivestreams.Subscription;
 import org.slf4j.*;
+import reactor.core.Disposable;
 import reactor.core.publisher.*;
+import reactor.core.scheduler.*;
+import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.util.*;
@@ -111,6 +114,13 @@ public class CdcEventStore implements EventStore {
     private final Timer                                                       backfillPageTimer;
     private final Timer                                                       backfillToLiveTransitionTimer;
     /**
+     * Counts how often the live-tail drain in {@link BackfillThenLiveOrdered} was detected as stalled on
+     * a missing {@code global_event_order} and recovered via re-subscription (see
+     * {@link CdcLiveDrainStalledException}). Any non-zero value means a permanent (or very-long-lived)
+     * live-tail gap was hit — previously a silent, self-perpetuating stall.
+     */
+    private final Counter                                                     stallDetectedCounter;
+    /**
      * Live size of the in-memory live-event buffer inside the currently-running
      * {@link BackfillThenLiveOrdered} pipeline. Updated by BackfillThenLiveOrdered as events flow
      * through its ordering buffer, so operators can observe pressure in real time and perf-lab /
@@ -163,6 +173,9 @@ public class CdcEventStore implements EventStore {
                                                                    .register(this.meterRegistry);
             backfillToLiveTransitionTimer = io.micrometer.core.instrument.Timer.builder("essentials.cdc.eventstore.backfill_to_live.transition.latency")
                                                                                .register(this.meterRegistry);
+            stallDetectedCounter = Counter.builder("essentials.cdc.backfill_live.stall_detected")
+                                          .description("Number of times the BackfillThenLiveOrdered live-tail drain was detected stalled on a missing global order and recovered via re-subscription")
+                                          .register(this.meterRegistry);
             Gauge.builder("essentials.cdc.backfill_live.buffer.size", backfillLiveBufferSize, AtomicInteger::get)
                  .description("Current size of the in-memory live-event buffer inside BackfillThenLiveOrdered; bounded by eventBus.backpressureBufferSize")
                  .register(this.meterRegistry);
@@ -174,7 +187,10 @@ public class CdcEventStore implements EventStore {
             liveEventsCounter = null;
             backfillPageTimer = null;
             backfillToLiveTransitionTimer = null;
+            stallDetectedCounter = null;
         }
+        requireTrue(!eventBusProperties.getLiveDrainStallThreshold().isNegative(),
+                    "eventBus.liveDrainStallThreshold must not be negative");
     }
 
     @Override
@@ -198,78 +214,120 @@ public class CdcEventStore implements EventStore {
                     eventStorePollingOptimizerFactory);
         }
 
-        var resume = GlobalEventOrder.of(fromInclusiveGlobalOrder);
-
         int pageSize = loadEventsByGlobalOrderBatchSize.orElse(backfillBatchSize);
 
         Optional<SubscriptionGapHandler> gapHandler =
                 subscriptionId.map(eventStreamGapHandler::gapHandlerFor);
 
-        // CDC race-safety: the "head" snapshot MUST be read only AFTER the live CDC-bus subscription
-        // has been established — never before. The per-aggregate bus sink is a hot multicast that does
-        // not replay history to late subscribers, so any event published in the window between a head
-        // snapshot and the live attach would be delivered by neither backfill (capped at head) nor the
-        // bus, stalling BackfillThenLiveOrdered forever on expectedNext (it never self-heals while CDC
-        // stays globally healthy). By deferring this read until BackfillThenLiveOrdered has subscribed
-        // the live source (see ordered(...)), we guarantee:
-        //   - any event published BEFORE the attach is already persisted, hence ≤ head and covered by
-        //     backfill (whose upper bound is this same late head);
-        //   - any event published AFTER the attach is captured by the live subscription.
-        // The read is memoized so backfill's upper bound and the ordering boundary share one value.
-        long noHead = Long.MIN_VALUE;
-        AtomicLong headBox = new AtomicLong(noHead);
-        LongSupplier headSnapshot = () -> {
-            long existing = headBox.get();
-            if (existing != noHead) return existing;
-            long read = unitOfWorkFactory.withUnitOfWork(() -> eventStore.findHighestGlobalEventOrderPersisted(aggregateType))
-                                         .map(GlobalEventOrder::longValue)
-                                         .orElse(fromInclusiveGlobalOrder - 1);
-            headBox.compareAndSet(noHead, read);
-            long head = headBox.get();
-            log.debug("[{}] CDC poll starting from '{}' (head snapshot: '{}' with batch size '{}')", aggregateType, resume, head, pageSize);
-            return head;
-        };
+        // Tier-1 live-tail stall recovery (cdc-improvements.md §P10): the drain in BackfillThenLiveOrdered
+        // advances expectedNext strictly by +1 and cannot skip a global order that never arrives on the
+        // live bus (most commonly a rolled-back IDENTITY value that produces no data WAL). When the drain
+        // parks on such a hole past eventBus.liveDrainStallThreshold it raises CdcLiveDrainStalledException;
+        // the retryWhen below filters on it and re-subscribes, routing the hole through the gap-handler-
+        // aware backfill, which is the only path proven to classify+heal it. resumeCursor carries the
+        // resume point across restarts: it starts at the caller's fromInclusiveGlobalOrder and is advanced
+        // to the stalled expectedNext before each retry — everything below it has already been emitted
+        // contiguously, so resuming there re-loads only the un-emitted tail (minimal re-delivery).
+        AtomicLong resumeCursor = new AtomicLong(fromInclusiveGlobalOrder);
 
-        Flux<PersistedEvent> backfill = backfillFlux(
-                aggregateType,
-                resume,
-                headSnapshot,
-                pageSize,
-                onlyIncludeEventIfItBelongsToTenant,
-                gapHandler
-                                                    );
+        Flux<PersistedEvent> ordered = Flux.defer(() -> {
+            long resumeFrom = resumeCursor.get();
+            var  resume     = GlobalEventOrder.of(resumeFrom);
 
-        // The live source's high-water mark starts at resume-1 (not head) because head is not yet
-        // known at assembly. BackfillThenLiveOrdered's expectedNext (= head+1) is the authoritative
-        // backfill→live boundary and drops any bus event ≤ head as a duplicate, so the lower base only
-        // means a marginally wider dedup window — never double-delivery.
-        //
-        // Tenant filtering is applied to the ORDERED OUTPUT below, NOT to this live source. The drain in
-        // BackfillThenLiveOrdered advances expectedNext strictly by 1, so any event removed upstream of
-        // it — e.g. an other-tenant event sitting between two events this subscriber wants — would punch
-        // a hole the drain waits on forever (in a multi-tenant deployment, tenants interleave in
-        // global_event_order, so this is the common case). The live source must therefore deliver the
-        // contiguous all-tenant stream; we pass Optional.empty() here (bus is all-tenant anyway, and its
-        // polling-fallback now loads all-tenant) and filter once on the ordered output. Backfill above
-        // keeps its efficient SQL-level tenant filter because it bypasses the drain (emitted straight
-        // through the merge), and the output filter is idempotent on it.
-        Flux<PersistedEvent> live = buildAdaptiveLiveSource(
-                aggregateType,
-                fromInclusiveGlobalOrder - 1,
-                pageSize,
-                Optional.empty(),
-                pollingInterval,
-                subscriptionId,
-                eventStorePollingOptimizerFactory);
+            // CDC race-safety: the "head" snapshot MUST be read only AFTER the live CDC-bus subscription
+            // has been established — never before. The per-aggregate bus sink is a hot multicast that does
+            // not replay history to late subscribers, so any event published in the window between a head
+            // snapshot and the live attach would be delivered by neither backfill (capped at head) nor the
+            // bus, stalling BackfillThenLiveOrdered forever on expectedNext. By deferring this read until
+            // BackfillThenLiveOrdered has subscribed the live source (see ordered(...)), we guarantee:
+            //   - any event published BEFORE the attach is already persisted, hence ≤ head and covered by
+            //     backfill (whose upper bound is this same late head);
+            //   - any event published AFTER the attach is captured by the live subscription.
+            // The read is memoized PER (re)subscription. On a stall-recovery restart this re-reads head, so
+            // the new head is now > the stalled hole and the hole falls inside the gap-handler-aware
+            // backfill range — classified there (transient → wait/recover, permanent → skip) instead of
+            // stalling the live tail again.
+            long         noHead       = Long.MIN_VALUE;
+            AtomicLong   headBox      = new AtomicLong(noHead);
+            LongSupplier headSnapshot = () -> {
+                long existing = headBox.get();
+                if (existing != noHead) return existing;
+                long read = unitOfWorkFactory.withUnitOfWork(() -> eventStore.findHighestGlobalEventOrderPersisted(aggregateType))
+                                             .map(GlobalEventOrder::longValue)
+                                             .orElse(resumeFrom - 1);
+                headBox.compareAndSet(noHead, read);
+                long head = headBox.get();
+                log.debug("[{}] CDC poll starting from '{}' (head snapshot: '{}' with batch size '{}')", aggregateType, resume, head, pageSize);
+                return head;
+            };
 
-        Flux<PersistedEvent> ordered =
-                new BackfillThenLiveOrdered(backfillToLiveTransitionTimer, eventBusProperties, backfillLiveBufferSize).ordered(
-                        backfill,
-                        live,
-                        headSnapshot
-                                                                                                                            );
+            Flux<PersistedEvent> backfill = backfillFlux(
+                    aggregateType,
+                    resume,
+                    headSnapshot,
+                    pageSize,
+                    onlyIncludeEventIfItBelongsToTenant,
+                    gapHandler
+                                                        );
+
+            // The live source's high-water mark starts at resume-1 (not head) because head is not yet
+            // known at assembly. BackfillThenLiveOrdered's expectedNext (= head+1) is the authoritative
+            // backfill→live boundary and drops any bus event ≤ head as a duplicate, so the lower base only
+            // means a marginally wider dedup window — never double-delivery.
+            //
+            // Tenant filtering is applied to the ORDERED OUTPUT below, NOT to this live source. The drain in
+            // BackfillThenLiveOrdered advances expectedNext strictly by 1, so any event removed upstream of
+            // it — e.g. an other-tenant event sitting between two events this subscriber wants — would punch
+            // a hole the drain waits on forever (in a multi-tenant deployment, tenants interleave in
+            // global_event_order, so this is the common case). The live source must therefore deliver the
+            // contiguous all-tenant stream; we pass Optional.empty() here (bus is all-tenant anyway, and its
+            // polling-fallback now loads all-tenant) and filter once on the ordered output. Backfill above
+            // keeps its efficient SQL-level tenant filter because it bypasses the drain (emitted straight
+            // through the merge), and the output filter is idempotent on it.
+            Flux<PersistedEvent> live = buildAdaptiveLiveSource(
+                    aggregateType,
+                    resumeFrom - 1,
+                    pageSize,
+                    Optional.empty(),
+                    pollingInterval,
+                    subscriptionId,
+                    eventStorePollingOptimizerFactory);
+
+            return new BackfillThenLiveOrdered(backfillToLiveTransitionTimer, eventBusProperties, backfillLiveBufferSize).ordered(
+                    backfill,
+                    live,
+                    headSnapshot
+                                                                                                                                );
+        }).retryWhen(liveDrainStallRecovery(aggregateType, resumeCursor));
 
         return filterByTenant(ordered, onlyIncludeEventIfItBelongsToTenant);
+    }
+
+    /**
+     * Retry spec backing Tier-1 live-tail stall recovery (see {@link CdcLiveDrainStalledException} and
+     * {@code cdc/cdc-improvements.md} §P10). It filters strictly on {@link CdcLiveDrainStalledException}
+     * — every other error propagates unchanged — and, on a stall, advances {@code resumeCursor} to the
+     * stalled {@code expectedNext} before re-subscribing so the gap-handler-aware backfill re-runs from
+     * the hole.
+     * <p>
+     * A short fixed settle precedes each re-subscribe so a pathological repeat-stall (e.g. a
+     * {@code NoEventStreamGapHandler} is configured, so a permanent gap is never promoted/skipped) backs
+     * off rather than hot-looping; backfill's own DB round-trip already prevents a tight CPU loop.
+     */
+    private Retry liveDrainStallRecovery(AggregateType aggregateType, AtomicLong resumeCursor) {
+        Duration restartBackoff = Duration.ofSeconds(1);
+        return Retry.from(companion -> companion.flatMap(retrySignal -> {
+            Throwable failure = retrySignal.failure();
+            if (!(failure instanceof CdcLiveDrainStalledException)) {
+                return Mono.error(failure);
+            }
+            CdcLiveDrainStalledException stall = (CdcLiveDrainStalledException) failure;
+            resumeCursor.set(stall.stalledAtGlobalOrder());
+            if (stallDetectedCounter != null) stallDetectedCounter.increment();
+            log.warn("[{}] CDC live-tail drain stalled on missing globalOrder '{}' for >= '{}'; re-subscribing and resuming backfill from there to classify the gap (transient → recover, permanent → skip)",
+                     aggregateType, stall.stalledAtGlobalOrder(), eventBusProperties.getLiveDrainStallThreshold());
+            return Mono.delay(restartBackoff);
+        }));
     }
 
     /**
@@ -650,6 +708,16 @@ public class CdcEventStore implements EventStore {
                 long          backfillToLiveStartNs = System.nanoTime();
                 AtomicBoolean transitionRecorded    = new AtomicBoolean(false);
 
+                // Live-tail stall detection (cdc-improvements.md §P10). The drain advances expectedNext
+                // strictly by +1; a global order that never arrives on the bus (a rolled-back IDENTITY
+                // value) would park it forever. Once parked, upstream demand drains to 0 and hookOnNext
+                // stops firing — so detection cannot be event-driven; a timer below watches for it.
+                // lastProgressNs marks the last time the drain emitted at least one event (or the
+                // backfill→live flip); stallSignalled ensures we raise the recovery error exactly once.
+                long          stallThresholdNs = eventBusProperties.getLiveDrainStallThreshold().toNanos();
+                AtomicLong    lastProgressNs   = new AtomicLong(System.nanoTime());
+                AtomicBoolean stallSignalled   = new AtomicBoolean(false);
+
                 // Bounded queue → tryEmitNext returns FAIL_OVERFLOW when a slow downstream consumer can't keep up.
                 // The shared CdcSinkEmitter then backs off and eventually fails fast per policy.
                 Sinks.Many<PersistedEvent> orderedLiveSink = Sinks.many()
@@ -676,6 +744,11 @@ public class CdcEventStore implements EventStore {
                         next++;
                         expectedNext.set(next);
                         drained++;
+                    }
+
+                    if (drained > 0) {
+                        // Forward progress resets the stall clock — the drain is not parked on a hole.
+                        lastProgressNs.set(System.nanoTime());
                     }
 
                     if (liveDone.get() && buffer.isEmpty()) {
@@ -746,9 +819,40 @@ public class CdcEventStore implements EventStore {
                 // Release the initial demand now that expectedNext is established (see hookOnSubscribe).
                 liveSub.request(bufferSize);
 
+                // Timer-driven stall watch (see stall-detection notes above). Fires the retryable
+                // CdcLiveDrainStalledException on the ordered sink when, post-backfill, the buffer holds a
+                // run that cannot be drained because its lowest order is strictly above expectedNext (a
+                // hole) and no forward progress has happened for the threshold. Disabled when the threshold
+                // is ZERO (restores strict-contiguity-only behaviour). Disposed in doFinally below.
+                Disposable stallWatch = stallThresholdNs <= 0
+                        ? null
+                        : Schedulers.parallel().schedulePeriodically(() -> {
+                            if (stallSignalled.get()) return;
+                            if (!backfillDone.get() || liveDone.get()) return;
+                            Map.Entry<Long, PersistedEvent> first = buffer.firstEntry();
+                            if (first == null) return;                                              // buffer empty → no hole
+                            long exp = expectedNext.get();
+                            if (first.getKey() <= exp) return;                                      // contiguous head present → drain handles it
+                            if (System.nanoTime() - lastProgressNs.get() < stallThresholdNs) return; // not parked long enough
+                            CdcLiveDrainStalledException stall = new CdcLiveDrainStalledException(
+                                    exp,
+                                    "CDC live-tail drain parked on missing global_event_order " + exp
+                                    + " (lowest buffered " + first.getKey() + ") for >= " + eventBusProperties.getLiveDrainStallThreshold());
+                            if (orderedLiveSink.tryEmitError(stall) == Sinks.EmitResult.OK) {
+                                stallSignalled.set(true);
+                                LOG.warn("BackfillThenLiveOrdered live-tail drain stalled on missing globalOrder {} (lowest buffered {}); signalling recovery", exp, first.getKey());
+                            }
+                            // Non-OK (raced with concurrent drain progress, or sink already terminated):
+                            // leave unsignalled; the next tick re-evaluates against fresh state.
+                        }, stallThresholdNs, stallThresholdNs, TimeUnit.NANOSECONDS);
+
                 Flux<PersistedEvent> backfillWithGate =
                         backfill.doOnComplete(() -> {
                             backfillDone.set(true);
+                            // Start the live-phase stall clock here, not at defer time: backfill itself may
+                            // legitimately run longer than the stall threshold, and only now can the drain
+                            // begin parking on a live-tail hole.
+                            lastProgressNs.set(System.nanoTime());
                             int drained = drain.getAsInt();
                             if (drained > 0) {
                                 liveSub.request(drained);
@@ -767,6 +871,7 @@ public class CdcEventStore implements EventStore {
                 // on backfillDone, so B emits nothing until after all backfill items have been delivered.
                 return Flux.merge(backfillWithGate, orderedLiveFlux)
                            .doFinally(sig -> {
+                               if (stallWatch != null) stallWatch.dispose();
                                liveSub.dispose();
                                orderedLiveSink.tryEmitComplete();
                            });

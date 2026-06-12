@@ -711,7 +711,11 @@ polling for its whole life. Now fixed for real deployments.
 
 ---
 
-## P10 — Gap-tolerant live drain in `BackfillThenLiveOrdered`
+## P10 — Gap-tolerant live drain in `BackfillThenLiveOrdered` — Tier 1 ✅ DONE
+
+> **Status.** Tier 1 (stall-detect → subscription restart) is implemented — see the
+> "Tier 1" section below for the as-built notes. Tier 2 (in-drain probe + classify)
+> remains deferred; build it only if Tier 1's re-backfill cost is measured to matter.
 
 **What.** [`BackfillThenLiveOrdered`](CdcEventStore.java)'s drain advances
 `expectedNext` strictly by `+1` (`buffer.remove(next); next++`). It has no way to
@@ -731,6 +735,19 @@ healthy, so availability never flips to polling and the
 tailer-received vs. published counts) never fires — the stall is confined to the
 one affected subscriber.
 
+**Self-heal analysis (corrected).** It is tempting to assume an availability flip
+to polling rescues the stall — it does not. `expectedNext` lives in the
+`Flux.defer` scope of `ordered(...)` and is owned by the single long-lived
+`liveSub`. [`buildAdaptiveLiveSource`](CdcEventStore.java)'s `switchMap` swaps the
+live *source* (CDC bus ↔ `pollEvents`) underneath that subscriber but never resets
+`expectedNext`. So even when the polling fallback engages and the gap handler
+correctly skips the permanent hole, it delivers `hole+1, hole+2, …` — which land in
+`hookOnNext` with `go > expectedNext`, get buffered *above* the still-parked hole,
+and `drain` (`buffer.remove(hole) == null → break`) stays stuck. The **only** heal
+path today is a full subscription teardown/restart: a fresh `head` snapshot (now
+`> hole`) plus the gap-handler-aware backfill covers the skip. An in-stream
+availability flip is *not* sufficient.
+
 **Scope / why it isn't already covered.**
 
 - The **backfill** phase (`≤ head`) is gap-handler-aware and emits *directly*
@@ -748,22 +765,134 @@ one affected subscriber.
 [`CdcEventStore.BackfillThenLiveOrdered`](CdcEventStore.java) — marked
 "⚠️ CRITICAL ORDERING COMPONENT — do NOT simplify", so any change here needs care.
 
-**Sketch.** Add a stall detector to the drain: when `backfillDone`, the buffer is
-non-empty, `buffer.firstKey() > expectedNext`, and no drain progress has happened
-for a threshold, resolve `[expectedNext, buffer.firstKey()-1]` against the
-event-stream gap handler (or a bounded one-shot poll) to classify each missing
-order — **advance `expectedNext` past confirmed-permanent gaps; keep waiting on
-still-transient ones**. The gap-handler awareness is mandatory: a naive
-poll-and-skip would advance past a transient gap that is merely committing late and
-is about to arrive on the bus, silently dropping it — strictly worse than the stall.
+### Proposed design
+
+Two tiers. Ship Tier 1; build Tier 2 only if measurement shows it is needed.
+
+The transient-vs-permanent distinction is mandatory either way: a still-transient
+gap is an event that is merely committing late and is about to arrive on the bus, so
+waiting on it is **correct** — skipping it would silently drop the event, strictly
+worse than the stall. Only a *confirmed-permanent* gap (a rolled-back IDENTITY value
+that will never reach the WAL) may be passed over. The two tiers differ only in
+*where* that distinction is drawn.
+
+#### Tier 1 (recommended) — stall-detect → subscription restart ✅ DONE
+
+Route the hole through the path that **already** makes the transient/permanent
+distinction correctly — the gap-handler-aware **backfill** — by recycling the
+subscription, rather than teaching the live drain to classify gaps itself.
+
+**As built.**
+
+1. **Timer-driven detector** in `BackfillThenLiveOrdered.ordered(...)`. Two design
+   facts forced a *timer*, not an inline `drain` check: once the drain parks on a
+   hole, upstream demand drains to `0` and `hookOnNext` stops firing, so an
+   event-driven check would never run again. A periodic task on
+   `Schedulers.parallel()` trips when `backfillDone`, `liveDone` is false,
+   `buffer.firstEntry().getKey() > expectedNext` (a real hole), and no `drained > 0`
+   progress has occurred for `liveDrainStallThreshold`. `lastProgressNs` is reset on
+   every drained run **and** at the backfill→live flip (so a long backfill cannot
+   trip the live-phase clock). The watcher is disposed in `doFinally`.
+2. **On trip, fail the stream — `expectedNext` is never mutated.** The watcher emits
+   a retryable [`CdcLiveDrainStalledException`](CdcLiveDrainStalledException.java)
+   (carrying the parked `expectedNext`) on the ordered sink, guarded so it fires at
+   most once and only if `tryEmitError` returns `OK` (a concurrent late-arriving
+   event that resolves the hole simply means the next tick re-evaluates). The drain
+   stays a pure strict-`+1` advance.
+3. **Restart heals — self-contained in `pollEvents`, no subscription-manager
+   change.** Two facts made a naïve restart insufficient, both handled: (a)
+   `PersistedEventSubscriber` does **not** override `hookOnError`, so a source error
+   would terminate the subscription, not recycle it; (b) the `head` snapshot was
+   memoised in `pollEvents` scope, so a plain `retryWhen` would reuse the *stale*
+   head and re-stall on the same hole. The active path is therefore wrapped in
+   `Flux.defer(...)` (fresh `head` read per (re)subscribe) + `.retryWhen(...)`
+   filtered strictly to `CdcLiveDrainStalledException`. On trip the retry advances a
+   `resumeCursor` to the stalled `expectedNext` (the hole) and re-subscribes, so the
+   new head is `> hole` and the hole falls inside the gap-handler-aware backfill
+   range, classified there (`findTransientGapsToIncludeInQuery` + `reconcileGaps`,
+   CdcEventStore.java) with zero new gap-classification code. A 1s settle precedes
+   each re-subscribe so a misconfiguration (e.g. `NoEventStreamGapHandler`, which
+   never promotes) backs off rather than hot-loops.
+
+**Why no loss / minimal re-delivery.** Recovery resumes backfill from the hole, not
+from the original subscription start: every order *below* the hole was already
+emitted contiguously, and the buffered tail *above* the hole was never emitted, so
+backfill re-loads exactly the un-emitted tail. No gap, no large re-delivery.
+
+**Config.** `cdc.eventBus.liveDrainStallThreshold` (`CdcEventBusProperties`), default
+`180s` — deliberately `> ` the 120s gap-promotion window so a genuinely transient gap
+has had its full chance to arrive before a restart fires. `Duration.ZERO` disables
+detection (restores strict-contiguity-only behaviour). Validated non-negative in the
+`CdcEventStore` constructor.
+
+**Observability.** Counter `essentials.cdc.backfill_live.stall_detected` (incremented
+on each recovery) plus a `WARN` log at both the detector and the retry — the
+previously-silent stall is now visible.
+
+**Tests.** `BackfillThenLiveOrderedTest` covers detection (permanent hole → error
+carrying the parked order), transient-no-trip (hole filled within threshold →
+completes cleanly), and disable (`Duration.ZERO` → no error). The end-to-end restart
+(retryWhen re-subscribe + gap-aware backfill skip on a real rolled-back sequence
+value) is left as an integration test — it needs Docker + wal2json + a rolled-back
+transaction to produce a genuine permanent gap.
+
+#### Tier 2 (deferred) — in-drain probe + classify
+
+Only build this if Tier 1's re-backfill cost is *measured* to matter (very deep live
+tail, or frequent trips). It avoids the restart by classifying the hole in place, at
+the cost of real complexity and risk inside the critical drain.
+
+Reuse the *existing* [`SubscriptionGapHandler`](gap/SubscriptionGapHandler.java)
+rather than a second gap model. Key constraint: the gap handler only learns about a
+range when that range passes through `EventStore.loadEventsByGlobalOrder(...)`
+(`findTransientGapsToIncludeInQuery` → `loadEventsByGlobalOrder` → `reconcileGaps`).
+The CDC bus path never calls it, so the gap handler is blind to a hole the drain is
+parked on until a load probes that range. The probe does double duty: it **recovers**
+a late-committing event (if the "hole" was a real event that hadn't reached the bus)
+and **classifies** a genuine hole.
+
+1. **Inject a `GapResolver` into `BackfillThenLiveOrdered`** (a static nested type
+   with no access to `eventStore` / `unitOfWorkFactory` / `gapHandler`), supplied by
+   the enclosing `pollEvents`:
+
+   ```java
+   @FunctionalInterface
+   interface GapResolver {
+       /** Resolve [fromInclusive, toInclusive] against the gap handler.
+        *  Returns events that actually materialised in the range (in order),
+        *  AND drives transient→permanent promotion via reconcileGaps. */
+       GapResolution resolve(long fromInclusive, long toInclusive);
+   }
+   record GapResolution(List<PersistedEvent> recovered, SortedSet<Long> confirmedPermanent) {}
+   ```
+
+   Implementation mirrors `backfillPage` exactly (CdcEventStore.java:462–477) so
+   promotion semantics are shared, not duplicated. After the load,
+   `confirmedPermanent = getPermanentGapsFor(aggregateType)` ∩ `[from, to]`.
+2. **Probe off the bus thread.** `drain` runs in `hookOnNext` and the resolver blocks
+   on a DB `UnitOfWork`, so never call it inline. Arm a scheduled probe on the same
+   stall condition as Tier 1, on a dedicated single-thread scheduler, guarded by an
+   `AtomicBoolean probeInFlight`.
+3. **Apply on the drain's thread.** Serialize the result back to the drain so
+   `expectedNext` is never mutated concurrently: re-buffer each `recovered` event
+   (`buffer.put`, never skipped); advance `expectedNext` only across the *leading
+   contiguous* run of `confirmedPermanent` from `expectedNext` (a still-transient
+   order in the middle must keep the drain waiting); leave still-transient orders
+   parked and re-arm.
+
+Composes with the existing model — one `SubscriptionGapHandler` per subscriber across
+backfill, polling, and (now) the live probe, so a gap promoted by any path is seen by
+all. But it is strictly more surface area in the ordering-critical drain than Tier 1,
+which is why it is deferred.
 
 ### Priority
 
 Low–Medium. Real but rare: needs an actual rolled-back (or otherwise skipped)
 sequence value to land exactly in the live tail a subscriber is consuming. Blast
-radius is one subscriber until something independently flips availability to
-polling. Worth fixing because, when it does hit, it is silent and self-perpetuating
-— but lower ROI than the delivered items above.
+radius is one subscriber, and — per the self-heal analysis above — it persists
+until a full subscription restart; an in-stream availability flip to polling does
+*not* clear it. Worth fixing because, when it does hit, it is silent and
+self-perpetuating — but lower ROI than the delivered items above.
 
 ---
 
