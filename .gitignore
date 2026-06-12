@@ -19,3 +19,5 @@ webpack.generated.js
 tsconfig.json
 types.d.ts
 vite.generated.ts
+/.m2/
+/.claude/worktrees/
