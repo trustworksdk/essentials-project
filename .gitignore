@@ -21,3 +21,4 @@ types.d.ts
 vite.generated.ts
 /.m2/
 /.claude/worktrees/
+CLAUDE.local.md
