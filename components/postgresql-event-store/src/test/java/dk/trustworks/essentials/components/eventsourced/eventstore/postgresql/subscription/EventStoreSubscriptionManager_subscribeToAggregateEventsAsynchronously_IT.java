@@ -46,6 +46,7 @@ import org.testcontainers.shaded.org.awaitility.Awaitility;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.*;
 import java.util.stream.*;
 
@@ -153,7 +154,11 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
 
         var testEvents = createTestEvents();
 
-        var productEventsReceived = new ArrayList<PersistedEvent>();
+        // CopyOnWriteArrayList: events are appended on the subscription handler thread but read
+        // (size()/stream()) on the Awaitility/main thread — a plain ArrayList would expose stale or
+        // mid-write state across threads, which is a flakiness source under the connectivity-disruption
+        // scenario where delivery and the assertions race.
+        var productEventsReceived = new CopyOnWriteArrayList<PersistedEvent>();
         var productsSubscription = eventStoreSubscriptionManagerNode1.subscribeToAggregateEventsAsynchronously(
                 SubscriberId.of("ProductsSub1"),
                 PRODUCTS,
@@ -182,7 +187,7 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
                 });
         System.out.println("productsSubscription: " + productsSubscription);
 
-        var orderEventsReceived = new ArrayList<PersistedEvent>();
+        var orderEventsReceived = new CopyOnWriteArrayList<PersistedEvent>();
         var ordersSubscription = eventStoreSubscriptionManagerNode1.subscribeToAggregateEventsAsynchronously(
                 SubscriberId.of("OrdersSub1"),
                 ORDERS,
@@ -252,11 +257,15 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
                                                  .get();
         System.out.println("Total number of Order Events: " + totalNumberOfOrderEvents);
 
-        // Verify we received all Product and Order events
-        Awaitility.waitAtMost(Duration.ofSeconds(10))
+        // Verify we received all Product and Order events. The window must absorb recovery after the
+        // simulated connectivity loss: reconnect + fenced-lock re-acquisition (3s TTL) + resume polling
+        // can take well over the original 5s/10s. Awaitility returns as soon as the count is reached, so
+        // the happy-path (subscribe()) run stays fast; the generous ceiling only matters under disruption.
+        var deliveryTimeout = simulateDbConnectivityIssues ? Duration.ofSeconds(40) : Duration.ofSeconds(10);
+        Awaitility.waitAtMost(deliveryTimeout)
                   .untilAsserted(() -> assertThat(productEventsReceived.size()).isEqualTo(totalNumberOfProductEvents));
 
-        Awaitility.waitAtMost(Duration.ofSeconds(5))
+        Awaitility.waitAtMost(deliveryTimeout)
                   .untilAsserted(() -> assertThat(orderEventsReceived.size()).isEqualTo(totalNumberOfOrderEvents));
 
         // Sleep a little to verify that no additional events were delivered
