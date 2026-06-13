@@ -804,7 +804,7 @@ A `verdict=FAIL` here usually means either:
 - Both compose services run with no restart policy and no inter-app dependency
   — both JVMs start truly concurrently. The framework's
   `PostgresqlUtil.acquireBootstrapLock(handle)` (delivered as **P6** in
-  [cdc-improvements.md](../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/cdc-improvements.md))
+  [cdc-improvements.md](../../docs/cdc-improvements.md))
   serializes their `CREATE TABLE IF NOT EXISTS` calls behind a transaction-scoped
   PG advisory lock, so the loser of the bootstrap race waits a few ms then sees
   the table exists and proceeds normally. Prior to P6 the compose profile used

@@ -242,7 +242,7 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
         } catch (Exception e) {
             // IMPORTANT: let the tailer treat this as a hard failure for this WAL message
             // so it will not ACK the LSN
-            log.warn("Failed to convert wal2json row for aggregateType='{}'. keys={} row={}",
+            log.warn("Failed to convert wal2json row for aggregateType='{}'. keys='{}' row='{}'",
                      aggregateType, r.keySet(), r, e);
             throw new JSONSerializationException("Failed to convert wal2json message to PersistedEvent", e);
         }
@@ -273,21 +273,6 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
             return jacksonJSONSerializer.getObjectMapper().writeValueAsString(o);
         } catch (Exception e) {
             return String.valueOf(o);
-        }
-    }
-
-    private String toCanonicalJson(Object o) {
-        try {
-            JsonNode n;
-            if (o == null) return "null";
-            if (o instanceof String s) {
-                n = jacksonJSONSerializer.getObjectMapper().readTree(s);
-            } else {
-                n = jacksonJSONSerializer.getObjectMapper().valueToTree(o);
-            }
-            return jacksonJSONSerializer.getObjectMapper().writeValueAsString(n);
-        } catch (Exception e) {
-            throw new JSONSerializationException("Failed to canonicalize JSON", e);
         }
     }
 

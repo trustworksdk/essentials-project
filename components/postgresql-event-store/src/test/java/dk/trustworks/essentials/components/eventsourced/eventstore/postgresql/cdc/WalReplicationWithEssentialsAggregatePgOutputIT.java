@@ -262,6 +262,72 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         tailer2.stop();
     }
 
+    /**
+     * Verifies the inbox dedup invariant documented on {@link CdcInboxRepository#insertIfAbsent}: under
+     * pgoutput, every persisted WAL message carries a distinct LSN, so the {@code unique(slot_name, lsn)}
+     * key never falsely dedups two distinct messages. Exercised across a multi-statement transaction
+     * (4 INSERTs in one txn — the first append, so the RELATION-message boundary is crossed) plus a
+     * second transaction (another BEGIN/COMMIT boundary). Runs the tailer in INBOX mode WITHOUT a
+     * dispatcher so the rows stay {@code RECEIVED} and their LSNs can be inspected directly.
+     */
+    @Test
+    void pgoutput_inbox_persists_a_distinct_lsn_per_message_across_a_multi_statement_transaction() {
+        String slotName = slotName();
+        String publicationName = publicationName();
+        createPublication(publicationName);
+
+        AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver);
+
+        var availability = new CdcAvailability();
+        var tailer = new WalReplicationTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                tailerProperties(),
+                PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                CdcDeliveryMode.INBOX,
+                pgOutputPlugin(publicationName, pgOutputConverter),
+                Optional.empty(), // INBOX mode → no direct consumer
+                Optional.empty(),
+                availability,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(eventStreamTablesSupplier()),
+                false
+        );
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+        appendOrderEvents();       // 4 INSERTs in ONE transaction (first append → RELATION boundary)
+        appendOneMoreOrderEvent(); // a 2nd transaction → another BEGIN/COMMIT boundary
+
+        // The pgoutput pre-filter persists 'R' (RELATION) and 'I' (INSERT) messages, dropping
+        // BEGIN/COMMIT. So the inbox receives 1 RELATION (emitted once, before the first INSERT for
+        // orders_events) + 5 INSERTs = 6 rows. No dispatcher runs, so they remain RECEIVED. Crucially,
+        // a RELATION→INSERT LSN collision (the documented risk) would dedup the first INSERT away and
+        // we'd see fewer than 6 distinct LSNs.
+        await()
+                .atMost(Duration.ofSeconds(20))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> assertThat(inboxRepository.countByStatus(slotName, "RECEIVED")).isGreaterThanOrEqualTo(6L));
+
+        var lsns = jdbi.withHandle(handle -> handle.createQuery(
+                                                   "select lsn from " + CdcSql.DEFAULT_CDC_TABLE_NAME + " where slot_name = :slot")
+                                                   .bind("slot", slotName)
+                                                   .mapTo(String.class)
+                                                   .list());
+
+        assertThat(lsns).as("1 RELATION + 5 INSERT messages persisted").hasSizeGreaterThanOrEqualTo(6);
+        assertThat(Set.copyOf(lsns))
+                .as("every persisted WAL message (RELATION and INSERTs alike) must carry a distinct LSN — the inbox unique(slot_name, lsn) dedup key depends on it")
+                .hasSize(lsns.size());
+
+        tailer.stop();
+    }
+
     private WalReplicationTailer directPgOutputTailer(String slotName,
                                                        String publicationName,
                                                        PgOutputToPersistedEventConverter pgOutputConverter,

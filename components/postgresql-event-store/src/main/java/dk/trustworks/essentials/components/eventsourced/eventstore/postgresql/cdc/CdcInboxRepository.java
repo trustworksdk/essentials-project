@@ -133,7 +133,23 @@ public class CdcInboxRepository {
     }
 
     /**
-     * idempotent insert; returns true if inserted, false if already existed
+     * Idempotent insert keyed by {@code (slot_name, lsn)}; returns {@code true} if a row was inserted,
+     * {@code false} if one already existed.
+     * <p>
+     * <b>Invariant: each persisted WAL message must carry a distinct {@code lsn} for a given slot.</b>
+     * The {@code unique(slot_name, lsn)} dedup key (see {@link CdcSql#buildCreateCdcTableSql()}) exists
+     * so that a WAL message re-streamed after a reconnect — before its LSN was acked — is recognised as
+     * already-received and acked again rather than re-dispatched. It relies on the {@code lsn} (the
+     * tailer's {@code PGReplicationStream#getLastReceiveLSN()}) being unique per persisted message: if
+     * two <em>distinct</em> messages ever reported the same LSN, the second would be treated as a
+     * duplicate and silently dropped. The risk area is pgoutput, whose pre-filter persists both
+     * {@code 'R'} (RELATION) and {@code 'I'} (INSERT) messages (a RELATION is emitted before the first
+     * INSERT for a relation so the dispatcher can cache its schema), so the invariant must hold across
+     * the RELATION→INSERT boundary, not just between INSERTs. It does: every message — RELATION and
+     * row-change alike — sits at its own WAL position. Only BEGIN/COMMIT framing is dropped, and those
+     * are never persisted, so they cannot collide with a kept row. Verified by
+     * {@code WalReplicationWithEssentialsAggregatePgOutputIT} (distinct LSNs across a multi-statement
+     * transaction, including the RELATION-message boundary).
      */
     public boolean insertIfAbsent(String slotName, String lsn, byte[] payloadBytes) {
         long startNs = System.nanoTime();
@@ -330,15 +346,6 @@ public class CdcInboxRepository {
     }
 
     /**
-     * Retrieves the status of a specific event in the CDC inbox table based on the provided slot name and Log Sequence Number (LSN).
-     * <p>
-     * For testing purposes.
-     *
-     * @param slotName the name of the slot associated with the event
-     * @param lsn      the Log Sequence Number (LSN) identifying the event
-     * @return an {@code Optional<String>} containing the status if the event exists, or an empty {@code Optional} if not found
-     */
-    /**
      * Registers two on-demand Micrometer gauges that expose the inbox depth for {@code slotName}:
      * <ul>
      *   <li>{@code essentials.cdc.inbox.received_backlog} — rows in {@code RECEIVED} status,
@@ -379,6 +386,15 @@ public class CdcInboxRepository {
         log.info("Registered CDC inbox backlog gauges for slot '{}'", slotName);
     }
 
+    /**
+     * Retrieves the status associated with a given logical slot name (LSN).
+     * <p>
+     * This method executes a database query to fetch the status for a particular slot name and LSN.
+     *
+     * @param slotName the name of the logical replication slot
+     * @param lsn the log sequence number (LSN) to look up
+     * @return an Optional containing the status if found, or an empty Optional if no status matches the slot name and LSN
+     */
     public Optional<String> statusForLsn(String slotName, String lsn) {
         return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql("""
                                                                                 select status from {:table}
@@ -414,6 +430,14 @@ public class CdcInboxRepository {
                                                     .execute());
     }
 
+    /**
+     * Represents a row in an inbox structure, encapsulating the unique identifier of the inbox,
+     * a log sequence number (LSN), and the JSON payload in byte array format.
+     *
+     * @param inboxId           The unique identifier for the inbox.
+     * @param lsn               The log sequence number associated with this inbox row.
+     * @param payloadJsonBytes  The JSON payload stored as a byte array.
+     */
     public record InboxRow(long inboxId, String lsn, byte[] payloadJsonBytes) {
     }
 

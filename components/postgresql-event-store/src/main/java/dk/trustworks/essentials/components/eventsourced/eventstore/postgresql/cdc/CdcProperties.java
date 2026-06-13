@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
 import java.time.Duration;
+import java.util.Optional;
 
 /**
  * The {@code CdcProperties} class represents the configuration properties for
@@ -151,6 +152,33 @@ public class CdcProperties {
     }
 
     /**
+     * Startup advisory for the weakest delivery configuration: {@link CdcDeliveryMode#DIRECT} combined
+     * with {@link CdcOverflowPolicy#LOG_AND_DROP}. In that combination the tailer acks the WAL LSN right
+     * after the in-memory hand-off, and a bus overflow is dropped rather than retried — so CDC performs
+     * no re-delivery of the dropped live event and recovery falls entirely to the subscriber's
+     * store-backed backfill. Not an error (the default {@code overflowPolicy=FAIL_FAST} avoids it, and a
+     * deliberate operator may accept it for throughput), so callers should WARN, not reject. Returns
+     * {@link Optional#empty()} for every other combination. See {@link CdcDeliveryMode} for the full matrix.
+     */
+    public Optional<String> directDeliveryDropAdvisory() {
+        if (deliveryMode == CdcDeliveryMode.DIRECT
+                && eventBus.getOverflowPolicy() == CdcOverflowPolicy.LOG_AND_DROP) {
+            return Optional.of(
+                    "CDC deliveryMode=DIRECT with eventBus.overflowPolicy=LOG_AND_DROP is the weakest "
+                            + "live-delivery configuration: DIRECT has no inbox, so the tailer acks the WAL LSN "
+                            + "immediately after handing events to the in-memory bus, and LOG_AND_DROP discards "
+                            + "(rather than retries) a bus overflow. CDC therefore does NOT re-deliver a dropped "
+                            + "live event — it reaches subscribers only when the store-backed backfill reconciles "
+                            + "the gap, which can be delayed indefinitely if live-drain stall detection is disabled "
+                            + "or the stream goes idle. Committed events are never lost from the event store, but "
+                            + "the live-tail push is silently skipped. Prefer deliveryMode=INBOX (durable staging, "
+                            + "survives restarts) or keep overflowPolicy=FAIL_FAST (the default — back-pressures and "
+                            + "retries instead of dropping). See CdcDeliveryMode for the full guarantee matrix.");
+        }
+        return Optional.empty();
+    }
+
+    /**
      * Retrieves the name of the database table used for the Change Data Capture (CDC) inbox.
      *
      * @return the name of the CDC inbox table as a {@code String}
@@ -245,6 +273,44 @@ public class CdcProperties {
         BYTES
     }
 
+    /**
+     * How the {@code WalReplicationTailer} hands decoded WAL events to the in-memory {@code CdcEventBus}.
+     * <p>
+     * <b>The event store is always the durable source of truth</b> — every event reaches CDC because it
+     * was already committed to the store. CDC is a live-tail <em>accelerator</em> on top of polling, and
+     * subscribers consume it through {@code CdcEventStore} (backfill from the store + live bus, ordered),
+     * so a committed event is never lost regardless of the settings below. What this mode — combined with
+     * {@link CdcOverflowPolicy} — controls is whether <b>CDC's own pipeline re-delivers</b> a live event
+     * the bus could not accept, or whether recovery falls back to the subscriber's store-backed backfill.
+     * <ul>
+     *   <li>{@code INBOX} (default): WAL → durable inbox table → dispatcher → bus. The tailer persists the
+     *       WAL message to the inbox <em>before</em> acking the LSN, decoupling WAL retention from bus
+     *       delivery and surviving tailer restarts (undispatched rows are retried).</li>
+     *   <li>{@code DIRECT}: WAL → converter → bus, with no inbox. The tailer acks the LSN immediately
+     *       after the in-memory hand-off to the bus, so there is no CDC-owned staging record for that
+     *       message once the ack releases the WAL.</li>
+     * </ul>
+     * Behaviour on a bus <b>overflow</b> (subscriber slower than producer), by combination:
+     * <table>
+     *   <caption>deliveryMode × overflowPolicy — live-tail re-delivery on bus overflow</caption>
+     *   <tr><th>mode</th><th>overflowPolicy</th><th>on overflow</th></tr>
+     *   <tr><td>INBOX</td><td>FAIL_FAST (default)</td>
+     *       <td>dispatcher leaves the inbox row {@code RECEIVED} and retries next tick — CDC self-retries
+     *           from durable staging.</td></tr>
+     *   <tr><td>INBOX</td><td>LOG_AND_DROP</td>
+     *       <td>dispatcher drops the bus push and marks the row dispatched; the event reaches live
+     *           subscribers only via store-backed backfill reconciliation.</td></tr>
+     *   <tr><td>DIRECT</td><td>FAIL_FAST (default)</td>
+     *       <td>the tailer throws and does <b>not</b> ack the LSN; the WAL message is re-streamed on the
+     *           next loop/reconnect — CDC self-retries (replication-slot lag grows while stuck).</td></tr>
+     *   <tr><td>DIRECT</td><td>LOG_AND_DROP</td>
+     *       <td><b>weakest:</b> the tailer drops the bus push and <b>still acks the LSN</b>. CDC performs
+     *           no re-delivery; the dropped live event reaches subscribers only if/when store-backed
+     *           backfill reconciles it (e.g. P10 stall recovery on a later event, or polling) — and with
+     *           stall detection disabled or an idle tail that reconciliation can be delayed indefinitely.
+     *           See {@code eventBus.overflowPolicy} and {@code CdcProperties#directDeliveryDropAdvisory()}.</td></tr>
+     * </table>
+     */
     public enum CdcDeliveryMode {
         INBOX,
         DIRECT

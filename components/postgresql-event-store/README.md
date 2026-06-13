@@ -2233,7 +2233,7 @@ Slot ownership and safety:
 
 Design details:
 
-- [Hybrid CDC design](src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/cdc.md)
+- [Hybrid CDC design](../../docs/cdc.md)
 
 Operational API:
 

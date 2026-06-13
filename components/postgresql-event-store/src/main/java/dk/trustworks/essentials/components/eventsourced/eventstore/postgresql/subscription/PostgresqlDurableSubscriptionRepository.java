@@ -227,6 +227,21 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
             log.trace("Received {} ResumePoints to save: {}", resumePoints.size(), resumePoints);
         }
 
+        // Filter to the changed resume points BEFORE opening a UnitOfWork — isChanged() is a pure
+        // in-memory flag, so there is no reason to hold a DB transaction open for it, and when nothing
+        // changed we can skip the transaction (and the empty batch execute) entirely. Snapshotting the
+        // changed set here also makes the post-execute setLastUpdated() loop below operate on exactly the
+        // rows we wrote: the previous in-trx approach re-tested isChanged() afterwards, so a resume point
+        // that advanced concurrently mid-transaction could be marked clean (changed=false) without ever
+        // having been persisted.
+        var changedResumePoints = resumePoints.stream()
+                                              .filter(SubscriptionResumePoint::isChanged)
+                                              .toList();
+        if (changedResumePoints.isEmpty()) {
+            log.debug("No changed ResumePoints to save (out of {})", resumePoints.size());
+            return;
+        }
+
         try {
             unitOfWorkFactory.usingUnitOfWork(uow -> {
                 var now = OffsetDateTime.now(Clock.systemUTC());
@@ -234,12 +249,7 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                                                                       " SET resume_from_and_including_global_eventorder = :resume_from_and_including_global_eventorder, last_updated = :last_updated " +
                                                                       " WHERE aggregate_type = :aggregate_type AND subscriber_id = :subscriber_id");
 
-                // TODO: Optimize filtering to happen outside db trx
-                resumePoints.forEach(subscriptionResumePoint -> {
-                    if (!subscriptionResumePoint.isChanged()) {
-                        log.debug("Wont save Unchanged {}", subscriptionResumePoint);
-                        return;
-                    }
+                changedResumePoints.forEach(subscriptionResumePoint -> {
                     log.debug("Saving {}", subscriptionResumePoint);
                     preparedBatch
                             .bind("aggregate_type", subscriptionResumePoint.getAggregateType())
@@ -252,11 +262,7 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                 var batchSize = preparedBatch.size();
                 var rowsUpdated = Arrays.stream(preparedBatch.execute())
                                         .reduce(Integer::sum).orElse(0);
-                resumePoints.forEach(subscriptionResumePoint -> {
-                    if (subscriptionResumePoint.isChanged()) {
-                        subscriptionResumePoint.setLastUpdated(now);
-                    }
-                });
+                changedResumePoints.forEach(subscriptionResumePoint -> subscriptionResumePoint.setLastUpdated(now));
                 if (log.isTraceEnabled()) {
                     log.trace("Saved {} resumePoints out of {} resulting in {} updated rows: {}",
                               batchSize,

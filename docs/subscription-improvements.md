@@ -1,6 +1,6 @@
 # Subscription Improvements
 
-Companion to the CDC improvements log ([cdc-improvements.md](../cdc/cdc-improvements.md)),
+Companion to the CDC improvements log ([cdc-improvements.md](cdc-improvements.md)),
 scoped to the subscription / event-delivery layer rather than the CDC pipeline itself.
 
 ---
@@ -31,7 +31,7 @@ latency / load optimisation that's safe to miss.
 ### The key insight: it's a pluggable strategy, not a new subscription type
 
 The framework already routes every subscription's poll cadence through
-[`EventStorePollingOptimizer`](../EventStorePollingOptimizer.java):
+[`EventStorePollingOptimizer`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/EventStorePollingOptimizer.java):
 
 ```java
 public interface EventStorePollingOptimizer {
@@ -163,7 +163,7 @@ That's the entire bridge — ~30 lines.
 #### Trigger installation (no new class)
 
 Installed in
-[`SeparateTablePerAggregateTypePersistenceStrategy`](../persistence/table_per_aggregate_type/SeparateTablePerAggregateTypePersistenceStrategy.java)'s
+[`SeparateTablePerAggregateTypePersistenceStrategy`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/persistence/table_per_aggregate_type/SeparateTablePerAggregateTypePersistenceStrategy.java)'s
 `addAggregateEventStreamConfiguration` path, immediately after the existing
 `createEventStreamTable(...)`, guarded by the same
 `PostgresqlUtil.acquireBootstrapLock(handle)` used for the P6 concurrent-startup fix:
@@ -590,3 +590,23 @@ Testcontainers IT covering:
   Y`. Until then, Phase 1's tunable trade-off covers operator needs.
 - **S3 — Consumer-group-scoped resume points.** Cross-reference cdc-improvements.md P7
   (`CdcConsumerGroup.namespaced(...)` already ships the cooperative half).
+- **S4 — Trim the one-event crash-recovery overlap in the periodic resume-point checkpoint.**
+  `DefaultEventStoreSubscriptionManager.saveResumePointsForAllSubscribers()` runs on a fixed
+  schedule as a crash-safety net and persists each active subscriber's *current* resume point
+  verbatim. A graceful `stop()`/`unsubscribe` records a precise resume boundary, but an
+  **ungraceful** failure (node crash, or the subscription manager dying before `stop()` runs to
+  completion) leaves recovery to resume from the last periodic checkpoint — which re-delivers
+  **exactly one already-processed event** on resubscription.
+
+  **This is safe today**, not a bug: delivery is at-least-once by contract, so a single duplicate
+  on crash recovery is within spec, and the verbatim save is deliberately conservative with
+  respect to resume-point resets (it never advances past an unprocessed event). The optimization
+  is to advance the checkpointed resume point for *active* subscribers to a clean boundary — the
+  same adjustment `stop()` makes — so crash recovery resumes with zero overlap.
+
+  **Why it's deferred.** The win is one duplicate event per ungraceful failure, fully absorbed by
+  idempotent handlers (the documented requirement). The risk is getting the "is this boundary
+  clean?" decision wrong for an in-flight/mid-batch subscriber and *skipping* an event (turning a
+  harmless duplicate into a loss), so it needs careful handling of the active/in-flight case — the
+  open question the inline note at `saveResumePointsForAllSubscribers()` flags. Build it only if a
+  user is sensitive to duplicate-on-crash-recovery and idempotency isn't sufficient.

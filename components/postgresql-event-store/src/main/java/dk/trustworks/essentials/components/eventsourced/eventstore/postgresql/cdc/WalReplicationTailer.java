@@ -270,7 +270,7 @@ public class WalReplicationTailer implements Lifecycle {
         requireNonNull(tailerProperties.getPollBackoffInterval(), "pollBackoffInterval cannot be null");
         requireNonNull(tailerProperties.getMaxPollBackoffInterval(), "maxPollBackInterval cannot be null");
         requireNonNull(tailerProperties.getReplicationStatusInterval(), "replicationStatusInterval cannot be null");
-        requireTrue(tailerProperties.getJitterRatio() > 0.0 && tailerProperties.getJitterRatio() < 0.5, "jitterRatio must be in [0.0..0.5]");
+        requireTrue(tailerProperties.getJitterRatio() >= 0.0 && tailerProperties.getJitterRatio() <= 0.5, "jitterRatio must be in [0.0..0.5]");
         requireTrue(tailerProperties.getBackOffFactor() > 1, "backOffFactor must be > 1");
         var configuredIdleLsnPushInterval = tailerProperties.getIdleLsnPushInterval();
         this.idleLsnPushIntervalNanos = configuredIdleLsnPushInterval != null
@@ -566,7 +566,11 @@ public class WalReplicationTailer implements Lifecycle {
                     lastHeartbeatNs = nowNs;
                     lastIdleLsnPushNs = nowNs;
                     lastMessageAtNs = nowNs;
-                    if (!handleStreamMessage(stream, msg)) continue;
+                    if (!handleStreamMessage(stream, msg)) {
+                        if(log.isTraceEnabled()) {
+                            log.trace("Message not handled");
+                        }
+                    }
                 }
             }
         } catch (Exception e) {

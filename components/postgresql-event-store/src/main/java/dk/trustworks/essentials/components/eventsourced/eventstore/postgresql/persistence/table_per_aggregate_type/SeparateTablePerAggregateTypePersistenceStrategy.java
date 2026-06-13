@@ -404,15 +404,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                 createEventStreamTable(unitOfWork.handle(), eventStreamConfiguration);
             }
             ensureIndexes(unitOfWork.handle(), eventStreamConfiguration);
-            // TODO: Revisit EventStream listening
-//            addEventStreamPostgresqlNotification(unitOfWork.handle(), eventStreamConfiguration);
         });
-        // Start listening for changes
-        // TODO: Start listening
-//            if (!postgresEventStreamListener.get().isStarted()) {
-//                postgresEventStreamListener.get().start();
-//            }
-//            postgresEventStreamListener.get().listenForChangesTo(eventStreamTableName);
     }
 
 

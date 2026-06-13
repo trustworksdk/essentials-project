@@ -729,6 +729,10 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public CdcEventBus cdcEventBus(EssentialsEventStoreProperties properties) {
+        // Surface the weakest delivery configuration (DIRECT + LOG_AND_DROP) loudly at startup — it
+        // silently skips the live-tail push for a dropped event (recovery falls to store-backed backfill).
+        // WARN, not reject: it is a deliberate, non-default opt-in. See CdcDeliveryMode for the matrix.
+        properties.getCdc().directDeliveryDropAdvisory().ifPresent(log::warn);
         return new CdcEventBus(properties.getCdc().getEventBus());
     }
 

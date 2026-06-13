@@ -10,7 +10,7 @@ Order is by priority. Each entry: what, why, where, sketch.
 
 ## P1 — Slot-health metrics ✅ DONE
 
-Implemented in [`CdcSlotMetrics.java`](CdcSlotMetrics.java). Wired in the Spring
+Implemented in [`CdcSlotMetrics.java`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcSlotMetrics.java). Wired in the Spring
 auto-config conditionally on `MeterRegistry` availability + `cdc.enabled`.
 
 Published gauges (tagged `slot=<slotName>`, sampled every
@@ -41,19 +41,19 @@ are unchanged.
 
 ## P2 — Fail-fast on degraded slot at startup ✅ DONE
 
-Implemented in [`PgReplicationSlots.validateSlotHealthOrThrow`](PgReplicationSlots.java).
+Implemented in [`PgReplicationSlots.validateSlotHealthOrThrow`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/PgReplicationSlots.java).
 
 Validation is now split into two phases:
 
-- **Identity check** ([`validateSlotOrThrow`](PgReplicationSlots.java)) — slot
+- **Identity check** ([`validateSlotOrThrow`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/PgReplicationSlots.java)) — slot
   type, plugin, database, persistent. Unchanged in scope.
-- **Health check** (new [`validateSlotHealthOrThrow`](PgReplicationSlots.java)) —
+- **Health check** (new [`validateSlotHealthOrThrow`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/PgReplicationSlots.java)) —
   verifies the slot is operationally usable. Detects three signals:
   - `wal_status` not in `reserved` (PG ≥ 13).
   - `conflicting = true` (PG ≥ 16).
   - `invalidation_reason` set (PG ≥ 16).
 
-Wiring inside [`ensureSlot`](PgReplicationSlots.java):
+Wiring inside [`ensureSlot`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/PgReplicationSlots.java):
 
 | Mode                | Identity check | Health check                                                        |
 | ------------------- | -------------- | ------------------------------------------------------------------- |
@@ -74,8 +74,8 @@ fields. The health check treats null as "unknown, can't verify" and passes.
 
 ## P3 — Inbox backlog + poison-rows gauges ✅ DONE
 
-Implemented as [`CdcInboxRepository.registerInboxBacklogGauges(slotName)`](CdcInboxRepository.java).
-The gauges sample [`countByStatus`](CdcInboxRepository.java) on demand at metrics
+Implemented as [`CdcInboxRepository.registerInboxBacklogGauges(slotName)`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcInboxRepository.java).
+The gauges sample [`countByStatus`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcInboxRepository.java) on demand at metrics
 scrape time — there is no separate background sampler. Cadence is whatever the
 metrics backend's scrape interval is (typically 15–60s).
 
@@ -110,9 +110,9 @@ One new property on `CdcDispatcherProperties`: `inboxMetricsEnabled`
 ## P4 — Configurable idle LSN push interval ✅ DONE
 
 Promoted to property
-[`cdc.walReplicationTailer.idleLsnPushInterval`](CdcProperties.java) (default
+[`cdc.walReplicationTailer.idleLsnPushInterval`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcProperties.java) (default
 `30s`). Captured into a per-instance final field at
-[`WalReplicationTailer`](WalReplicationTailer.java) construction time, replacing
+[`WalReplicationTailer`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/WalReplicationTailer.java) construction time, replacing
 the previous static `IDLE_LSN_PUSH_INTERVAL_NANOS` constant. The constant is
 retained as `DEFAULT_IDLE_LSN_PUSH_INTERVAL_NANOS` for fallback when the
 property is null or non-positive — disable mode is intentionally **not**
@@ -126,8 +126,8 @@ unaffected.
 ## P5 — Startup advisory log for `max_slot_wal_keep_size` ✅ DONE
 
 Implemented as
-[`PgReplicationSlots.getKeepSizeAdvisoryIfUnbounded(Connection)`](PgReplicationSlots.java),
-called from [`WalReplicationTailer.ensureReplicationSlot`](WalReplicationTailer.java)
+[`PgReplicationSlots.getKeepSizeAdvisoryIfUnbounded(Connection)`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/PgReplicationSlots.java),
+called from [`WalReplicationTailer.ensureReplicationSlot`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/WalReplicationTailer.java)
 once per JVM (guarded by an `AtomicBoolean` so reconnects don't repeat the log).
 
 The helper queries `pg_settings.setting WHERE name='max_slot_wal_keep_size'`,
@@ -151,7 +151,7 @@ operators can reason about the trade-off without leaving the log line.
 | 4 | Configurable idle LSN push interval           | ✅ done   | ~30 min      | Tight `wal_sender_timeout` hitting the hardcoded 30s.        |
 | 5 | Advisory log for `max_slot_wal_keep_size`     | ✅ done   | ~30 min      | Operator forgets the server-side disk safety net.            |
 | 9 | CDC direct push-latency fix (warm-up cutover)  | ✅ done   | ~1 day       | Subscriptions established during CDC warm-up were silently pinned to polling for life. |
-| 10 | Gap-tolerant live drain (permanent rollback gaps) | proposed | ~1 day | Live-tail delivery stalls forever on a rolled-back `global_event_order` hole. |
+| 10 | Gap-tolerant live drain (permanent rollback gaps) | ✅ done (Tier 1); Tier 2 deferred | ~1 day | Live-tail delivery stalls forever on a rolled-back `global_event_order` hole. |
 
 P1–P6 + P8 are ✅ delivered. The framework's slot-growth risk is now
 observable (P1 + P3), fail-fast on existing-slot startup (P2), tunable for
@@ -162,7 +162,7 @@ per-statement timeout (P8). P7 (consumer-group-scoped resume points) is
 partially delivered via `CdcConsumerGroup.namespaced(...)` — full
 schema-level scoping deferred. P9 is now **fixed**: the original
 "polling-with-priming" hypothesis was refuted — CDC direct *is* a true bus
-push, but the old [`CdcEventStore.pollEvents`](CdcEventStore.java) early-returned
+push, but the old [`CdcEventStore.pollEvents`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java) early-returned
 plain polling for any subscription established while availability was non-`ACTIVE`
 (the common startup ordering, since `CdcAvailability` starts `INACTIVE` and the
 tailer flips it `ACTIVE` only after connecting) and never re-entered — so such a
@@ -254,7 +254,7 @@ Every framework component that creates its own table at startup. Surveyed:
 |---|---|
 | [`PostgresqlEventStreamGapHandler`](../../../../../../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/gap/PostgresqlEventStreamGapHandler.java) | `transient_subscriber_gaps`, `permanent_gaps` |
 | [`PostgresqlDurableSubscriptionRepository`](../../../../../../../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/subscription/PostgresqlDurableSubscriptionRepository.java) | `durable_subscriptions` |
-| [`CdcSql`](CdcSql.java) (via `CdcInboxRepository`) | `eventstore_cdc_inbox` |
+| [`CdcSql`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcSql.java) (via `CdcInboxRepository`) | `eventstore_cdc_inbox` |
 | `PostgresqlFencedLockStorage` | `fenced_locks` |
 | `PostgresqlDurableQueuesStatistics` + `DurableQueuesSql` | `durable_queues`, queue-stats tables |
 | `ExecutorScheduledJobRepository` | scheduler tables |
@@ -355,7 +355,7 @@ diagnosed in week 3 of multi-group production.
 
 **Path A — Cooperative API helper (already delivered)**
 
-[`CdcConsumerGroup.namespaced(SubscriberId)`](CdcConsumerGroup.java) returns
+[`CdcConsumerGroup.namespaced(SubscriberId)`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcConsumerGroup.java) returns
 a `SubscriberId` prefixed with the active group name. Applications opt in per
 subscription. Completely non-breaking:
 
@@ -419,7 +419,7 @@ the current state is "documented, helper exists, applications opt in".
 ## P8 — Configurable dispatcher poll-query timeout ✅ DONE
 
 Implemented as the
-[`cdc.cdcDispatcher.queryTimeout`](CdcProperties.java) property + an overload
+[`cdc.cdcDispatcher.queryTimeout`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcProperties.java) property + an overload
 `CdcInboxRepository.fetchNextBatch(slotName, batchSize, queryTimeoutSeconds)`
 that applies `setQueryTimeout` only when the configured value is positive.
 
@@ -486,9 +486,9 @@ extended to wrap the per-row writes via the same `setQueryTimeout` pattern.
 
 **Status:** ✅ **fixed.** Root cause found by code analysis (the perf-lab bypass comparison
 was not needed; the code path is conclusive); the original hypothesis below is **refuted**.
-The fix ships in [`CdcEventStore.pollEvents`](CdcEventStore.java) and is covered by unit +
+The fix ships in [`CdcEventStore.pollEvents`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java) and is covered by unit +
 Testcontainers ITs — see [The fix (delivered)](#the-fix--delivered). Triggered by perf-lab
-data captured during the [S1 notify-polling spec](../subscription/subscription-improvements.md).
+data captured during the [S1 notify-polling spec](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/subscription/subscription-improvements.md).
 
 ### What we observed
 
@@ -545,7 +545,7 @@ This is **wrong** in two ways, both established by reading the delivery path:
 
 1. The CDC push does **not** merely "prime the polling optimizer". The
    `NotifyAwareEventStorePollingOptimizer` epoch is fed by the *trigger-based*
-   LISTEN/NOTIFY path ([`NotifyEpochSource`](../subscription/notify/NotifyEpochSource.java)),
+   LISTEN/NOTIFY path ([`NotifyEpochSource`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/subscription/notify/NotifyEpochSource.java)),
    which is independent of CDC. A CDC-direct push to the bus does not advance that
    epoch at all.
 2. The managed subscription path **is** wired to consume the CDC bus as a true
@@ -553,7 +553,7 @@ This is **wrong** in two ways, both established by reading the delivery path:
    `EventStoreSubscriptionManager` is given the `@Primary` `CdcEventStore`
    decorator (see `EventStoreConfiguration.eventStoreSubscriptionManager(...)` →
    `.setEventStore(...)`), so `subscribeToAggregateEventsAsynchronously` flows
-   through [`CdcEventStore.pollEvents`](CdcEventStore.java), whose live source is
+   through [`CdcEventStore.pollEvents`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java), whose live source is
    `cdcBus.fluxForAggregate(aggregateType)` (a push) when availability is `ACTIVE`.
 
 So CDC direct is *not* "polling with priming". It is a genuine push — **but only
@@ -565,7 +565,7 @@ caveat is the whole story.
 The unexplained latency budget is caused by an **establishment-time gate**, not
 by anything in steady-state delivery:
 
-[`CdcEventStore.pollEvents`](CdcEventStore.java) begins with
+[`CdcEventStore.pollEvents`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java) begins with
 
 ```java
 if (!availability.isActive()) {
@@ -582,7 +582,7 @@ entire lifetime** and never consumes the CDC bus, even after CDC becomes `ACTIVE
 seconds later.
 
 `CdcAvailability` starts in state `INACTIVE`
-([`CdcAvailability.java:63`](CdcAvailability.java)); the WAL tailer only flips it
+([`CdcAvailability.java:63`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcAvailability.java)); the WAL tailer only flips it
 to `ACTIVE` once it has connected and begun streaming — a few seconds into
 application boot. Long-lived subscriptions registered at startup therefore
 subscribe **while `INACTIVE`**, hit the early-return, and are pinned to polling.
@@ -609,7 +609,7 @@ throughout regardless of that label.
 
 ### The fix (delivered)
 
-[`CdcEventStore.pollEvents`](CdcEventStore.java) no longer terminally early-returns
+[`CdcEventStore.pollEvents`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java) no longer terminally early-returns
 plain polling when availability is non-`ACTIVE` at subscribe time. Instead it returns
 the **adaptive live source seeded at the resume point** (`buildAdaptiveLiveSource` with
 `lastSeen = resume - 1`):
@@ -717,7 +717,7 @@ polling for its whole life. Now fixed for real deployments.
 > "Tier 1" section below for the as-built notes. Tier 2 (in-drain probe + classify)
 > remains deferred; build it only if Tier 1's re-backfill cost is measured to matter.
 
-**What.** [`BackfillThenLiveOrdered`](CdcEventStore.java)'s drain advances
+**What.** [`BackfillThenLiveOrdered`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java)'s drain advances
 `expectedNext` strictly by `+1` (`buffer.remove(next); next++`). It has no way to
 skip a `global_event_order` value that will *never* arrive on the live stream, so
 a permanently-missing order in the live tail parks `expectedNext` on it forever —
@@ -731,14 +731,14 @@ hole: that value is never committed, produces no data WAL, and so never reaches
 the CDC bus. If such a hole lands in the live region (`> head`) of an active
 subscription, the live drain stalls. It does **not** self-heal: CDC stays globally
 healthy, so availability never flips to polling and the
-[`CdcEffectivenessMonitor`](CdcEffectivenessMonitor.java) (which compares
+[`CdcEffectivenessMonitor`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEffectivenessMonitor.java) (which compares
 tailer-received vs. published counts) never fires — the stall is confined to the
 one affected subscriber.
 
 **Self-heal analysis (corrected).** It is tempting to assume an availability flip
 to polling rescues the stall — it does not. `expectedNext` lives in the
 `Flux.defer` scope of `ordered(...)` and is owned by the single long-lived
-`liveSub`. [`buildAdaptiveLiveSource`](CdcEventStore.java)'s `switchMap` swaps the
+`liveSub`. [`buildAdaptiveLiveSource`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java)'s `switchMap` swaps the
 live *source* (CDC bus ↔ `pollEvents`) underneath that subscriber but never resets
 `expectedNext`. So even when the polling fallback engages and the gap handler
 correctly skips the permanent hole, it delivers `hole+1, hole+2, …` — which land in
@@ -762,7 +762,7 @@ availability flip is *not* sufficient.
   hole is genuinely absent from the all-tenant committed stream too.
 
 **Where.** The drain `IntSupplier` inside
-[`CdcEventStore.BackfillThenLiveOrdered`](CdcEventStore.java) — marked
+[`CdcEventStore.BackfillThenLiveOrdered`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcEventStore.java) — marked
 "⚠️ CRITICAL ORDERING COMPONENT — do NOT simplify", so any change here needs care.
 
 ### Proposed design
@@ -794,7 +794,7 @@ subscription, rather than teaching the live drain to classify gaps itself.
    every drained run **and** at the backfill→live flip (so a long backfill cannot
    trip the live-phase clock). The watcher is disposed in `doFinally`.
 2. **On trip, fail the stream — `expectedNext` is never mutated.** The watcher emits
-   a retryable [`CdcLiveDrainStalledException`](CdcLiveDrainStalledException.java)
+   a retryable [`CdcLiveDrainStalledException`](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/CdcLiveDrainStalledException.java)
    (carrying the parked `expectedNext`) on the ordered sink, guarded so it fires at
    most once and only if `tryEmitError` returns `OK` (a concurrent late-arriving
    event that resolves the hole simply means the next tick re-evaluates). The drain
