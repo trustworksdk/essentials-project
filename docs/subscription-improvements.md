@@ -588,6 +588,43 @@ Testcontainers IT covering:
   **Trigger to actually build it.** A real user with workload at ≥1 Hz who needs
   **both** DB-load budget X **and** p95 wake-up < Y, where X requires `max-delay >
   Y`. Until then, Phase 1's tunable trade-off covers operator needs.
+
+  **Implementation note — coexistence with the existing optimizers (incl. jitter).**
+  The reactive wake-up and the polling optimizers are *orthogonal axes* and compose
+  cleanly: the optimizer decides *how long the fallback timeout is* (DB-load floor, and
+  for `JitteredEventStorePollingOptimizer`
+  the cross-subscriber de-sync jitter); the NOTIFY signal is an *early-wake* that may cut
+  that timeout short. S2 keeps using `optimizer.currentDelayMs()` purely as the timeout
+  duration, so it is optimizer-agnostic. They are in fact complementary — jitter
+  de-synchronizes the *quiet-system* fallback polls (no thundering herd when many
+  subscribers hit `max-delay`), while NOTIFY gives sub-ms wake-up when events actually
+  arrive (waking near-simultaneously then is by design, and not something jitter targets).
+
+  **Seam.** Today the poll loop blocks on `Thread.sleep(pollingOptimizer.currentDelayMs())`
+  (`PostgresqlEventStore`, the polling-worker `run()` loop). Rather than special-casing the loop, lift the wait into
+  the `EventStorePollingOptimizer` SPI as a new method (e.g. `awaitNextPollWindow()` /
+  `Mono<Void> nextPollDelay()`) with a **default that reproduces current behaviour**
+  (`sleep(currentDelayMs())`):
+
+  - `JitteredEventStorePollingOptimizer` / `SimpleEventStorePollingOptimizer` inherit the
+    default unchanged → no interruption (correct: they have no NOTIFY source).
+  - `NotifyAwareEventStorePollingOptimizer` overrides it →
+    `Mono.firstWithSignal(notifySignalForTable, Mono.delay(currentDelayMs())).block()`.
+
+  This keeps the worker thread's blocking model (it just blocks interruptibly), needs zero
+  changes to the jitter/simple optimizers, and keeps the loop optimizer-agnostic. A "jitter
+  **and** notify" deployment is then a notify-aware optimizer that also jitters its
+  `currentDelayMs()` and overrides the await.
+
+  **Caveats.**
+  - Requires the S1 NOTIFY signal source (per-table `Sinks.Many<Void>` fed by
+    `MultiTableChangeListener`). Absent it, S2 degrades gracefully to the timeout-only
+    behaviour above.
+  - **Pick one NOTIFY mechanism.** `NotifyAwareEventStorePollingOptimizer.currentDelayMs()`
+    already peeks the epoch and returns `0` to shorten the *next* sleep (the Phase-1
+    mechanism). Once S2's interruptible await owns the wake, that epoch-peek is redundant
+    (harmless, but the optimizer should be simplified to a pure backoff ramp to avoid two
+    overlapping wake mechanisms).
 - **S3 — Consumer-group-scoped resume points.** Cross-reference cdc-improvements.md P7
   (`CdcConsumerGroup.namespaced(...)` already ships the cooperative half).
 - **S4 — Trim the one-event crash-recovery overlap in the periodic resume-point checkpoint.**

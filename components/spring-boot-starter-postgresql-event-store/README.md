@@ -185,6 +185,35 @@ Controls *when* in-transaction subscribers receive events. See [postgresql-event
 
 ### CDC Configuration (Hybrid Logical Replication)
 
+> **Which delivery mechanism should I use?** Subscribers are always correct regardless —
+> the choice is only *how fast the fast path is* and *what operational footprint you accept*.
+> See **[cdc.md §12.6 "Choosing a delivery mechanism"](../../docs/cdc.md)**
+> for the full comparison (plain/jittered/notify polling vs CDC INBOX/DIRECT, with indicative
+> latency and DB-load numbers). Quick guide:
+> - **Simplest, any Postgres, new project** → leave defaults (CDC `AUTO`, falls back to
+>   jittered polling automatically if logical replication is unavailable).
+> - **Latency-sensitive read models / high fan-out / want audit trail or replica-offload** →
+>   CDC `INBOX` (the default).
+> - **Don't control the DB / no `wal_level=logical` / want minimal moving parts** → disable
+>   CDC and run polling (see the upgrade note below).
+
+> **⚠️ Upgrade note (existing users).** CDC is **enabled by default**
+> (`essentials.eventstore.cdc.enabled` defaults to `true` — it starts unless you explicitly set
+> it `false`). Before this version the default delivery was **polling with jitter**. On upgrade:
+> - If your database does **not** have `wal_level=logical` (or you can't create slots), `mode=auto`
+>   transparently falls back to the previous polling-with-jitter behaviour — no action needed, no
+>   events lost.
+> - If your database **does** support logical replication, the app will now create a **replication
+>   slot** and stream WAL — a real operational change (slot/publication management and WAL-retention
+>   risk; see [cdc.md §5](../../docs/cdc.md)).
+>
+> **To keep the pre-upgrade behaviour (polling with jitter), set:**
+> ```properties
+> essentials.eventstore.cdc.enabled=false
+> ```
+> CDC's operational surface (replication slot, publication, WAL retention) is heavier than polling,
+> so adopt it deliberately rather than inheriting it on upgrade.
+
 Hybrid CDC can run in durable inbox mode (`INBOX`) or direct publish mode (`DIRECT`):
 
 ```properties

@@ -1354,6 +1354,44 @@ The one case where liveliness can degrade: **CDC stuck AND polling disabled or
 broken**. The framework does not make this configuration possible — polling is
 always available as the fallback, by construction. Don't disable polling.
 
+### 12.6 Choosing a delivery mechanism
+
+§12.1–12.4 compare CDC / polling / hybrid at a high level. This section folds in the
+finer choices — the **polling sub-variants** (plain, jittered, notify-driven) and the
+**CDC delivery modes** (INBOX vs DIRECT) — into one place, with indicative numbers and a
+need-based recommendation. For the polling-side tuning detail see
+[subscription-improvements.md](subscription-improvements.md); for the INBOX/DIRECT delivery
+guarantees see the `CdcDeliveryMode` javadoc.
+
+> **The numbers below are *indicative* (a 10 Hz / 1 s-window smoke run, plus the S1
+> 0.1–1 Hz perf-lab runs), not a rigorous benchmark.** They show the *shape* of the
+> trade-off; absolute latency depends heavily on event inter-arrival rate, batch size, and
+> hardware. Measure your own workload before committing to an SLA.
+
+| Mechanism | Live p95 (indicative) | Idle DB load | Best for | Main cost |
+|---|---|---|---|---|
+| **Plain fixed polling** | ≈ poll interval (idle ~1 s, 1 Hz ~334 ms) | N subs × M JVMs × poll-rate | simplest possible; no infra; works on any Postgres | latency = poll interval; load grows with subscriber count |
+| **Jittered polling** (the polling default) | same as plain | same total, **de-synchronized** | **the safe default** — many subscribers/JVMs sharing one DB without lock-step poll spikes | no latency gain — load-smoothing only |
+| **Notify-polling (S1)** | idle ~898 ms @ `max-delay=1s`; ~222 ms @ `max-delay=200ms` (1 Hz) | **near-zero at idle** (−32% @ 0.1 Hz) | low op-cost path that cuts idle DB load *and* beats plain polling on latency; great polling fallback | `pg_notify` trigger (~10–50 µs/INSERT); latency floor ≈ `max-delay` |
+| **CDC INBOX** | ~159 ms (dispatcher hop) | 1 replication conn + inbox queries; **no per-subscriber poll amplification** | audit trail, replica-offload, server-side filtering, durable buffer, high fan-out | slot + publication + plugin ops; WAL-retention risk (§5) |
+| **CDC DIRECT** | **~33 ms (~4–5× below polling)** | 1 replication conn, no inbox | **lowest latency** push delivery | weaker re-delivery under `LOG_AND_DROP` (see `CdcDeliveryMode`); no durable buffer |
+
+Pick by need:
+
+- **Defaults / simplest correct setup, any Postgres** → **jittered polling** (no
+  `wal_level=logical`, no slot, no triggers). Add **notify-polling** when idle DB load or
+  quiet-system latency matters and you can afford a per-INSERT trigger.
+- **Latency-sensitive read models, high fan-out, want an audit trail or replica-offload**
+  → **CDC** (hybrid). Use **INBOX** (the default) for the durable buffer + replica-offload;
+  use **DIRECT** only when you need the absolute lowest latency and accept the weaker
+  overflow guarantee.
+- **You don't control the database** (managed service without logical replication, or
+  `wal_level` ≠ `logical`) → polling (jittered ± notify). CDC in `AUTO` mode also degrades
+  to exactly this automatically.
+
+Polling is always the floor of correctness; CDC is the ceiling of speed (§12.4). You are
+never choosing *between* correctness and speed — only how fast the fast path is.
+
 ---
 
 ## 13. Known Limitations
