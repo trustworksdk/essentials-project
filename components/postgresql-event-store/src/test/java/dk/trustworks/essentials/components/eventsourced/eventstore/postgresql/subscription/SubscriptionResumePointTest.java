@@ -80,4 +80,35 @@ class SubscriptionResumePointTest {
         assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(1));
         assertThat(resumePoint.isChanged()).isTrue();
     }
+
+    @Test
+    void test_an_advance_during_an_in_flight_save_stays_unpersisted() {
+        // The lost-update the value-based dirty tracking exists to prevent: a save binds 205, an
+        // in-flight batch then advances the resume point to 213, and only afterwards does the save
+        // commit and report back. Marking the point clean here would strand 213 - the periodic
+        // snapshotter only saves resume points that isChanged(), so 206..212 would be redelivered.
+        var resumePoint = resumePointAt(205);
+        var boundValue  = resumePoint.getResumeFromAndIncluding();
+
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(213));
+        resumePoint.markAsPersisted(boundValue, OffsetDateTime.now());
+
+        assertThat(resumePoint.getResumeFromAndIncluding()).isEqualTo(GlobalEventOrder.of(213));
+        assertThat(resumePoint.isChanged()).as("213 was never written, so it still needs saving").isTrue();
+    }
+
+    @Test
+    void test_marking_the_written_value_as_persisted_makes_it_clean() {
+        var resumePoint = resumePointAt(205);
+        resumePoint.advanceResumeFromAndIncluding(GlobalEventOrder.of(213));
+
+        resumePoint.markAsPersisted(GlobalEventOrder.of(213), OffsetDateTime.now());
+
+        assertThat(resumePoint.isChanged()).isFalse();
+    }
+
+    @Test
+    void test_a_newly_loaded_resume_point_is_in_sync_with_the_store() {
+        assertThat(resumePointAt(100).isChanged()).isFalse();
+    }
 }

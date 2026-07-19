@@ -25,17 +25,33 @@ import java.util.Objects;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The durable position of a subscriber within an {@link AggregateType}'s event stream.
+ * <p>
+ * <b>Thread-safety:</b> instances are mutated from the thread processing events (which advances
+ * {@link #advanceResumeFromAndIncluding(GlobalEventOrder)}) and read/marked-persisted from the
+ * thread persisting them (the periodic snapshotter or {@code stop()}). All access to the mutable
+ * state is therefore synchronized on the instance.
+ * <p>
+ * <b>Dirty tracking is value-based, not flag-based:</b> "persisted" is recorded as the
+ * {@link GlobalEventOrder} that was actually written to the database rather than as a boolean.
+ * A boolean flag loses updates - if the resume point advances while a save is in-flight, clearing
+ * the flag on commit marks the newer, never-written value as clean, and since nothing re-dirties a
+ * resume point that has stopped advancing, that progress is never persisted by any later save.
+ */
 public final class SubscriptionResumePoint {
-    private final SubscriberId     subscriberId;
-    private final AggregateType    aggregateType;
-    private       GlobalEventOrder resumeFromAndIncluding;
-    private       OffsetDateTime   lastUpdated;
-    private       boolean          changed;
+    private final    SubscriberId     subscriberId;
+    private final    AggregateType    aggregateType;
+    private volatile GlobalEventOrder resumeFromAndIncluding;
+    /** The value most recently confirmed written to the underlying store - {@link #isChanged()} is derived from it. */
+    private volatile GlobalEventOrder lastPersistedResumeFromAndIncluding;
+    private volatile OffsetDateTime   lastUpdated;
 
     public SubscriptionResumePoint(SubscriberId subscriberId, AggregateType aggregateType, GlobalEventOrder resumeFromAndIncluding, OffsetDateTime lastUpdated) {
         this.subscriberId = requireNonNull(subscriberId, "No subscriberId provided");
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.resumeFromAndIncluding = requireNonNull(resumeFromAndIncluding, "No resumeFromAndIncluding provided");
+        this.lastPersistedResumeFromAndIncluding = this.resumeFromAndIncluding;
         this.lastUpdated = requireNonNull(lastUpdated, "No lastUpdated provided");
     }
 
@@ -61,11 +77,8 @@ public final class SubscriptionResumePoint {
      * progress use {@link #advanceResumeFromAndIncluding(GlobalEventOrder)} instead, which cannot
      * rewind.
      */
-    public SubscriptionResumePoint setResumeFromAndIncluding(GlobalEventOrder resumeFromAndIncluding) {
+    public synchronized SubscriptionResumePoint setResumeFromAndIncluding(GlobalEventOrder resumeFromAndIncluding) {
         requireNonNull(resumeFromAndIncluding, "No resumeFromAndIncluding provided");
-        if (!Objects.equals(this.resumeFromAndIncluding, resumeFromAndIncluding)) {
-            changed = true;
-        }
         this.resumeFromAndIncluding = resumeFromAndIncluding;
         return this;
     }
@@ -82,7 +95,7 @@ public final class SubscriptionResumePoint {
      * because unfilled gaps are tracked separately (and durably) by the {@code EventStreamGapHandler},
      * not by the resume point.
      */
-    public SubscriptionResumePoint advanceResumeFromAndIncluding(GlobalEventOrder resumeFromAndIncluding) {
+    public synchronized SubscriptionResumePoint advanceResumeFromAndIncluding(GlobalEventOrder resumeFromAndIncluding) {
         requireNonNull(resumeFromAndIncluding, "No resumeFromAndIncluding provided");
         if (resumeFromAndIncluding.longValue() <= this.resumeFromAndIncluding.longValue()) {
             return this;
@@ -90,14 +103,40 @@ public final class SubscriptionResumePoint {
         return setResumeFromAndIncluding(resumeFromAndIncluding);
     }
 
-    public SubscriptionResumePoint setLastUpdated(OffsetDateTime lastUpdated) {
+    /**
+     * Mark the resume point as being in sync with the underlying store at its <i>current</i> value.
+     *
+     * @param lastUpdated the timestamp the value was written
+     * @see #markAsPersisted(GlobalEventOrder, OffsetDateTime) to mark a specific value as written
+     */
+    public synchronized SubscriptionResumePoint setLastUpdated(OffsetDateTime lastUpdated) {
+        return markAsPersisted(this.resumeFromAndIncluding, lastUpdated);
+    }
+
+    /**
+     * Record that {@code persistedResumeFromAndIncluding} was successfully written to the underlying store.<br>
+     * <br>
+     * Callers must pass the value they actually wrote, <b>not</b> the current value: a resume point can
+     * advance concurrently while the write is in-flight, and that newer value has <i>not</i> been persisted.
+     * Passing it here would mark it clean and the progress would be silently lost, since the periodic
+     * snapshotter only saves resume points that {@link #isChanged()}.
+     *
+     * @param persistedResumeFromAndIncluding the value that was written to the underlying store
+     * @param lastUpdated                     the timestamp the value was written
+     */
+    public synchronized SubscriptionResumePoint markAsPersisted(GlobalEventOrder persistedResumeFromAndIncluding,
+                                                                OffsetDateTime lastUpdated) {
+        this.lastPersistedResumeFromAndIncluding = requireNonNull(persistedResumeFromAndIncluding, "No persistedResumeFromAndIncluding provided");
         this.lastUpdated = requireNonNull(lastUpdated, "No lastUpdated provided");
-        changed = false;
         return this;
     }
 
+    /**
+     * @return true if {@link #getResumeFromAndIncluding()} differs from the value last confirmed
+     * written to the underlying store, i.e. this resume point needs saving
+     */
     public boolean isChanged() {
-        return changed;
+        return !Objects.equals(resumeFromAndIncluding, lastPersistedResumeFromAndIncluding);
     }
 
     @Override

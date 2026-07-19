@@ -197,49 +197,12 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                 // Ignore
                 Thread.currentThread().interrupt();
             }
-            persistLatestResumePoint();
+            persistResumePointUntilSettled(durableSubscriptionRepository, resumePoint);
             started = false;
             log.info("[{}-{}] Stopped subscription",
                     subscriberId,
                     aggregateType);
         }
-    }
-
-    /** Max polls waiting for the resume point to stop advancing after dispose() - 10 x 100ms = 1s. */
-    private static final int  RESUME_POINT_SETTLE_POLL_ATTEMPTS = 10;
-    private static final long RESUME_POINT_SETTLE_POLL_DELAY_MS = 100L;
-
-    /**
-     * Wait (bounded) for the resume point to stop advancing, then persist it once.
-     * <p>
-     * {@code dispose()} stops new work being pulled, but batches already in flight keep completing
-     * and each one advances the resume point. Persisting before they finish leaves the durable resume
-     * point behind the work actually performed, and nothing corrects it afterwards: the periodic
-     * snapshotter in {@code DefaultEventStoreSubscriptionManager} only saves <i>active</i>
-     * subscriptions, and this one is on its way to inactive. Those events would then be redelivered
-     * on the next start. So settle first, save last.
-     */
-    private void persistLatestResumePoint() {
-        GlobalEventOrder previouslySeen = null;
-        for (int attempt = 0; attempt < RESUME_POINT_SETTLE_POLL_ATTEMPTS; attempt++) {
-            var latestResumePoint = resumePoint.getResumeFromAndIncluding();
-            if (latestResumePoint.equals(previouslySeen)) {
-                break;
-            }
-            previouslySeen = latestResumePoint;
-            try {
-                Thread.sleep(RESUME_POINT_SETTLE_POLL_DELAY_MS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-
-        log.debug("[{}-{}] Storing ResumePoint with resumeFromAndIncluding {}",
-                  subscriberId,
-                  aggregateType,
-                  resumePoint.getResumeFromAndIncluding());
-        durableSubscriptionRepository.saveResumePoint(resumePoint);
     }
 
 
