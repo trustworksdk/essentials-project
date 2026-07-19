@@ -43,37 +43,50 @@ public class PgReplicationSlotsForceRecreateIT extends AbstractLogicalReplicatio
         // Create a wal2json logical slot.
         jdbi.useHandle(h -> h.execute("select * from pg_create_logical_replication_slot(?, 'wal2json')", slotName));
 
-        // Open a logical replication stream to make the slot ACTIVE (active_pid set).
-        try (var streamConn = replicationDataSource.getConnection()) {
-            var pgConn = streamConn.unwrap(PGConnection.class);
-            PGReplicationStream stream = pgConn.getReplicationAPI()
-                                               .replicationStream()
-                                               .logical()
-                                               .withSlotName(slotName)
-                                               .start();
+        try {
+            // Open a logical replication stream to make the slot ACTIVE (active_pid set).
+            // Deliberately NOT try-with-resources: forceRecreateSlot terminates this connection's
+            // backend, so an implicit close() flushes a terminate message down a dead socket and
+            // throws "Unable to close connection properly", masking the real test result. Closed
+            // leniently below instead — same reason stream.close() is guarded.
+            var streamConn = replicationDataSource.getConnection();
             try {
-                // Confirm the slot really is active before we try to force-recreate it.
-                try (Connection probe = jdbi.open().getConnection()) {
-                    var before = PgReplicationSlots.findSlot(probe, slotName);
-                    assertThat(before).isNotNull();
-                    assertThat(before.isActive()).as("slot is held by the live stream").isTrue();
+                var pgConn = streamConn.unwrap(PGConnection.class);
+                PGReplicationStream stream = pgConn.getReplicationAPI()
+                                                   .replicationStream()
+                                                   .logical()
+                                                   .withSlotName(slotName)
+                                                   .start();
+                try {
+                    // Confirm the slot really is active before we try to force-recreate it.
+                    try (Connection probe = jdbi.open().getConnection()) {
+                        var before = PgReplicationSlots.findSlot(probe, slotName);
+                        assertThat(before).isNotNull();
+                        assertThat(before.isActive()).as("slot is held by the live stream").isTrue();
 
-                    // Force-recreate: must terminate the stream's backend, wait for release, drop, recreate.
-                    boolean dropped = PgReplicationSlots.forceRecreateSlot(probe, slotName, "wal2json");
-                    assertThat(dropped).isTrue();
+                        // Force-recreate: must terminate the stream's backend, wait for release, drop, recreate.
+                        boolean dropped = PgReplicationSlots.forceRecreateSlot(probe, slotName, "wal2json");
+                        assertThat(dropped).isTrue();
 
-                    // The slot exists again, is no longer active, and is a fresh wal2json logical slot.
-                    var after = PgReplicationSlots.findSlot(probe, slotName);
-                    assertThat(after).isNotNull();
-                    assertThat(after.isActive()).isFalse();
-                    assertThat(after.isLogical()).isTrue();
-                    assertThat(after.plugin).isEqualTo("wal2json");
+                        // The slot exists again, is no longer active, and is a fresh wal2json logical slot.
+                        var after = PgReplicationSlots.findSlot(probe, slotName);
+                        assertThat(after).isNotNull();
+                        assertThat(after.isActive()).isFalse();
+                        assertThat(after.isLogical()).isTrue();
+                        assertThat(after.plugin).isEqualTo("wal2json");
+                    }
+                } finally {
+                    try {
+                        stream.close();
+                    } catch (Exception ignore) {
+                        // The backend was terminated by forceRecreateSlot; closing may throw — irrelevant here.
+                    }
                 }
             } finally {
                 try {
-                    stream.close();
+                    streamConn.close();
                 } catch (Exception ignore) {
-                    // The backend was terminated by forceRecreateSlot; closing may throw — irrelevant here.
+                    // Same reason as stream.close() above — the backend is already gone.
                 }
             }
         } finally {

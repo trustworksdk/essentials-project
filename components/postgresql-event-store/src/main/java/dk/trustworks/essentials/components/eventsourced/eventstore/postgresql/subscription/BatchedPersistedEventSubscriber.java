@@ -372,9 +372,10 @@ public class BatchedPersistedEventSubscriber extends BaseSubscriber<PersistedEve
                                              lastEvent.globalEventOrder());
                                }))
             .doFinally(signalType -> {
-                // Update the resume point to after the last event in the batch
+                // Update the resume point to after the last event in the batch - advance (not set),
+                // since gap-filled batches can complete out of order and must not rewind it
                 eventStoreSubscription.currentResumePoint().get()
-                                      .setResumeFromAndIncluding(lastEvent.globalEventOrder().increment());
+                                      .advanceResumeFromAndIncluding(lastEvent.globalEventOrder().increment());
 
                 // Reschedule latency check
                 schedulePartialBatchProcessing();

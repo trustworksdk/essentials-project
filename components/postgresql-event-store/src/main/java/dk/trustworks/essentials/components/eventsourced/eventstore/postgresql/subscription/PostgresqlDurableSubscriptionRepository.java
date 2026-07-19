@@ -242,9 +242,9 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
             return;
         }
 
+        var now = OffsetDateTime.now(Clock.systemUTC());
         try {
             unitOfWorkFactory.usingUnitOfWork(uow -> {
-                var now = OffsetDateTime.now(Clock.systemUTC());
                 var preparedBatch = uow.handle().prepareBatch("UPDATE " + this.durableSubscriptionsTableName +
                                                                       " SET resume_from_and_including_global_eventorder = :resume_from_and_including_global_eventorder, last_updated = :last_updated " +
                                                                       " WHERE aggregate_type = :aggregate_type AND subscriber_id = :subscriber_id");
@@ -262,7 +262,6 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                 var batchSize = preparedBatch.size();
                 var rowsUpdated = Arrays.stream(preparedBatch.execute())
                                         .reduce(Integer::sum).orElse(0);
-                changedResumePoints.forEach(subscriptionResumePoint -> subscriptionResumePoint.setLastUpdated(now));
                 if (log.isTraceEnabled()) {
                     log.trace("Saved {} resumePoints out of {} resulting in {} updated rows: {}",
                               batchSize,
@@ -276,6 +275,11 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                               rowsUpdated);
                 }
             });
+            // Mark the resume points clean ONLY once the transaction has actually committed. Doing this
+            // inside the UnitOfWork clears the changed-flag even when the commit subsequently fails (e.g.
+            // the database became unreachable mid-save) - and since nothing re-dirties a resume point that
+            // has stopped advancing, that progress would then never be persisted by any later save.
+            changedResumePoints.forEach(subscriptionResumePoint -> subscriptionResumePoint.setLastUpdated(now));
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {
                 log.debug("Failed to save the {} ResumePoints", resumePoints.size(), e);

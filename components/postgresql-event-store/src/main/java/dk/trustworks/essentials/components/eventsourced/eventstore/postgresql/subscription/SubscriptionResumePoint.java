@@ -55,6 +55,12 @@ public final class SubscriptionResumePoint {
         return lastUpdated;
     }
 
+    /**
+     * Unconditionally reposition the resume point - including <i>backwards</i>.<br>
+     * Use this for deliberate repositioning (e.g. a subscription reset). To record consumption
+     * progress use {@link #advanceResumeFromAndIncluding(GlobalEventOrder)} instead, which cannot
+     * rewind.
+     */
     public SubscriptionResumePoint setResumeFromAndIncluding(GlobalEventOrder resumeFromAndIncluding) {
         requireNonNull(resumeFromAndIncluding, "No resumeFromAndIncluding provided");
         if (!Objects.equals(this.resumeFromAndIncluding, resumeFromAndIncluding)) {
@@ -62,6 +68,26 @@ public final class SubscriptionResumePoint {
         }
         this.resumeFromAndIncluding = resumeFromAndIncluding;
         return this;
+    }
+
+    /**
+     * Move the resume point forward to {@code resumeFromAndIncluding}, ignoring the call when it
+     * would move it backwards or leave it unchanged.<br>
+     * <br>
+     * Events are not necessarily <b>completed</b> in {@link GlobalEventOrder} order: when a transient
+     * gap occurs (e.g. a database disruption) the {@code EventStreamGapHandler} re-delivers the
+     * skipped events afterwards, so an older event can finish after newer ones have already been
+     * handled. Assigning unconditionally would rewind the resume point to that straggler and cause
+     * every event in between to be redelivered on the next resume. Advancing past a gap is safe
+     * because unfilled gaps are tracked separately (and durably) by the {@code EventStreamGapHandler},
+     * not by the resume point.
+     */
+    public SubscriptionResumePoint advanceResumeFromAndIncluding(GlobalEventOrder resumeFromAndIncluding) {
+        requireNonNull(resumeFromAndIncluding, "No resumeFromAndIncluding provided");
+        if (resumeFromAndIncluding.longValue() <= this.resumeFromAndIncluding.longValue()) {
+            return this;
+        }
+        return setResumeFromAndIncluding(resumeFromAndIncluding);
     }
 
     public SubscriptionResumePoint setLastUpdated(OffsetDateTime lastUpdated) {
