@@ -303,9 +303,19 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
         productsSubscription.stop();
         ordersSubscription.stop();
 
-        // Check the ResumePoints are updated and saved
-        var lastEventOrder   = orderEventsReceived.get(totalNumberOfOrderEvents - 1);
-        var lastProductEvent = productEventsReceived.get(totalNumberOfProductEvents - 1);
+        // Check the ResumePoints are updated and saved.
+        // Select by highest GlobalEventOrder rather than by arrival position: under the
+        // connectivity-disruption scenario events can arrive out of order (which is why the
+        // GlobalEventOrder assertions above sort first), so the last *received* event is not
+        // necessarily the one with the highest GlobalEventOrder. The resume point always tracks
+        // the highest order consumed, so it must be compared against the maximum. With in-order
+        // delivery the maximum is also the last arrival, so this is equivalent for subscribe().
+        var lastEventOrder   = orderEventsReceived.stream()
+                                                  .max(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                                  .orElseThrow();
+        var lastProductEvent = productEventsReceived.stream()
+                                                    .max(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                                    .orElseThrow();
 
         assertThat(ordersSubscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()); // When the subscriber is stopped we store the next global event order
         var ordersSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(ordersSubscription.subscriberId(), ordersSubscription.aggregateType());
