@@ -48,7 +48,14 @@ import static org.assertj.core.api.Assertions.assertThat;
         })
 class BaselineComparisonScenarioSmokeIT {
 
-    @Container
+    // Deliberately NOT annotated @Container. @Container stops the container from JUnit's
+    // AfterAllCallback, but the @SpringBootTest context is cached by the TestContext framework
+    // and only closed later, by SpringApplicationShutdownHook at JVM exit. That ordering runs
+    // the entire Spring shutdown against a dead database: an EOFException storm from the
+    // background pollers, plus a 30s stall while DBFencedLockManager.stop() tries to release
+    // its locks and blocks on Hikari's connectionTimeout. Starting the container manually (see
+    // registerProperties) leaves it running for the life of the JVM, so it outlives the context;
+    // Testcontainers' Ryuk sidecar reaps it after the JVM exits.
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17.5-bookworm")
             .withDatabaseName("essentials_lab")
             .withUsername("essentials")
@@ -63,6 +70,10 @@ class BaselineComparisonScenarioSmokeIT {
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {
+        // Started here rather than in a static initializer so it only happens once the context is
+        // actually being built — i.e. after @Testcontainers' disabledWithoutDocker condition has
+        // been evaluated, so a Docker-less machine skips instead of failing to start a container.
+        postgres.start();
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
