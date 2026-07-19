@@ -168,6 +168,21 @@
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <!--
+                  Failsafe defaults to putting the *packaged artifact* on the test classpath
+                  instead of target/classes. Because `repackage` (above) rewrites that artifact
+                  into a Spring Boot fat JAR, the application classes end up under
+                  BOOT-INF/classes/ and are invisible to a plain classloader — so @SpringBootTest
+                  fails with "Unable to find a @SpringBootConfiguration by searching packages
+                  upwards from the test". Point failsafe back at the exploded classes directory.
+                -->
+                <configuration>
+                    <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>
