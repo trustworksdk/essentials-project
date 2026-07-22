@@ -65,5 +65,43 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>enforce-module-dependency-direction</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <!--
+                                      Artifact-level guard for the core dependency chain:
+                                      shared -> types/reactive -> foundation-types -> foundation
+                                      -> postgresql-event-store -> eventsourced-aggregates.
+                                      immutable/ production code depends only on shared/; its
+                                      dependency on types/ is test-scope only (hence allow-listed
+                                      here, since bannedDependencies spans all scopes). Mirrors
+                                      EssentialsArchitectureTest#immutable_depends_only_on_shared.
+                                    -->
+                                    <excludes>
+                                        <exclude>dk.trustworks.essentials*:*</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>dk.trustworks.essentials:shared</include>
+                                        <include>dk.trustworks.essentials:types</include>
+                                    </includes>
+                                    <message>immutable/ may depend only on shared/ (production) and types/ (test scope) among Essentials modules.</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 </project>
