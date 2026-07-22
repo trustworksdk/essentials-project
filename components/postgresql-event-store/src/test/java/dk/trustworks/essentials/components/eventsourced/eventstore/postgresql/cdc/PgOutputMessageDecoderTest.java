@@ -73,8 +73,8 @@ class PgOutputMessageDecoderTest {
         assertThat(relation.relationName()).isEqualTo("orders_events");
         assertThat(relation.replicaIdentity()).isEqualTo('d');
         assertThat(relation.columns()).hasSize(2);
-        assertThat(relation.columns().getFirst().key()).isTrue();
-        assertThat(relation.columns().getFirst().name()).isEqualTo("event_id");
+        assertThat(relation.columns().get(0).key()).isTrue();
+        assertThat(relation.columns().get(0).name()).isEqualTo("event_id");
         assertThat(relation.columns().get(1).key()).isFalse();
         assertThat(relation.columns().get(1).name()).isEqualTo("event_payload");
     }

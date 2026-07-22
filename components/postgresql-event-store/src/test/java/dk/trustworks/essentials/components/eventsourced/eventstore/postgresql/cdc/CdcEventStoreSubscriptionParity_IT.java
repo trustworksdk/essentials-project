@@ -410,7 +410,7 @@ class CdcEventStoreSubscriptionParity_IT extends AbstractLogicalReplicationPostg
         appendOrderEvents(1);
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             assertThat(secondRunEvents).hasSize(1);
-            assertThat(secondRunEvents.getFirst().globalEventOrder()).isEqualTo(GlobalEventOrder.of(6));
+            assertThat(secondRunEvents.get(0).globalEventOrder()).isEqualTo(GlobalEventOrder.of(6));
         });
 
         secondRun.stop();
@@ -481,7 +481,7 @@ class CdcEventStoreSubscriptionParity_IT extends AbstractLogicalReplicationPostg
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             assertThat(received).hasSize(8);
-            assertThat(received.getFirst().globalEventOrder().longValue()).isGreaterThanOrEqualTo(initialGap);
+            assertThat(received.get(0).globalEventOrder().longValue()).isGreaterThanOrEqualTo(initialGap);
             assertThat(received.stream().map(e -> e.globalEventOrder().longValue()).toList())
                     .containsExactlyElementsOf(sequence(initialGap, initialGap + 7));
         });

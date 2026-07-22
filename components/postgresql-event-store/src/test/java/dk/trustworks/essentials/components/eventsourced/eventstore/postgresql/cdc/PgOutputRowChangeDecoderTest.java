@@ -51,7 +51,7 @@ class PgOutputRowChangeDecoderTest {
         ));
 
         assertThat(changes).hasSize(1);
-        var change = changes.getFirst();
+        var change = changes.get(0);
         assertThat(change.kind()).isEqualTo("insert");
         assertThat(change.relationId()).isEqualTo(7);
         assertThat(change.schema()).isEqualTo("public");
@@ -85,8 +85,8 @@ class PgOutputRowChangeDecoderTest {
         ));
 
         assertThat(changes).hasSize(1);
-        assertThat(changes.getFirst().transactionId()).isNull();
-        assertThat(changes.getFirst().transactionCommitTimestampMicros()).isNull();
+        assertThat(changes.get(0).transactionId()).isNull();
+        assertThat(changes.get(0).transactionCommitTimestampMicros()).isNull();
     }
 
     @Test

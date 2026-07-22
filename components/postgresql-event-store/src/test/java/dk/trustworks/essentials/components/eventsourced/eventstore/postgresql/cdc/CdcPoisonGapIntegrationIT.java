@@ -359,10 +359,10 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
                       assertThat(inboxRepository.statusForLsn(slotName, "0/VALID-1")).contains("DISPATCHED");
 
                       assertThat(dispatched).hasSize(1);
-                      assertThat(dispatched.getFirst().globalEventOrder().longValue()).isEqualTo(42L);
+                      assertThat(dispatched.get(0).globalEventOrder().longValue()).isEqualTo(42L);
 
                       assertThat(poisonNotifier.calls).hasSize(1);
-                      assertThat(poisonNotifier.calls.getFirst().gaps()).containsExactly(GlobalEventOrder.of(41L));
+                      assertThat(poisonNotifier.calls.get(0).gaps()).containsExactly(GlobalEventOrder.of(41L));
                   });
 
         dispatcher.stop();

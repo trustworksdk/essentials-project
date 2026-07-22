@@ -39,9 +39,9 @@ class WalParserModeBytesTest {
 
         assertThat(fromString).hasSize(1);
         assertThat(fromBytes).hasSize(1);
-        assertThat(fromBytes.getFirst().globalEventOrder()).isEqualTo(fromString.getFirst().globalEventOrder());
-        assertThat((Object) fromBytes.getFirst().eventId()).isEqualTo(fromString.getFirst().eventId());
-        assertThat((Object) fromBytes.getFirst().aggregateType()).isEqualTo(fromString.getFirst().aggregateType());
+        assertThat(fromBytes.get(0).globalEventOrder()).isEqualTo(fromString.get(0).globalEventOrder());
+        assertThat((Object) fromBytes.get(0).eventId()).isEqualTo(fromString.get(0).eventId());
+        assertThat((Object) fromBytes.get(0).aggregateType()).isEqualTo(fromString.get(0).aggregateType());
     }
 
     @Test
@@ -55,8 +55,8 @@ class WalParserModeBytesTest {
 
         assertThat(fromString).hasSize(1);
         assertThat(fromBytes).hasSize(1);
-        assertThat((Object) fromBytes.getFirst().aggregateType()).isEqualTo(fromString.getFirst().aggregateType());
-        assertThat(fromBytes.getFirst().globalEventOrder()).isEqualTo(fromString.getFirst().globalEventOrder());
+        assertThat((Object) fromBytes.get(0).aggregateType()).isEqualTo(fromString.get(0).aggregateType());
+        assertThat(fromBytes.get(0).globalEventOrder()).isEqualTo(fromString.get(0).globalEventOrder());
     }
 
     private static String validWal() {
