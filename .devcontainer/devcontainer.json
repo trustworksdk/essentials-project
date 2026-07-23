@@ -1,181 +1,320 @@
 {
-	"name": "Essentials Java DevContainer Environment",
-	"build": {
-		"dockerfile": "Dockerfile",
-		"args": {
-			"JAVA_VERSION": "17",
-			"INSTALL_MAVEN": "true",
-			"INSTALL_GRADLE": "false",
-			"INSTALL_RIPGREP": "true",
-			"MAVEN_VERSION": "3.9.11"
-		}
-	},
-	"features": {
-		// Enable Docker-in-Docker support, from the official devcontainer feature, for TestContainers integration
-		"ghcr.io/devcontainers/features/docker-in-docker:2": {
-			"version": "latest",
-			"moby": true,
-			"dockerDashComposeVersion": "v2"
-		},
-		// Install Node.js from the official devcontainer feature.
-		"ghcr.io/devcontainers/features/node:1": {
-			"version": "latest"
-		}
-	},
-	// Run as non-root user for improved security.
-	"remoteUser": "vscode",
+    "name": "essentials-project",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".",
+        "args": {
+            // Project identity — used for container naming and Docker labels
+            "PROJECT_NAME": "essentials-project",
 
-	// Container environment variables
-	"containerEnv": {
-		"LANG": "en_US.UTF-8",
-		"LANGUAGE": "en_US:en",
-		"LC_ALL": "en_US.UTF-8",
-		// Enable Docker Content Trust for image verification
-		"DOCKER_CONTENT_TRUST": "1",
-		// JetBrains specific environment variables
-		"JETBRAINS_REMOTE_DEV_NON_INTERACTIVE": "1",
-		"JAVA_HOME": "/usr/lib/jvm/msopenjdk-current",
-		// IDE shared indexes for performance
-		"SHARED_INDEXES_BASE_URL": "file:///home/vscode/.cache/shared-indexes",
-		// JVM options for better container performance
-		"JAVA_TOOL_OPTIONS":"-XX:+UseContainerSupport -XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=40 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp",
-		// Maven options for better performance
-		"MAVEN_OPTS": "-XX:MaxRAMPercentage=20 -XX:+TieredCompilation -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=512m -XX:InitialCodeCacheSize=64m",
-		// Node.js memory settings for Claude Code and other tools
-		"NODE_OPTIONS": "--max-old-space-size=12288",
-		"CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
-	},
-	// Docker volumes for persistence - no initialization needed!
-	"mounts": [
-		// Persist Claude Code settings and authentication
-		"source=claude-code-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
-		"source=devcontainer-claude-code-cache,target=/home/vscode/.cache/claude-code,type=volume,consistency=cached",
-		// Persist Maven repository cache (write-on-download, read-heavy workload)
-		"source=devcontainer-maven-repo,target=/home/vscode/.m2/repository,type=volume,consistency=cached",
-		// Persist Gradle cache (write-on-download, read-heavy workload)
-		"source=devcontainer-gradle-cache,target=/home/vscode/.gradle,type=volume,consistency=cached",
-		// JetBrains specific caches (container-managed, host-consistent backups)
-		"source=devcontainer-jetbrains-remote,target=/home/vscode/.cache/JetBrains/RemoteDev,type=volume,consistency=cached",
-		"source=devcontainer-jetbrains-config,target=/home/vscode/.config/JetBrains,type=volume,consistency=cached",
-		"source=devcontainer-jetbrains-cache,target=/home/vscode/.cache/JetBrains,type=volume,consistency=cached",
-		"source=devcontainer-jetbrains-share,target=/home/vscode/.local/share/JetBrains,type=volume,consistency=cached",
-		"source=devcontainer-java-userprefs,target=/home/vscode/.java/.userPrefs,type=volume,consistency=cached",
-		// Shared IDE indexes for better performance (container-managed)
-		"source=devcontainer-ide-indexes,target=/home/vscode/.cache/shared-indexes,type=volume,consistency=cached",
-		// Optional: Add a shared workspace cache volume (container-managed)
-		"source=devcontainer-workspace-cache,target=/home/vscode/.cache/workspace,type=volume,consistency=cached"
-	],
+            // Installation toggles (true/false)
+            "INSTALL_JAVA": "true",
+            // Kotlin LSP (official JetBrains Kotlin/kotlin-lsp). Runs on the
+            // JVM, so requires INSTALL_JAVA=true. The bundled IntelliJ-platform
+            // server adds ~800 MB to the image
+            "INSTALL_KOTLIN_LSP": "true",
+            "INSTALL_CLAUDE": "true",
+            // Local-first agent stack (graphify + headroom). graphify is
+            // the knowledge-graph indexer (code + SQL + infra + docs; tree-sitter,
+            // fully local, no model calls). headroom transparently compresses what
+            // Claude Code reads. All MIT/Apache. graphify + headroom install in
+            // post-create.sh (uv tools).
+            "INSTALL_GRAPHIFY": "true",
+            "INSTALL_HEADROOM": "true",
+            // rtk (Rust Token Killer) — transparent CLI-output compression,
+            // activated with the local-first stack. Build-time binary + a Claude
+            // Code PreToolUse hook installed in post-create.sh.
+            "INSTALL_RTK": "true",
 
-	// Resource limits to prevent container resource exhaustion attacks
-	"runArgs": [
-		"--cpus=4",
-		"--memory=16g",
-		"--pids-limit=100",
-		"--security-opt", "apparmor=docker-default",
-		"--network=bridge"
-	],
+            // JetBrains Gateway support
+            "INSTALL_JETBRAINS": "true",
 
-	// Forward no ports by default
-	"forwardPorts": [
-		// 8080,  // Spring Boot default
-		// 8081,  // Alternative service port
-		// 5005,  // Java debug port (JetBrains/JDWP)
-		// 63342, // JetBrains built-in server
-		// 5432,  // PostgreSQL
-		// 9092,  // Kafka
-		// 27017  // MongoDB
-	],
-	// Automatically forward ports that are listening
-	"otherPortsAttributes": {
-		"onAutoForward": "notify"
-	},
-	// Port labels for clarity
-	"portsAttributes": {
-		"5005": {
-			"label": "Java Debug (JDWP)",
-			"onAutoForward": "notify"
-		},
-		"8080": {
-			"label": "Spring Boot",
-			"onAutoForward": "notify"
-		},
-		"63342": {
-			"label": "JetBrains Server",
-			"onAutoForward": "silent"
-		}
-	},
+            // Git identity is in containerEnv (not here) to avoid leaking PII into image layers.
 
-	"customizations": {
-		// Automatically install VS Code extensions for Java, Maven, and Gradle support.
-		"vscode": {
-			"extensions": [
-                "vscjava.vscode-java-pack",
-                "vscjava.vscode-maven",
-                "vscjava.vscode-gradle",
-                "vscjava.vscode-spring-initializr",
-                "vscjava.vscode-spring-boot-dashboard",
-                "github.copilot",
-                "github.copilot-chat",
-                "ms-azuretools.vscode-docker",
-                "vscjava.vscode-java-test",
-                "sonarsource.sonarlint-vscode"
-			],
-			"settings": {
-				// Java settings optimized for DDD and Event Sourcing
-				"java.configuration.updateBuildConfiguration": "automatic",
-				"java.completion.enabled": true,
-				"java.completion.favoriteStaticMembers": [
-					"org.mockito.Mockito.*",
-					"org.assertj.core.api.Assertions.*"
-				],
-				"java.saveActions.organizeImports": true,
-				"java.dependency.syncWithFolderExplorer": true,
-				"java.configuration.runtimes": [
-					{
-						"name": "JavaSE",
-						"path": "/usr/lib/jvm/msopenjdk-current",
-						"default": true
-					}
-				],
-				// Maven settings
-				"maven.executable.preferMavenWrapper": false,
-				"maven.pomfile.autoUpdateEffectivePOM": true,
-				// Gradle settings
-				"gradle.nestedProjects": true,
-				"gradle.autoDetect": true,
-				// Editor settings
-				"editor.suggestSelection": "first",
-				"editor.quickSuggestionsDelay": 500,
-				"editor.suggestOnTriggerCharacters": true,
-				"editor.tabCompletion": "on",
-				"editor.formatOnSave": true,
-				"editor.codeActionsOnSave": {
-					"source.organizeImports": true
-				},
-				// Terminal settings
-				"terminal.integrated.defaultProfile.linux": "bash",
-				"terminal.integrated.profiles.linux": {
-					"bash": {
-						"path": "/bin/bash",
-						"args": ["-l"]
-					}
-				},
-				// Telemetry Configuration
-				"telemetry.telemetryLevel": "off",
-				"redhat.telemetry.enabled": false,
-				"java.telemetry.enabled": false
-			}
-		},
-		"jetbrains": {
-			"gateway": {
-				"enabled": true
-			},
-			"backend": "IntelliJ"
-		}
-	},
-	// Lifecycle scripts
-    "onCreateCommand": "echo 'DevContainer created successfully!'",
-	"postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.claude && npm config set ignore-scripts true && npm install -g npm@latest && npm install -g @anthropic-ai/claude-code && if [ -f .devcontainer/maven-settings.xml ]; then cp .devcontainer/maven-settings.xml ~/.m2/settings.xml; fi && echo 'Post-create setup completed successfully!'",
-    "postStartCommand": "git config --global --add safe.directory /workspace && git config --global pull.rebase true",
+            // Version configuration
+            // MAVEN_SHA512 is managed in Dockerfile — only override here if you
+            // change MAVEN_VERSION to a version different from the Dockerfile default.
+            "JAVA_VERSION": "17",
+            "MAVEN_VERSION": "3.9.16",
+
+            // JetBrains IDE backend — for reference/scripts only.
+            // To change the actual IDE, edit customizations.jetbrains.backend below.
+            "JETBRAINS_BACKEND": "IntelliJ"
+        }
+    },
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+
+    // ==========================================================================
+    // DevContainer Features
+    // ==========================================================================
+    "features": {
+        // Docker-in-Docker support for TestContainers and container workflows.
+        // Required for `mvn verify` (integration tests use Testcontainers).
+        // moby: false → installs Docker CE from download.docker.com instead of Microsoft's
+        // Moby packages. Required on Debian trixie+ (Moby packages removed from trixie).
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {
+            "version": "latest",
+            "moby": false,
+            "dockerDashComposeVersion": "v2"
+        },
+        // Node.js via DevContainer feature.
+        "ghcr.io/devcontainers/features/node:1": {
+            "version": "25",
+            "nodeGypDependencies": true
+        },
+        // Python via DevContainer feature
+        "ghcr.io/devcontainers/features/python:1": {
+            "version": "3.14",
+            "installTools": true
+        }
+    },
+
+    // ==========================================================================
+    // User Configuration
+    // ==========================================================================
+    "remoteUser": "vscode",
+
+    // ==========================================================================
+    // Environment Variables
+    // ==========================================================================
+    "containerEnv": {
+        "LANG": "en_US.UTF-8",
+        "LANGUAGE": "en_US:en",
+        "LC_ALL": "en_US.UTF-8",
+        // JetBrains remote development
+        "JETBRAINS_REMOTE_DEV_NON_INTERACTIVE": "1",
+        // Timezone (override to match your deployment region)
+        "TZ": "UTC",
+        // Java runtime options for containers (overridable here without rebuild)
+        "JAVA_TOOL_OPTIONS": "-XX:+UseContainerSupport -XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=40 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp",
+        // Cross-tool telemetry opt-out. DO_NOT_TRACK=1 is the cross-tool standard
+        // (https://consoledonottrack.com).
+        "DO_NOT_TRACK": "1",
+        // Local-first stack: keep everything offline. graphify ships no telemetry
+        // (we also disable its local query log); headroom's only network touch is
+        // an update check, disabled here; CCR originals + state live on the
+        // ~/.headroom named volume (HEADROOM_WORKSPACE_DIR). Harmless when the
+        // tools aren't installed.
+        "GRAPHIFY_QUERY_LOG_DISABLE": "1",
+        // Make the local `graphify update` rebuild authoritative. update (run by
+        // post-create + the post-commit/post-checkout git hooks) resolves symbol
+        // references to their defining file and prunes duplicate/JDK-stdlib stub
+        // nodes, so a fresh rebuild often has FEWER (cleaner) nodes than one left
+        // by the heavier `graphify extract`. Without this flag graphify's node-count
+        // guard refuses to overwrite a larger graph (also fires after code-deleting
+        // refactors), so code changes silently stop landing. Forcing lets the leaner,
+        // better-resolved rebuild win — safe because graphify-out/ is gitignored and
+        // fully rebuildable. Read by CLI + hooks (GRAPHIFY_FORCE=1).
+        "GRAPHIFY_FORCE": "1",
+        "HEADROOM_UPDATE_CHECK": "off",
+        "HEADROOM_WORKSPACE_DIR": "/home/vscode/.headroom",
+        "RTK_TELEMETRY_DISABLED": "1",
+        // Native LSP layer: enable Claude Code's built-in LSP tool (semantic
+        // go-to-definition / find-references / diagnostics). Auto-on for recent
+        // Claude Code (≥ 2.1.50); setting it explicitly is harmless and covers
+        // earlier builds. post-create.sh registers per-language LSP plugins from
+        // the official marketplace only when this is "1".
+        "ENABLE_LSP_TOOL": "1",
+        // Git identity — each developer creates .devcontainer/.env.local
+        // (gitignored, see .env.local.example) which post-create.sh sources
+        // before running `git config --global`. Left empty here so the vars
+        // exist in the container environment; .env.local supplies the values.
+        "GIT_USER_NAME": "",
+        "GIT_USER_EMAIL": "",
+        // Development
+        "NODE_ENV": "development",
+        // Java
+        "JAVA_HOME": "/usr/lib/jvm/temurin-jdk",
+        // Maven — stable, version-independent home (symlinked in the Dockerfile to
+        // the pinned apache-maven-${MAVEN_VERSION}). Exposing it here makes it
+        // visible to ALL processes, including the JetBrains/Gateway backend (which
+        // is not a login shell and so never sources /etc/profile.d). IntelliJ
+        // auto-detects Maven from MAVEN_HOME — pick it under Settings → Build Tools
+        // → Maven → "Maven home path". Fixes the empty "-Dide.compiler.maven.path.to.home=".
+        "MAVEN_HOME": "/opt/maven",
+        // Claude Code — auto permission mode. Set "true" to have post-create.sh
+        // write permissions.defaultMode="auto" into the USER settings file
+        // (~/.claude/settings.json) on every container start. This is the only
+        // supported way to set auto mode: as of Claude Code v2.1.142, the "auto"
+        // value is IGNORED in project .claude/settings.json (a repo cannot grant
+        // itself auto mode). Best-effort: requires an eligible account (Claude Code
+        // v2.1.83+); an ineligible session silently starts in "default" mode.
+        // Note: autoMode.environment (trusted infrastructure) must go in
+        // .claude/settings.local.json (gitignored), NOT .claude/settings.json.
+        "CLAUDE_DEFAULT_MODE_AUTO": "true",
+        // Plugin marketplace seed directory — populated at runtime by a live
+        // bind-mount of .devcontainer/.plugin-marketplace (see mounts below).
+        // initializeCommand refreshes the host clone on every start, so the
+        // seed is always current without a rebuild. No runtime auth needed.
+        "CLAUDE_CODE_PLUGIN_SEED_DIR": "/opt/claude-seed",
+        // Claude Code authentication — long-lived OAuth token, propagated from the host.
+        // Generate once on the host with `claude setup-token`, export it in your shell,
+        // then rebuild the container. If unset, falls back to interactive login inside
+        // the container (run `claude` — it uses a paste-code flow that works without a
+        // localhost callback).
+        "CLAUDE_CODE_OAUTH_TOKEN": "${localEnv:CLAUDE_CODE_OAUTH_TOKEN}",
+        // EXPERIMENTAL: These flags enable preview features in Claude Code.
+        // They may change semantics or be removed without notice across CLI versions.
+        // If Claude Code behaves unexpectedly, try removing these first.
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+        "CLAUDE_CODE_ENABLE_TASKS": "true",
+        "CLAUDE_CODE_FORK_SUBAGENT": "1"
+    },
+
+    // ==========================================================================
+    // Volume Mounts for Caching
+    // Named volumes persist across container rebuilds.
+    // ${devcontainerId} scopes volumes per devcontainer instance.
+    // ==========================================================================
+    "mounts": [
+        // Java/Maven
+        "source=devcontainer-maven-repo-${devcontainerId},target=/home/vscode/.m2/repository,type=volume",
+        "source=devcontainer-java-userprefs-${devcontainerId},target=/home/vscode/.java/.userPrefs,type=volume",
+        // Node.js/NPM
+        "source=devcontainer-npm-cache-${devcontainerId},target=/home/vscode/.npm,type=volume",
+        // Python/UV/pip
+        "source=devcontainer-uv-cache-${devcontainerId},target=/home/vscode/.cache/uv,type=volume",
+        "source=devcontainer-pip-cache-${devcontainerId},target=/home/vscode/.cache/pip,type=volume",
+
+        // Claude Code config and cache (named volumes — NOT bind-mounted to avoid host-path conflicts)
+        "source=devcontainer-claude-config-${devcontainerId},target=/home/vscode/.claude,type=volume",
+        "source=devcontainer-claude-cache-${devcontainerId},target=/home/vscode/.cache/claude-code,type=volume",
+
+        // headroom workspace/CCR store (only used when INSTALL_HEADROOM=true) —
+        // memory DB, reversible-compression originals, savings ledger, logs.
+        // Persists across rebuilds (HEADROOM_WORKSPACE_DIR=~/.headroom).
+        "source=devcontainer-headroom-${devcontainerId},target=/home/vscode/.headroom,type=volume",
+        // NOTE: graphify's output (graphify-out/) lives in-repo (gitignored) — no named volume needed.
+
+        // Plugin marketplace seed — LIVE bind-mount of the host clone that a custom
+        // local-init.sh (initializeCommand) can refresh on every start.
+        // Bind-mounting (instead of a Dockerfile COPY) means every container
+        // START picks up the latest plugin versions — no rebuild required.
+        // The host directory is populated on the host with host git credentials,
+        // so no credentials enter the container. readonly: the container only reads it.
+        "source=${localWorkspaceFolder}/.devcontainer/.plugin-marketplace,target=/opt/claude-seed/marketplaces,type=bind,readonly",
+
+        // JetBrains caches
+        "source=devcontainer-jetbrains-remote-${devcontainerId},target=/home/vscode/.cache/JetBrains/RemoteDev,type=volume",
+        "source=devcontainer-jetbrains-config-${devcontainerId},target=/home/vscode/.config/JetBrains,type=volume",
+        "source=devcontainer-jetbrains-cache-${devcontainerId},target=/home/vscode/.cache/JetBrains,type=volume",
+        "source=devcontainer-jetbrains-share-${devcontainerId},target=/home/vscode/.local/share/JetBrains,type=volume"
+    ],
+
+    // ==========================================================================
+    // Resource Limits & Security
+    // ==========================================================================
+    "runArgs": [
+        "--name", "essentials-project-devcontainer",
+        "--cpus=8",
+        "--memory=16g",
+        "--pids-limit=4096",
+        // Docker-in-Docker requires privileged mode.
+        // Note: --privileged disables AppArmor, seccomp, and capability restrictions.
+        // If you ever remove Docker-in-Docker, replace --privileged with:
+        //   "--security-opt", "apparmor=docker-default"
+        "--privileged"
+    ],
+
+    // ==========================================================================
+    // Port Forwarding
+    // ==========================================================================
+    "forwardPorts": [],
+    "otherPortsAttributes": {
+        "onAutoForward": "notify"
+    },
+    "portsAttributes": {
+        "3000": { "label": "Node.js App", "onAutoForward": "notify" },
+        "5005": { "label": "Java Debug (JDWP)", "onAutoForward": "notify" },
+        "5432": { "label": "PostgreSQL", "onAutoForward": "silent" },
+        "8000": { "label": "Python App", "onAutoForward": "notify" },
+        "8080": { "label": "Spring Boot / Generic", "onAutoForward": "notify" },
+        "9229": { "label": "Node.js Debug", "onAutoForward": "silent" },
+        "63342": { "label": "JetBrains Server", "onAutoForward": "silent" }
+    },
+
+    // ==========================================================================
+    // IDE Customizations
+    // ==========================================================================
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                // Core
+                "github.copilot"
+                ,"github.copilot-chat"
+                ,"ms-azuretools.vscode-docker"
+                ,"anthropic.claude-code"
+                // Java
+                ,"vscjava.vscode-java-pack"
+                ,"vscjava.vscode-maven"
+                ,"vscjava.vscode-spring-initializr"
+                ,"vscjava.vscode-spring-boot-dashboard"
+                ,"vscjava.vscode-java-test"
+                // Node.js/TypeScript (baseline)
+                ,"ms-vscode.vscode-typescript-next"
+                ,"dbaeumer.vscode-eslint"
+                ,"esbenp.prettier-vscode"
+                // Python (baseline)
+                ,"ms-python.python"
+                ,"ms-python.vscode-pylance"
+                ,"charliermarsh.ruff"
+            ],
+            "settings": {
+                // Editor
+                "editor.formatOnSave": true,
+                "editor.tabCompletion": "on",
+                "editor.suggestSelection": "first",
+                "editor.codeActionsOnSave": {
+                    "source.organizeImports": "explicit"
+                },
+                // Terminal
+                "terminal.integrated.defaultProfile.linux": "bash",
+                // Java settings
+                "java.configuration.updateBuildConfiguration": "automatic",
+                "java.saveActions.organizeImports": true,
+                "maven.executable.preferMavenWrapper": false,
+                // Python settings
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "[python]": {
+                    "editor.defaultFormatter": "charliermarsh.ruff"
+                },
+                // TypeScript settings
+                "[typescript]": {
+                    "editor.defaultFormatter": "esbenp.prettier-vscode"
+                },
+                "[javascript]": {
+                    "editor.defaultFormatter": "esbenp.prettier-vscode"
+                },
+                // Telemetry (disabled)
+                "telemetry.telemetryLevel": "off",
+                "redhat.telemetry.enabled": false,
+                "java.telemetry.enabled": false
+            }
+        },
+        // JetBrains Gateway configuration
+        "jetbrains": {
+            "gateway": {
+                "enabled": true
+            },
+            "backend": "IntelliJ"
+        }
+    },
+
+    // ==========================================================================
+    // Lifecycle Scripts
+    // ==========================================================================
+    // Runs on the HOST before every container start. Clones/updates the plugin
+    // marketplace repo using the developer's local git credentials — credentials
+    // never enter the container. The clone is live bind-mounted to
+    // /opt/claude-seed/marketplaces (see mounts), so every START — not just a
+    // rebuild — picks up the latest plugin versions.
+    // local-init.sh is gitignored (internal): when it's absent the
+    // container still starts — it just runs without a pre-seeded marketplace.
+    "initializeCommand": "if [ -f .devcontainer/scripts/local-init.sh ]; then bash .devcontainer/scripts/local-init.sh; else echo 'ℹ️  .devcontainer/scripts/local-init.sh not present — skipping plugin marketplace seed (container still starts).'; fi",
+    "onCreateCommand": "echo '✅ DevContainer created successfully!'",
+    "postCreateCommand": "if [ -f /workspace/.devcontainer/scripts/post-create.sh ]; then bash /workspace/.devcontainer/scripts/post-create.sh; else echo '⚠️ post-create.sh not found, skipping...'; fi",
+    "postStartCommand": "git config --global --add safe.directory /workspace 2>/dev/null || true",
+    "waitFor": "postStartCommand",
     "shutdownAction": "stopContainer"
 }
