@@ -135,6 +135,9 @@ RUN apt-get update && \
     vim \
     jq \
     tree \
+    # ripgrep — installs the `rg` binary. Fast recursive search used by agent
+    # tooling and interactive shells; Debian trixie ships 14.x in main.
+    ripgrep \
     htop \
     unzip \
     wget \
