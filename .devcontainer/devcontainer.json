@@ -311,7 +311,10 @@
     // rebuild — picks up the latest plugin versions.
     // local-init.sh is gitignored (internal): when it's absent the
     // container still starts — it just runs without a pre-seeded marketplace.
-    "initializeCommand": "if [ -f .devcontainer/scripts/local-init.sh ]; then bash .devcontainer/scripts/local-init.sh; else echo 'ℹ️  .devcontainer/scripts/local-init.sh not present — skipping plugin marketplace seed (container still starts).'; fi",
+    // The mkdir -p is required regardless: the bind mount above fails the
+    // container create with "bind source path does not exist" if the
+    // directory is missing, so an empty directory is created as a fallback.
+    "initializeCommand": "mkdir -p .devcontainer/.plugin-marketplace; if [ -f .devcontainer/scripts/local-init.sh ]; then bash .devcontainer/scripts/local-init.sh; else echo 'ℹ️  .devcontainer/scripts/local-init.sh not present — skipping plugin marketplace seed (container still starts).'; fi",
     "onCreateCommand": "echo '✅ DevContainer created successfully!'",
     "postCreateCommand": "if [ -f /workspace/.devcontainer/scripts/post-create.sh ]; then bash /workspace/.devcontainer/scripts/post-create.sh; else echo '⚠️ post-create.sh not found, skipping...'; fi",
     "postStartCommand": "git config --global --add safe.directory /workspace 2>/dev/null || true",
