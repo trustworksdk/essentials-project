@@ -280,6 +280,14 @@ fi
 # import Request`) and dies with ModuleNotFoundError. That makes [code,mcp] not
 # self-sufficient. We inject fastapi alone (~pure-python, no ML deps) rather
 # than pulling all of [proxy]. Drop this once upstream makes the import lazy.
+#
+# `--with "mcp<2"`: UPSTREAM BUG (headroom-ai 0.32.1). headroom declares an
+# unbounded `mcp>=1.0.0`, but the MCP Python SDK 2.0.0 removed the low-level
+# decorator API that headroom's server is written against — `Server` no longer
+# has .list_tools()/.call_tool(). With mcp 2.x resolved, `headroom mcp serve`
+# crashes at startup (AttributeError in ccr/mcp_server.py::_setup_handlers)
+# before completing the MCP handshake, so Claude Code reports the server as
+# failed. Pin to the 1.x line. Drop this once upstream supports mcp 2.x.
 # =============================================================================
 if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
     echo "Setting up headroom (context compression — MCP mode)..."
@@ -293,10 +301,20 @@ if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
                 sudo chown -R vscode:vscode "$HOME/.cache/uv" 2>/dev/null || true
             fi
             echo "  Installing headroom-ai[code,mcp] (uv tool — light extras, no proxy/ML deps)..."
-            uv tool install "headroom-ai[code,mcp]" --with fastapi 2>&1 \
-                || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]\" --with fastapi."
+            uv tool install "headroom-ai[code,mcp]" --with fastapi --with "mcp<2" 2>&1 \
+                || echo "  WARNING: headroom install failed. Retry with: uv tool install \"headroom-ai[code,mcp]\" --with fastapi --with \"mcp<2\"."
         else
             echo "  headroom already installed ($(command -v headroom))"
+            # Self-heal an env that predates the mcp<2 pin (or was pushed onto
+            # mcp 2.x by `uv tool upgrade`): re-pin in place so `headroom mcp
+            # serve` can start. See the mcp<2 note above.
+            headroom_py="$(uv tool dir 2>/dev/null)/headroom-ai/bin/python"
+            if [ -x "$headroom_py" ] && ! "$headroom_py" -c \
+                 'import mcp.server, sys; sys.exit(0 if hasattr(mcp.server.Server, "list_tools") else 1)' &> /dev/null; then
+                echo "  Re-pinning MCP SDK to 1.x (upstream mcp>=1.0.0 is unbounded)..."
+                uv tool install "headroom-ai[code,mcp]" --force --with fastapi --with "mcp<2" 2>&1 \
+                    || echo "  WARNING: could not re-pin mcp<2 — 'headroom mcp serve' may fail to start."
+            fi
         fi
 
         # Heal the ~/.headroom named-volume mountpoint if it ended up root-owned.
