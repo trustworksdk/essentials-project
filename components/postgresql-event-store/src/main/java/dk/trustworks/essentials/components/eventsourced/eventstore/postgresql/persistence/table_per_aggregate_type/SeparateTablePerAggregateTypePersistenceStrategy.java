@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.jdbi.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyTriggerInstaller;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
@@ -39,6 +40,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -112,6 +114,27 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
      */
     private final ConcurrentMap<AggregateType, String>                                                        lastPersistedEventForAggregateSql = new ConcurrentHashMap<>();
     private final ConcurrentMap<AggregateType, SeparateTablePerAggregateEventStreamConfiguration>             aggregateTypeConfigurations       = new ConcurrentHashMap<>();
+    /**
+     * Optional callback invoked once per event-stream table after {@link #initializeEventStorageFor}
+     * commits. When set (non-null), the framework's S1 (NOTIFY-driven polling wake-up)
+     * autoconfig has registered an installer that adds a {@code pg_notify} trigger to the
+     * table and registers it with the framework's {@code MultiTableChangeListener}.
+     * <p>
+     * An {@link AtomicReference} (not a {@code synchronized} field) because:
+     * <ul>
+     *   <li>{@link #enableNotifyTriggerInstallation} is a one-shot operation — it
+     *       compare-and-sets {@code null → installer} and rejects a second call. Treats
+     *       double-wiring as a bootstrap bug rather than silently overwriting.</li>
+     *   <li>{@link #addAggregateEventStreamConfiguration} just reads the reference: if
+     *       non-null, invokes the installer.</li>
+     *   <li>The race between a new aggregate registration and the start-of-day sweep in
+     *       {@link #enableNotifyTriggerInstallation} can at worst cause a double-invoke
+     *       for the same table — harmless because the installer is documented idempotent
+     *       (DROP+CREATE trigger; {@code listenToNotificationsFor} is a no-op when
+     *       already registered).</li>
+     * </ul>
+     */
+    private final AtomicReference<NotifyTriggerInstaller>                                                     notifyTriggerInstaller             = new AtomicReference<>();
     private final EventStoreUnitOfWorkFactory<EventStoreUnitOfWork>                                           unitOfWorkFactory;
     private final PersistableEventMapper                                                                      eventMapper;
     private final AggregateEventStreamConfigurationFactory<SeparateTablePerAggregateEventStreamConfiguration> aggregateEventStreamConfigurationFactory;
@@ -288,8 +311,53 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         if (!aggregateTypeConfigurations.containsKey(aggregateTypeConfiguration.aggregateType)) {
             aggregateTypeConfigurations.put(aggregateTypeConfiguration.aggregateType, aggregateTypeConfiguration);
             initializeEventStorageFor(aggregateTypeConfiguration);
+            // S1: install the NOTIFY trigger + register with the change listener, if the
+            // autoconfig enabled it. If the installer is set between the read and the
+            // call (or after this method returns), the start-of-day sweep in
+            // #enableNotifyTriggerInstallation will pick this table up regardless.
+            var installer = notifyTriggerInstaller.get();
+            if (installer != null) {
+                installer.installFor(aggregateTypeConfiguration.eventStreamTableName);
+            }
         }
         return this;
+    }
+
+    /**
+     * Enable NOTIFY-driven polling wake-up (S1) for this persistence strategy. Called by
+     * Spring autoconfig when {@code essentials.eventstore.subscription.notify-polling.enabled=true}.
+     * <p>
+     * Two-phase: the installer is invoked once-per-already-registered-aggregate (the
+     * start-of-day sweep) and then for every subsequently-registered aggregate via
+     * {@link #addAggregateEventStreamConfiguration}. The installer must be idempotent —
+     * the sweep and the per-registration path may race, and the framework's
+     * {@code ListenNotify.addChangeNotificationTriggerToTable} already drops+recreates
+     * the trigger safely on every call.
+     * <p>
+     * One-shot: a second call throws {@link IllegalStateException} rather than silently
+     * overwriting — a double-call signals a wiring bug (two bootstrap beans, duplicate
+     * autoconfig import) that should surface loudly, not be papered over. The previous
+     * implementation used {@code synchronized} for last-writer-wins; we now CAS so the
+     * code is lock-free <em>and</em> double-wiring is rejected at startup.
+     *
+     * @throws IllegalStateException if {@code enableNotifyTriggerInstallation} has
+     *                               already been called on this instance.
+     */
+    public final void enableNotifyTriggerInstallation(NotifyTriggerInstaller installer) {
+        requireNonNull(installer, "installer cannot be null");
+        if (!notifyTriggerInstaller.compareAndSet(null, installer)) {
+            throw new IllegalStateException(
+                    "Notify trigger installer is already configured on this persistence strategy; "
+                            + "enableNotifyTriggerInstallation must only be called once. "
+                            + "Check for duplicate autoconfig wiring (e.g. multiple bootstrap beans).");
+        }
+        // Sweep: ensure every already-registered table has its trigger installed.
+        // Idempotent thanks to ListenNotify's DROP+CREATE shape; a concurrent
+        // addAggregateEventStreamConfiguration may also install for the same table —
+        // harmless duplicate work.
+        for (var cfg : aggregateTypeConfigurations.values()) {
+            installer.installFor(cfg.eventStreamTableName);
+        }
     }
 
     @Override
@@ -327,6 +395,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
         eventStreamConfiguration.eventStreamTableColumnNames.validate();
 
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
+            PostgresqlUtil.acquireBootstrapLock(unitOfWork.handle());
             Optional<String> eventTable = unitOfWork.handle().createQuery("SELECT to_regclass(:tableName)")
                                                     .bind("tableName", eventStreamConfiguration.eventStreamTableName)
                                                     .mapTo(String.class)
@@ -335,15 +404,7 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
                 createEventStreamTable(unitOfWork.handle(), eventStreamConfiguration);
             }
             ensureIndexes(unitOfWork.handle(), eventStreamConfiguration);
-            // TODO: Revisit EventStream listening
-//            addEventStreamPostgresqlNotification(unitOfWork.handle(), eventStreamConfiguration);
         });
-        // Start listening for changes
-        // TODO: Start listening
-//            if (!postgresEventStreamListener.get().isStarted()) {
-//                postgresEventStreamListener.get().start();
-//            }
-//            postgresEventStreamListener.get().listenForChangesTo(eventStreamTableName);
     }
 
 
@@ -960,6 +1021,12 @@ public final class SeparateTablePerAggregateTypePersistenceStrategy implements A
     public Map<AggregateType, String> getSeparateTablePerAggregateEventStreamTableNames() {
         return aggregateTypeConfigurations.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().eventStreamTableName));
+    }
+
+    @Override
+    public Map<String, AggregateType> getSeparateTablePerEventStreamTableNameAggregates() {
+        return aggregateTypeConfigurations.entrySet().stream()
+                                          .collect(Collectors.toMap(entry -> entry.getValue().eventStreamTableName, Map.Entry::getKey));
     }
 
     @Override

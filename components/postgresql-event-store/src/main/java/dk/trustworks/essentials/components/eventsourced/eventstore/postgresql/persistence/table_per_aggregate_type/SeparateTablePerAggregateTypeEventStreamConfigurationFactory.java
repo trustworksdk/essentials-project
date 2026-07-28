@@ -427,6 +427,25 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
                                                                                 tenantSerializer);
     }
 
+    /**
+     * Provides a default configuration for the SeparateTablePerAggregateTypeEventStreamConfigurationFactory.
+     *
+     * @param jsonSerializer the JSON event serializer to be used for serializing events
+     * @return an instance of SeparateTablePerAggregateTypeEventStreamConfigurationFactory configured with default settings
+     */
+    public static SeparateTablePerAggregateTypeEventStreamConfigurationFactory defaultConfiguration(JSONEventSerializer jsonSerializer) {
+        return new SeparateTablePerAggregateTypeEventStreamConfigurationFactory(aggregateType -> aggregateType + "_events",
+                                                                                EventStreamTableColumnNames.defaultColumnNames(),
+                                                                                100,
+                                                                                jsonSerializer,
+                                                                                IdentifierColumnType.TEXT,
+                                                                                IdentifierColumnType.TEXT,
+                                                                                IdentifierColumnType.TEXT,
+                                                                                JSONColumnType.JSONB,
+                                                                                JSONColumnType.JSONB,
+                                                                                new TenantSerializer.TenantIdSerializer());
+    }
+
     @Override
     public SeparateTablePerAggregateEventStreamConfiguration createEventStreamConfigurationFor(AggregateType aggregateType,
                                                                                                AggregateIdSerializer aggregateIdSerializer) {

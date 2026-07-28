@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream;
@@ -53,17 +54,19 @@ import java.time.Duration;
 @Configuration
 @ConfigurationProperties(prefix = "essentials.eventstore")
 public class EssentialsEventStoreProperties {
-    private IdentifierColumnType                             identifierColumnType                  = IdentifierColumnType.TEXT;
-    private JSONColumnType                                   jsonColumnType                        = JSONColumnType.JSONB;
-    private boolean                                          useEventStreamGapHandler              = true;
-    private boolean                                          verboseTracing                        = false;
-    private boolean                                          addAnnotationBasedInMemoryProjector   = true;
+    private IdentifierColumnType                             identifierColumnType                   = IdentifierColumnType.TEXT;
+    private JSONColumnType                                   jsonColumnType                         = JSONColumnType.JSONB;
+    private boolean                                          useEventStreamGapHandler               = true;
+    private boolean                                          verboseTracing                         = false;
+    private boolean                                          addAnnotationBasedInMemoryProjector    = true;
     private boolean                                          autoFlushAndPublishAfterAppendToStream = false;
-    private EssentialsComponentsProperties.MetricsProperties metrics                               = new EssentialsComponentsProperties.MetricsProperties();
+    private EssentialsComponentsProperties.MetricsProperties metrics                                = new EssentialsComponentsProperties.MetricsProperties();
 
     private final EventStoreSubscriptionManagerProperties subscriptionManager = new EventStoreSubscriptionManagerProperties();
 
     private final EventStoreSubscriptionMonitorProperties subscriptionMonitor = new EventStoreSubscriptionMonitorProperties();
+
+    private final CdcProperties cdc = new CdcProperties();
 
     /**
      * Should the Tracing produces only include all operations or only top level operations (default false)
@@ -254,6 +257,15 @@ public class EssentialsEventStoreProperties {
     }
 
     /**
+     * Retrieves the change data capture (CDC) properties associated with the event store.
+     *
+     * @return the {@link CdcProperties} that contains the CDC configuration.
+     */
+    public CdcProperties getCdc() {
+        return cdc;
+    }
+
+    /**
      * Configuration properties for essentials metrics collection and logging.
      * <p>
      * This configuration is used to enable and fine-tune metrics gathering and logging for the event store.
@@ -307,6 +319,7 @@ public class EssentialsEventStoreProperties {
         private Duration                                         maxEventStorePollingInterval = Duration.ofMillis(2000);
         private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(10);
         private EssentialsComponentsProperties.MetricsProperties metrics                      = new EssentialsComponentsProperties.MetricsProperties();
+        private final NotifyPollingProperties                    notifyPolling                = new NotifyPollingProperties();
 
         /**
          * How many events should The {@link EventStore} maximum return when polling for events
@@ -412,6 +425,90 @@ public class EssentialsEventStoreProperties {
          */
         public EssentialsComponentsProperties.MetricsProperties getMetrics() {
             return metrics;
+        }
+
+        /**
+         * Configuration for the S1 NOTIFY-driven polling wake-up feature — adds an
+         * {@code AFTER INSERT} trigger on every event-stream table that fires
+         * {@code pg_notify}, registers the table with the framework's
+         * {@code MultiTableChangeListener}, and installs a NOTIFY-aware
+         * {@code EventStorePollingOptimizer} so subscribers ramp their poll cadence to
+         * the configured cap on quiet systems but wake immediately on writes.
+         * <p>
+         * See {@code subscription-improvements.md} (S1) for the full design including
+         * trade-offs vs CDC INBOX, the operator decision tree, and the phase-2 path to
+         * sub-10 ms reactive wake-up.
+         */
+        public NotifyPollingProperties getNotifyPolling() {
+            return notifyPolling;
+        }
+    }
+
+    /**
+     * Properties for the S1 NOTIFY-driven polling wake-up feature. Disabled by default
+     * — the master switch makes the whole feature opt-in and the change non-breaking.
+     */
+    public static class NotifyPollingProperties {
+        /**
+         * Master switch. {@code false} (default) = framework behaves exactly as before:
+         * no triggers installed, no notification listener registered for event-stream
+         * tables, no NOTIFY-aware optimizer wired. Set {@code true} to enable.
+         */
+        private boolean  enabled            = false;
+
+        /**
+         * Backoff floor after a no-events poll. Also the value the optimizer resets to
+         * on a NOTIFY-driven wake-up. Default 50 ms — short enough to keep follow-up
+         * polls responsive when activity continues, long enough to avoid busy-spinning
+         * a polling loop on a freshly-emptied inbox.
+         */
+        private Duration initialDelay       = Duration.ofMillis(50);
+
+        /**
+         * Backoff cap — the longest the optimizer will let the per-subscription delay
+         * grow to on a sustained quiet period. Equals the worst-case live latency on a
+         * fully-idle system (a NOTIFY arriving mid-sleep cannot interrupt the in-flight
+         * sleep in Phase 1 — that's Phase 2). Default 1 s — balances DB-load savings
+         * (higher cap = fewer queries) against worst-case latency on quiet systems.
+         */
+        private Duration maxDelay           = Duration.ofSeconds(1);
+
+        /**
+         * Exponential ramp factor between consecutive no-events polls. Default 2.0 →
+         * 50 ms → 100 → 200 → … → 1 s in ~5 ramps. Must be {@code > 1.0}.
+         */
+        private double   backoffMultiplier  = 2.0d;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public Duration getInitialDelay() {
+            return initialDelay;
+        }
+
+        public void setInitialDelay(Duration initialDelay) {
+            this.initialDelay = initialDelay;
+        }
+
+        public Duration getMaxDelay() {
+            return maxDelay;
+        }
+
+        public void setMaxDelay(Duration maxDelay) {
+            this.maxDelay = maxDelay;
+        }
+
+        public double getBackoffMultiplier() {
+            return backoffMultiplier;
+        }
+
+        public void setBackoffMultiplier(double backoffMultiplier) {
+            this.backoffMultiplier = backoffMultiplier;
         }
     }
 

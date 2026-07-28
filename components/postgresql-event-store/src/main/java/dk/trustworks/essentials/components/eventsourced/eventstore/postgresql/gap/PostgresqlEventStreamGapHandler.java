@@ -50,7 +50,6 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     private static final String                                               TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME = "transient_subscriber_gaps_index";
     public static final  String                                               PERMANENT_GAPS_TABLE_NAME            = "permanent_gaps";
     public static final  List<GlobalEventOrder>                               NO_GAPS                              = List.of();
-    private final        PostgresqlEventStore<CONFIG>                         postgresqlEventStore;
     private final        EventStoreUnitOfWorkFactory<?>                       unitOfWorkFactory;
     private final        ResolveTransientGapsToIncludeInQueryStrategy         resolveTransientGapsToIncludeInQueryStrategy;
     private final        ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy;
@@ -59,27 +58,47 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     /**
      * Default configuration that includes the earliest 10 transient gaps and which will promote transient gaps to permanent gaps after 120 seconds.
      *
-     * @param postgresqlEventStore the postgresql event store
-     * @param unitOfWorkFactory    the unit of work factory that coordinates the event store {@link UnitOfWork}
+     * @param unitOfWorkFactory the unit of work factory that coordinates the event store {@link UnitOfWork}
      */
-    public PostgresqlEventStreamGapHandler(PostgresqlEventStore<CONFIG> postgresqlEventStore,
-                                           EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
-        this(postgresqlEventStore,
-             unitOfWorkFactory,
-             Duration.ofSeconds(60),
-             (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
-                 var numberOfGaps          = allTransientGaps.size();
-                 var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
-                 return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
-                                                                    .stream()
-                                                                    .map(Pair::_1)
-                                                                    .collect(Collectors.toList()) : NO_GAPS;
-             },
-             ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+    public PostgresqlEventStreamGapHandler(EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
+        this(   null,
+                unitOfWorkFactory,
+                Duration.ofSeconds(60),
+                (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
+                    var numberOfGaps          = allTransientGaps.size();
+                    var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
+                    return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
+                                                                       .stream()
+                                                                       .map(Pair::_1)
+                                                                       .collect(Collectors.toList()) : NO_GAPS;
+                },
+                ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
     }
 
     /**
-     * @param postgresqlEventStore                                 the postgresql event store
+     * Default configuration that includes the earliest 10 transient gaps and which will promote transient gaps to permanent gaps after 120 seconds.
+     *
+     * @param postgresqlEventStore the postgresql event store
+     * @param unitOfWorkFactory    the unit of work factory that coordinates the event store {@link UnitOfWork}
+     */
+    @Deprecated(forRemoval = true)
+    public PostgresqlEventStreamGapHandler(PostgresqlEventStore<CONFIG> postgresqlEventStore,
+                                           EventStoreUnitOfWorkFactory<?> unitOfWorkFactory) {
+        this(   null,
+                unitOfWorkFactory,
+                Duration.ofSeconds(60),
+                (forAggregateType, globalOrderQueryRange, allTransientGaps) -> {
+                    var numberOfGaps          = allTransientGaps.size();
+                    var numberOfGapsToInclude = Math.min(numberOfGaps, 2);
+                    return numberOfGapsToInclude > 0 ? allTransientGaps.subList(0, numberOfGapsToInclude)
+                                                                       .stream()
+                                                                       .map(Pair::_1)
+                                                                       .collect(Collectors.toList()) : NO_GAPS;
+                },
+                ResolveTransientGapsToPermanentGapsPromotionStrategy.thresholdBased(120));
+    }
+
+    /**
      * @param unitOfWorkFactory                                    the unit of work factory that coordinates the event store {@link UnitOfWork}
      * @param refreshTransientGapsFromStorageInterval              how often should transient gaps be refreshed from database. This is a simple low overhead effort to keep local caches of transient gaps
      *                                                             eventually in sync across multiple nodes. Any new transient gaps detected, resolved/deleted are always reflected in the underlying database which is the ultimate
@@ -89,15 +108,15 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
      *                                                             using e.g. {@link EventStreamGapHandler#resetPermanentGapsFor(AggregateType)})
      * @param resolveTransientGapsToIncludeInQueryStrategy         strategy that determines how many and which gaps, among all the transient gaps detected for the given subscriber,
      *                                                             should be included from {@link SubscriptionGapHandler#findTransientGapsToIncludeInQuery(AggregateType, LongRange)}
-     *                                                             (which is called from {@link PostgresqlEventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional)})
+     *                                                             (which is called from {@link PostgresqlEventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)})
      * @param resolveTransientGapsToPermanentGapsPromotionStrategy strategy for when the {@link PostgresqlEventStreamGapHandler} will promote a transient gap to a permanent gap
      */
+    @Deprecated(forRemoval = true)
     public PostgresqlEventStreamGapHandler(PostgresqlEventStore<CONFIG> postgresqlEventStore,
-                                           EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
-                                           Duration refreshTransientGapsFromStorageInterval,
-                                           ResolveTransientGapsToIncludeInQueryStrategy resolveTransientGapsToIncludeInQueryStrategy,
-                                           ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy) {
-        this.postgresqlEventStore = requireNonNull(postgresqlEventStore, "No postgresqlEventStore provided");
+            EventStoreUnitOfWorkFactory<?> unitOfWorkFactory,
+            Duration refreshTransientGapsFromStorageInterval,
+            ResolveTransientGapsToIncludeInQueryStrategy resolveTransientGapsToIncludeInQueryStrategy,
+            ResolveTransientGapsToPermanentGapsPromotionStrategy resolveTransientGapsToPermanentGapsPromotionStrategy) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.refreshTransientGapsFromStorageEverySeconds = requireNonNull(refreshTransientGapsFromStorageInterval, "No refreshTransientGapsFromStorageInterval provided").toSeconds();
         this.resolveTransientGapsToIncludeInQueryStrategy = requireNonNull(resolveTransientGapsToIncludeInQueryStrategy, "No resolveTransientGapsToIncludeInQuery provided");
@@ -112,30 +131,31 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
 
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
             var handle = unitOfWork.handle();
+            PostgresqlUtil.acquireBootstrapLock(handle);
             var jdbi   = handle.getJdbi();
             jdbi.registerArgument(new AggregateTypeArgumentFactory());
             jdbi.registerColumnMapper(new AggregateTypeColumnMapper());
             jdbi.registerArgument(new SubscriberIdArgumentFactory());
             jdbi.registerColumnMapper(new SubscriberIdColumnMapper());
             handle.execute("CREATE TABLE IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (\n" +
-                                                "   subscriber_id text NOT NULL,\n" +
-                                                "   aggregate_type text NOT NULL,\n" +
-                                                "   gap_global_event_order bigint NOT NULL\n," +
-                                                "   first_discovered TIMESTAMP WITH TIME ZONE NOT NULL\n," +
-                                                "   PRIMARY KEY (subscriber_id, aggregate_type, gap_global_event_order)\n" +
-                                                ")");
+                                   "   subscriber_id text NOT NULL,\n" +
+                                   "   aggregate_type text NOT NULL,\n" +
+                                   "   gap_global_event_order bigint NOT NULL\n," +
+                                   "   first_discovered TIMESTAMP WITH TIME ZONE NOT NULL\n," +
+                                   "   PRIMARY KEY (subscriber_id, aggregate_type, gap_global_event_order)\n" +
+                                   ")");
             log.info("Ensured Table '{}' exists", TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME);
 
             handle.execute("CREATE INDEX IF NOT EXISTS " + TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME + " ON \n" +
-                                                TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)");
+                                   TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "(subscriber_id, aggregate_type)");
             log.info("Ensured Index '{}' exists", TRANSIENT_SUBSCRIBER_GAPS_INDEX_NAME);
 
             handle.execute("CREATE TABLE IF NOT EXISTS " + PERMANENT_GAPS_TABLE_NAME + " (\n" +
-                                                "   aggregate_type text NOT NULL,\n" +
-                                                "   gap_global_event_order bigint NOT NULL\n," +
-                                                "   added_timestamp TIMESTAMP WITH TIME ZONE NOT NULL," +
-                                                "   PRIMARY KEY (aggregate_type, gap_global_event_order)\n" +
-                                                ")");
+                                   "   aggregate_type text NOT NULL,\n" +
+                                   "   gap_global_event_order bigint NOT NULL\n," +
+                                   "   added_timestamp TIMESTAMP WITH TIME ZONE NOT NULL," +
+                                   "   PRIMARY KEY (aggregate_type, gap_global_event_order)\n" +
+                                   ")");
             log.info("Ensured table '{}' exists", PERMANENT_GAPS_TABLE_NAME);
         });
     }
@@ -164,26 +184,26 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     public List<GlobalEventOrder> resetPermanentGapsFor(AggregateType aggregateType, LongRange resetForThisSpecificGlobalEventOrdersRange) {
         requireNonNull(resetForThisSpecificGlobalEventOrdersRange, "No resetForThisSpecificGlobalEventOrdersRange provided");
         List<GlobalEventOrder> globalEventOrdersRemoved = unitOfWorkFactory.withUnitOfWork(unitOfWork ->
-                                                                        {
-                                                                            var sql = "DELETE FROM " + PERMANENT_GAPS_TABLE_NAME + " WHERE aggregate_type = :aggregate_type \n";
-                                                                            if (resetForThisSpecificGlobalEventOrdersRange.isOpenRange()) {
-                                                                                sql += " AND gap_global_event_order >= :gap_global_event_order_from_and_including";
-                                                                            } else {
-                                                                                sql += " AND gap_global_event_order >= :gap_global_event_order_from_and_including AND gap_global_event_order <= :gap_global_event_order_to_and_including";
-                                                                            }
-                                                                            sql += "  RETURNING gap_global_event_order";
-                                                                            var update = unitOfWork.handle().createQuery(sql)
-                                                                                                   .bind("aggregate_type", requireNonNull(aggregateType, "No aggregateType provided"));
-                                                                            if (resetForThisSpecificGlobalEventOrdersRange.isOpenRange()) {
-                                                                                update.bind("gap_global_event_order_from_and_including", resetForThisSpecificGlobalEventOrdersRange.fromInclusive);
-                                                                            } else {
-                                                                                update.bind("gap_global_event_order_from_and_including", resetForThisSpecificGlobalEventOrdersRange.fromInclusive);
-                                                                                update.bind("gap_global_event_order_to_and_including", resetForThisSpecificGlobalEventOrdersRange.toInclusive);
-                                                                            }
-                                                                            return update
-                                                                                    .mapTo(GlobalEventOrder.class)
-                                                                                    .list();
-                                                                        });
+                                                                                           {
+                                                                                               var sql = "DELETE FROM " + PERMANENT_GAPS_TABLE_NAME + " WHERE aggregate_type = :aggregate_type \n";
+                                                                                               if (resetForThisSpecificGlobalEventOrdersRange.isOpenRange()) {
+                                                                                                   sql += " AND gap_global_event_order >= :gap_global_event_order_from_and_including";
+                                                                                               } else {
+                                                                                                   sql += " AND gap_global_event_order >= :gap_global_event_order_from_and_including AND gap_global_event_order <= :gap_global_event_order_to_and_including";
+                                                                                               }
+                                                                                               sql += "  RETURNING gap_global_event_order";
+                                                                                               var update = unitOfWork.handle().createQuery(sql)
+                                                                                                                      .bind("aggregate_type", requireNonNull(aggregateType, "No aggregateType provided"));
+                                                                                               if (resetForThisSpecificGlobalEventOrdersRange.isOpenRange()) {
+                                                                                                   update.bind("gap_global_event_order_from_and_including", resetForThisSpecificGlobalEventOrdersRange.fromInclusive);
+                                                                                               } else {
+                                                                                                   update.bind("gap_global_event_order_from_and_including", resetForThisSpecificGlobalEventOrdersRange.fromInclusive);
+                                                                                                   update.bind("gap_global_event_order_to_and_including", resetForThisSpecificGlobalEventOrdersRange.toInclusive);
+                                                                                               }
+                                                                                               return update
+                                                                                                       .mapTo(GlobalEventOrder.class)
+                                                                                                       .list();
+                                                                                           });
         log.info("[{}] Removed {} Permanent Gap(s), according to reset range {}, with GlobalEventOrder: {}",
                  aggregateType,
                  globalEventOrdersRemoved.size(),
@@ -224,6 +244,33 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
     public Stream<GlobalEventOrder> getPermanentGapsFor(AggregateType aggregateType) {
         return getPermanentGapsAsLongFor(aggregateType)
                 .map(GlobalEventOrder::of);
+    }
+
+    @Override
+    public void registerPermanentGaps(AggregateType aggregateType, List<GlobalEventOrder> gaps, String reason) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(gaps, "No gaps provided");
+        if (gaps.isEmpty()) return;
+
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            var now = now();
+            var batch = uow.handle().prepareBatch("""
+                                                      INSERT INTO permanent_gaps(aggregate_type, gap_global_event_order, added_timestamp)
+                                                      VALUES (:aggregate_type, :gap_global_event_order, :added_timestamp)
+                                                      ON CONFLICT DO NOTHING
+                                                  """);
+
+            for (var g : gaps) {
+                batch.bind("aggregate_type", aggregateType)
+                     .bind("gap_global_event_order", g)
+                     .bind("added_timestamp", now)
+                     .add();
+            }
+            batch.execute();
+        });
+
+        log.warn("[{}] Registered {} permanent gap(s) due to poison/skip. reason='{}' gaps={}",
+                 aggregateType, gaps.size(), reason, gaps);
     }
 
     private Stream<Long> getPermanentGapsAsLongFor(AggregateType aggregateType) {
@@ -371,12 +418,16 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
 
         private void addNewTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> newTransientGapsToAdd) {
             if (newTransientGapsToAdd.isEmpty()) return;
+            var distinctTransientGapsToAdd = newTransientGapsToAdd.stream()
+                                                                  .distinct()
+                                                                  .collect(Collectors.toList());
+            if (distinctTransientGapsToAdd.isEmpty()) return;
 
             var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
             var now        = now();
 
             var gaps = internalGetTransientGapsFor(aggregateType);
-            gaps.addAll(newTransientGapsToAdd.stream()
+            gaps.addAll(distinctTransientGapsToAdd.stream()
                                              .map(globalEventOrder -> Pair.of(globalEventOrder,
                                                                               now))
                                              .collect(Collectors.toList()));
@@ -385,7 +436,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
                                                                          "(subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
                                                                          "VALUES (:subscriber_id, :aggregate_type, :gap_global_event_order, :first_discovered) " +
                                                                          "ON CONFLICT DO NOTHING");
-            for (var transientGap : newTransientGapsToAdd) {
+            for (var transientGap : distinctTransientGapsToAdd) {
                 preparedBatch
                         .bind("subscriber_id", subscriberId)
                         .bind("aggregate_type", aggregateType)
@@ -395,60 +446,83 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
             }
             var rowsUpdated = Arrays.stream(preparedBatch.execute())
                                     .reduce(Integer::sum).orElse(0);
-            if (rowsUpdated == newTransientGapsToAdd.size()) {
+            if (rowsUpdated == distinctTransientGapsToAdd.size()) {
                 log.debug("[{}] Added {} New Transient '{}' Gaps {}\nAll Transient '{}' Gaps: {}",
                           subscriberId,
-                          newTransientGapsToAdd.size(),
+                          distinctTransientGapsToAdd.size(),
                           aggregateType,
-                          newTransientGapsToAdd,
+                          distinctTransientGapsToAdd,
                           aggregateType,
                           allTransientGaps);
-            } else {
-                log.warn("[{}] Added {} out of {} new Transient '{}' Gaps. " +
-                                 "Do you have multiple instances of the same subscriber '{}' running without using exclusive subscriptions?\n" +
+            } else if (rowsUpdated > distinctTransientGapsToAdd.size()) {
+                log.warn("[{}] Added {} out of {} new Transient '{}' Gaps.\n" +
+                                 "This indicates unexpected row-count behavior for subscriber '{}'.\n" +
                                  "New Transient Gaps to add: {}",
                          subscriberId,
                          rowsUpdated,
-                         newTransientGapsToAdd.size(),
+                         distinctTransientGapsToAdd.size(),
                          aggregateType,
                          subscriberId,
-                         allTransientGaps);
+                         distinctTransientGapsToAdd);
+            } else {
+                log.debug("[{}] Added {} out of {} new Transient '{}' Gaps.\n" +
+                                 "This can happen under non-exclusive subscriptions where transient gaps are reconciled concurrently.\n" +
+                                 "New Transient Gaps to add: {}",
+                         subscriberId,
+                         rowsUpdated,
+                         distinctTransientGapsToAdd.size(),
+                         aggregateType,
+                         distinctTransientGapsToAdd);
             }
         }
 
         private void deleteTransientGaps(AggregateType aggregateType, List<GlobalEventOrder> resolvedTransientGaps) {
             if (resolvedTransientGaps.isEmpty()) return;
+            var distinctResolvedTransientGaps = resolvedTransientGaps.stream()
+                                                                     .distinct()
+                                                                     .collect(Collectors.toList());
+            if (distinctResolvedTransientGaps.isEmpty()) return;
 
             var unitOfWork = unitOfWorkFactory.getRequiredUnitOfWork();
             var gaps       = internalGetTransientGapsFor(aggregateType);
             allTransientGaps.put(aggregateType,
                                  gaps.stream()
-                                     .filter(gap -> !resolvedTransientGaps.contains(gap._1))
+                                     .filter(gap -> !distinctResolvedTransientGaps.contains(gap._1))
                                      .collect(Collectors.toList()));
 
             var numOfRowsChanges = unitOfWork.handle().createUpdate("DELETE FROM " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + "\n" +
-                                                                            "    WHERE aggregate_type = :aggregate_type and gap_global_event_order IN (<resolveTransientGaps>)")
+                                                                            "    WHERE aggregate_type = :aggregate_type and subscriber_id = :subscriber_id and gap_global_event_order IN (<resolveTransientGaps>)")
                                              .bind("aggregate_type", requireNonNull(aggregateType, "No aggregateType provided"))
-                                             .bindList("resolveTransientGaps", resolvedTransientGaps)
+                                             .bind("subscriber_id", subscriberId)
+                                             .bindList("resolveTransientGaps", distinctResolvedTransientGaps)
                                              .execute();
-            if (numOfRowsChanges != resolvedTransientGaps.size()) {
+            if (numOfRowsChanges > distinctResolvedTransientGaps.size()) {
                 log.warn("[{}] Wanted to delete {} resolved Transient '{}' gaps, but was only able to delete {} transient gaps.\n" +
-                                 "Do you have multiple instances of the same subscriber '{}' running without using exclusive subscriptions?\n" +
+                                 "This indicates unexpected row-count behavior for subscriber '{}'.\n" +
                                  "Resolved Transient Gaps to delete: {}",
                          subscriberId,
-                         resolvedTransientGaps.size(),
+                         distinctResolvedTransientGaps.size(),
                          aggregateType,
                          numOfRowsChanges,
                          subscriberId,
-                         resolvedTransientGaps);
+                         distinctResolvedTransientGaps);
+            } else if (numOfRowsChanges < distinctResolvedTransientGaps.size()) {
+                log.debug("[{}] Deleted {} out of {} resolved Transient '{}' gaps.\n" +
+                                  "This can happen under non-exclusive subscriptions where transient gaps are reconciled concurrently.\n" +
+                                  "Resolved Transient Gaps to delete: {}",
+                          subscriberId,
+                          numOfRowsChanges,
+                          distinctResolvedTransientGaps.size(),
+                          aggregateType,
+                          distinctResolvedTransientGaps);
             } else {
                 log.debug("[{}] Deleted {} resolved Transient '{}' gaps. " +
                                   "Resolved Transient Gaps deleted: {}\n" +
                                   "All Transient '{}' Gaps: {}",
                           subscriberId,
-                          resolvedTransientGaps.size(),
+                          distinctResolvedTransientGaps.size(),
                           aggregateType,
-                          resolvedTransientGaps,
+                          distinctResolvedTransientGaps,
                           aggregateType,
                           allTransientGaps);
             }
@@ -534,7 +608,7 @@ public final class PostgresqlEventStreamGapHandler<CONFIG extends AggregateEvent
 
     /**
      * Strategy the allows user of the {@link PostgresqlEventStreamGapHandler} to determine which and how many transient gaps to include in
-     * a given call to the {@link EventStore#loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)} during {@link EventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional)}
+     * a given call to the {@link EventStore#loadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)} during {@link EventStore#pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}
      */
     @FunctionalInterface
     public interface ResolveTransientGapsToIncludeInQueryStrategy {

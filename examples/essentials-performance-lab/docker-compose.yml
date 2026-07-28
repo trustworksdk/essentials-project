@@ -1,0 +1,94 @@
+services:
+  postgres-wal2json:
+    build:
+      context: .
+      dockerfile: docker/postgresql-wal2json/Dockerfile
+    image: essentials/perf-lab-postgres-wal2json:17
+    container_name: essentials-perf-lab-postgres
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+    environment:
+      POSTGRES_DB: essentials_lab
+      POSTGRES_USER: essentials
+      POSTGRES_PASSWORD: essentials
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"  # Faster startup
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U essentials -d essentials_lab"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # === chaos profile (multi-instance app) ============================================
+  # Activated via `docker compose --profile chaos up`. Two perf-lab app instances run
+  # against the same PG, share the same replication slot name, and compete for the
+  # framework's advisory lock. Used by the tailer-kill-failover and multi-tailer-
+  # leadership chaos scripts. Outside the chaos profile these services don't start —
+  # the default workflow (running scenarios via `mvn spring-boot:run` on the host) is
+  # unaffected.
+  #
+  # Build prerequisite: a fat JAR at examples/essentials-performance-lab/target/
+  # essentials-performance-lab-DEV-SNAPSHOT.jar. Run `mvn -pl examples/essentials-
+  # performance-lab package -DskipTests` first, or use scripts/build-app-image.sh
+  # which does both steps.
+  perf-lab-app-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: essentials/perf-lab-app:DEV-SNAPSHOT
+    container_name: essentials-perf-lab-app-1
+    profiles: ["chaos"]
+    depends_on:
+      postgres-wal2json:
+        condition: service_healthy
+    environment:
+      # Each instance gets a unique node name for log readability. The slot name itself
+      # is identical across instances (derived from the consumer-group default), so the
+      # advisory lock decides who streams.
+      ESSENTIALS_LAB_NODE_NAME: node-1
+      ESSENTIALS_LAB_SCENARIO: ${CHAOS_SCENARIO:-slot-lag-bounded}
+      # Chaos scenarios are observation-driven — the script kills containers when ready
+      # rather than waiting for the scenario to elapse. Long duration so the JVM stays
+      # alive until the script is done.
+      ESSENTIALS_LAB_DURATION: ${CHAOS_DURATION:-PT3600S}
+      # Light load — enough to keep the tailer connected and the inbox flowing, low
+      # enough not to swamp the operator's PG when running locally.
+      ESSENTIALS_LAB_PRODUCER_RATE_HZ: ${CHAOS_RATE_HZ:-50}
+      ESSENTIALS_LAB_PRODUCER_THREADS: "1"
+      ESSENTIALS_LAB_AGGREGATE_CARDINALITY: "500"
+      ESSENTIALS_LAB_RANDOM_SEED: "42"
+      # Tight metrics interval so /actuator/prometheus reflects the slot's true state
+      # within seconds — the chaos scripts query this gauge to verify which instance
+      # holds the lock.
+      ESSENTIALS_EVENTSTORE_CDC_SLOT_METRICS_INTERVAL: "PT2S"
+      # Spring Boot reads SPRING_DATASOURCE_URL etc. from the environment; the
+      # Dockerfile sets the default to use the docker-network DNS name.
+      JAVA_OPTS: "-Xms256m -Xmx512m"
+
+  perf-lab-app-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: essentials/perf-lab-app:DEV-SNAPSHOT
+    container_name: essentials-perf-lab-app-2
+    profiles: ["chaos"]
+    depends_on:
+      postgres-wal2json:
+        condition: service_healthy
+    environment:
+      ESSENTIALS_LAB_NODE_NAME: node-2
+      ESSENTIALS_LAB_SCENARIO: ${CHAOS_SCENARIO:-slot-lag-bounded}
+      ESSENTIALS_LAB_DURATION: ${CHAOS_DURATION:-PT3600S}
+      ESSENTIALS_LAB_PRODUCER_RATE_HZ: ${CHAOS_RATE_HZ:-50}
+      ESSENTIALS_LAB_PRODUCER_THREADS: "1"
+      ESSENTIALS_LAB_AGGREGATE_CARDINALITY: "500"
+      ESSENTIALS_LAB_RANDOM_SEED: "43"
+      ESSENTIALS_EVENTSTORE_CDC_SLOT_METRICS_INTERVAL: "PT2S"
+      JAVA_OPTS: "-Xms256m -Xmx512m"

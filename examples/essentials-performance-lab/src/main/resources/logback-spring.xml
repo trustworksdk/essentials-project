@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
+<!--
+  logback-spring.xml — perf-lab logging config. Default is reasonably quiet (INFO root),
+  with CDC subsystems at INFO and diagnostic toggles exposed as Spring properties so matrix
+  scripts can flip TRACE on from the command line without editing this file.
+
+  Toggle via JVM system properties (pass with -D...):
+    logging.level.cdc=TRACE                                 # all CDC packages
+    logging.level.essentials.cdc=DEBUG                      # shorter alias (see springProperty below)
+    logging.level.dk.trustworks...cdc.CdcDispatcher=TRACE
+
+  Matrix scripts can also set PERF_LAB_CDC_LOG_LEVEL=TRACE and pass it as -Dlogging.level.cdc.
+  -->
+<configuration>
+
+    <springProperty scope="context" name="cdcLogLevel"
+                    source="logging.level.essentials.cdc" defaultValue="INFO"/>
+    <springProperty scope="context" name="tailerLogLevel"
+                    source="logging.level.essentials.cdc.tailer" defaultValue="${cdcLogLevel}"/>
+    <springProperty scope="context" name="dispatcherLogLevel"
+                    source="logging.level.essentials.cdc.dispatcher" defaultValue="${cdcLogLevel}"/>
+    <springProperty scope="context" name="converterLogLevel"
+                    source="logging.level.essentials.cdc.converter" defaultValue="${cdcLogLevel}"/>
+    <springProperty scope="context" name="perfLabLogLevel"
+                    source="logging.level.essentials.perflab" defaultValue="INFO"/>
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Quiet noisy framework loggers that are rarely useful in a perf run. -->
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+    <logger name="org.postgresql" level="WARN"/>
+    <logger name="io.micrometer" level="WARN"/>
+
+    <!-- CDC subsystems — level controllable per-subsystem via Spring properties above. -->
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.WalReplicationTailer"
+            level="${tailerLogLevel}"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcDispatcher"
+            level="${dispatcherLogLevel}"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcInboxRepository"
+            level="${cdcLogLevel}"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcEventStore"
+            level="${cdcLogLevel}"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter"
+            level="${converterLogLevel}"/>
+
+    <!-- Scenario code. -->
+    <logger name="dk.trustworks.essentials.examples.perflab"
+            level="${perfLabLogLevel}"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

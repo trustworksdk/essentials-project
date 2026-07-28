@@ -26,6 +26,7 @@ import org.springframework.beans.factory.config.*;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.env.Environment;
+import org.springframework.util.StringUtils;
 
 import java.util.Optional;
 
@@ -66,16 +67,20 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
         }
 
         var tableName = ttlJob.tableName();
-        if (tableName.isEmpty() && !ttlJob.tableNameProperty().isEmpty()) {
-            tableName = environment.getProperty(ttlJob.tableNameProperty(), tableName);
-        } else if (tableName.isEmpty()) {
+        if (StringUtils.hasText(ttlJob.tableNameProperty())) {
+            String configured = environment.getProperty(ttlJob.tableNameProperty());
+            if (StringUtils.hasText(configured)) {
+                tableName = configured;
+            }
+        }
+        if (tableName.isEmpty()) {
             throw new IllegalArgumentException(msg("@TTLJob on '{}' requires tableName or tableNameProperty", beanName));
         }
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
         PostgresqlUtil.checkIsValidTableOrColumnName(ttlJob.timestampColumn());
 
         var days = ttlJob.defaultTtlDays();
-        if (!ttlJob.ttlDurationProperty().isEmpty()) {
+        if (StringUtils.hasText(ttlJob.ttlDurationProperty())) {
             days = environment.getProperty(ttlJob.ttlDurationProperty(), Long.class, days);
         }
 

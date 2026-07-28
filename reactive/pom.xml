@@ -95,5 +95,41 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>enforce-module-dependency-direction</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <!--
+                                      Artifact-level guard for the core dependency chain:
+                                      shared -> types/reactive -> foundation-types -> foundation
+                                      -> postgresql-event-store -> eventsourced-aggregates.
+                                      reactive/ may depend only on shared/. Mirrors
+                                      EssentialsArchitectureTest#reactive_depends_only_on_shared
+                                      at the POM level.
+                                    -->
+                                    <excludes>
+                                        <exclude>dk.trustworks.essentials*:*</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>dk.trustworks.essentials:shared</include>
+                                    </includes>
+                                    <message>reactive/ may depend only on shared/ among Essentials modules.</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 </project>

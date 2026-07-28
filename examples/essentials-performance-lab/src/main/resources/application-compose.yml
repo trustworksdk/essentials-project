@@ -1,0 +1,11 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:55432/essentials_lab
+    username: essentials
+    password: essentials
+
+essentials:
+  eventstore:
+    cdc:
+      enabled: false
+      mode: auto

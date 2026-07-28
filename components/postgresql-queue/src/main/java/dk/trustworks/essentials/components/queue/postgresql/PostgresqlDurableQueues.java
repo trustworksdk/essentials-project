@@ -410,6 +410,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private void initializeQueueTables() {
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
         unitOfWorkFactory.usingUnitOfWork(handleAwareUnitOfWork -> {
+            PostgresqlUtil.acquireBootstrapLock(handleAwareUnitOfWork.handle());
             handleAwareUnitOfWork.handle().getJdbi().registerArgument(new QueueNameArgumentFactory());
             handleAwareUnitOfWork.handle().getJdbi().registerColumnMapper(new QueueNameColumnMapper());
             handleAwareUnitOfWork.handle().getJdbi().registerArgument(new QueueEntryIdArgumentFactory());

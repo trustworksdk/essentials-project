@@ -28,6 +28,11 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.projection.An
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.handler.WalReplicationTailerErrorHandler;
+import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.health.CdcHealthIndicator;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.*;
@@ -39,12 +44,18 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.monitoring.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyAwareEventStorePollingOptimizer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyEpochSource;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify.NotifyPollingSettings;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
+import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
@@ -57,15 +68,27 @@ import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
 import io.micrometer.tracing.propagation.Propagator;
 import org.jdbi.v3.core.Jdbi;
+import org.postgresql.ds.PGSimpleDataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
+import org.springframework.boot.actuate.autoconfigure.health.ConditionalOnEnabledHealthIndicator;
+import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import javax.sql.DataSource;
+import java.net.URI;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
+import java.util.function.Function;
 
 import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 
@@ -92,6 +115,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireTrue;
 @ConditionalOnClass(name = "dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.PostgresqlEventStore")
 @EnableConfigurationProperties(EssentialsEventStoreProperties.class)
 public class EventStoreConfiguration {
+    private static final Logger log = LoggerFactory.getLogger(EventStoreConfiguration.class);
 
     /**
      * The Local EventBus where the {@link EventStore} publishes {@link PersistedEvents} locally
@@ -160,21 +184,176 @@ public class EventStoreConfiguration {
                                                                        FencedLockManager fencedLockManager,
                                                                        DurableSubscriptionRepository durableSubscriptionRepository,
                                                                        EssentialsEventStoreProperties eventStoreProperties,
-                                                                       EssentialsComponentsProperties essentialsComponentsProperties) {
+                                                                       EssentialsComponentsProperties essentialsComponentsProperties,
+                                                                       Optional<NotifyEpochSource> notifyEpochSource,
+                                                                       AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy) {
+        var subscriptionManagerProps = eventStoreProperties.getSubscriptionManager();
+
+        warnIfCdcAndNotifyPollingBothEnabled(eventStoreProperties);
+
+        var optimizerFactory = buildPollingOptimizerFactory(subscriptionManagerProps,
+                                                            notifyEpochSource,
+                                                            persistenceStrategy);
+
         return EventStoreSubscriptionManager.builder()
                                             .setEventStore(eventStore)
                                             .setFencedLockManager(fencedLockManager)
                                             .setDurableSubscriptionRepository(durableSubscriptionRepository)
-                                            .setEventStorePollingBatchSize(eventStoreProperties.getSubscriptionManager().getEventStorePollingBatchSize())
-                                            .setEventStorePollingInterval(eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval())
-                                            .setSnapshotResumePointsEvery(eventStoreProperties.getSubscriptionManager().getSnapshotResumePointsEvery())
+                                            .setEventStorePollingBatchSize(subscriptionManagerProps.getEventStorePollingBatchSize())
+                                            .setEventStorePollingInterval(subscriptionManagerProps.getEventStorePollingInterval())
+                                            .setSnapshotResumePointsEvery(subscriptionManagerProps.getSnapshotResumePointsEvery())
                                             .setStartLifeCycles(essentialsComponentsProperties.getLifeCycles().isStartLifeCycles())
-                                            .setEventStorePollingOptimizerFactory(eventSteamName -> new JitteredEventStorePollingOptimizer(eventSteamName,
-                                                                                                                                           eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval().toMillis(),
-                                                                                                                                           (long) (eventStoreProperties.getSubscriptionManager().getEventStorePollingInterval().toMillis() * 0.5d),
-                                                                                                                                           eventStoreProperties.getSubscriptionManager().getMaxEventStorePollingInterval().toMillis(),
-                                                                                                                                           0.1d))
+                                            .setEventStorePollingOptimizerFactory(optimizerFactory)
                                             .build();
+    }
+
+    /**
+     * Build the per-subscription {@link EventStorePollingOptimizer} factory.
+     * <ul>
+     *   <li>If notify-polling is enabled <em>and</em> a {@link NotifyEpochSource} is
+     *       present in the context, return a factory that produces
+     *       {@link NotifyAwareEventStorePollingOptimizer}s keyed on the underlying
+     *       event-stream table.</li>
+     *   <li>Otherwise (or when a key can't be resolved to an event-stream table —
+     *       e.g. a custom subscription log name not produced by
+     *       {@code PostgresqlEventStore#pollEvents}), fall back to the existing
+     *       {@link JitteredEventStorePollingOptimizer}.</li>
+     * </ul>
+     * The factory receives the {@code eventStreamLogName} the framework chose for the
+     * subscription — for PostgresqlEventStore subscriptions this is
+     * {@code "EventStream:<aggregateType>:<subscriberId>"} (see
+     * {@code PostgresqlEventStore#pollEvents}). We parse the aggregate type from this
+     * name and resolve the event-stream table name via the persistence strategy. A
+     * malformed key or unknown aggregate type degrades gracefully to a jittered
+     * optimizer (preserving existing behaviour) — that's safer than returning
+     * {@link EventStorePollingOptimizer#None()} which would remove all backoff and
+     * peg the DB.
+     */
+    private Function<String, EventStorePollingOptimizer> buildPollingOptimizerFactory(
+            EssentialsEventStoreProperties.EventStoreSubscriptionManagerProperties subscriptionManagerProps,
+            Optional<NotifyEpochSource> notifyEpochSource,
+            AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy) {
+        var notifyPollingProps = subscriptionManagerProps.getNotifyPolling();
+        var jitteredFactory    = buildJitteredOptimizerFactory(subscriptionManagerProps);
+
+        if (!notifyPollingProps.isEnabled()) {
+            return jitteredFactory;
+        }
+        if (notifyEpochSource.isEmpty()) {
+            log.warn("Notify-polling is enabled but no NotifyEpochSource bean is present — "
+                             + "falling back to jittered polling optimizer for all subscriptions.");
+            return jitteredFactory;
+        }
+
+        var notifySettings = new NotifyPollingSettings(true,
+                                                       notifyPollingProps.getInitialDelay(),
+                                                       notifyPollingProps.getMaxDelay(),
+                                                       notifyPollingProps.getBackoffMultiplier());
+        var epochSource = notifyEpochSource.get();
+        log.info("Notify-aware polling optimizer enabled: initialDelay={} maxDelay={} backoffMultiplier={}",
+                 notifySettings.initialDelay(), notifySettings.maxDelay(), notifySettings.backoffMultiplier());
+
+        return eventStreamLogName -> {
+            var aggregateType = parseAggregateTypeFromLogName(eventStreamLogName);
+            if (aggregateType == null) {
+                log.warn("Could not parse aggregate type from event stream log name='{}' — "
+                                 + "using jittered optimizer for this subscription.", eventStreamLogName);
+                return jitteredFactory.apply(eventStreamLogName);
+            }
+            var configOpt = persistenceStrategy.findAggregateEventStreamConfiguration(aggregateType);
+            if (configOpt.isEmpty()) {
+                log.warn("No event-stream configuration registered for aggregateType='{}' "
+                                 + "(parsed from log name='{}') — using jittered optimizer for this subscription.",
+                         aggregateType, eventStreamLogName);
+                return jitteredFactory.apply(eventStreamLogName);
+            }
+            var tableName = configOpt.get().eventStreamTableName;
+            log.debug("Creating NotifyAwareEventStorePollingOptimizer for logName='{}' aggregateType='{}' table='{}'",
+                      eventStreamLogName, aggregateType, tableName);
+            return new NotifyAwareEventStorePollingOptimizer(epochSource, tableName, notifySettings);
+        };
+    }
+
+    /**
+     * The legacy/default factory: a {@link JitteredEventStorePollingOptimizer} per
+     * subscription. Preserves pre-S1 behaviour and is used as the fallback whenever
+     * notify-polling is disabled or its prerequisites aren't met.
+     */
+    private Function<String, EventStorePollingOptimizer> buildJitteredOptimizerFactory(
+            EssentialsEventStoreProperties.EventStoreSubscriptionManagerProperties subscriptionManagerProps) {
+        long pollingIntervalMs    = subscriptionManagerProps.getEventStorePollingInterval().toMillis();
+        long maxPollingIntervalMs = subscriptionManagerProps.getMaxEventStorePollingInterval().toMillis();
+        return eventStreamLogName -> new JitteredEventStorePollingOptimizer(eventStreamLogName,
+                                                                            pollingIntervalMs,
+                                                                            (long) (pollingIntervalMs * 0.5d),
+                                                                            maxPollingIntervalMs,
+                                                                            0.1d);
+    }
+
+    /**
+     * Parse the {@link AggregateType} from a subscription log name of the form
+     * {@code "EventStream:<aggregateType>:<subscriberId>"} (the format
+     * {@code PostgresqlEventStore#pollEvents} uses). Returns {@code null} if the name
+     * doesn't match the expected shape — callers fall back to the jittered optimizer
+     * in that case.
+     */
+    private static AggregateType parseAggregateTypeFromLogName(String eventStreamLogName) {
+        if (eventStreamLogName == null) return null;
+        String[] parts = eventStreamLogName.split(":", 3);
+        if (parts.length < 2 || parts[1].isBlank()) return null;
+        return AggregateType.of(parts[1]);
+    }
+
+    /**
+     * Coexistence WARN: CDC INBOX already delivers a notify-equivalent wake-up via its
+     * dispatcher, so enabling both wake-up paths adds DB load (extra trigger fire per
+     * insert, extra LISTEN connection) for no gain in liveness. Operators can still
+     * enable both intentionally during migration windows — hence WARN, not fail.
+     */
+    private void warnIfCdcAndNotifyPollingBothEnabled(EssentialsEventStoreProperties eventStoreProperties) {
+        var notifyPollingEnabled = eventStoreProperties.getSubscriptionManager().getNotifyPolling().isEnabled();
+        var cdcEnabled           = eventStoreProperties.getCdc().isEnabled();
+        if (notifyPollingEnabled && cdcEnabled) {
+            log.warn("Both CDC (essentials.eventstore.cdc.enabled) and notify-polling "
+                             + "(essentials.eventstore.subscription-manager.notify-polling.enabled) are enabled. "
+                             + "These are alternative wake-up mechanisms — running both adds DB load "
+                             + "(per-insert trigger fire + extra LISTEN connection) without improving liveness. "
+                             + "Pick one for production.");
+        }
+    }
+
+    /**
+     * S1: NOTIFY-driven polling wake-up. Bridges the framework's
+     * {@link MultiTableChangeListener} (which publishes {@link TableChangeNotification}s
+     * onto the EventBus returned by {@link MultiTableChangeListener#getEventBus()})
+     * into per-table epoch counters that {@link NotifyAwareEventStorePollingOptimizer}
+     * reads to know when to wake from backoff.
+     * <p>
+     * Conditional on {@code essentials.eventstore.subscription-manager.notify-polling.enabled=true}.
+     * Subscribes to the change-listener's own EventBus (not the EventStore's) — guaranteed
+     * to receive the table-change events regardless of which bus the EventStore uses.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.subscription-manager.notify-polling", name = "enabled", havingValue = "true")
+    @ConditionalOnMissingBean
+    public NotifyEpochSource notifyEpochSource(MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
+        return new NotifyEpochSource(multiTableChangeListener.getEventBus());
+    }
+
+    /**
+     * S1: bootstrap bean that wires the persistence strategy's {@code NotifyTriggerInstaller}
+     * so that every event-stream table (existing and future) gets a {@code pg_notify}
+     * trigger and is registered with the shared {@link MultiTableChangeListener}.
+     * See {@link EventStoreNotifyPollingBootstrap} for the full lifecycle and rationale.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.subscription-manager.notify-polling", name = "enabled", havingValue = "true")
+    @ConditionalOnMissingBean
+    public EventStoreNotifyPollingBootstrap eventStoreNotifyPollingBootstrap(
+            Jdbi jdbi,
+            AggregateEventStreamPersistenceStrategy<SeparateTablePerAggregateEventStreamConfiguration> persistenceStrategy,
+            MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
+        return new EventStoreNotifyPollingBootstrap(jdbi, persistenceStrategy, multiTableChangeListener);
     }
 
     @Bean
@@ -231,12 +410,13 @@ public class EventStoreConfiguration {
                                                                                                 EventStoreEventBus eventStoreLocalEventBus,
                                                                                                 EssentialsEventStoreProperties essentialsComponentsProperties,
                                                                                                 List<EventStoreInterceptor> eventStoreInterceptors,
-                                                                                                EventStoreSubscriptionObserver eventStoreSubscriptionObserver) {
+                                                                                                EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
+                                                                                                EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler) {
         var configurableEventStore = new PostgresqlEventStore<>(eventStoreUnitOfWorkFactory,
                                                                 persistenceStrategy,
                                                                 Optional.of(eventStoreLocalEventBus),
                                                                 eventStore -> essentialsComponentsProperties.isUseEventStreamGapHandler() ?
-                                                                              new PostgresqlEventStreamGapHandler<>(eventStore, eventStoreUnitOfWorkFactory) :
+                                                                              eventStreamGapHandler :
                                                                               new NoEventStreamGapHandler<>(),
                                                                 eventStoreSubscriptionObserver);
         configurableEventStore.addEventStoreInterceptors(eventStoreInterceptors);
@@ -259,6 +439,12 @@ public class EventStoreConfiguration {
         var projector = new AnnotationBasedInMemoryProjector();
         eventStore.addGenericInMemoryProjector(projector);
         return projector;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory) {
+        return new PostgresqlEventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration>(eventStoreUnitOfWorkFactory);
     }
 
     @Bean
@@ -452,6 +638,372 @@ public class EventStoreConfiguration {
                                                             essentialsProperties.getTracingProperties().getModuleTag());
     }
 
+    // CDC ############################################################################################
+
+    @Bean
+    @ConditionalOnClass(HealthIndicator.class)
+    @ConditionalOnEnabledHealthIndicator("cdc")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public HealthIndicator cdcHealthIndicator(CdcAvailability availability,
+                                              Optional<WalReplicationTailer> tailer,
+                                              Optional<CdcDispatcher> dispatcher,
+                                              EssentialsEventStoreProperties properties) {
+        return new CdcHealthIndicator(availability, tailer, dispatcher, properties);
+    }
+
+    @Bean
+    @Primary
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public EventStore cdcEventStore(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                    EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
+                                    CdcEventBus cdcEventBus,
+                                    EssentialsEventStoreProperties essentialsProperties,
+                                    CdcAvailability availability,
+                                    Optional<MeterRegistry> meterRegistry) {
+        return new CdcEventStore(
+                eventStore,
+                eventStoreUnitOfWorkFactory,
+                eventStreamGapHandler,
+                cdcEventBus,
+                essentialsProperties.getCdc(),
+                availability,
+                meterRegistry
+        );
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcAvailability cdcAvailability(Optional<MeterRegistry> meterRegistry) {
+        return new CdcAvailability(meterRegistry);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcDispatcher cdcDispatcher(CdcInboxRepository cdcInboxRepository,
+                                       EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                       EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
+                                       SubscriptionResetOnPoisonNotifier subscriptionResetOnPoisonNotifier,
+                                       CdcEventBus cdcEventBus,
+                                       EssentialsEventStoreProperties essentialsProperties,
+                                       CdcConsumerGroup group,
+                                       CdcSlotNameProvider slotNameProvider,
+                                       CdcAvailability availability,
+                                       @Qualifier("configuredLogicalDecodingPlugin") LogicalDecodingPlugin logicalDecodingPlugin,
+                                       Optional<MeterRegistry> meterRegistry) {
+
+        String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
+
+        return new CdcDispatcher(cdcInboxRepository,
+                                 eventStoreUnitOfWorkFactory,
+                                 eventStreamGapHandler,
+                                 logicalDecodingPlugin,
+                                 Optional.of(subscriptionResetOnPoisonNotifier),
+                                 cdcEventBus::publish,
+                                 slotName,
+                                 essentialsProperties.getCdc().getCdcDispatcher(),
+                                 essentialsProperties.getCdc().getDeliveryMode(),
+                                 availability,
+                                 meterRegistry
+        );
+    }
+
+    private static String getCdcSlotName(EssentialsEventStoreProperties essentialsProperties, CdcConsumerGroup group, CdcSlotNameProvider slotNameProvider) {
+        var slotProps = essentialsProperties.getCdc().getSlot();
+        return slotProps.getName() != null && !slotProps.getName().isBlank()
+                          ? slotProps.getName()
+                          : slotNameProvider.slotName(group);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public SubscriptionResetOnPoisonNotifier subscriptionResetOnPoisonNotifier(EventStoreSubscriptionManager eventStoreSubscriptionManager,
+                                                                               DurableSubscriptionRepository durableSubscriptionRepository) {
+        return new SubscriptionResetOnPoisonNotifier(eventStoreSubscriptionManager, durableSubscriptionRepository);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcEventBus cdcEventBus(EssentialsEventStoreProperties properties) {
+        // Surface the weakest delivery configuration (DIRECT + LOG_AND_DROP) loudly at startup — it
+        // silently skips the live-tail push for a dropped event (recovery falls to store-backed backfill).
+        // WARN, not reject: it is a deliberate, non-default opt-in. See CdcDeliveryMode for the matrix.
+        properties.getCdc().directDeliveryDropAdvisory().ifPresent(log::warn);
+        return new CdcEventBus(properties.getCdc().getEventBus());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public LogicalReplicationToPersistedEventConverter logicalReplicationToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
+        return new JacksonWal2JsonToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer,
+                                                                               AggregateTypeResolver aggregateTypeResolver) {
+        return new PgOutputToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public WalGlobalOrdersExtractor walGlobalOrdersExtractor(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
+        return new JacksonWalGlobalOrdersExtractor(jsonSerializer, aggregateTypeResolver);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public AggregateTypeResolver aggregateTypeResolver(@Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        // Pass a live supplier rather than a snapshot — aggregates registered at runtime via
+        // addAggregateEventStreamConfiguration(...) must become visible to CDC conversion.
+        var postgresqlEventStore = (PostgresqlEventStore<?>) eventStore;
+        return new DefaultAggregateTypeResolver(
+                () -> postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public WalMessageFilter walMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
+                                             @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                             EssentialsEventStoreProperties properties) {
+        // Pass a live supplier rather than a snapshot — aggregates registered at runtime via
+        // addAggregateEventStreamConfiguration(...) must become visible to the WAL filter or
+        // their INSERTs will be silently dropped before reaching the CDC inbox.
+        var postgresqlEventStore = (PostgresqlEventStore<?>) eventStore;
+        java.util.function.Supplier<java.util.Collection<String>> tablesSupplier =
+                () -> postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerEventStreamTableNameAggregates().keySet();
+
+        // Plugin-specific filter. pgoutput gets the binary-peek filter that drops B/C/U/D/T
+        // and I messages for non-event-stream tables BEFORE they hit the inbox; wal2json
+        // keeps the JSON-regex filter. Either can be overridden via a user-supplied
+        // WalMessageFilter bean (ConditionalOnMissingBean above).
+        String configuredPlugin = properties.getCdc().getPlugin();
+        if (dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.PgOutputLogicalDecodingPlugin.PLUGIN_NAME
+                .equalsIgnoreCase(configuredPlugin)) {
+            return new dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.PgOutputRawPayloadFilter(
+                    tablesSupplier);
+        }
+        return new DefaultWalMessageFilter(jacksonJSONSerializer, tablesSupplier);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcConsumerGroup cdcConsumerGroup(EssentialsEventStoreProperties props) {
+        return CdcConsumerGroup.of(props.getCdc().getSlot().getGroup());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(name = "wal2jsonLogicalDecodingPlugin")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public LogicalDecodingPlugin wal2jsonLogicalDecodingPlugin(EssentialsEventStoreProperties properties,
+                                                                LogicalReplicationToPersistedEventConverter converter,
+                                                                WalGlobalOrdersExtractor walGlobalOrdersExtractor) {
+        return new Wal2JsonLogicalDecodingPlugin(properties.getCdc().getWalReplicationTailer(),
+                                                 converter,
+                                                 walGlobalOrdersExtractor,
+                                                 properties.getCdc().getWalParserMode());
+    }
+
+    @Bean("configuredLogicalDecodingPlugin")
+    @ConditionalOnMissingBean(name = "configuredLogicalDecodingPlugin")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public LogicalDecodingPlugin logicalDecodingPlugin(EssentialsEventStoreProperties properties,
+                                                       @Qualifier("wal2jsonLogicalDecodingPlugin") LogicalDecodingPlugin wal2jsonLogicalDecodingPlugin,
+                                                       @Qualifier("pgoutputLogicalDecodingPlugin") LogicalDecodingPlugin pgoutputLogicalDecodingPlugin) {
+        String configuredPlugin = properties.getCdc().getPlugin();
+        if (Wal2JsonLogicalDecodingPlugin.PLUGIN_NAME.equalsIgnoreCase(configuredPlugin)) {
+            return wal2jsonLogicalDecodingPlugin;
+        }
+        if (PgOutputLogicalDecodingPlugin.PLUGIN_NAME.equalsIgnoreCase(configuredPlugin)) {
+            return pgoutputLogicalDecodingPlugin;
+        }
+        throw new IllegalArgumentException("Unsupported CDC logical decoding plugin '" + configuredPlugin + "'");
+    }
+
+    @Bean("pgoutputLogicalDecodingPlugin")
+    @ConditionalOnMissingBean(name = "pgoutputLogicalDecodingPlugin")
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public LogicalDecodingPlugin pgoutputLogicalDecodingPlugin(EssentialsEventStoreProperties properties,
+                                                                PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter) {
+        return new PgOutputLogicalDecodingPlugin(properties.getCdc().getPgOutput(), pgOutputToPersistedEventConverter);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcSlotNameProvider cdcSlotNameProvider(DataSourceProperties dsProps) {
+        String url = dsProps.getUrl();
+        String db  = null;
+        if (url != null) {
+            try {
+                URI    uri  = URI.create(url.replace("jdbc:", ""));
+                String path = uri.getPath();
+                if (path != null && path.length() > 1) {
+                    db = path.substring(1);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return new DefaultCdcSlotNameProvider(db);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public WalReplicationTailer walReplicationTailer(DataSourceProperties dataSourceProperties,
+                                                     Jdbi jdbi,
+                                                     EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                                     @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                                     CdcInboxRepository cdcInboxRepository,
+                                                     EssentialsEventStoreProperties properties,
+                                                     CdcConsumerGroup group,
+                                                     CdcSlotNameProvider slotNameProvider,
+                                                     CdcAvailability availability,
+                                                     WalMessageFilter walMessageFilter,
+                                                     CdcEventBus cdcEventBus,
+                                                     @Qualifier("configuredLogicalDecodingPlugin") LogicalDecodingPlugin logicalDecodingPlugin,
+                                                     Optional<MeterRegistry> meterRegistry,
+                                                     Optional<WalReplicationTailerErrorHandler> errorHandler) throws SQLException {
+
+        String     slotName              = getCdcSlotName(properties, group, slotNameProvider);
+        DataSource replicationDataSource = createReplicationDataSource(dataSourceProperties);
+
+        // Live supplier mirroring the aggregateTypeResolver wiring — aggregates registered at
+        // runtime must become visible to the tailer's publication-membership diagnostic check.
+        var postgresqlEventStore = (PostgresqlEventStore<?>) eventStore;
+        java.util.function.Supplier<java.util.Set<String>> eventStreamTableNamesSupplier =
+                () -> postgresqlEventStore.getPersistenceStrategy()
+                                          .getSeparateTablePerEventStreamTableNameAggregates()
+                                          .keySet();
+
+        return new WalReplicationTailer(replicationDataSource,
+                                        jdbi,
+                                        eventStoreUnitOfWorkFactory,
+                                        slotName,
+                                        cdcInboxRepository,
+                                        properties.getCdc().getWalReplicationTailer(),
+                                        properties.getCdc().getSlot().getMode(),
+                                        properties.getCdc().getMode(),
+                                        properties.getCdc().getDeliveryMode(),
+                                        logicalDecodingPlugin,
+                                        Optional.of(cdcEventBus::publish),
+                                        Optional.of(walMessageFilter),
+                                        availability,
+                                        meterRegistry,
+                                        errorHandler,
+                                        Optional.of(eventStreamTableNamesSupplier),
+                                        properties.getCdc().getSlot().isRecreateOnStart());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcInboxRepository cdcInboxRepository(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                                 Optional<MeterRegistry> meterRegistry,
+                                                 EssentialsEventStoreProperties essentialsProperties,
+                                                 CdcConsumerGroup group,
+                                                 CdcSlotNameProvider slotNameProvider) {
+        var cdc = essentialsProperties.getCdc();
+        // Use the configured inbox table name so the repository reads/writes the SAME table the
+        // @TTLJob (essentials.eventstore.cdc.inbox-table-name) cleans. Passing the default here would
+        // let a custom-named TTL job clean a table the repository never touches, leaking rows.
+        var repo = new CdcInboxRepository(eventStoreUnitOfWorkFactory, meterRegistry, cdc.getInboxTableName());
+        // Inbox depth gauges are scoped to a known slot. Register them once here, gated on
+        // INBOX delivery mode (DIRECT bypasses the inbox; the gauges would be permanently 0
+        // and misleading) and the dispatcher's metrics-enabled toggle. The gauges sample on
+        // demand at metrics scrape time — no separate background sampler.
+        if (cdc.getDeliveryMode() == CdcProperties.CdcDeliveryMode.INBOX
+                && cdc.getCdcDispatcher().isInboxMetricsEnabled()) {
+            repo.registerInboxBacklogGauges(getCdcSlotName(essentialsProperties, group, slotNameProvider));
+        }
+        return repo;
+    }
+
+    /**
+     * Background health probe that watches for "CDC appears ACTIVE but isn't delivering" and
+     * "dispatcher scheduler dead" failure modes. Fires availability.failed(...) so subscribers
+     * fall back to polling. Guarded by essentials.eventstore.cdc.health-check.enabled (default
+     * true) — also skipped when delivery-mode is DIRECT, since the heuristic depends on the
+     * dispatcher.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcEffectivenessMonitor cdcEffectivenessMonitor(WalReplicationTailer walReplicationTailer,
+                                                           CdcDispatcher cdcDispatcher,
+                                                           CdcAvailability availability,
+                                                           EssentialsEventStoreProperties essentialsProperties,
+                                                           CdcConsumerGroup group,
+                                                           CdcSlotNameProvider slotNameProvider) {
+        String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
+        return new CdcEffectivenessMonitor(
+                walReplicationTailer,
+                cdcDispatcher,
+                availability,
+                essentialsProperties.getCdc().getDeliveryMode(),
+                essentialsProperties.getCdc().getHealthCheck(),
+                slotName);
+    }
+
+    /**
+     * Background sampler that publishes the slot's WAL retention health as Micrometer gauges
+     * (lag bytes, active flag, wal_status, inactive_since_seconds). Quietly no-ops when no
+     * {@link MeterRegistry} is present in the context. Also gated by
+     * {@code essentials.eventstore.cdc.slot.metrics-enabled} (default true); disable for
+     * environments that shouldn't run the periodic {@code SELECT FROM pg_replication_slots}
+     * probe.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcSlotMetrics cdcSlotMetrics(WalReplicationTailer walReplicationTailer,
+                                         Optional<MeterRegistry> meterRegistry,
+                                         EssentialsEventStoreProperties essentialsProperties,
+                                         CdcConsumerGroup group,
+                                         CdcSlotNameProvider slotNameProvider) {
+        String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
+        return new CdcSlotMetrics(walReplicationTailer,
+                                  meterRegistry,
+                                  slotName,
+                                  essentialsProperties.getCdc().getSlot());
+    }
+
+    private DataSource createReplicationDataSource(DataSourceProperties properties) throws SQLException {
+        var jdbcUrl = properties.getUrl();
+        if (jdbcUrl == null) {
+            throw new IllegalStateException("spring.datasource.url must be set");
+        }
+
+        URI uri = URI.create(jdbcUrl.replace("jdbc:", ""));
+
+        var host     = uri.getHost();
+        int port     = uri.getPort() == -1 ? 5432 : uri.getPort();
+        var database = uri.getPath().replaceFirst("/", "");
+
+        PGSimpleDataSource pg = new PGSimpleDataSource();
+        pg.setServerNames(new String[]{host});
+        pg.setPortNumbers(new int[]{port});
+        pg.setDatabaseName(database);
+        pg.setUser(properties.getUsername());
+        pg.setPassword(properties.getPassword());
+
+        pg.setProperty("replication", "database");
+        pg.setProperty("preferQueryMode", "simple");
+        pg.setProperty("assumeMinServerVersion", "17");
+
+        return pg;
+    }
+
     // # Api ##########################################################################################
 
     @Bean
@@ -466,12 +1018,35 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public CdcApi cdcApi(EssentialsSecurityProvider securityProvider,
+                         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                         EssentialsEventStoreProperties properties,
+                         CdcAvailability availability,
+                         CdcConsumerGroup group,
+                         CdcSlotNameProvider slotNameProvider,
+                         Optional<WalReplicationTailer> tailer,
+                         Optional<CdcDispatcher> dispatcher) {
+        String slotName = getCdcSlotName(properties, group, slotNameProvider);
+        return new DefaultCdcApi(securityProvider,
+                                 eventStoreUnitOfWorkFactory,
+                                 availability,
+                                 properties.getCdc(),
+                                 slotName,
+                                 tailer,
+                                 dispatcher);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public PostgresqlEventStoreStatisticsApi postgresqlEventStoreStatisticsApi(EssentialsSecurityProvider securityProvider,
-                                                                               EventStore eventStore) {
+                                                                               @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
         var postgresqlEventStore           = (PostgresqlEventStore<?>) eventStore;
         var aggregateEventStreamTableNames = postgresqlEventStore.getPersistenceStrategy().getSeparateTablePerAggregateEventStreamTableNames();
         return new DefaultPostgresqlEventStoreStatisticsApi(securityProvider,
                                                             eventStore.getUnitOfWorkFactory(),
                                                             aggregateEventStreamTableNames);
     }
+
+
 }

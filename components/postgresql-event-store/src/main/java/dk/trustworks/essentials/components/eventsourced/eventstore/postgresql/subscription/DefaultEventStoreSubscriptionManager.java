@@ -292,6 +292,13 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     }
 
     @Override
+    public Optional<EventStoreSubscription> getSubscription(SubscriberId subscriberId, AggregateType aggregateType) {
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        return Optional.ofNullable(subscribers.get(Pair.of(subscriberId, aggregateType)));
+    }
+
+    @Override
     public Optional<GlobalEventOrder> getCurrentEventOrder(SubscriberId subscriberId, AggregateType aggregateType) {
         return Optional.ofNullable(this.subscribers.get(Pair.of(subscriberId, aggregateType)))
                        .flatMap(EventStoreSubscription::currentResumePoint)
@@ -299,9 +306,15 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     }
 
     private void saveResumePointsForAllSubscribers() {
-        // TODO: Filter out active subscribers and decide if we can increment the global event order like when the subscriber stops.
-        //   Current approach is safe with regards to reset of resume-points, but it will result in one overlapping event during resubscription
-        //   related to a failed node or after a subscription manager failure (i.e. it doesn't run stop() at all or run to completion)
+        // Note (deliberate trade-off): this periodic crash-safety checkpoint persists each active
+        // subscriber's CURRENT resume point verbatim. A graceful stop()/unsubscribe records a precise
+        // boundary, but an ungraceful failure (node crash, or this manager dying before stop() runs to
+        // completion) resumes from the last checkpoint and re-delivers exactly ONE already-processed
+        // event. That is safe — delivery is at-least-once by contract, and the verbatim save is
+        // conservative w.r.t. resume-point resets (it never advances past an unprocessed event).
+        // Advancing the checkpoint for active subscribers (as stop() does) would trim that one-event
+        // overlap, but risks skipping an in-flight event if the "is this boundary clean?" decision is
+        // wrong — turning a harmless duplicate into a loss. Tracked as S4 in docs/subscription-improvements.md.
         try {
             durableSubscriptionRepository.saveResumePoints(subscribers.values()
                                                                       .stream()

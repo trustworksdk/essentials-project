@@ -94,8 +94,8 @@ public record CronScheduleConfiguration(CronExpression cronExpression,
 
     public FixedDelayScheduleConfiguration toFixedDelayConfiguration() {
         var cronValue = cronExpression.toString().trim();
-        long periodMillis;
-        long initialDelayMillis;
+        Long periodMillis = null;
+        Long initialDelayMillis = null;
 
         if (cronValue.matches("\\d+\\s*seconds?")) {
             var seconds = Integer.parseInt(cronValue.split("\\s+")[0]);
@@ -134,19 +134,15 @@ public record CronScheduleConfiguration(CronExpression cronExpression,
             var now = ZonedDateTime.now(ZoneId.systemDefault());
             var nextMidnight = now.truncatedTo(ChronoUnit.DAYS).plusDays(1);
             initialDelayMillis = Duration.between(now, nextMidnight).toMillis();
-        } else if ("0 * * * *".equals(cronValue)) {
-            // Every hour at minute 0
-            var now = ZonedDateTime.now(ZoneId.systemDefault());
-            var nextHour = now.truncatedTo(ChronoUnit.HOURS).plusHours(1);
-            initialDelayMillis = Duration.between(now, nextHour).toMillis();
-            periodMillis = Duration.ofHours(1).toMillis();
-        } else if ("0 0 * * *".equals(cronValue) || "0 0 0 * *".equals(cronValue)) {
-            // Every day at midnight
-            var now = ZonedDateTime.now(ZoneId.systemDefault());
-            var nextMidnight = now.truncatedTo(ChronoUnit.DAYS).plusDays(1);
-            initialDelayMillis = Duration.between(now, nextMidnight).toMillis();
-            periodMillis = Duration.ofDays(1).toMillis();
-        } else {
+        } else if (cronValue.split("\\s+").length == 5) {
+            var fiveFieldCron = parseFiveFieldCron(cronValue);
+            if (fiveFieldCron != null) {
+                periodMillis = fiveFieldCron.periodMillis;
+                initialDelayMillis = fiveFieldCron.initialDelayMillis;
+            }
+        }
+
+        if (periodMillis == null || initialDelayMillis == null) {
             throw new IllegalArgumentException(
                     String.format("Unable to parse cron expression '%s' to fixed delay", cronValue)
             );
@@ -155,6 +151,113 @@ public record CronScheduleConfiguration(CronExpression cronExpression,
         return new FixedDelayScheduleConfiguration(
                 new FixedDelay(initialDelayMillis, periodMillis, TimeUnit.MILLISECONDS)
         );
+    }
+
+    private static ParsedFixedDelay parseFiveFieldCron(String cronValue) {
+        var parts = cronValue.split("\\s+");
+        var minute = parts[0];
+        var hour = parts[1];
+        var dayOfMonth = parts[2];
+        var month = parts[3];
+        var dayOfWeek = parts[4];
+        var zoneId = ZoneId.systemDefault();
+        var now = ZonedDateTime.now(zoneId);
+
+        if (!"*".equals(month) || !"*".equals(dayOfWeek)) {
+            return null;
+        }
+
+        // Every N minutes: */N * * * *
+        if (minute.startsWith("*/") && "*".equals(hour) && "*".equals(dayOfMonth)) {
+            var n = parsePositiveInt(minute.substring(2));
+            if (n == null) return null;
+
+            var next = now.truncatedTo(ChronoUnit.MINUTES).plusMinutes(1);
+            while (next.getMinute() % n != 0) {
+                next = next.plusMinutes(1);
+            }
+            return new ParsedFixedDelay(Duration.ofMinutes(n).toMillis(), millisUntil(now, next));
+        }
+
+        // Every hour at minute M: M * * * *
+        if (isMinute(minute) && "*".equals(hour) && "*".equals(dayOfMonth)) {
+            var minuteOfHour = Integer.parseInt(minute);
+            var next = now.truncatedTo(ChronoUnit.HOURS).withMinute(minuteOfHour);
+            if (!next.isAfter(now)) {
+                next = next.plusHours(1);
+            }
+            return new ParsedFixedDelay(Duration.ofHours(1).toMillis(), millisUntil(now, next));
+        }
+
+        // Every N hours at minute M: M */N * * *
+        if (isMinute(minute) && hour.startsWith("*/") && "*".equals(dayOfMonth)) {
+            var minuteOfHour = Integer.parseInt(minute);
+            var everyHours = parsePositiveInt(hour.substring(2));
+            if (everyHours == null) return null;
+
+            var next = now.truncatedTo(ChronoUnit.HOURS).withMinute(minuteOfHour);
+            while (!next.isAfter(now) || (next.getHour() % everyHours != 0)) {
+                next = next.plusHours(1).withMinute(minuteOfHour);
+            }
+            return new ParsedFixedDelay(Duration.ofHours(everyHours).toMillis(), millisUntil(now, next));
+        }
+
+        // Daily at HH:MM: M H * * *
+        if (isMinute(minute) && isHour(hour) && "*".equals(dayOfMonth)) {
+            var minuteOfHour = Integer.parseInt(minute);
+            var hourOfDay = Integer.parseInt(hour);
+
+            var next = now.truncatedTo(ChronoUnit.DAYS).withHour(hourOfDay).withMinute(minuteOfHour);
+            if (!next.isAfter(now)) {
+                next = next.plusDays(1);
+            }
+            return new ParsedFixedDelay(Duration.ofDays(1).toMillis(), millisUntil(now, next));
+        }
+
+        // Every N days at HH:MM: M H */N * *
+        if (isMinute(minute) && isHour(hour) && dayOfMonth.startsWith("*/")) {
+            var minuteOfHour = Integer.parseInt(minute);
+            var hourOfDay = Integer.parseInt(hour);
+            var everyDays = parsePositiveInt(dayOfMonth.substring(2));
+            if (everyDays == null) return null;
+
+            var next = now.truncatedTo(ChronoUnit.DAYS).withHour(hourOfDay).withMinute(minuteOfHour);
+            if (!next.isAfter(now)) {
+                next = next.plusDays(1);
+            }
+            while (((next.getDayOfMonth() - 1) % everyDays) != 0) {
+                next = next.plusDays(1);
+            }
+            return new ParsedFixedDelay(Duration.ofDays(everyDays).toMillis(), millisUntil(now, next));
+        }
+
+        return null;
+    }
+
+    private static boolean isMinute(String value) {
+        if (!value.matches("\\d+")) return false;
+        var minute = Integer.parseInt(value);
+        return minute >= 0 && minute <= 59;
+    }
+
+    private static boolean isHour(String value) {
+        if (!value.matches("\\d+")) return false;
+        var hour = Integer.parseInt(value);
+        return hour >= 0 && hour <= 23;
+    }
+
+    private static Integer parsePositiveInt(String value) {
+        if (!value.matches("\\d+")) return null;
+        var parsed = Integer.parseInt(value);
+        if (parsed <= 0) return null;
+        return parsed;
+    }
+
+    private static long millisUntil(ZonedDateTime now, ZonedDateTime next) {
+        return Duration.between(now, next).toMillis();
+    }
+
+    private record ParsedFixedDelay(long periodMillis, long initialDelayMillis) {
     }
 
 }
