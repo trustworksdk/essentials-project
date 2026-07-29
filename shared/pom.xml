@@ -64,5 +64,43 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>enforce-module-dependency-direction</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <!--
+                                      Artifact-level guard for the core dependency chain:
+                                      shared -> types/reactive -> foundation-types -> foundation
+                                      -> postgresql-event-store -> eventsourced-aggregates.
+                                      Bans every intra-project (dk.trustworks.essentials*)
+                                      dependency except the allow-listed upstream artifacts,
+                                      catching a wrong-direction <dependency> at build time -
+                                      including the postgresql-event-store boundary that
+                                      EssentialsArchitectureTest cannot express because
+                                      foundation-types shares its package namespace.
+                                      shared/ is the zero-dependency base: no intra-project
+                                      dependency is allowed at all.
+                                    -->
+                                    <excludes>
+                                        <exclude>dk.trustworks.essentials*:*</exclude>
+                                    </excludes>
+                                    <message>shared/ is the zero-dependency base of the library and must not depend on any other Essentials module.</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 </project>

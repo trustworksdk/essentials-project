@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: essentials-performance-lab
+  datasource:
+    url: jdbc:postgresql://localhost:5432/essentials_lab
+    username: essentials
+    password: essentials
+
+essentials:
+  scheduler:
+    enabled: true
+  eventstore:
+    cdc:
+      enabled: true
+      mode: auto
+      # pgoutput publication management — perf-lab lets the framework create and maintain the
+      # publication with FOR TABLE <event-stream-tables> (precise server-side filter) rather
+      # than relying on a pre-created FOR ALL TABLES. With FOR_TABLE_LIST, transactions that
+      # only touch non-event tables (durable_queues, fenced_lock, TTL, …) are filtered by
+      # pgoutput on the server and never reach the client at all — saving network, client CPU,
+      # and inbox writes.
+      # Note: auto-manage runs at tailer startup; aggregates registered after startup aren't
+      # automatically added to the publication (would need a restart). The perf-lab registers
+      # all aggregates at @PostConstruct so this is fine here.
+      pg-output:
+        publication:
+          auto-manage: true
+          mode: FOR_TABLE_LIST
+      slot:
+        # Fresh replication slot per JVM so matrix cases don't inherit the previous case's
+        # WAL backlog — the backlog was sometimes large enough that the 60s measurement
+        # window ended before the tailer replayed past it, making the case look stuck.
+        # Opt-in destructive; dev/test only. See CdcSlotProperties#isRecreateOnStart Javadoc.
+        recreate-on-start: true
+  lab:
+    mode: showcase
+    scenario: catalog
+    warmup: 10s
+    duration: 30s
+    producer-threads: 4
+    subscriber-count: 5
+    queue-count: 10
+    aggregate-cardinality: 1000
+    random-seed: 42
+    metrics-output-file: ./target/perf-lab-metrics.json
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

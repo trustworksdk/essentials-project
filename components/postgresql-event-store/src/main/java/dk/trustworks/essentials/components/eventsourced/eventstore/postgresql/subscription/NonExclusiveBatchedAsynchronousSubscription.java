@@ -197,13 +197,7 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                 // Ignore
                 Thread.currentThread().interrupt();
             }
-            // Save resume point to be the next global order event
-            log.debug("[{}-{}] Storing ResumePoint with resumeFromAndIncluding {}",
-                    subscriberId,
-                    aggregateType,
-                    resumePoint.getResumeFromAndIncluding());
-
-            durableSubscriptionRepository.saveResumePoint(resumePoint);
+            persistResumePointUntilSettled(durableSubscriptionRepository, resumePoint);
             started = false;
             log.info("[{}-{}] Stopped subscription",
                     subscriberId,

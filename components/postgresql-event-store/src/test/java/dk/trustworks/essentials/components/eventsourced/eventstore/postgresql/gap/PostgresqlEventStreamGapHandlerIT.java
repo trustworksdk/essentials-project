@@ -35,6 +35,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTim
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
 import dk.trustworks.essentials.shared.functional.tuple.Pair;
+import dk.trustworks.essentials.types.LongRange;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -49,6 +50,7 @@ import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler.TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME;
 
 @Testcontainers
 class PostgresqlEventStreamGapHandlerIT {
@@ -287,6 +289,66 @@ class PostgresqlEventStreamGapHandlerIT {
                              .getTransientGapsFor(ORDERS)).isEmpty();
 
         orderEventsFlux.dispose();
+    }
+
+    @Test
+    void resolving_transient_gap_only_deletes_rows_for_current_subscriber() {
+        var subscriberA = SubscriberId.of("gap-sub-a");
+        var subscriberB = SubscriberId.of("gap-sub-b");
+
+        var persistedEvent = unitOfWorkFactory.withUnitOfWork(() -> eventStore.appendToStream(aggregateType,
+                                                                                                OrderId.random(),
+                                                                                                List.of(new OrderEvent.OrderAccepted(OrderId.random()))))
+                                              .eventList()
+                                              .get(0);
+        var gapGlobalOrder = persistedEvent.globalEventOrder();
+
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> {
+            var now = OffsetDateTime.now();
+            unitOfWork.handle()
+                      .createUpdate("INSERT INTO " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
+                                            "VALUES (:subscriber_id, :aggregate_type, :gap_global_event_order, :first_discovered)")
+                      .bind("subscriber_id", subscriberA)
+                      .bind("aggregate_type", aggregateType)
+                      .bind("gap_global_event_order", gapGlobalOrder)
+                      .bind("first_discovered", now)
+                      .execute();
+            unitOfWork.handle()
+                      .createUpdate("INSERT INTO " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " (subscriber_id, aggregate_type, gap_global_event_order, first_discovered) " +
+                                            "VALUES (:subscriber_id, :aggregate_type, :gap_global_event_order, :first_discovered)")
+                      .bind("subscriber_id", subscriberB)
+                      .bind("aggregate_type", aggregateType)
+                      .bind("gap_global_event_order", gapGlobalOrder)
+                      .bind("first_discovered", now)
+                      .execute();
+            return null;
+        });
+
+        var subscriberAGapHandler = eventStore.getEventStreamGapHandler().gapHandlerFor(subscriberA);
+        var subscriberBGapHandler = eventStore.getEventStreamGapHandler().gapHandlerFor(subscriberB);
+
+        assertThat(subscriberAGapHandler.getTransientGapsFor(aggregateType)).containsExactly(gapGlobalOrder);
+        assertThat(subscriberBGapHandler.getTransientGapsFor(aggregateType)).containsExactly(gapGlobalOrder);
+
+        unitOfWorkFactory.withUnitOfWork(unitOfWork -> {
+            subscriberAGapHandler.reconcileGaps(aggregateType,
+                                                LongRange.only(gapGlobalOrder.longValue()),
+                                                List.of(persistedEvent),
+                                                List.of(gapGlobalOrder));
+            return null;
+        });
+
+        assertThat(subscriberAGapHandler.getTransientGapsFor(aggregateType)).isEmpty();
+        assertThat(subscriberBGapHandler.getTransientGapsFor(aggregateType)).containsExactly(gapGlobalOrder);
+
+        var remainingRows = unitOfWorkFactory.withUnitOfWork(unitOfWork ->
+                unitOfWork.handle()
+                          .createQuery("SELECT subscriber_id FROM " + TRANSIENT_SUBSCRIBER_GAPS_TABLE_NAME + " WHERE aggregate_type = :aggregate_type and gap_global_event_order = :gap_global_event_order")
+                          .bind("aggregate_type", aggregateType)
+                          .bind("gap_global_event_order", gapGlobalOrder)
+                          .mapTo(String.class)
+                          .list());
+        assertThat(remainingRows).containsExactly(subscriberB.toString());
     }
 
     private Pair<OrderId, List<? extends OrderEvent>> createTestEvents() {

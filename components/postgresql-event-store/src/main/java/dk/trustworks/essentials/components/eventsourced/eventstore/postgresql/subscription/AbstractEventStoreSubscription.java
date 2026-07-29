@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.foundation.types.*;
 import org.slf4j.*;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.function.*;
 
@@ -113,6 +114,63 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
                   aggregateType,
                   e.globalEventOrder(),
                   e.event().getEventTypeOrName().getValue(), cause);
+    }
+
+    /** How long {@link #persistResumePointUntilSettled} keeps re-saving before giving up. */
+    protected static final Duration RESUME_POINT_SETTLE_TIMEOUT    = Duration.ofSeconds(5);
+    /** Delay between the settle re-checks - short enough to see in-flight work land, long enough not to spin. */
+    protected static final long     RESUME_POINT_SETTLE_DELAY_MILL = 100L;
+
+    /**
+     * Persist the resume point on the way to inactive, retrying until it is durably in sync.
+     * <p>
+     * {@code dispose()} stops new work being pulled but batches already in flight keep completing, and
+     * each one advances the resume point - including <i>after</i> a save has bound its value. Saving once
+     * therefore leaves the durable resume point behind the work actually performed, and nothing corrects
+     * it afterwards: the periodic snapshotter in {@code DefaultEventStoreSubscriptionManager} only saves
+     * <i>active</i> subscriptions, and this one is on its way to inactive. Those events would then be
+     * redelivered on the next start.
+     * <p>
+     * So rather than guessing when the in-flight work has drained, save and re-check
+     * {@link SubscriptionResumePoint#isChanged()} - which is value-based and stays true when the resume
+     * point advanced past what was written - until it reports clean or the timeout expires.
+     *
+     * @param durableSubscriptionRepository the repository to persist to
+     * @param resumePoint                   the resume point to persist
+     */
+    protected void persistResumePointUntilSettled(DurableSubscriptionRepository durableSubscriptionRepository,
+                                                  SubscriptionResumePoint resumePoint) {
+        requireNonNull(durableSubscriptionRepository, "No durableSubscriptionRepository provided");
+        requireNonNull(resumePoint, "No resumePoint provided");
+
+        var deadline = System.nanoTime() + RESUME_POINT_SETTLE_TIMEOUT.toNanos();
+        while (true) {
+            log.debug("[{}-{}] Storing ResumePoint with resumeFromAndIncluding {}",
+                      subscriberId,
+                      aggregateType,
+                      resumePoint.getResumeFromAndIncluding());
+            durableSubscriptionRepository.saveResumePoint(resumePoint);
+
+            if (!resumePoint.isChanged()) {
+                // What we wrote is what the resume point holds - nothing advanced past it mid-save
+                return;
+            }
+            if (System.nanoTime() - deadline >= 0) {
+                log.warn("[{}-{}] Gave up after {} waiting for the ResumePoint to settle - it is still advancing (currently {}). " +
+                                 "Events up to that point may be redelivered on the next start",
+                         subscriberId,
+                         aggregateType,
+                         RESUME_POINT_SETTLE_TIMEOUT,
+                         resumePoint.getResumeFromAndIncluding());
+                return;
+            }
+            try {
+                Thread.sleep(RESUME_POINT_SETTLE_DELAY_MILL);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     /**

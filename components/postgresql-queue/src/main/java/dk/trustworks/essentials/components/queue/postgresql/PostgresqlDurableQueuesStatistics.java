@@ -75,10 +75,12 @@ import static dk.trustworks.essentials.shared.MessageFormatter.*;
  */
 @TTLJob(name = "durable_queues_statistics_ttl",
         enabledProperty = "essentials.durable-queues.enable-queue-statistics-ttl",
+        tableName = "durable_queues_statistics",
         tableNameProperty = "essentials.durable-queues.shared-queue-statistics-table-name",
         timestampColumn = "deletion_ts",
         cronExpression = "0 0 * * *", // every day at midnight
-        ttlDurationProperty = "essentials.durable-queues.queue-statistics-ttl-duration"
+        ttlDurationProperty = "essentials.durable-queues.queue-statistics-ttl-duration",
+        defaultTtlDays = 90
 )
 public class PostgresqlDurableQueuesStatistics implements DurableQueuesStatistics {
     private static final Logger log                               = LoggerFactory.getLogger(PostgresqlDurableQueuesStatistics.class);
@@ -210,6 +212,7 @@ public class PostgresqlDurableQueuesStatistics implements DurableQueuesStatistic
         PostgresqlUtil.checkIsValidTableOrColumnName(durableQueueTableName);
         PostgresqlUtil.checkIsValidTableOrColumnName(statsQueueTableName);
         unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
             uow.handle().getJdbi().registerArgument(new QueueNameArgumentFactory());
             uow.handle().getJdbi().registerColumnMapper(new QueueNameColumnMapper());
             uow.handle().getJdbi().registerArgument(new QueueEntryIdArgumentFactory());

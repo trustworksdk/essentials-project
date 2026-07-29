@@ -81,6 +81,39 @@
 
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>enforce-module-dependency-direction</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <!--
+                                      Artifact-level guard for the core dependency chain:
+                                      shared -> types/reactive -> foundation-types -> foundation
+                                      -> postgresql-event-store -> eventsourced-aggregates.
+                                      types/ may depend only on shared/. Mirrors
+                                      EssentialsArchitectureTest#types_depends_only_on_shared
+                                      at the POM level.
+                                    -->
+                                    <excludes>
+                                        <exclude>dk.trustworks.essentials*:*</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>dk.trustworks.essentials:shared</include>
+                                    </includes>
+                                    <message>types/ may depend only on shared/ among Essentials modules.</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
                 <version>${kotlin.version}</version>
@@ -115,6 +148,12 @@
                         <arg>-Xjsr305=strict</arg>
                     </args>
                     <jvmTarget>${java.version}</jvmTarget>
+                    <!-- Pin language/API level (root pom properties) so artifacts compiled with a
+                         newer Kotlin compiler remain binary- and metadata-compatible for consumers on
+                         Kotlin 2.1. apiVersion prevents binding to newer stdlib APIs (stdlib is
+                         'provided', so the consumer supplies their own). -->
+                    <languageVersion>${kotlinLanguage.version}</languageVersion>
+                    <apiVersion>${kotlinApi.version}</apiVersion>
                 </configuration>
                 <dependencies>
                     <dependency>

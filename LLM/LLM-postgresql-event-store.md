@@ -29,6 +29,7 @@
 
 - [Core Concepts](#core-concepts)
 - [Setup](#setup)
+- [Hybrid CDC](#hybrid-cdc)
 - [Event Operations](#event-operations)
 - [Subscriptions](#subscriptions)
 - [EventProcessor Framework](#eventprocessor-framework)
@@ -180,6 +181,36 @@ public class MyPersistableEventMapper implements PersistableEventMapper {
     }
 }
 ```
+
+## Hybrid CDC
+
+Hybrid CDC combines logical replication (`pgoutput` by default, `wal2json` optional) with polling semantics.
+
+Key classes:
+- `cdc.WalReplicationTailer` - consumes logical replication stream into `eventstore_cdc_inbox` or publishes directly
+- `cdc.CdcDispatcher` - converts inbox rows to `PersistedEvent` and publishes live events
+- `cdc.CdcEventStore` - chooses hybrid (`ACTIVE`) or polling fallback (`INACTIVE`/`FAILED`)
+- `cdc.CdcAvailability` - state machine + metrics (`essentials.cdc.active`, `...fallback_total`, `...start_failures_total`)
+
+Operational model:
+- advisory lock per slot ensures one active tailer per slot (`slotLockAcquired`)
+- `CdcMode` controls startup semantics:
+  - `require`: fail startup if CDC cannot start
+  - `auto`: degrade to polling fallback
+- `PgSlotMode` controls slot lifecycle (`CREATE_IF_MISSING`, `REQUIRE_EXISTING`, `RECREATE`, `EXTERNAL`)
+
+Message filtering/conversion:
+- `pgoutput` is the default plugin and requires a publication (default: `essentials_cdc_publication`)
+- only configured aggregate event stream inserts are converted
+- non-insert pgoutput messages are ignored by the EventStore CDC path
+
+Poison handling:
+- conversion failures mark inbox row `POISON`
+- global orders are extracted and registered as permanent gaps
+- `CdcPoisonNotifier` (e.g. `SubscriptionResetOnPoisonNotifier`) can reset resume points backward
+
+Design reference:
+- [Hybrid CDC design](../components/postgresql-event-store/src/main/java/dk/trustworks/essentials/components/eventsourced/eventstore/postgresql/cdc/hybrid-cdc-eventstore.md)
 
 ## Event Operations
 

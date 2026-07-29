@@ -357,20 +357,40 @@ class BatchedPersistedEventSubscriber_IT {
         productsSubscription.stop();
         ordersSubscription.stop();
 
-        // Check the ResumePoints are updated and saved
-        var lastEventOrder = new ArrayList<>(orderEventsReceived).get(totalNumberOfOrderEvents - 1);
-        var lastProductEvent = productEventsReceived.get(totalNumberOfProductEvents - 1);
+        // Check the ResumePoints are updated and saved.
+        // Take the HIGHEST globalEventOrder, not the last-arrived event: when db connectivity is
+        // interrupted the gap handler re-delivers skipped events afterwards, so the last event to
+        // arrive can be an older straggler (the same reason the ordering assertions above sort
+        // before comparing). A resume point only ever moves forward, so it reflects the furthest
+        // progress made - not whichever event happened to be handled last.
+        var lastEventOrder = orderEventsReceived.stream()
+                                                .max(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                                .orElseThrow();
+        var lastProductEvent = productEventsReceived.stream()
+                                                    .max(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                                    .orElseThrow();
 
         assertThat(ordersSubscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()); // When the subscriber is stopped we store the next global event order
-        var ordersSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(ordersSubscription.subscriberId(), ordersSubscription.aggregateType());
-        assertThat(ordersSubscriptionResumePoint).isPresent();
-        Awaitility.waitAtMost(Duration.ofSeconds(40))
-                .untilAsserted(() -> assertThat(ordersSubscriptionResumePoint.get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()));  // When the subscriber is stopped we store the next global event order));
+        Awaitility.waitAtMost(Duration.ofSeconds(50))
+                .untilAsserted(() -> {
+                    var ordersSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(
+                            ordersSubscription.subscriberId(),
+                            ordersSubscription.aggregateType());
+                    assertThat(ordersSubscriptionResumePoint).isPresent();
+                    assertThat(ordersSubscriptionResumePoint.get().getResumeFromAndIncluding())
+                            .isEqualTo(lastEventOrder.globalEventOrder().increment());
+                });  // When the subscriber is stopped we store the next global event order
 
         assertThat(productsSubscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastProductEvent.globalEventOrder().increment()); // // When the subscriber is stopped we store the next global event order
-        var productsSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(productsSubscription.subscriberId(), productsSubscription.aggregateType());
-        assertThat(productsSubscriptionResumePoint).isPresent();
-        assertThat(productsSubscriptionResumePoint.get().getResumeFromAndIncluding()).isEqualTo(lastProductEvent.globalEventOrder().increment());// When the subscriber is stopped we store the next global event order
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> {
+                    var productsSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(
+                            productsSubscription.subscriberId(),
+                            productsSubscription.aggregateType());
+                    assertThat(productsSubscriptionResumePoint).isPresent();
+                    assertThat(productsSubscriptionResumePoint.get().getResumeFromAndIncluding())
+                            .isEqualTo(lastProductEvent.globalEventOrder().increment());
+                }); // When the subscriber is stopped we store the next global event order
     }
 
     @Test

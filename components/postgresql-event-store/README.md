@@ -23,6 +23,7 @@ Full-featured Event Store for PostgreSQL with durable subscriptions, gap handlin
 - [In-Memory Projections](#in-memory-projections)
 - [Gap Handling](#gap-handling)
 - [Event Polling](#event-polling)
+- [CDC](#hybrid-cdc-wal2json)
 - [EventStoreSubscriptionObserver](#eventstoresubscriptionobserver)
 - [Advanced Configuration](#advanced-configuration)
 - [Related Modules](#related-modules)
@@ -2197,6 +2198,76 @@ var observer = new MeasurementEventStoreSubscriptionObserver(
 - New Relic
 - CloudWatch
 - Any Micrometer-supported backend
+
+---
+
+## Hybrid CDC (Logical Replication)
+
+Hybrid CDC is available through the CDC package and Spring Boot starter integration.
+
+What it adds:
+
+- low-latency live ingestion from PostgreSQL logical replication (`pgoutput` by default, `wal2json` optional)
+- configurable delivery pipeline:
+  - `INBOX` (default): durable inbox/dispatcher with poison handling and permanent gap registration
+  - `DIRECT`: tailer converts and publishes directly to CDC bus (no inbox persistence, no dispatcher)
+- ordered `backfill + live` merge (`BackfillThenLiveOrdered`)
+- automatic fallback to classic polling when CDC is unavailable in `auto` mode
+
+Startup semantics:
+
+- `cdc.enabled` controls whether tailer/dispatcher are started
+- `cdc.mode=require` fails startup if CDC cannot become active
+- `cdc.mode=auto` marks CDC as failed/inactive and continues with polling fallback
+- `cdc.delivery-mode=inbox|direct` controls whether CDC uses durable inbox or direct publish mode
+- `cdc.cdc-dispatcher.dispatched-row-policy=mark-dispatched|delete` controls whether dispatched inbox rows are retained for TTL cleanup or deleted immediately
+- CDC conversion only processes configured aggregate event stream inserts
+  - `wal2json`: `kind=insert` rows on configured event tables
+  - `pgoutput`: only insert messages for configured event tables; non-insert messages are ignored
+
+Slot ownership and safety:
+
+- one active tailer per slot is coordinated with PostgreSQL advisory lock
+- slot validation includes slot type/plugin/database compatibility (`PgSlotMode` governs lifecycle)
+- `slotLockAcquired` and CDC availability are exposed via status/metrics
+
+Design details:
+
+- [Hybrid CDC design](../../docs/cdc.md)
+
+Operational API:
+
+- `CdcApi#getStatus(principal)` exposes CDC availability, effective configuration, replication slot state, tailer status, and dispatcher status for admin/support tooling.
+
+Recommended defaults:
+
+```properties
+essentials.eventstore.cdc.enabled=true
+essentials.eventstore.cdc.mode=auto
+essentials.eventstore.cdc.delivery-mode=inbox
+essentials.eventstore.cdc.wal-parser-mode=bytes
+```
+
+Tuning baseline (good starting point from perf-lab runs):
+
+```properties
+essentials.eventstore.cdc.cdc-event-store-backfill-batch-size=1000
+essentials.eventstore.cdc.cdc-dispatcher.batch-size=200
+essentials.eventstore.cdc.cdc-dispatcher.poll-interval=PT0.05S
+essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S
+```
+
+Direct CDC bus tuning:
+
+```properties
+essentials.eventstore.cdc.event-bus.backpressure-buffer-size=8192
+essentials.eventstore.cdc.event-bus.non-serialized-max-retries=16
+essentials.eventstore.cdc.event-bus.overflow-max-retries=20
+essentials.eventstore.cdc.event-bus.overflow-policy=fail-fast
+```
+
+Notes:
+- `queued-task-cap-factor` exists for parity with `LocalEventBus` settings but is currently informational for `CdcEventBus`.
 
 ---
 

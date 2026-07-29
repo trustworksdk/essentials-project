@@ -283,6 +283,65 @@ class OrderDateArgumentFactory : LocalDateTimeValueTypeArgumentFactory<OrderDate
 class OrderDateColumnMapper : LocalDateTimeValueTypeColumnMapper<OrderDate>()
 ```
 
+### Java Entity Support
+
+For Java-only applications, extend `JavaVersionedEntity<ID, SELF>` instead of implementing `VersionedEntity<ID, SELF>` directly.
+This avoids dealing with Kotlin value-class mangled methods for `version`.
+
+```java
+@DocumentEntity(tableName = "products")
+public class Product extends JavaVersionedEntity<String, Product> {
+    @Id
+    private String id;
+    @Indexed
+    private String name;
+    private long version = Version.NOT_SAVED_YET_VALUE;
+    private OffsetDateTime lastUpdated = OffsetDateTime.now(ZoneOffset.UTC);
+
+    @Override
+    public long getVersionValue() { return version; }
+
+    @Override
+    public void setVersionValue(long version) { this.version = version; }
+
+    @Override
+    public OffsetDateTime getLastUpdated() { return lastUpdated; }
+
+    @Override
+    public void setLastUpdated(OffsetDateTime lastUpdated) { this.lastUpdated = lastUpdated; }
+}
+```
+
+The repository factory has Java-friendly overloads that accept `Class<T>`:
+
+```java
+DocumentDbRepository<Product, String> repository = factory.createForStringId(Product.class);
+```
+
+And Java-friendly `long` overloads for save/update version arguments:
+
+```java
+repository.save(product, Version.ZERO_VALUE);
+repository.update(product, 42L);
+```
+
+Java-friendly query and index APIs are available without Kotlin `KProperty1` references:
+
+```java
+repository.addIndexByPaths("name_city", "name", "address.city");
+
+var result = repository.queryBuilder()
+    .where(repository.condition()
+        .eq("category", "Electronics")
+        .lt("price", "1000.00", DbType.NUMERIC)
+        .gte("createdAt", OffsetDateTime.now().minusDays(7), DbType.TIMESTAMPTZ))
+    .orderBy("address.city", QueryBuilder.Order.ASC)
+    .orderBy("price", DbType.NUMERIC, QueryBuilder.Order.ASC)
+    .limit(100)
+    .offset(0)
+    .find();
+```
+
 Register all semantic types with JDBI during initialization:
 
 ```kotlin
