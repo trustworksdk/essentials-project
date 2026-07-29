@@ -16,6 +16,10 @@
 
 package dk.trustworks.essentials.examples.perflab;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.examples.perflab.scenario.ScenarioRunner;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.SpringApplication;
@@ -29,6 +33,20 @@ public class EssentialsPerformanceLabApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(EssentialsPerformanceLabApplication.class, args);
+    }
+
+    /**
+     * Jackson 2 {@link ObjectMapper} used by the scenarios to write their metrics JSON.
+     * <p>
+     * Spring Boot 4 auto-configures a Jackson 3 {@code tools.jackson.databind.ObjectMapper}, so the
+     * Jackson 2 mapper the scenarios inject is no longer contributed by {@code spring-boot-starter-json}
+     * and is declared here instead.
+     */
+    @Bean
+    ObjectMapper objectMapper() {
+        return new ObjectMapper().registerModule(new Jdk8Module())
+                                 .registerModule(new JavaTimeModule())
+                                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     }
 
     @Bean

@@ -60,6 +60,18 @@
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
+        <!-- EssentialsComponentsConfiguration registers Jdk8Module and JavaTimeModule on the
+             Jackson 2 ObjectMapper. Both are provided scope in spring-boot-starter-postgresql and
+             therefore not transitive, and Boot 4 no longer supplies the Jackson 2 datatype modules
+             via spring-boot-starter-json, so this application has to declare them itself. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jdk8</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
