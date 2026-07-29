@@ -51,6 +51,7 @@ import reactor.core.Disposable;
 import javax.sql.DataSource;
 import java.time.*;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -123,7 +124,9 @@ abstract class OrderAggregateRootRepositoryTest {
         // Reset the event store between Test method runs
         persistenceStrategy.resetEventStorageFor(ORDERS);
 
-        asynchronousOrderEventsReceived = new ArrayList<>();
+        // Appended to from the pollEvents subscription thread below while the test thread reads and
+        // compares it, so it has to tolerate concurrent modification during iteration.
+        asynchronousOrderEventsReceived = new CopyOnWriteArrayList<>();
         persistedEventFlux = eventStore.pollEvents(ORDERS,
                                                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
                                                    Optional.empty(),
