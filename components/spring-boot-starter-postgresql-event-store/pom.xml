@@ -79,6 +79,14 @@
             <version>${spring-boot.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Spring Boot 4 moved the health contributor API and its @ConditionalOnEnabledHealthIndicator
+             out of spring-boot-actuator-autoconfigure into the separate spring-boot-health module. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-health</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
