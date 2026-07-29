@@ -176,6 +176,15 @@
             <version>${spring-boot.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Spring Boot 4 keeps the health contributor API in its own module. The event store
+             starter references it from EventStoreConfiguration, so it has to be on the test
+             classpath for the auto-configuration to be introspectable. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-health</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
