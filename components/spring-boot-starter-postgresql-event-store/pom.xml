@@ -62,7 +62,6 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
-            <version>${snakeyaml.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -79,16 +78,22 @@
             <version>${spring-boot.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Spring Boot 4 moved the health contributor API and its @ConditionalOnEnabledHealthIndicator
+             out of spring-boot-actuator-autoconfigure into the separate spring-boot-health module. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-health</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
-            <version>${micrometer.version}</version>
             <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing</artifactId>
-            <version>${micrometer-tracing.version}</version>
             <optional>true</optional>
         </dependency>
 

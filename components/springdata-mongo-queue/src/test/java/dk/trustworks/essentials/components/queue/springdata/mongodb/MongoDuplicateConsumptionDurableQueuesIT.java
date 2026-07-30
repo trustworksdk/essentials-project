@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.springdata.mongodb;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DuplicateConsumptionDurableQueuesIT;
 import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
+import org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
@@ -52,7 +52,7 @@ class MongoDuplicateConsumptionDurableQueuesIT extends DuplicateConsumptionDurab
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.data.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
+        registry.add("spring.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
     }
 
     @Autowired

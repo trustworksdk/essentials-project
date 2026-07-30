@@ -16,7 +16,9 @@
 
 package dk.trustworks.essentials.types.spring.web;
 
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
@@ -24,8 +26,24 @@ import org.springframework.context.annotation.Bean;
 class WebMvcSpringWebApplication {
 
     @Bean
-    public com.fasterxml.jackson.databind.Module essentialJacksonModule() {
-        return new EssentialTypesJacksonModule();
+    public ObjectMapper objectMapper() {
+        try {
+            var moduleClass = Class.forName("dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
+            var factoryMethod = moduleClass.getMethod("createObjectMapper", com.fasterxml.jackson.databind.Module[].class);
+            var mapper = factoryMethod.invoke(null, (Object) new com.fasterxml.jackson.databind.Module[]{
+                    new Jdk8Module(),
+                    new JavaTimeModule()
+            });
+            if (mapper instanceof ObjectMapper objectMapper) {
+                return objectMapper;
+            }
+
+            return new ObjectMapper()
+                    .registerModule(new Jdk8Module())
+                    .registerModule(new JavaTimeModule());
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Couldn't instantiate Essentials Jackson ObjectMapper", e);
+        }
     }
 
 }

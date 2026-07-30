@@ -35,8 +35,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ty
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.reactive.EventHandler;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
@@ -53,6 +51,7 @@ import reactor.core.Disposable;
 import javax.sql.DataSource;
 import java.time.*;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -125,7 +124,9 @@ abstract class OrderAggregateRootRepositoryTest {
         // Reset the event store between Test method runs
         persistenceStrategy.resetEventStorageFor(ORDERS);
 
-        asynchronousOrderEventsReceived = new ArrayList<>();
+        // Appended to from the pollEvents subscription thread below while the test thread reads and
+        // compares it, so it has to tolerate concurrent modification during iteration.
+        asynchronousOrderEventsReceived = new CopyOnWriteArrayList<>();
         persistedEventFlux = eventStore.pollEvents(ORDERS,
                                                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
                                                    Optional.empty(),
@@ -475,8 +476,7 @@ abstract class OrderAggregateRootRepositoryTest {
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
+                                     .addModules(TestFasterxmlModules.optionalEssentialsModules())
                                      .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()

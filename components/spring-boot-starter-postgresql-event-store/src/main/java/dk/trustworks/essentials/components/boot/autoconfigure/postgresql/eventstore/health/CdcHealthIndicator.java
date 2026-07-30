@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.EssentialsEventStoreProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
-import org.springframework.boot.actuate.health.*;
+import org.springframework.boot.health.contributor.*;
 
 import java.time.Instant;
 import java.util.Optional;

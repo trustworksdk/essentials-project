@@ -1,4 +1,5 @@
 target/
+.m2/
 
 .idea/
 *.iml
@@ -19,6 +20,7 @@ webpack.generated.js
 tsconfig.json
 types.d.ts
 vite.generated.ts
+
 /.m2/
 
 # Claude

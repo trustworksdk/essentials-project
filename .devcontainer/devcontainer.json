@@ -34,7 +34,13 @@
             // Version configuration
             // MAVEN_SHA512 is managed in Dockerfile — only override here if you
             // change MAVEN_VERSION to a version different from the Dockerfile default.
-            "JAVA_VERSION": "17",
+            // JAVA_VERSION is the default JDK: it backs /usr/lib/jvm/temurin-jdk and
+            // JAVA_HOME. 25 is required by the Spring Boot 4 branches, which compile with
+            // maven.compiler.release=21 but enforce requireJavaVersion [21,26).
+            "JAVA_VERSION": "25",
+            // Kept installed alongside the default for the Java 17 branches. Build those
+            // with JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-$(dpkg --print-architecture).
+            "ADDITIONAL_JAVA_VERSIONS": "17",
             "MAVEN_VERSION": "3.9.16",
 
             // JetBrains IDE backend — for reference/scripts only.
@@ -88,6 +94,12 @@
         "TZ": "UTC",
         // Java runtime options for containers (overridable here without rebuild)
         "JAVA_TOOL_OPTIONS": "-XX:+UseContainerSupport -XX:InitialRAMPercentage=10 -XX:MaxRAMPercentage=40 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp",
+        // Pinned here as well as in /etc/profile.d/java.sh, which only runs for login
+        // shells. Non-login shells (anything an IDE or agent spawns) would otherwise
+        // inherit whatever JAVA_HOME the launching process happened to export — the
+        // JetBrains terminal supplies a stale /usr/lib/jvm/msopenjdk-current, which does
+        // not exist in this image and makes mvn refuse to start.
+        "JAVA_HOME": "/usr/lib/jvm/temurin-jdk",
         // Cross-tool telemetry opt-out. DO_NOT_TRACK=1 is the cross-tool standard
         // (https://consoledonottrack.com).
         "DO_NOT_TRACK": "1",

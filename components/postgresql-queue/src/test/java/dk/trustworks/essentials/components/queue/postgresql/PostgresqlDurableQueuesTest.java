@@ -35,10 +35,10 @@ class PostgresqlDurableQueuesTest {
                 mock(HandleAwareUnitOfWorkFactory.class),
                 mock(JSONSerializer.class),
                 PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME,
-                mock(MultiTableChangeListener.class),
                 null,
-                mock(TransactionalMode.class),
-                mock(Duration.class));
+                null,
+                TransactionalMode.FullyTransactional,
+                Duration.ofSeconds(30));
         assertThat(durableQueues.getSharedQueueTableName()).isEqualTo(PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME);
     }
 
@@ -49,10 +49,10 @@ class PostgresqlDurableQueuesTest {
                 mock(HandleAwareUnitOfWorkFactory.class),
                 mock(JSONSerializer.class),
                 overriddenTableName,
-                mock(MultiTableChangeListener.class),
                 null,
-                mock(TransactionalMode.class),
-                mock(Duration.class));
+                null,
+                TransactionalMode.FullyTransactional,
+                Duration.ofSeconds(30));
         assertThat(durableQueues.getSharedQueueTableName()).isEqualTo(overriddenTableName);
     }
 
@@ -63,10 +63,10 @@ class PostgresqlDurableQueuesTest {
                                            mock(HandleAwareUnitOfWorkFactory.class),
                                            mock(JSONSerializer.class),
                                            "where",
-                                           mock(MultiTableChangeListener.class),
                                            null,
-                                           mock(TransactionalMode.class),
-                                           mock(Duration.class)))
+                                           null,
+                                           TransactionalMode.FullyTransactional,
+                                           Duration.ofSeconds(30)))
                 .isInstanceOf(InvalidTableOrColumnNameException.class);
 
         assertThatThrownBy(() ->
@@ -74,10 +74,10 @@ class PostgresqlDurableQueuesTest {
                                            mock(HandleAwareUnitOfWorkFactory.class),
                                            mock(JSONSerializer.class),
                                            "OR 1=1",
-                                           mock(MultiTableChangeListener.class),
                                            null,
-                                           mock(TransactionalMode.class),
-                                           mock(Duration.class)))
+                                           null,
+                                           TransactionalMode.FullyTransactional,
+                                           Duration.ofSeconds(30)))
                 .isInstanceOf(InvalidTableOrColumnNameException.class);
     }
 }

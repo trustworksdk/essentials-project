@@ -21,7 +21,7 @@ import dk.trustworks.essentials.types.springdata.mongo.model.*;
 import dk.trustworks.essentials.types.springdata.mongo.model.Order;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
+import org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest;
 import org.springframework.data.mongodb.core.convert.MongoCustomConversions;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
@@ -42,7 +42,7 @@ class OrderRepositoryIT {
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.data.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
+        registry.add("spring.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
     }
 
     @Autowired

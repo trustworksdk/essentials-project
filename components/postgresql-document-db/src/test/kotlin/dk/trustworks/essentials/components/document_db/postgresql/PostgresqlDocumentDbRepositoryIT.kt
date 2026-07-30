@@ -16,13 +16,9 @@
 
 package dk.trustworks.essentials.components.document_db.postgresql
 
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import dk.trustworks.essentials.components.document_db.*
 import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule
 import dk.trustworks.essentials.kotlin.types.Amount
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -72,12 +68,7 @@ class DocumentDbRepositoryImplIT {
         val repositoryFactory = DocumentDbRepositoryFactory(
             jdbi,
             JdbiUnitOfWorkFactory(jdbi),
-            JacksonJSONSerializer(
-                EssentialsImmutableJacksonModule.createObjectMapper(
-                    Jdk8Module(),
-                    JavaTimeModule()
-                ).registerKotlinModule()
-            )
+            JacksonJSONSerializer(TestObjectMappers.createKotlinObjectMapper())
         )
 
         orderRepository = OrderRepository(repositoryFactory.create(Order::class))

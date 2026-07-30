@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.OrderId;
+import dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.Order;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
@@ -27,6 +28,7 @@ import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.*;
 
 import java.time.*;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -37,6 +39,8 @@ class AddNewAggregateSnapshotStrategyTest {
 
     private static OrderId ORDER_ID;
     private static Order   AGGREGATE;
+    private static final JSONEventSerializer JSON_SERIALIZER =
+            new JacksonJSONEventSerializer(TestFasterxmlObjectMapperFactory.createObjectMapper());
 
 
     @BeforeAll
@@ -202,19 +206,23 @@ class AddNewAggregateSnapshotStrategyTest {
         }
 
         private PersistedEvent createPersistedEvent(long eventOrder) {
-
             return PersistedEvent.from(EventId.random(),
                                        AggregateType.of("ORDERS"),
                                        ORDER_ID,
-                                       mock(EventJSON.class),
+                                       new EventJSON(JSON_SERIALIZER,
+                                                     new SnapshotEvent(eventOrder),
+                                       new EventType(SnapshotEvent.class.getName()),
+                                                     "{}"),
                                        EventOrder.of(eventOrder),
                                        EventRevision.of(1),
                                        GlobalEventOrder.of(100 + eventOrder),
-                                       mock(EventMetaDataJSON.class),
+                                       new EventMetaDataJSON(JSON_SERIALIZER, Map.of(), Map.class.getName(), "{}"),
                                        OffsetDateTime.now(Clock.systemUTC()),
                                        Optional.empty(),
                                        Optional.empty(),
                                        Optional.empty());
         }
+
+        private record SnapshotEvent(long eventOrder) {}
     }
 }

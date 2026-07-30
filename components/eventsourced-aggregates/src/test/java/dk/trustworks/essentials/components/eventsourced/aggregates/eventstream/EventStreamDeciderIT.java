@@ -42,7 +42,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import static dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule.createObjectMapper;
+import static dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.createObjectMapper;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static org.assertj.core.api.Assertions.*;
 

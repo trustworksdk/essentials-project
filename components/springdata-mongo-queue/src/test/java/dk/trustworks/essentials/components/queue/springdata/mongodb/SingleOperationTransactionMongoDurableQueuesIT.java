@@ -25,7 +25,7 @@ import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.S
 import dk.trustworks.essentials.components.foundation.types.CorrelationId;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.data.mongo.DataMongoTest;
+import org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.*;
@@ -47,7 +47,7 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.data.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
+        registry.add("spring.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
     }
 
     @Autowired

@@ -52,6 +52,26 @@
             <artifactId>spring-boot-starter-json</artifactId>
             <version>${spring-boot.version}</version>
         </dependency>
+        <!-- Spring Boot 4's spring-boot-starter-json brings Jackson 3 (tools.jackson). The perf-lab
+             scenarios use the Jackson 2 ObjectMapper, matching the jackson2 default flavour of the
+             Essentials modules they exercise, so declare Jackson 2 databind explicitly. Version comes
+             from the jackson-bom managed in the parent POM. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!-- EssentialsComponentsConfiguration registers Jdk8Module and JavaTimeModule on the
+             Jackson 2 ObjectMapper. Both are provided scope in spring-boot-starter-postgresql and
+             therefore not transitive, and Boot 4 no longer supplies the Jackson 2 datatype modules
+             via spring-boot-starter-json, so this application has to declare them itself. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jdk8</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
@@ -82,7 +102,6 @@
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-            <version>1.5.25</version>
         </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>

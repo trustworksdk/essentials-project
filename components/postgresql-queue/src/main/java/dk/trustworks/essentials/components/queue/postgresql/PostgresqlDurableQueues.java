@@ -126,7 +126,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         this(unitOfWorkFactory,
-             new JacksonJSONSerializer(DurableQueuesSerialization.createDefaultObjectMapper()),
+             DurableQueuesSerialization.createDefaultJSONSerializer(),
              DEFAULT_DURABLE_QUEUES_TABLE_NAME,
              null,
              null);
@@ -150,7 +150,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory) {
         this(unitOfWorkFactory,
-             new JacksonJSONSerializer(DurableQueuesSerialization.createDefaultObjectMapper()),
+             DurableQueuesSerialization.createDefaultJSONSerializer(),
              DEFAULT_DURABLE_QUEUES_TABLE_NAME,
              null,
              queuePollingOptimizerFactory);

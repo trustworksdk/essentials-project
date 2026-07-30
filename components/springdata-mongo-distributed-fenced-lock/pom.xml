@@ -67,7 +67,6 @@
         <dependency>
             <groupId>org.springframework.data</groupId>
             <artifactId>spring-data-mongodb</artifactId>
-            <version>${spring-data-mongodb.version}</version>
             <scope>provided</scope>
             <exclusions>
                 <exclusion>
@@ -79,7 +78,6 @@
         <dependency>
             <groupId>org.mongodb</groupId>
             <artifactId>mongodb-driver-sync</artifactId>
-            <version>${mongodb-driver-sync.version}</version>
             <scope>provided</scope>
         </dependency>
 
@@ -98,7 +96,7 @@
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-mongodb</artifactId>
+            <artifactId>spring-boot-starter-data-mongodb-test</artifactId>
             <version>${spring-boot.version}</version>
             <scope>test</scope>
             <exclusions>
@@ -111,7 +109,6 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
-            <version>${snakeyaml.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

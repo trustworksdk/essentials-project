@@ -48,7 +48,7 @@ public class ApplicationTests {
         return new MongoTransactionManager(databaseFactory);
     }
 
-    @Value("${spring.data.mongodb.uri}")
+    @Value("${spring.mongodb.uri}")
     private String mongoUri;
 
     @Bean
