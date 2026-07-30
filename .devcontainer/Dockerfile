@@ -39,6 +39,11 @@ ARG INSTALL_JETBRAINS="false"
 # Build Arguments - Version Configuration
 # -----------------------------------------------------------------------------
 ARG JAVA_VERSION="17"
+# Extra JDKs to install alongside JAVA_VERSION, space separated (e.g. "17 21").
+# JAVA_VERSION remains the default: it is what /usr/lib/jvm/temurin-jdk and
+# JAVA_HOME point at. The extras are installed so a branch that needs a different
+# JDK can be built with an explicit JAVA_HOME=/usr/lib/jvm/temurin-<v>-jdk-<arch>.
+ARG ADDITIONAL_JAVA_VERSIONS=""
 # MAVEN_SHA512 must match MAVEN_VERSION — update both together.
 # Get the SHA512 from: https://archive.apache.org/dist/maven/maven-3/<version>/binaries/
 ARG MAVEN_VERSION="3.9.16"
@@ -88,6 +93,7 @@ ARG INSTALL_HEADROOM
 ARG INSTALL_RTK
 ARG INSTALL_JETBRAINS
 ARG JAVA_VERSION
+ARG ADDITIONAL_JAVA_VERSIONS
 ARG MAVEN_VERSION
 ARG MAVEN_SHA512
 ARG JDTLS_VERSION
@@ -178,7 +184,7 @@ ENV LANG=en_US.UTF-8 \
 # -----------------------------------------------------------------------------
 RUN if [ "${INSTALL_JAVA}" = "true" ]; then \
     set -eux && \
-    echo "Installing Java ${JAVA_VERSION} and Maven ${MAVEN_VERSION}..." && \
+    echo "Installing Java ${JAVA_VERSION}${ADDITIONAL_JAVA_VERSIONS:+ (plus ${ADDITIONAL_JAVA_VERSIONS})} and Maven ${MAVEN_VERSION}..." && \
     # Install Eclipse Temurin (Adoptium) - works on all Debian versions
     install -m 0755 -d /etc/apt/keyrings && \
     curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
@@ -187,6 +193,10 @@ RUN if [ "${INSTALL_JAVA}" = "true" ]; then \
     > /etc/apt/sources.list.d/adoptium.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends temurin-${JAVA_VERSION}-jdk && \
+    # Extra JDKs for branches that target a different release than JAVA_VERSION
+    for v in ${ADDITIONAL_JAVA_VERSIONS}; do \
+    apt-get install -y --no-install-recommends "temurin-${v}-jdk"; \
+    done && \
     apt-get clean -y && rm -rf /var/lib/apt/lists/* && \
     # Install Maven with SHA512 verification
     curl -fsSL "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" -o maven.tar.gz && \
@@ -218,11 +228,20 @@ RUN if [ "${INSTALL_JAVA}" = "true" ]; then \
 # Note: Adoptium packages include architecture suffix (e.g., temurin-24-jdk-arm64)
 # We create a symlink to provide a consistent JAVA_HOME path.
 # ENV directives are inside the conditional so a non-Java build has a clean PATH.
+# The symlink resolves JAVA_VERSION explicitly rather than globbing: with more than
+# one JDK installed (see ADDITIONAL_JAVA_VERSIONS) a glob sorts lexically, so
+# "temurin-17-jdk-arm64" would win over "temurin-25-jdk-arm64" and JAVA_HOME would
+# silently point at the wrong JDK.
 RUN if [ "${INSTALL_JAVA}" = "true" ]; then \
-    ARCH_SPECIFIC_JDK=$(ls -d /usr/lib/jvm/temurin-*-jdk-* 2>/dev/null | head -1) && \
-    if [ -n "$ARCH_SPECIFIC_JDK" ]; then \
+    ARCH_SPECIFIC_JDK="/usr/lib/jvm/temurin-${JAVA_VERSION}-jdk-$(dpkg --print-architecture)" && \
+    if [ ! -d "$ARCH_SPECIFIC_JDK" ]; then \
+    ARCH_SPECIFIC_JDK=$(ls -d /usr/lib/jvm/temurin-${JAVA_VERSION}-jdk* 2>/dev/null | head -1); \
+    fi && \
+    if [ -n "$ARCH_SPECIFIC_JDK" ] && [ -d "$ARCH_SPECIFIC_JDK" ]; then \
     ln -sf "$ARCH_SPECIFIC_JDK" /usr/lib/jvm/temurin-jdk && \
     echo "Created symlink: /usr/lib/jvm/temurin-jdk -> $ARCH_SPECIFIC_JDK"; \
+    else \
+    echo "ERROR: could not locate the JDK for JAVA_VERSION=${JAVA_VERSION}" >&2 && exit 1; \
     fi && \
     # Write Java env to profile.d so it loads in login shells
     echo 'export JAVA_HOME=/usr/lib/jvm/temurin-jdk' >> /etc/profile.d/java.sh && \
