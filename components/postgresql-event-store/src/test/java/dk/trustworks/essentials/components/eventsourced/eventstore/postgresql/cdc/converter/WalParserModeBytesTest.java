@@ -16,9 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -30,7 +29,7 @@ class WalParserModeBytesTest {
 
     @Test
     void converter_parses_string_and_bytes_equivalently() {
-        var serializer = new JacksonJSONEventSerializer(new ObjectMapper());
+        var serializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
         var converter = new JacksonWal2JsonToPersistedEventConverter(serializer, resolver);
 
@@ -46,7 +45,7 @@ class WalParserModeBytesTest {
 
     @Test
     void extractor_parses_string_and_bytes_equivalently() {
-        var serializer = new JacksonJSONEventSerializer(new ObjectMapper());
+        var serializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
         var extractor = new JacksonWalGlobalOrdersExtractor(serializer, resolver);
 

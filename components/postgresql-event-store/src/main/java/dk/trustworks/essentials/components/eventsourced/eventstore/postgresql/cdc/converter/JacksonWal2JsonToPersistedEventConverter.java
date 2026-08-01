@@ -16,8 +16,6 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
@@ -26,7 +24,6 @@ import dk.trustworks.essentials.components.foundation.json.JSONSerializationExce
 import dk.trustworks.essentials.components.foundation.types.*;
 import org.slf4j.*;
 
-import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.time.format.*;
 import java.time.temporal.ChronoField;
@@ -41,7 +38,7 @@ import java.util.regex.*;
  * only the necessary insert operations from the WAL2JSON change set and validates the structural
  * integrity of the input data.
  * <p>
- * The conversion is configurable via the provided {@link JacksonJSONEventSerializer} for
+ * The conversion is configurable via the provided {@link JSONEventSerializer} for
  * JSON serialization/deserialization and {@link AggregateTypeResolver} for resolving the
  * aggregate type of events based on the table name.
  * <p>
@@ -69,23 +66,23 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
                     .appendPattern("X")
                     .toFormatter();
 
-    private final JacksonJSONEventSerializer jacksonJSONSerializer;
-    private final AggregateTypeResolver      aggregateTypeResolver;
+    private final JSONEventSerializer   jsonSerializer;
+    private final AggregateTypeResolver aggregateTypeResolver;
 
-    public JacksonWal2JsonToPersistedEventConverter(JacksonJSONEventSerializer jacksonJSONSerializer,
+    public JacksonWal2JsonToPersistedEventConverter(JSONEventSerializer jsonSerializer,
                                                     AggregateTypeResolver aggregateTypeResolver) {
-        this.jacksonJSONSerializer = jacksonJSONSerializer;
+        this.jsonSerializer = jsonSerializer;
         this.aggregateTypeResolver = aggregateTypeResolver;
     }
 
     /**
-     * Exposes the configured {@link JacksonJSONEventSerializer} so that the owning
+     * Exposes the configured {@link JSONEventSerializer} so that the owning
      * {@code Wal2JsonLogicalDecodingPlugin} can supply a properly-wired
      * {@code DefaultWalMessageFilter} as its default raw-payload filter — without forcing every
      * plugin call site to plumb the serializer through a separate constructor parameter.
      */
-    public JacksonJSONEventSerializer getJacksonJSONSerializer() {
-        return jacksonJSONSerializer;
+    public JSONEventSerializer getJsonSerializer() {
+        return jsonSerializer;
     }
 
     @Override
@@ -101,10 +98,10 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
                       wal2jsonMessage.length() > 500 ? wal2jsonMessage.substring(0, 500) + "..." : wal2jsonMessage);
         }
 
-        JsonNode root;
+        Object root;
         try {
-            root = jacksonJSONSerializer.getObjectMapper().readTree(wal2jsonMessage);
-        } catch (IOException e) {
+            root = jsonSerializer.deserialize(wal2jsonMessage, Object.class);
+        } catch (Exception e) {
             throw new JSONSerializationException("Failed to deserialize wal2json message to PersistedEvent", e);
         }
         return convertRoot(root);
@@ -117,19 +114,20 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
             return List.of();
         }
 
-        JsonNode root;
+        Object root;
         try {
-            root = jacksonJSONSerializer.getObjectMapper().readTree(wal2jsonMessageBytes);
-        } catch (IOException e) {
+            root = jsonSerializer.deserialize(wal2jsonMessageBytes, Object.class);
+        } catch (Exception e) {
             throw new JSONSerializationException("Failed to deserialize wal2json bytes to PersistedEvent", e);
         }
         return convertRoot(root);
     }
 
-    private List<PersistedEvent> convertRoot(JsonNode root) {
-        JsonNode changeNode = root.get("change");
-        if (!(changeNode instanceof ArrayNode changes)) {
-            log.trace("wal2json root had no 'change' array. keys={}", root.fieldNames().hasNext() ? "present" : "none");
+    private List<PersistedEvent> convertRoot(Object rootNode) {
+        var root = asMap(rootNode);
+        if (!(root != null && root.get("change") instanceof List<?> changes)) {
+            log.trace("wal2json root had no 'change' array. keys={}",
+                      root != null && !root.isEmpty() ? "present" : "none");
             return List.of();
         }
 
@@ -137,7 +135,10 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
 
         List<PersistedEvent> events = new ArrayList<>(changes.size());
 
-        for (var change : changes) {
+        for (var changeElement : changes) {
+            var change = asMap(changeElement);
+            if (change == null) continue;
+
             var kind = text(change, "kind");
             if (!"insert".equalsIgnoreCase(kind)) {
                 log.trace("Skipping change kind='{}'", kind);
@@ -198,14 +199,14 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
             }
 
             var event = new EventJSON(
-                    jacksonJSONSerializer,
+                    jsonSerializer,
                     EventType.of(eventType),
                     toJson(toObject(r, "event_payload"))
             );
 
             var jsonEventMetadata = toJson(toObject(r, "event_metadata"));
             var meta = new EventMetaDataJSON(
-                    jacksonJSONSerializer,
+                    jsonSerializer,
                     EventMetaData.class.getName(),
                     jsonEventMetadata
             );
@@ -248,37 +249,36 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
         }
     }
 
-    private Map<String, Object> extractRow(JsonNode change) {
-        var names  = (ArrayNode) change.get("columnnames");
-        var values = (ArrayNode) change.get("columnvalues");
+    private Map<String, Object> extractRow(Map<String, Object> change) {
+        var names  = (List<?>) change.get("columnnames");
+        var values = (List<?>) change.get("columnvalues");
 
         Map<String, Object> row = new HashMap<>(names.size());
         for (int i = 0; i < names.size(); i++) {
-            row.put(names.get(i).asText(), jsonToJava(values.get(i)));
+            // Values are already plain Java (String/Number/Boolean/Map/List) — untyped deserialization did the work
+            // that a tree walk would otherwise have to repeat.
+            row.put(String.valueOf(names.get(i)), values.get(i));
         }
         return row;
-    }
-
-    private Object jsonToJava(JsonNode n) {
-        if (n == null || n.isNull()) return null;
-        if (n.isTextual()) return n.asText();
-        if (n.isNumber()) return n.numberValue();
-        if (n.isBoolean()) return n.asBoolean();
-        return jacksonJSONSerializer.getObjectMapper().convertValue(n, Object.class);
     }
 
     private String toJson(Object o) {
         if (o instanceof String s) return s;
         try {
-            return jacksonJSONSerializer.getObjectMapper().writeValueAsString(o);
+            return jsonSerializer.serialize(o);
         } catch (Exception e) {
             return String.valueOf(o);
         }
     }
 
-    private static String text(JsonNode n, String key) {
-        var node = n.get(key);
-        return node != null && !node.isNull() ? node.asText() : null;
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object value) {
+        return (value instanceof Map<?, ?> map) ? (Map<String, Object>) map : null;
+    }
+
+    private static String text(Map<String, Object> node, String key) {
+        var value = node.get(key);
+        return value != null ? value.toString() : null;
     }
 
     private static String toString(Map<String, Object> r, String key) {

@@ -135,7 +135,7 @@ public class FlexAggregateTest {
     // -------------------------- Supporting methods -------------------------------------
 
     private static ObjectMapper        objectMapper   = createObjectMapper();
-    private static JSONEventSerializer jsonSerializer = new JacksonJSONEventSerializer(objectMapper);
+    private static JSONEventSerializer jsonSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
 
     private static PersistedEvent typedEvent(Object aggregateId, Object event, long eventOrder) {
         return PersistedEvent.from(EventId.random(),

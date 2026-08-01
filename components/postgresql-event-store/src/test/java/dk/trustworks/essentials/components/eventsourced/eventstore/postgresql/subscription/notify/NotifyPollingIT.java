@@ -16,14 +16,6 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.notify;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.MapperFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.EventStreamTableColumnNames;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.IdentifierColumnType;
@@ -34,7 +26,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.PersistableEventMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypePersistenceStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.CustomerId;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderId;
@@ -43,7 +36,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventTypeOrName;
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify;
 import dk.trustworks.essentials.components.foundation.postgresql.ListenNotify.SqlOperation;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
@@ -51,8 +43,6 @@ import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.postgresql.TableChangeNotification;
 import dk.trustworks.essentials.components.foundation.types.CorrelationId;
 import dk.trustworks.essentials.components.foundation.types.EventId;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
@@ -125,7 +115,7 @@ class NotifyPollingIT {
                 standardSingleTenantConfiguration(
                         aggregateType -> aggregateType + "_events",
                         EventStreamTableColumnNames.defaultColumnNames(),
-                        new JacksonJSONEventSerializer(createObjectMapper()),
+                        EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
                         IdentifierColumnType.UUID,
                         JSONColumnType.JSONB));
 
@@ -137,7 +127,7 @@ class NotifyPollingIT {
         changeListener = new MultiTableChangeListener<>(
                 jdbi,
                 Duration.ofMillis(50),               // tight poll for fast tests
-                new JacksonJSONSerializer(createObjectMapper()),
+                EssentialsObjectMappers.createJSONSerializer(),
                 notifyBus,
                 false);
         changeListener.start();
@@ -308,30 +298,6 @@ class NotifyPollingIT {
                 .isGreaterThanOrEqualTo(expected);
     }
 
-    private ObjectMapper createObjectMapper() {
-        var om = JsonMapper.builder()
-                           .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                           .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                           .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                           .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                           .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                           .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                           .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                           .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                           .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                           .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                           .addModule(new Jdk8Module())
-                           .addModule(new JavaTimeModule())
-                           .addModule(new EssentialTypesJacksonModule())
-                           .addModule(new EssentialsImmutableJacksonModule())
-                           .build();
-        om.setVisibility(om.getSerializationConfig().getDefaultVisibilityChecker()
-                           .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                           .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                           .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                           .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return om;
-    }
 
     /**
      * Captures the {@code tableName} arguments the installer is invoked with. Thread-safe

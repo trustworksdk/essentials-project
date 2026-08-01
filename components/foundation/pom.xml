@@ -118,6 +118,18 @@
             <version>${jackson3-bom.version}</version>
             <optional>true</optional>
         </dependency>
+        <!-- Needed by the canonical Jackson 2 mapper in EssentialsObjectMappers. Jackson 3 has both built in, so
+             these are Jackson-2-only. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jdk8</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>

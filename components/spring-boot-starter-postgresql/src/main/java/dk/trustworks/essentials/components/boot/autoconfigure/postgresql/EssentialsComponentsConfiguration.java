@@ -29,6 +29,8 @@ import dk.trustworks.essentials.components.foundation.fencedlock.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.interceptor.micrometer.*;
 import dk.trustworks.essentials.components.foundation.jdbi.EssentialsQueryTagger;
+import dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
@@ -417,6 +419,11 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingClass("dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer")
     @ConditionalOnMissingBean
     public JSONSerializer jsonSerializer(List<Module> additionalModules) {
+        if (EssentialsJacksonModules.isJackson3Flavor()) {
+            // The application is on Jackson 3, so no Jackson 2 Module beans can exist to collect. A Jackson 3
+            // deployment that needs extra modules defines its own JSONSerializer bean, which this backs off from.
+            return EssentialsObjectMappers.createJSONSerializer();
+        }
         var objectMapperBuilder = JsonMapper.builder()
                                             .disable(MapperFeature.AUTO_DETECT_GETTERS)
                                             .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)

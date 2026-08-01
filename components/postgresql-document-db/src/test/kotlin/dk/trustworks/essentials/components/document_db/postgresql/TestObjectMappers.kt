@@ -16,35 +16,39 @@
 
 package dk.trustworks.essentials.components.document_db.postgresql
 
-import com.fasterxml.jackson.databind.Module
-import com.fasterxml.jackson.databind.json.JsonMapper
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers
+import dk.trustworks.essentials.components.foundation.json.JSONSerializer
+import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer
+import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
 
+/**
+ * Builds the [JSONSerializer] the repository ITs persist documents with, for whichever Jackson flavour the build
+ * selected.
+ *
+ * Two things have to line up. The mapper configuration comes from [EssentialsObjectMappers] because that configuration
+ * *is* the persisted-JSON contract — a locally assembled mapper drifts and silently changes the stored format. On top
+ * of that, documents here are Kotlin data classes, so the flavour's Kotlin module has to be registered or their
+ * immutable constructors cannot be bound.
+ *
+ * Both Kotlin modules can be named side by side: Jackson 3 moved to the `tools.jackson.module` group, so the two have
+ * different fully-qualified names. That is unlike the Essentials `types-jackson`/`types-jackson3` pair, which share
+ * class names and therefore have to be resolved reflectively through [EssentialsJacksonModules].
+ */
 object TestObjectMappers {
-    fun createKotlinObjectMapper() = JsonMapper.builder()
-        .addModule(Jdk8Module())
-        .addModule(JavaTimeModule())
-        .addModules(*optionalEssentialsModules())
-        .build()
-        .registerKotlinModule()
 
-    private fun optionalEssentialsModules(): Array<Module> {
-        val modules = mutableListOf<Module>()
-        addIfFasterxmlModule(modules, "dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule")
-        addIfFasterxmlModule(modules, "dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule")
-        return modules.toTypedArray()
-    }
-
-    private fun addIfFasterxmlModule(modules: MutableList<Module>, className: String) {
-        try {
-            val instance = Class.forName(className).getDeclaredConstructor().newInstance()
-            if (instance is Module) {
-                modules.add(instance)
-            }
-        } catch (_: ReflectiveOperationException) {
-            // Optional test support module for the active Jackson flavor.
+    fun createJSONSerializer(): JSONSerializer =
+        if (EssentialsJacksonModules.isJackson3Flavor()) {
+            Jackson3JSONSerializer(
+                EssentialsObjectMappers.createJackson3ObjectMapper(
+                    tools.jackson.module.kotlin.KotlinModule.Builder().build()
+                )
+            )
+        } else {
+            JacksonJSONSerializer(
+                EssentialsObjectMappers.createJackson2ObjectMapper(
+                    com.fasterxml.jackson.module.kotlin.KotlinModule.Builder().build()
+                )
+            )
         }
-    }
 }

@@ -44,6 +44,7 @@ Annotated `@Indexed` properties → `CREATE INDEX IF NOT EXISTS idx_<table>_<fie
 ## Test Structure
 
 - All integration tests: `*IT.kt` — require live PostgreSQL via Testcontainers (`PostgreSQLContainer("postgres:latest")`)
+- `TestObjectMappers.createJSONSerializer()` — the only way ITs build a serializer. Flavour-neutral: mapper config from `EssentialsObjectMappers` (that config *is* the persisted-JSON contract) plus the active flavour's Kotlin module, which is what binds the data classes' immutable constructors. Both Kotlin modules can be named directly — Jackson 3's lives in group `tools.jackson.module`, so the FQCNs differ, unlike `types-jackson`/`types-jackson3`
 - Unit test: `EntityConfigurationTest.kt` — no DB, tests reflection/annotation parsing
 - `Entities.kt` — shared test entities (`Order`, `Product`, `Visit`, `ShippingOrder`, `CompositeOrder`)
 - `QueryIT.kt` — `QueryBuilder`/`Condition` DSL coverage including nested property paths and pagination
@@ -70,3 +71,4 @@ Run ITs: requires Docker (Testcontainers pulls `postgres:latest` automatically).
 - **`Condition.and`/`or` consume last two conditions from internal list** via `removeLast()` — order of chained calls matters; mixing `and`/`or` without explicit parentheses in DSL can produce unexpected groupings.
 - **`then` extension outside `Condition` scope** (top-level `KProperty1.then`) uses `NoJSONSerializer` placeholder — only valid for `Index` definition, not query execution.
 - JDBI `VersionArgumentFactory`/`VersionColumnMapper` registered on `Jdbi` instance in `DocumentDbRepositoryFactory.init` — must use factory, not construct `PostgresqlDocumentDbRepository` directly, or register manually.
+- **Main code names no Jackson type** — it takes the `JSONSerializer` SPI, so both Jackson majors work without a flavour-specific branch. Only the tests need the flavour's Kotlin module, so the pom carries both (`com.fasterxml.jackson.module` and `tools.jackson.module`), `optional`. Keep it that way: a Jackson import in main code would tie the module to one major.

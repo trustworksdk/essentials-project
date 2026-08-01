@@ -24,7 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ga
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import org.junit.jupiter.api.*;
@@ -44,13 +44,13 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private EventProcessorIT.TestPersistableEventMapper                             eventMapper;
-    private JacksonJSONEventSerializer                                              jacksonJSONSerializer;
+    private JSONEventSerializer                                                    jacksonJSONSerializer;
     private CdcInboxRepository                                                      inboxRepository;
     private EventStreamGapHandler<?>                                                gapHandler;
 
     @BeforeEach
     void setup() {
-        jacksonJSONSerializer = new JacksonJSONEventSerializer(createObjectMapper());
+        jacksonJSONSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy =

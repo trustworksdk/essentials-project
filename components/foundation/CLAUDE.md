@@ -17,7 +17,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `ttl` | `TTLManager` SPI, `TTLJob`, `TTLJobDefinition`, `TTLJobBeanPostProcessor` |
 | `scheduler` | `EssentialsScheduler` SPI, `DefaultEssentialsScheduler`; `pgcron` and `executor` sub-packages |
 | `lifecycle` | `DefaultLifecycleManager` (Spring `SmartLifecycle` adapter) |
-| `json` | `JSONSerializer` SPI, `JacksonJSONSerializer` |
+| `json` | `JSONSerializer` SPI, `JacksonJSONSerializer` (Jackson 2), `Jackson3JSONSerializer` (Jackson 3), `EssentialsObjectMappers`, `EssentialsJacksonModules` |
 | `reactive.command` | `DurableLocalCommandBus` (reactive command bus backed by `DurableQueues`) |
 | `interceptor.micrometer` | Micrometer timing interceptors for queue + command bus |
 | `events` | `InfrastructureLocalEventBus` (internal event bus for infrastructure events) |
@@ -46,7 +46,10 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `TTLManager` | SPI for registering TTL delete jobs; backed by `EssentialsScheduler` |
 | `EssentialsScheduler` | Thin scheduler abstraction over `pg_cron` or `ScheduledExecutorService` |
 | `DefaultLifecycleManager` | Spring `SmartLifecycle` — discovers and starts/stops all `Lifecycle` beans |
-| `JSONSerializer` | Serialization SPI; `JacksonJSONSerializer` is the only production impl |
+| `JSONSerializer` | Serialization SPI; `JacksonJSONSerializer` (Jackson 2) and `Jackson3JSONSerializer` (Jackson 3) |
+| `EssentialsObjectMappers` | **The** canonical persisted-JSON mapper config, for both Jackson majors. Every mapper used for persistence must come from here |
+| `EssentialsJacksonModules` | Reflectively resolves the Essentials Jackson modules for the active flavor; throws on a flavor mismatch |
+| `Jackson3CollectionWrapperModule` | Jackson 3 only. Pins any `Map`/`Collection` implementation that wraps one behind a final field to a delegating creator, so it keeps reading as its contents. Matched by shape, so new wrapper types are covered on arrival |
 | `PostgresqlUtil` | `checkIsValidTableOrColumnName` (SQL injection guard), extension checks, version detection |
 | `DurableLocalCommandBus` | Command bus backed by `DurableQueues`; durable delivery of commands |
 
@@ -85,3 +88,10 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 - `MultiTableChangeListener` uses a single dedicated JDBC connection (not the pool); losing it → listener stops silently unless `Lifecycle` restart is wired
 - `TTLJobBeanPostProcessor` is a Spring `BeanPostProcessor` — auto-registers `@TTLJob`-annotated beans; ordering relative to `DefaultLifecycleManager` matters
 - `EssentialsScheduler` is for internal essentials use, not a general app scheduler — not a Quartz/Spring Scheduler replacement
+- **Never hand-roll a persistence mapper** — use `EssentialsObjectMappers`. The exact config (field access, ISO dates, numeric Durations, Essentials modules) is a wire-format contract; a local copy that drifts silently changes persisted JSON. Pinned by `EssentialsObjectMappersWireFormatTest` in `postgresql-event-store`
+- **Jackson 3 changed temporal defaults** — `WRITE_DURATIONS_AS_TIMESTAMPS` (J2 numeric `30.000000000` vs J3 `"PT30S"`) and `WRITE_DATES_AS_TIMESTAMPS` moved to `DateTimeFeature`. `EssentialsObjectMappers` pins both back to Jackson 2 behaviour so existing data stays readable, and enables `USE_BIG_DECIMAL_FOR_FLOATS` so untyped binding (used by the CDC WAL path) round-trips numbers exactly
+- **Jackson 3 stopped populating final fields** — `ALLOW_FINAL_FIELDS_AS_MUTATORS` is on by default in J2, off in J3, and it is how the Objenesis immutable module fills immutable payloads. `createJackson3ObjectMapper` re-enables it. Symptom without it: a payload whose only property is a final field (J3 reads a lone single-arg constructor as a *delegating* creator, so nothing binds) deserializes to **null with no error**. Multi-arg constructors escape it only because this build passes `-parameters` — a consumer's build need not. Pinned by `ImmutablePayloadSerializationTest` in `postgresql-queue`
+- **A type whose JSON form is its contents must be pinned to a delegating creator** — the flag above makes its final field a mutator, so Jackson stops seeing a map/scalar wrapper and starts seeing a bean, then calls the constructor with `null`. `Jackson3CollectionWrapperModule` covers `Map`/`Collection` implementations (`MessageMetaData`, `EventMetaData`) by shape; value types are pinned in `types-jackson3`. The break is read-only and asymmetric — serialization keeps writing the old shape — so it surfaces far from its cause: 87 `postgresql-queue` ITs on the first, an event-fetch failure on the second
+- **Never annotate an Essentials type with a serialization framework annotation** — no `@JsonCreator`/`@JsonProperty` on core types. One type has to work across both Jackson majors and the non-Jackson serializers, so framework knowledge lives in the mapper layer (`MapWrapperMixIns`) or the flavor's types-jackson module
+- **`types-jackson`/`types-jackson3` share FQCNs** — only one flavor is ever on the classpath, selected by `essentials.types-jackson.artifactId`. Never name those module classes from code that must compile under both; go through `EssentialsJacksonModules`
+- An enforcer rule bans `foundation` from depending on the Jackson flavor modules (even test-scope) — that's why resolution is reflective, and why flavor wire-format tests live in `postgresql-event-store`

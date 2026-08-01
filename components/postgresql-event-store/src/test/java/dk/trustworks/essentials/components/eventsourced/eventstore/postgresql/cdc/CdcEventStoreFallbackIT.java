@@ -23,7 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ga
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypePersistenceStrategy;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.CustomerId;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderId;
@@ -45,11 +45,11 @@ class CdcEventStoreFallbackIT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<?> eventStore;
     private EventStreamGapHandler<?> gapHandler;
-    private JacksonJSONEventSerializer jacksonJSONSerializer;
+    private JSONEventSerializer       jacksonJSONSerializer;
 
     @BeforeEach
     void setup() {
-        jacksonJSONSerializer = new JacksonJSONEventSerializer(createObjectMapper());
+        jacksonJSONSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         var eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy =

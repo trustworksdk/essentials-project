@@ -30,7 +30,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
@@ -45,6 +45,7 @@ import reactor.core.Disposable;
 
 import java.time.*;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration.standardSingleTenantConfiguration;
@@ -86,7 +87,7 @@ class OrderWithStateAggregateRootRepositoryIT {
                                                 new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                                      unitOfWorkFactory,
                                                                                                      eventMapper,
-                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                                     SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
                                                                                                                                                                                                     IdentifierColumnType.TEXT,
                                                                                                                                                                                                     JSONColumnType.JSON)));
         recordingLocalEventBusConsumer = new RecordingLocalEventBusConsumer();
@@ -94,14 +95,14 @@ class OrderWithStateAggregateRootRepositoryIT {
 
         ordersRepository = StatefulAggregateRepository.from(eventStore,
                                                             standardSingleTenantConfiguration(ORDERS,
-                                                                                              new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                              EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
                                                                                               AggregateIdSerializer.serializerFor(OrderId.class),
                                                                                               IdentifierColumnType.UUID,
                                                                                               JSONColumnType.JSONB),
                                                             reflectionBasedAggregateRootFactory(),
                                                             OrderWithState.class);
 
-        asynchronousOrderEventsReceived = new ArrayList<>();
+        asynchronousOrderEventsReceived = new CopyOnWriteArrayList<>();
         persistedEventFlux = eventStore.pollEvents(ORDERS,
                                                    GlobalEventOrder.FIRST_GLOBAL_EVENT_ORDER,
                                                    Optional.empty(),

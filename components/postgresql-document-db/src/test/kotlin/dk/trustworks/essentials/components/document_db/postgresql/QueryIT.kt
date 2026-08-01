@@ -19,7 +19,6 @@ package dk.trustworks.essentials.components.document_db.postgresql
 import dk.trustworks.essentials.components.document_db.DocumentDbRepository
 import dk.trustworks.essentials.components.document_db.DocumentDbRepositoryFactory
 import dk.trustworks.essentials.components.document_db.Index
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory
 import dk.trustworks.essentials.kotlin.types.Amount
 import dk.trustworks.essentials.kotlin.types.jdbi.AmountArgumentFactory
@@ -72,7 +71,7 @@ class QueryIT {
         val repositoryFactory = DocumentDbRepositoryFactory(
             jdbi,
             JdbiUnitOfWorkFactory(jdbi),
-            JacksonJSONSerializer(TestObjectMappers.createKotlinObjectMapper())
+            TestObjectMappers.createJSONSerializer()
         )
 
         orderRepository =  OrderRepository(repositoryFactory.create(Order::class))

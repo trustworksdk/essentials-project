@@ -16,10 +16,9 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.PgOutputRowChange;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventType;
 import org.junit.jupiter.api.Test;
 
@@ -33,7 +32,7 @@ import static java.util.Map.entry;
 class PgOutputToPersistedEventConverterTest {
     private final AggregateType orders = AggregateType.of("Orders");
     private final PgOutputToPersistedEventConverter converter = new PgOutputToPersistedEventConverter(
-            new JacksonJSONEventSerializer(new ObjectMapper()),
+            EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
             tableName -> "orders_events".equals(tableName) ? orders : null
     );
 
@@ -96,7 +95,7 @@ class PgOutputToPersistedEventConverterTest {
     void ignores_tables_when_resolver_throws_for_unknown_mapping() {
         var strictResolver = new DefaultAggregateTypeResolver(Map.of("orders_events", orders));
         var strictConverter = new PgOutputToPersistedEventConverter(
-                new JacksonJSONEventSerializer(new ObjectMapper()),
+                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
                 strictResolver
         );
         var otherTable = new PgOutputRowChange("insert", 1, "public", "durable_subscriptions", null, null, Map.of(), Map.of(), List.of());

@@ -40,7 +40,7 @@ class AddNewAggregateSnapshotStrategyTest {
     private static OrderId ORDER_ID;
     private static Order   AGGREGATE;
     private static final JSONEventSerializer JSON_SERIALIZER =
-            new JacksonJSONEventSerializer(TestFasterxmlObjectMapperFactory.createObjectMapper());
+            EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
 
 
     @BeforeAll

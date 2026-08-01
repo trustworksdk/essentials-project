@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer;
 import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
@@ -101,8 +102,7 @@ public class DurableQueuesSerialization {
      * otherwise falls back to Jackson 2.
      */
     public static JSONSerializer createDefaultJSONSerializer() {
-        var jackson3Serializer = tryCreateJackson3JSONSerializer();
-        return jackson3Serializer != null ? jackson3Serializer : new JacksonJSONSerializer(createDefaultObjectMapper());
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 
     /**
@@ -112,67 +112,8 @@ public class DurableQueuesSerialization {
      * @return the default {@link ObjectMapper}
      */
     public static ObjectMapper createDefaultObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .build();
-        registerJackson2ModuleIfCompatible(objectMapper, "dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
-        registerJackson2ModuleIfCompatible(objectMapper, "dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule");
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+        return EssentialsObjectMappers.createJackson2ObjectMapper();
     }
 
-    private static JSONSerializer tryCreateJackson3JSONSerializer() {
-        try {
-            // Only select Jackson 3 path when the essentials modules are the jackson3 variants
-            var moduleClass = Class.forName("dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule");
-            var superClassName = moduleClass.getSuperclass().getName();
-            if (!superClassName.startsWith("tools.jackson.")) {
-                return null;
-            }
 
-            var jsonMapperClass = Class.forName("tools.jackson.databind.json.JsonMapper");
-            var builder = jsonMapperClass.getMethod("builder").invoke(null);
-            var jacksonModuleClass = Class.forName("tools.jackson.databind.JacksonModule");
-            var essentialTypesModule = moduleClass.getDeclaredConstructor().newInstance();
-            var immutableModuleClass = Class.forName("dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule");
-            var immutableModule = immutableModuleClass.getDeclaredConstructor().newInstance();
-
-            builder.getClass().getMethod("addModule", jacksonModuleClass).invoke(builder, essentialTypesModule);
-            builder.getClass().getMethod("addModule", jacksonModuleClass).invoke(builder, immutableModule);
-            var mapper = builder.getClass().getMethod("build").invoke(builder);
-
-            var serializerClass = Class.forName("dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer");
-            return (JSONSerializer) serializerClass.getDeclaredConstructor(mapper.getClass()).newInstance(mapper);
-        } catch (Throwable ignore) {
-            return null;
-        }
-    }
-
-    private static void registerJackson2ModuleIfCompatible(ObjectMapper objectMapper, String moduleClassName) {
-        try {
-            var moduleClass = Class.forName(moduleClassName);
-            var module = moduleClass.getDeclaredConstructor().newInstance();
-            if (com.fasterxml.jackson.databind.Module.class.isAssignableFrom(moduleClass)) {
-                objectMapper.registerModule((com.fasterxml.jackson.databind.Module) module);
-            }
-        } catch (Throwable ignore) {
-            // ignore, fallback mapper still works without optional modules
-        }
-    }
 }

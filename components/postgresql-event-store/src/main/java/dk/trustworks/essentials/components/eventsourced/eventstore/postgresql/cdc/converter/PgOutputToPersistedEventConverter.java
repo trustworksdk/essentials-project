@@ -16,14 +16,13 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.PgOutputRowChange;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSON;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventMetaDataJSON;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializationException;
 import dk.trustworks.essentials.components.foundation.types.CorrelationId;
@@ -56,7 +55,7 @@ public final class PgOutputToPersistedEventConverter {
                     .appendPattern("X")
                     .toFormatter();
 
-    private final JacksonJSONEventSerializer jacksonJSONSerializer;
+    private final JSONEventSerializer jsonSerializer;
     private final AggregateTypeResolver      aggregateTypeResolver;
 
     /**
@@ -72,9 +71,9 @@ public final class PgOutputToPersistedEventConverter {
     private final AtomicLong insertsSeenCount                 = new AtomicLong(0);
     private final AtomicLong insertsWithUnknownAggregateCount = new AtomicLong(0);
 
-    public PgOutputToPersistedEventConverter(JacksonJSONEventSerializer jacksonJSONSerializer,
+    public PgOutputToPersistedEventConverter(JSONEventSerializer jsonSerializer,
                                              AggregateTypeResolver aggregateTypeResolver) {
-        this.jacksonJSONSerializer = jacksonJSONSerializer;
+        this.jsonSerializer = jsonSerializer;
         this.aggregateTypeResolver = aggregateTypeResolver;
     }
 
@@ -142,13 +141,13 @@ public final class PgOutputToPersistedEventConverter {
         }
 
         var event = new EventJSON(
-                jacksonJSONSerializer,
+                jsonSerializer,
                 EventType.of(eventTypeValue),
                 canonicalJson(requiredObject(values, "event_payload"))
         );
 
         var meta = new EventMetaDataJSON(
-                jacksonJSONSerializer,
+                jsonSerializer,
                 EventMetaData.class.getName(),
                 canonicalJson(optionalObject(values, "event_metadata").orElse("{}"))
         );
@@ -181,16 +180,21 @@ public final class PgOutputToPersistedEventConverter {
         );
     }
 
+    /**
+     * Normalises a WAL column value into the JSON string that gets persisted as the event payload/metadata.
+     * <p>
+     * A {@code String} column already holds JSON text, so it is parsed and re-serialized to normalise formatting.
+     * The round-trip goes through untyped binding, which is why {@code EssentialsObjectMappers} enables
+     * {@code USE_BIG_DECIMAL_FOR_FLOATS} on both majors: without it a JSON float would bind to {@code Double} and
+     * {@code 1.10} would come back out as {@code 1.1}, silently rewriting persisted payloads.
+     */
     private String canonicalJson(Object raw) {
         try {
-            JsonNode node;
             if (raw == null) return "null";
-            if (raw instanceof String stringValue) {
-                node = jacksonJSONSerializer.getObjectMapper().readTree(stringValue);
-            } else {
-                node = jacksonJSONSerializer.getObjectMapper().valueToTree(raw);
-            }
-            return jacksonJSONSerializer.getObjectMapper().writeValueAsString(node);
+            var value = (raw instanceof String stringValue)
+                        ? jsonSerializer.deserialize(stringValue, Object.class)
+                        : raw;
+            return jsonSerializer.serialize(value);
         } catch (Exception e) {
             throw new JSONSerializationException("Failed to canonicalize JSON", e);
         }

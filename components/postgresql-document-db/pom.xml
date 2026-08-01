@@ -109,6 +109,21 @@
             <artifactId>jackson-module-kotlin</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- Jackson 3 counterparts of the two above, for when essentials.types-jackson.artifactId selects that flavour.
+             Documents here are Kotlin data classes, so the flavour's Kotlin module is what binds their constructors.
+             Jackson 3 moved the Kotlin module to the tools.jackson.module group, so both can coexist on the classpath. -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>

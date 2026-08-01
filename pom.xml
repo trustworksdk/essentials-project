@@ -80,9 +80,12 @@
         <skipDependencyCheck>false</skipDependencyCheck>
 
         <spring-boot.version>4.0.3</spring-boot.version>
-        <essentials.jackson.flavor>jackson2</essentials.jackson.flavor>
-        <essentials.types-jackson.artifactId>types-jackson</essentials.types-jackson.artifactId>
-        <essentials.immutable-jackson.artifactId>immutable-jackson</essentials.immutable-jackson.artifactId>
+        <!-- The default Jackson flavour. Jackson 3 is the default because that is what Spring Boot 4 ships with; build
+             or depend with -Pjackson2 to stay on Jackson 2. Both flavours publish the same class names, so exactly one
+             is ever on the classpath, and both write byte-identical JSON — see EssentialsObjectMappers. -->
+        <essentials.jackson.flavor>jackson3</essentials.jackson.flavor>
+        <essentials.types-jackson.artifactId>types-jackson3</essentials.types-jackson.artifactId>
+        <essentials.immutable-jackson.artifactId>immutable-jackson3</essentials.immutable-jackson.artifactId>
         <objenesis.version>3.5</objenesis.version>
         <postgresql.version>42.7.13</postgresql.version>
         <slf4j.version>2.0.18</slf4j.version>
@@ -570,6 +573,17 @@
     </build>
 
     <profiles>
+        <!-- Builds and tests against Jackson 2 instead of the default Jackson 3. -->
+        <profile>
+            <id>jackson2</id>
+            <properties>
+                <essentials.jackson.flavor>jackson2</essentials.jackson.flavor>
+                <essentials.types-jackson.artifactId>types-jackson</essentials.types-jackson.artifactId>
+                <essentials.immutable-jackson.artifactId>immutable-jackson</essentials.immutable-jackson.artifactId>
+            </properties>
+        </profile>
+        <!-- Retained as a no-op alias now that Jackson 3 is the default, so existing commands and CI jobs that pass
+             -Pjackson3 keep working and keep meaning the same thing. -->
         <profile>
             <id>jackson3</id>
             <properties>

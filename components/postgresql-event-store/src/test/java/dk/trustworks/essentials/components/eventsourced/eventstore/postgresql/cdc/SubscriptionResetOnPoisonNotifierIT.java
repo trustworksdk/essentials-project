@@ -24,7 +24,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -50,7 +50,7 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private CdcEventStore                                                           cdcEventStore;
     private EventProcessorIT.TestPersistableEventMapper                             eventMapper;
-    private JacksonJSONEventSerializer                                              jacksonJSONSerializer;
+    private JSONEventSerializer                                                    jacksonJSONSerializer;
     private CdcInboxRepository                                                      inboxRepository;
     private EventStreamGapHandler<?>                                                gapHandler;
     private DurableSubscriptionRepository                                           durableSubscriptionRepository;
@@ -60,7 +60,7 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
 
     @BeforeEach
     void setup() {
-        jacksonJSONSerializer = new JacksonJSONEventSerializer(createObjectMapper());
+        jacksonJSONSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         eventMapper = new EventProcessorIT.TestPersistableEventMapper();
 
         var persistenceStrategy =

@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.document_db.postgresql
 
 import dk.trustworks.essentials.components.document_db.*
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory
 import dk.trustworks.essentials.kotlin.types.Amount
 import org.assertj.core.api.Assertions.assertThat
@@ -68,7 +67,7 @@ class DocumentDbRepositoryImplIT {
         val repositoryFactory = DocumentDbRepositoryFactory(
             jdbi,
             JdbiUnitOfWorkFactory(jdbi),
-            JacksonJSONSerializer(TestObjectMappers.createKotlinObjectMapper())
+            TestObjectMappers.createJSONSerializer()
         )
 
         orderRepository = OrderRepository(repositoryFactory.create(Order::class))

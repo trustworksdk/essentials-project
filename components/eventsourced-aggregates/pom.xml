@@ -53,6 +53,23 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- The tests serialize events carrying Essentials value types, so the types module of the active Jackson
+             flavour has to be present. Without it the value types persist as {"value":"..."} nested objects instead
+             of JSON primitives, and the tests pass while writing a wire format nothing else can read back. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials</groupId>
+            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Jackson 3, needed when the flavour above is the Jackson 3 one: it is declared optional upstream and so is
+             not transitive. -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.jdbi</groupId>
             <artifactId>jdbi3-postgres</artifactId>
