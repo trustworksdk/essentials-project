@@ -1,0 +1,1418 @@
+<!DOCTYPE html>
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<!--
+  STATIC MOCKUP — not production code, not wired to anything.
+
+  Purpose: settle the look and feel of the Thymeleaf + vanilla-JS admin UI before any templates exist.
+  Open this file directly in a browser; there is no server, no build step, no dependencies.
+
+  Fixtures below are hand-written against the committed contract
+  (components/admin-api-spec/openapi/essentials-admin-api.yaml) — field names and nullability match the
+  DTO schemas exactly, so the layout is judged against data of the real shape.
+
+  In production the tables would be server-rendered by Thymeleaf and refreshed with fetch(); the
+  rendering here is vanilla JS purely so one file can stand alone.
+-->
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Essentials Admin</title>
+    <style>
+        /* ── Tokens ────────────────────────────────────────────────────────────────────────────
+           Values from the data-viz reference palette. Light and dark are both selected sets:
+           dark is the same hues re-stepped for the dark surface, never an automatic flip.        */
+        :root {
+            color-scheme: light;
+            --surface-1: #fcfcfb;
+            --page: #f9f9f7;
+            --ink-primary: #0b0b0b;
+            --ink-secondary: #52514e;
+            --ink-muted: #898781;
+            --gridline: #e1e0d9;
+            --baseline: #c3c2b7;
+            --border: rgba(11, 11, 11, 0.10);
+            --accent: #2a78d6;            /* categorical slot 1 / sequential hue */
+            --seq-track: #cde2fb;         /* sequential step 100 — track only, never data */
+            --seq-fill: #2a78d6;          /* sequential step 450 */
+            --success-text: #006300;
+            /* Status palette — fixed, never themed. Always paired with an icon + label. */
+            --status-good: #0ca30c;
+            --status-warning: #fab219;
+            --status-serious: #ec835a;
+            --status-critical: #d03b3b;
+            --radius: 8px;
+            --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root:where(:not([data-theme="light"])) {
+                color-scheme: dark;
+                --surface-1: #1a1a19;
+                --page: #0d0d0d;
+                --ink-primary: #ffffff;
+                --ink-secondary: #c3c2b7;
+                --ink-muted: #898781;
+                --gridline: #2c2c2a;
+                --baseline: #383835;
+                --border: rgba(255, 255, 255, 0.10);
+                --accent: #3987e5;
+                --seq-track: #184f95;
+                --seq-fill: #3987e5;
+                --success-text: #0ca30c;
+            }
+        }
+
+        :root[data-theme="dark"] {
+            color-scheme: dark;
+            --surface-1: #1a1a19;
+            --page: #0d0d0d;
+            --ink-primary: #ffffff;
+            --ink-secondary: #c3c2b7;
+            --ink-muted: #898781;
+            --gridline: #2c2c2a;
+            --baseline: #383835;
+            --border: rgba(255, 255, 255, 0.10);
+            --accent: #3987e5;
+            --seq-track: #184f95;
+            --seq-fill: #3987e5;
+            --success-text: #0ca30c;
+        }
+
+        /* ── Base ──────────────────────────────────────────────────────────────────────────── */
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: var(--font);
+            font-size: 14px;
+            line-height: 1.5;
+            color: var(--ink-primary);
+            background: var(--page);
+            display: grid;
+            grid-template-columns: 232px 1fr;
+            min-height: 100vh;
+        }
+
+        /* ── Sidebar ───────────────────────────────────────────────────────────────────────── */
+        .sidebar {
+            background: var(--surface-1);
+            border-right: 1px solid var(--border);
+            padding: 20px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+        }
+
+        .brand { padding: 0 8px; }
+        .brand-name { font-weight: 600; letter-spacing: -0.01em; }
+        .brand-sub { color: var(--ink-muted); font-size: 12px; }
+
+        .nav { display: flex; flex-direction: column; gap: 2px; }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 7px 8px;
+            border-radius: 6px;
+            color: var(--ink-secondary);
+            cursor: pointer;
+            border: none;
+            background: none;
+            font: inherit;
+            text-align: left;
+            width: 100%;
+        }
+
+        .nav-item:hover { background: color-mix(in oklab, var(--ink-primary) 6%, transparent); }
+
+        .nav-item[aria-current="page"] {
+            background: color-mix(in oklab, var(--accent) 12%, transparent);
+            color: var(--ink-primary);
+            font-weight: 500;
+        }
+
+        .nav-item .ic { width: 16px; text-align: center; color: var(--ink-muted); }
+        .nav-item[aria-current="page"] .ic { color: var(--accent); }
+
+        /* A nav item the caller's roles do not permit: visible but inert, so the UI explains
+           itself rather than silently hiding capability. */
+        .nav-item[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+        .nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); padding: 0 8px; margin-bottom: 4px; }
+
+        .sidebar-footer { margin-top: auto; padding: 0 8px; font-size: 12px; color: var(--ink-muted); }
+
+        /* ── Main ──────────────────────────────────────────────────────────────────────────── */
+        .main {
+            padding: 20px 24px 48px;
+            max-width: 1400px;
+            /* A grid item's automatic minimum size is min-content, so a wide table would stretch this
+               column past its track and put the whole page into horizontal scroll. */
+            min-width: 0;
+        }
+
+        .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+        .page-title { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+        .page-sub { color: var(--ink-secondary); margin: 2px 0 0; }
+        .topbar-right { display: flex; align-items: center; gap: 8px; }
+
+        .chip {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            color: var(--ink-secondary);
+            background: var(--surface-1);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .btn {
+            font: inherit;
+            font-size: 13px;
+            padding: 5px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--surface-1);
+            color: var(--ink-primary);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .btn:hover { background: color-mix(in oklab, var(--ink-primary) 5%, transparent); }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-danger { color: var(--status-critical); border-color: color-mix(in oklab, var(--status-critical) 35%, var(--border)); }
+        .btn-sm { font-size: 12px; padding: 3px 8px; }
+
+        /* ── Card ──────────────────────────────────────────────────────────────────────────── */
+        .card {
+            background: var(--surface-1);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+        }
+
+        .card-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--gridline);
+        }
+
+        .card-title { font-weight: 600; font-size: 14px; }
+        .card-note { color: var(--ink-muted); font-size: 12px; }
+        .card-body { padding: 12px 14px; }
+        .card-body.flush { padding: 0; }
+
+        /* ── Stat tiles (KPI row) ──────────────────────────────────────────────────────────── */
+        .kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+
+        .tile {
+            background: var(--surface-1);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px 14px;
+            /* An unexpectedly long value must not widen the grid track. */
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .tile-label { color: var(--ink-secondary); font-size: 12px; }
+        /* Proportional figures for standalone numbers; tabular is reserved for columns. */
+        .tile-value { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; overflow-wrap: anywhere; }
+        .tile-sub { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
+        .tile-value.is-critical { color: var(--status-critical); }
+        .tile-value.is-text { font-size: 18px; font-weight: 600; }
+
+        /* ── Status badge — colour NEVER carries meaning alone: icon + label always ─────────── */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            white-space: nowrap;
+        }
+
+        .badge .dot { font-size: 11px; line-height: 1; }
+        .badge-good { color: var(--success-text); background: color-mix(in oklab, var(--status-good) 10%, transparent); border-color: color-mix(in oklab, var(--status-good) 30%, var(--border)); }
+        .badge-warning { color: var(--ink-primary); background: color-mix(in oklab, var(--status-warning) 18%, transparent); border-color: color-mix(in oklab, var(--status-warning) 45%, var(--border)); }
+        .badge-serious { color: var(--ink-primary); background: color-mix(in oklab, var(--status-serious) 18%, transparent); border-color: color-mix(in oklab, var(--status-serious) 45%, var(--border)); }
+        .badge-critical { color: var(--status-critical); background: color-mix(in oklab, var(--status-critical) 10%, transparent); border-color: color-mix(in oklab, var(--status-critical) 30%, var(--border)); }
+        .badge-neutral { color: var(--ink-secondary); }
+
+        /* ── Table ─────────────────────────────────────────────────────────────────────────── */
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+        th {
+            text-align: left;
+            font-weight: 500;
+            font-size: 12px;
+            color: var(--ink-secondary);
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--baseline);
+            white-space: nowrap;
+            background: var(--surface-1);
+        }
+
+        td { padding: 8px 12px; border-bottom: 1px solid var(--gridline); vertical-align: middle; white-space: nowrap; }
+        tbody tr:last-child td { border-bottom: none; }
+        tbody tr:hover { background: color-mix(in oklab, var(--accent) 5%, transparent); }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+        .truncate { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nil { color: var(--ink-muted); }
+        .actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+        /* A wide table scrolls horizontally; the action column must not scroll out of reach. */
+        td.actions, th.sticky {
+            position: sticky;
+            right: 0;
+            background: var(--surface-1);
+            box-shadow: -1px 0 0 var(--gridline);
+        }
+
+        /* ── Inline magnitude bar (sequential, one hue) ─────────────────────────────────────
+           Ranked magnitude where the label is long text → bar in the cell, not a chart.
+           The number is always shown beside it (relief rule), so the bar is never the only
+           carrier of the value.                                                              */
+        .bar-cell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+        .bar-track { display: block; width: 84px; height: 8px; background: var(--seq-track); border-radius: 4px; overflow: hidden; flex: none; }
+        .bar-fill { display: block; height: 100%; background: var(--seq-fill); border-radius: 0 4px 4px 0; }
+        .bar-num { font-variant-numeric: tabular-nums; min-width: 68px; text-align: right; }
+
+        /* ── Meter — a single ratio against a limit (not a 2-slice pie) ─────────────────────── */
+        .meter-row { display: grid; grid-template-columns: 1fr 160px 64px; gap: 12px; align-items: center; padding: 7px 0; }
+        .meter-row + .meter-row { border-top: 1px solid var(--gridline); }
+        .meter-track { display: block; height: 8px; background: var(--seq-track); border-radius: 4px; overflow: hidden; }
+        .meter-fill { display: block; height: 100%; border-radius: 0 4px 4px 0; background: var(--seq-fill); }
+        .meter-val { font-variant-numeric: tabular-nums; text-align: right; }
+
+        /* ── Key/value grid (CDC configuration, slot detail) ───────────────────────────────── */
+        .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 28px; }
+        .kv-item { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--gridline); }
+        .kv-key { color: var(--ink-secondary); }
+        .kv-val { font-variant-numeric: tabular-nums; text-align: right; }
+
+        /* ── States ────────────────────────────────────────────────────────────────────────── */
+        .empty { padding: 28px 14px; text-align: center; color: var(--ink-secondary); }
+        .empty-icon { font-size: 20px; color: var(--ink-muted); }
+
+        .banner {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            padding: 10px 12px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
+
+        .banner-warning { background: color-mix(in oklab, var(--status-warning) 12%, var(--surface-1)); border-color: color-mix(in oklab, var(--status-warning) 40%, var(--border)); }
+        .banner-critical { background: color-mix(in oklab, var(--status-critical) 8%, var(--surface-1)); border-color: color-mix(in oklab, var(--status-critical) 30%, var(--border)); }
+        .banner-info { background: var(--surface-1); }
+        .banner strong { font-weight: 600; }
+
+        .skeleton { height: 13px; border-radius: 4px; background: linear-gradient(90deg, var(--gridline), color-mix(in oklab, var(--gridline) 40%, var(--surface-1)), var(--gridline)); background-size: 200% 100%; animation: sk 1.2s ease-in-out infinite; }
+        @keyframes sk { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+        /* ── Tabs / toolbar ────────────────────────────────────────────────────────────────── */
+        .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+        .tabs { display: inline-flex; gap: 2px; background: color-mix(in oklab, var(--ink-primary) 5%, transparent); padding: 2px; border-radius: 8px; }
+        .tab { font: inherit; font-size: 13px; border: none; background: none; padding: 4px 10px; border-radius: 6px; cursor: pointer; color: var(--ink-secondary); }
+        .tab[aria-selected="true"] { background: var(--surface-1); color: var(--ink-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
+        select, input[type="text"] { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-primary); }
+        .spacer { flex: 1; }
+        .pager { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--gridline); color: var(--ink-secondary); font-size: 12px; }
+
+        /* ── Detail drawer ──────────────────────────────────────────────────────────────────
+           A drawer rather than a modal: triaging dead letters means stepping through messages one
+           after another, and a modal forces a close/reopen cycle per message. The table stays
+           visible and the drawer just re-renders.                                                */
+        .scrim {
+            position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32);
+            opacity: 0; pointer-events: none; transition: opacity 0.15s ease; z-index: 50;
+        }
+        .scrim.is-open { opacity: 1; pointer-events: auto; }
+
+        .drawer {
+            position: fixed; top: 0; right: 0; height: 100vh; width: 580px; max-width: 92vw;
+            background: var(--surface-1); border-left: 1px solid var(--border);
+            transform: translateX(100%); transition: transform 0.18s ease; z-index: 51;
+            display: flex; flex-direction: column;
+        }
+        .drawer.is-open { transform: none; }
+
+        .drawer-head { padding: 14px 16px; border-bottom: 1px solid var(--gridline); display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .drawer-title { font-weight: 600; }
+        .drawer-body { padding: 14px 16px; overflow-y: auto; flex: 1; }
+        .drawer-foot { padding: 12px 16px; border-top: 1px solid var(--gridline); display: flex; gap: 8px; align-items: center; }
+        .drawer-sub { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
+
+        .code {
+            font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+            font-size: 12px; line-height: 1.55;
+            white-space: pre-wrap; word-break: break-word;
+            background: var(--page); border: 1px solid var(--gridline); border-radius: 6px;
+            padding: 10px 12px; max-height: 300px; overflow: auto; margin: 0;
+        }
+
+        .code.is-trace {
+            white-space: pre;
+            word-break: normal;
+            overflow-x: auto;
+            max-height: 240px;
+        }
+
+        .field { margin-bottom: 14px; }
+        .field-label { font-size: 12px; color: var(--ink-secondary); display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+        .field-actions { display: flex; gap: 6px; }
+
+        /* Entry id doubles as the affordance that opens the drawer — a real button, so it is
+           keyboard reachable rather than relying on the row click alone. */
+        .link {
+            background: none; border: none; padding: 0; font: inherit;
+            font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
+            color: var(--accent); cursor: pointer; text-align: left;
+        }
+        .link:hover { text-decoration: underline; }
+
+        tbody tr.is-selected { background: color-mix(in oklab, var(--accent) 9%, transparent); }
+
+        /* ── Error & loading states ─────────────────────────────────────────────────────────
+           Rendered inside the card whose fetch failed, so one failing panel never blanks the page. */
+        .state { padding: 24px 14px; text-align: center; }
+        .state-icon { font-size: 20px; line-height: 1; margin-bottom: 6px; }
+        .state-title { font-weight: 600; margin-bottom: 3px; }
+        .state-detail { color: var(--ink-secondary); font-size: 13px; max-width: 460px; margin: 0 auto; }
+        .state-actions { margin-top: 12px; display: flex; gap: 8px; justify-content: center; }
+        .state-401 .state-icon, .state-403 .state-icon { color: var(--status-warning); }
+        .state-5xx .state-icon { color: var(--status-critical); }
+
+        .sk-row { display: flex; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--gridline); }
+        .sk-row:last-child { border-bottom: none; }
+
+        /* ── Dialog — a modal IS right here: a destructive confirm must block. ──────────────── */
+        .modal-scrim {
+            position: fixed; inset: 0; background: rgba(0, 0, 0, 0.42);
+            opacity: 0; pointer-events: none; transition: opacity 0.12s ease; z-index: 60;
+        }
+        .modal-scrim.is-open { opacity: 1; pointer-events: auto; }
+
+        .modal {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -48%) scale(0.99);
+            width: 460px; max-width: 92vw; z-index: 61;
+            background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+            opacity: 0; pointer-events: none; transition: opacity 0.12s ease, transform 0.12s ease;
+        }
+        .modal.is-open { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1); }
+        .modal-head { padding: 14px 16px 0; font-weight: 600; }
+        .modal-body { padding: 8px 16px 14px; color: var(--ink-secondary); font-size: 13px; }
+        .modal-foot { padding: 12px 16px; border-top: 1px solid var(--gridline); display: flex; gap: 8px; justify-content: flex-end; }
+        .modal-body label { display: block; color: var(--ink-primary); margin: 12px 0 4px; font-size: 12px; }
+        .modal-body input[type="text"], .modal-body select { width: 100%; }
+        .btn-solid-danger {
+            background: var(--status-critical); border-color: var(--status-critical); color: #fff;
+        }
+        .btn-solid-danger:hover { filter: brightness(0.94); background: var(--status-critical); }
+        .btn-solid-danger:disabled { opacity: 0.4; }
+
+        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+        .swatch-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+        .section { display: none; }
+        .section.is-active { display: block; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+        h3.sub { font-size: 13px; margin: 0 0 8px; color: var(--ink-secondary); font-weight: 500; }
+    </style>
+</head>
+<body>
+<aside class="sidebar">
+    <div class="brand">
+        <div class="brand-name">Essentials Admin</div>
+        <div class="brand-sub">orders-service · prod</div>
+    </div>
+
+    <nav class="nav" id="nav">
+        <div class="nav-group">Overview</div>
+        <button class="nav-item" data-view="overview" aria-current="page"><span class="ic">◫</span> Dashboard</button>
+
+        <div class="nav-group" style="margin-top:12px">Infrastructure</div>
+        <button class="nav-item" data-view="locks"><span class="ic">▣</span> Fenced locks</button>
+        <button class="nav-item" data-view="queues"><span class="ic">≡</span> Durable queues</button>
+        <button class="nav-item" data-view="scheduler"><span class="ic">◷</span> Scheduler</button>
+
+        <div class="nav-group" style="margin-top:12px">Event store</div>
+        <button class="nav-item" data-view="subscriptions"><span class="ic">↻</span> Subscriptions</button>
+        <button class="nav-item" data-view="cdc"><span class="ic">⇄</span> CDC</button>
+        <button class="nav-item" data-view="postgresql"><span class="ic">▤</span> PostgreSQL stats</button>
+
+        <div class="nav-group" style="margin-top:12px">Mockup only</div>
+        <button class="nav-item" data-view="states"><span class="ic">◈</span> Component states</button>
+    </nav>
+
+    <div class="sidebar-footer">
+        Signed in as <strong>ops@trustworks.dk</strong><br>
+        <span class="nil">essentials_admin</span>
+    </div>
+</aside>
+
+<main class="main">
+    <div class="topbar">
+        <div>
+            <h1 class="page-title" id="pageTitle">Dashboard</h1>
+            <p class="page-sub" id="pageSub">Current state of the Essentials infrastructure</p>
+        </div>
+        <div class="topbar-right">
+            <span class="chip" id="stamp">updated 12:04:31</span>
+            <button class="btn btn-sm" id="refreshBtn">Refresh</button>
+            <button class="btn btn-sm" id="themeBtn">Dark</button>
+        </div>
+    </div>
+
+    <section class="section is-active" data-section="overview"></section>
+    <section class="section" data-section="locks"></section>
+    <section class="section" data-section="queues"></section>
+    <section class="section" data-section="scheduler"></section>
+    <section class="section" data-section="subscriptions"></section>
+    <section class="section" data-section="cdc"></section>
+    <section class="section" data-section="postgresql"></section>
+    <section class="section" data-section="states"></section>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<div class="modal-scrim" id="modalScrim"></div>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="false" aria-labelledby="drawerTitle"></aside>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   FIXTURES — shapes match the committed contract exactly, including nullability.
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+const fx = {
+  // GET /fenced-locks → ApiDBFencedLock[]
+  locks: [
+    { lockName: 'EventProcessor-OrderProcessor', currentToken: 42, lockedByLockManagerInstanceId: 'orders-7c9f', lockAcquiredTimestamp: '2026-07-31T09:15:02Z', lockLastConfirmedTimestamp: '2026-07-31T12:04:12Z' },
+    { lockName: 'EventProcessor-ShipmentProcessor', currentToken: 17, lockedByLockManagerInstanceId: 'orders-7c9f', lockAcquiredTimestamp: '2026-07-31T09:15:03Z', lockLastConfirmedTimestamp: '2026-07-31T12:04:11Z' },
+    { lockName: 'TTLManager-eventstore_cdc_inbox', currentToken: 8, lockedByLockManagerInstanceId: 'orders-3ab1', lockAcquiredTimestamp: '2026-07-30T22:00:00Z', lockLastConfirmedTimestamp: '2026-07-31T12:03:58Z' },
+    // An unheld lock: currentToken / holder / timestamps are all optional in the contract
+    { lockName: 'NightlyReconciliation', currentToken: null, lockedByLockManagerInstanceId: null, lockAcquiredTimestamp: null, lockLastConfirmedTimestamp: null }
+  ],
+
+  // GET /durable-queues → string[]
+  queueNames: ['OrderEvents', 'ShipmentCommands', 'EmailOutbox', 'PaymentInbox'],
+
+  // GET /durable-queues/queues/{queueName}/statistics → ApiQueuedStatistics
+  queueStats: {
+    OrderEvents: { queueName: 'OrderEvents', fromTimestamp: '2026-07-24T00:00:00Z', totalMessagesDelivered: 184203, avgDeliveryLatencyMs: 34, firstDelivery: '2026-07-24T00:00:11Z', lastDelivery: '2026-07-31T12:04:28Z' }
+  },
+  queueCounts: { OrderEvents: { queued: 128, deadLetters: 3 } },
+
+  // GET /durable-queues/queues/{queueName}/messages → ApiQueuedMessage[]
+  queued: [
+    { id: '018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa01', queueName: 'OrderEvents', payload: '{"orderId":"ORD-99213","total":149.95}', addedTimestamp: '2026-07-31T12:04:20Z', nextDeliveryTimestamp: '2026-07-31T12:04:35Z', deliveryTimestamp: null, lastDeliveryError: null, totalDeliveryAttempts: 0, redeliveryAttempts: 0, isDeadLetterMessage: false, isBeingDelivered: false },
+    { id: '018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa02', queueName: 'OrderEvents', payload: '{"orderId":"ORD-99214","total":32.00}', addedTimestamp: '2026-07-31T12:04:21Z', nextDeliveryTimestamp: '2026-07-31T12:04:36Z', deliveryTimestamp: '2026-07-31T12:04:30Z', lastDeliveryError: null, totalDeliveryAttempts: 1, redeliveryAttempts: 0, isDeadLetterMessage: false, isBeingDelivered: true },
+    // payload === null: the caller lacks QUEUE_PAYLOAD_READER. Contract documents this explicitly.
+    { id: '018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa03', queueName: 'OrderEvents', payload: null, addedTimestamp: '2026-07-31T12:04:22Z', nextDeliveryTimestamp: '2026-07-31T12:05:10Z', deliveryTimestamp: null, lastDeliveryError: 'Connection reset by peer', totalDeliveryAttempts: 2, redeliveryAttempts: 1, isDeadLetterMessage: false, isBeingDelivered: false }
+  ],
+
+  // GET /durable-queues/queues/{queueName}/dead-letter-messages → ApiQueuedMessage[]
+  deadLetters: [
+    // Deliberately large payload + a real stack trace: the detail drawer has to cope with the sizes
+    // that actually occur, not just one-line fixtures.
+    { id: '018f2b04-51cc-7a10-9d22-71bb0e77dd10', queueName: 'OrderEvents',
+      payload: '{"orderId":"ORD-98120","customerId":"CUST-40219","placedAt":"2026-07-31T08:10:58Z","currency":"DKK","lines":[{"sku":"BOOK-1123","name":"Domain-Driven Design","quantity":1,"unitPrice":419.00,"vatRate":0.25},{"sku":"BOOK-8842","name":"Implementing DDD","quantity":2,"unitPrice":389.50,"vatRate":0.25},{"sku":"MUG-0001","name":"Essentials mug","quantity":3,"unitPrice":79.00,"vatRate":0.25}],"shipping":{"method":"GLS_PARCELSHOP","parcelShopId":"DK-12842","address":{"street":"Vestergade 12","postalCode":"8000","city":"Aarhus","country":"DK"}},"payment":{"method":"CARD","last4":"4242","authorizationId":"auth_9f2b41c8"},"totals":{"net":1494.00,"vat":373.50,"gross":1867.50}}',
+      addedTimestamp: '2026-07-31T08:11:02Z', nextDeliveryTimestamp: null, deliveryTimestamp: '2026-07-31T08:44:19Z',
+      lastDeliveryError: 'dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueException: PaymentGatewayTimeoutException: no response after 30s\n\tat dk.trustworks.essentials.examples.orders.PaymentGatewayClient.authorize(PaymentGatewayClient.java:88)\n\tat dk.trustworks.essentials.examples.orders.OrderProcessor.on(OrderProcessor.java:142)\n\tat dk.trustworks.essentials.components.foundation.messaging.queue.DefaultDurableQueueConsumer.handleMessage(DefaultDurableQueueConsumer.java:318)\n\tat java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)\nCaused by: java.net.SocketTimeoutException: Read timed out\n\tat java.base/sun.nio.ch.NioSocketImpl.timedRead(NioSocketImpl.java:280)\n\t... 24 more',
+      totalDeliveryAttempts: 5, redeliveryAttempts: 4, isDeadLetterMessage: true, isBeingDelivered: false },
+    { id: '018f2b04-51cc-7a10-9d22-71bb0e77dd11', queueName: 'OrderEvents', payload: '{"orderId":"ORD-98121"}', addedTimestamp: '2026-07-31T08:12:40Z', nextDeliveryTimestamp: null, deliveryTimestamp: '2026-07-31T08:45:02Z', lastDeliveryError: 'IllegalStateException: aggregate already closed', totalDeliveryAttempts: 5, redeliveryAttempts: 4, isDeadLetterMessage: true, isBeingDelivered: false },
+    { id: '018f2b04-51cc-7a10-9d22-71bb0e77dd12', queueName: 'OrderEvents', payload: null, addedTimestamp: '2026-07-31T09:02:11Z', nextDeliveryTimestamp: null, deliveryTimestamp: '2026-07-31T09:38:44Z', lastDeliveryError: 'DataIntegrityViolationException: duplicate key', totalDeliveryAttempts: 5, redeliveryAttempts: 4, isDeadLetterMessage: true, isBeingDelivered: false }
+  ],
+
+  // GET /event-store/subscriptions → ApiSubscription[]
+  subscriptions: [
+    { subscriberId: 'OrderProcessor', aggregateType: 'Orders', currentGlobalOrder: 918204, lastUpdated: '2026-07-31T12:04:29Z' },
+    { subscriberId: 'ShipmentProcessor', aggregateType: 'Orders', currentGlobalOrder: 918204, lastUpdated: '2026-07-31T12:04:29Z' },
+    { subscriberId: 'OrderSummaryView', aggregateType: 'Orders', currentGlobalOrder: 911003, lastUpdated: '2026-07-31T12:01:14Z' },
+    { subscriberId: 'PaymentProjection', aggregateType: 'Payments', currentGlobalOrder: 45219, lastUpdated: '2026-07-31T12:04:22Z' }
+  ],
+  // GET .../highest-global-event-order → GlobalEventOrderResult, loaded on demand only
+  highestGlobalOrder: { Orders: 918204, Payments: 45219 },
+
+  // GET /scheduler/pg-cron-jobs → ApiPgCronJob[]
+  pgCronJobs: [
+    { jobId: 1, schedule: '*/5 * * * *', command: "CALL essentials_ttl_delete('eventstore_cdc_inbox')", nodeName: 'localhost', nodePort: 5432, database: 'orders', active: true, jobName: 'ttl-eventstore_cdc_inbox' },
+    { jobId: 2, schedule: '0 3 * * *', command: "CALL essentials_ttl_delete('durable_queues')", nodeName: 'localhost', nodePort: 5432, database: 'orders', active: true, jobName: 'ttl-durable_queues' },
+    { jobId: 3, schedule: '0 4 * * 0', command: 'VACUUM ANALYZE orders_events', nodeName: 'localhost', nodePort: 5432, database: 'orders', active: false, jobName: 'weekly-vacuum' }
+  ],
+  pgCronRunDetails: [
+    { jobId: 1, runId: 8841, jobPid: 21044, database: 'orders', username: 'essentials', command: "CALL essentials_ttl_delete('eventstore_cdc_inbox')", status: 'succeeded', returnMessage: null, startTime: '2026-07-31T12:00:00', endTime: '2026-07-31T12:00:01' },
+    { jobId: 1, runId: 8840, jobPid: 20981, database: 'orders', username: 'essentials', command: "CALL essentials_ttl_delete('eventstore_cdc_inbox')", status: 'succeeded', returnMessage: null, startTime: '2026-07-31T11:55:00', endTime: '2026-07-31T11:55:01' },
+    { jobId: 1, runId: 8839, jobPid: 20903, database: 'orders', username: 'essentials', command: "CALL essentials_ttl_delete('eventstore_cdc_inbox')", status: 'failed', returnMessage: 'canceling statement due to statement timeout', startTime: '2026-07-31T11:50:00', endTime: '2026-07-31T11:50:31' }
+  ],
+  executorJobs: [
+    { name: 'CdcEffectivenessMonitor', initialDelay: 30, period: 60, unit: 'SECONDS', scheduledAt: '2026-07-31T09:15:00' },
+    { name: 'FencedLockConfirmation', initialDelay: 0, period: 5, unit: 'SECONDS', scheduledAt: '2026-07-31T09:15:00' }
+  ],
+
+  // GET /postgresql/query-statistics/top-ten-slowest → ApiQueryStatistics[]
+  slowQueries: [
+    { query: 'SELECT * FROM orders_events WHERE global_order > $1 ORDER BY global_order LIMIT $2', totalTime: 184203.44, calls: 91204, meanTime: 2.02 },
+    { query: 'INSERT INTO orders_events (global_order, aggregate_id, event_order, ...) VALUES ($1, $2, $3, ...)', totalTime: 92044.10, calls: 918204, meanTime: 0.10 },
+    { query: 'SELECT * FROM durable_queues WHERE queue_name = $1 AND is_dead_letter_message = false ORDER BY id LIMIT $2', totalTime: 61003.87, calls: 42011, meanTime: 1.45 },
+    { query: 'UPDATE durable_queues SET total_delivery_attempts = total_delivery_attempts + 1 WHERE id = $1', totalTime: 38112.02, calls: 184203, meanTime: 0.21 },
+    { query: 'DELETE FROM eventstore_cdc_inbox WHERE received_at < $1', totalTime: 21044.55, calls: 8841, meanTime: 2.38 }
+  ],
+
+  // GET /event-store/statistics/table-sizes → Map<String, ApiTableSizeStatistics>
+  tableSizes: {
+    orders_events: { totalSize: '4218 MB', tableSize: '3102 MB', indexSize: '1116 MB' },
+    payments_events: { totalSize: '881 MB', tableSize: '640 MB', indexSize: '241 MB' },
+    durable_queues: { totalSize: '212 MB', tableSize: '155 MB', indexSize: '57 MB' },
+    eventstore_cdc_inbox: { totalSize: '38 MB', tableSize: '31 MB', indexSize: '7 MB' }
+  },
+  // GET /event-store/statistics/table-activity → Map<String, ApiTableActivityStatistics>
+  tableActivity: {
+    orders_events: { seq_scan: 12, seq_tup_read: 918204, idx_scan: 4210394, idx_tup_fetch: 8402193, n_tup_ins: 918204, n_tup_upd: 0, n_tup_del: 0 },
+    payments_events: { seq_scan: 4, seq_tup_read: 45219, idx_scan: 210394, idx_tup_fetch: 402193, n_tup_ins: 45219, n_tup_upd: 0, n_tup_del: 0 },
+    durable_queues: { seq_scan: 881, seq_tup_read: 4102934, idx_scan: 9204113, idx_tup_fetch: 12402193, n_tup_ins: 184331, n_tup_upd: 368662, n_tup_del: 184203 },
+    eventstore_cdc_inbox: { seq_scan: 2, seq_tup_read: 8841, idx_scan: 1840221, idx_tup_fetch: 1840221, n_tup_ins: 918204, n_tup_upd: 918204, n_tup_del: 917000 }
+  },
+  // GET /event-store/statistics/table-cache-hit-ratio → Map<String, ApiTableCacheHitRatio>
+  cacheHitRatio: {
+    orders_events: { cacheHitRatio: 99 },
+    payments_events: { cacheHitRatio: 97 },
+    durable_queues: { cacheHitRatio: 92 },
+    eventstore_cdc_inbox: { cacheHitRatio: 71 }
+  },
+
+  // GET /event-store/cdc/status → ApiCdcStatus. `tailer` and `dispatcher` are nullable by
+  // contract: null when that component is not running in the queried instance.
+  cdc: {
+    availability: { state: 'ACTIVE', slotName: 'slot_orders_prod', reason: null, lastChangedEpochMs: 1785484502000, fallbackCount: 1 },
+    configuration: {
+      enabled: true, mode: 'AUTO', plugin: 'pgoutput', pgOutputPublicationName: 'essentials_pub', deliveryMode: 'INBOX',
+      walParserMode: 'BYTES', cdcEventStoreBackfillBatchSize: 500, inboxTableName: 'eventstore_cdc_inbox', inboxTtlDuration: 3600,
+      slotName: 'slot_orders_prod', slotMode: 'PERSISTENT', slotGroup: 'orders', walTailerPollInterval: 'PT0.05S',
+      walTailerPollBackoffInterval: 'PT0.2S', walTailerMaxPollBackoffInterval: 'PT2S', walTailerReplicationStatusInterval: 'PT10S',
+      dispatcherBatchSize: 200, dispatcherPollInterval: 'PT0.05S', dispatcherPoisonPolicy: 'SKIP_AND_LOG', dispatcherDispatchedRowPolicy: 'DELETE'
+    },
+    slot: {
+      slotName: 'slot_orders_prod', exists: true, configuredMode: 'PERSISTENT', expectedPlugin: 'pgoutput', expectedPluginMatches: true,
+      active: true, activePid: 21044, slotType: 'logical', plugin: 'pgoutput', database: 'orders', temporary: false,
+      restartLsn: '0/1955460', confirmedFlushLsn: '0/1955AA8', walStatus: 'reserved', safeWalSize: 1073741824,
+      inactiveSince: null, conflicting: 'f', invalidationReason: null, failover: false, synced: false
+    },
+    tailer: null,
+    dispatcher: {
+      slotName: 'slot_orders_prod', started: true, stopping: false, ticks: 88412, tickFailures: 0, conversionFailures: 0,
+      poisonRows: 2, gapExtractionFailures: 0, publishedEvents: 918204, lastBatchSize: 37, lastTickEpochMs: 1785488668000
+    }
+  }
+};
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   Helpers
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+const el = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content; };
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const n = (v) => v == null ? nil() : Number(v).toLocaleString('en-US');
+const nil = (t = '—') => `<span class="nil" title="not set">${t}</span>`;
+const ts = (v) => v == null ? nil() : esc(String(v).replace('T', ' ').replace('Z', ''));
+const epoch = (ms) => ms == null ? nil() : ts(new Date(ms).toISOString().slice(0, 19));
+
+/* Status is icon + label + colour — never colour alone. */
+function badge(kind, label, icon) {
+  const icons = { good: '●', warning: '▲', serious: '▲', critical: '■', neutral: '○' };
+  return `<span class="badge badge-${kind}"><span class="dot" aria-hidden="true">${icon || icons[kind]}</span>${esc(label)}</span>`;
+}
+
+/* Inline sequential bar + the number itself (relief rule: the bar is never the sole carrier). */
+function bar(value, max, formatted) {
+  const pct = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
+  return `<div class="bar-cell"><span class="bar-num">${formatted}</span>
+            <span class="bar-track" role="img" aria-label="${formatted}"><span class="bar-fill" style="width:${pct}%"></span></span></div>`;
+}
+
+function table(cols, rows, opts = {}) {
+  if (!rows.length) {
+    return `<div class="empty"><div class="empty-icon" aria-hidden="true">◌</div>
+              <div>${esc(opts.empty || 'Nothing to show')}</div></div>`;
+  }
+  return `<div class="table-wrap"><table><thead><tr>${cols.map(c =>
+    `<th${c.sticky ? ' class="sticky"' : (c.num ? ' class="num"' : '')}${c.width ? ` style="width:${c.width}"` : ''}>${esc(c.label)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.join('')}</tbody></table></div>`;
+}
+
+function card(title, body, note, flush) {
+  return `<div class="card"><div class="card-head"><span class="card-title">${esc(title)}</span>
+            ${note ? `<span class="card-note">${note}</span>` : ''}</div>
+          <div class="card-body${flush ? ' flush' : ''}">${body}</div></div>`;
+}
+
+function tile(label, value, sub, critical) {
+  return `<div class="tile"><div class="tile-label">${esc(label)}</div>
+            <div class="tile-value${critical ? ' is-critical' : ''}">${value}</div>
+            ${sub ? `<div class="tile-sub">${sub}</div>` : ''}</div>`;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   States — every non-happy path a card can be in
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Modelled on the contract's Error schema: `status` and `error` are required, `message` is nullable.
+ * The adapter deliberately omits `message` on 5xx so internal detail cannot leak to an HTTP caller,
+ * so the 500 state must read sensibly with nothing but a status.
+ */
+function errorState(err) {
+  const map = {
+    401: { cls: 'state-401', icon: '▲', title: 'Not signed in',
+           detail: 'The request was not authenticated. The host application decides how callers sign in — this panel will populate once a principal is resolved.' },
+    403: { cls: 'state-403', icon: '▲', title: 'Not permitted',
+           detail: 'Your roles do not cover this operation. Ask an administrator for the role named below, or use an account holding <code class="mono">essentials_admin</code>.' },
+    500: { cls: 'state-5xx', icon: '■', title: 'Server error',
+           detail: 'The server failed to answer. No detail is returned on a 5xx by design — check the application logs for the corresponding stack trace.' },
+    0:   { cls: 'state-5xx', icon: '■', title: 'Cannot reach the server',
+           detail: 'The request did not complete. The service may be restarting, or a gateway between you and it is down.' }
+  };
+  const m = map[err.status] ?? map[500];
+  return `<div class="state ${m.cls}">
+      <div class="state-icon" aria-hidden="true">${m.icon}</div>
+      <div class="state-title">${err.status ? err.status + ' · ' : ''}${esc(m.title)}</div>
+      <div class="state-detail">${m.detail}${err.message ? `<br><span class="mono" style="font-size:12px">${esc(err.message)}</span>` : ''}</div>
+      <div class="state-actions">
+        <button class="btn btn-sm">Retry</button>
+        ${err.status === 403 ? '<span class="chip">requires essentials_queue_reader</span>' : ''}
+      </div>
+    </div>`;
+}
+
+function loadingRows(count, widths) {
+  return Array.from({ length: count }, () =>
+    `<div class="sk-row">${widths.map(w => `<span class="skeleton" style="width:${w}"></span>`).join('')}</div>`).join('');
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   Dialogs — destructive actions confirm before acting
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+let dialogConfirm = null;
+
+function openDialog(opts) {
+  const { title, body, confirmLabel, danger, requireText } = opts;
+  dialogConfirm = opts.onConfirm ?? null;
+
+  document.getElementById('modal').innerHTML = `
+    <div class="modal-head" id="modalTitle">${esc(title)}</div>
+    <div class="modal-body">
+      ${body}
+      ${requireText ? `<label for="confirmText">Type <strong>${esc(requireText)}</strong> to confirm</label>
+        <input type="text" id="confirmText" autocomplete="off" spellcheck="false">` : ''}
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-sm" id="dialogCancel">Cancel</button>
+      <button class="btn btn-sm ${danger ? 'btn-solid-danger' : ''}" id="dialogConfirm" ${requireText ? 'disabled' : ''}>${esc(confirmLabel)}</button>
+    </div>`;
+
+  document.getElementById('modal').classList.add('is-open');
+  document.getElementById('modalScrim').classList.add('is-open');
+
+  if (requireText) {
+    const input = document.getElementById('confirmText');
+    input.addEventListener('input', () => {
+      document.getElementById('dialogConfirm').disabled = input.value !== requireText;
+    });
+    input.focus();
+  } else {
+    /* Cancel takes focus on a destructive dialog — the safe option should be the default one. */
+    document.getElementById(danger ? 'dialogCancel' : 'dialogConfirm').focus();
+  }
+}
+
+function closeDialog() {
+  document.getElementById('modal').classList.remove('is-open');
+  document.getElementById('modalScrim').classList.remove('is-open');
+  dialogConfirm = null;
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#dialogCancel') || e.target.closest('#modalScrim')) { closeDialog(); return; }
+  if (e.target.closest('#dialogConfirm')) {
+    const fn = dialogConfirm;
+    closeDialog();
+    fn?.();
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   Views
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+const views = {};
+
+views.overview = () => {
+  const held = fx.locks.filter(l => l.currentToken != null).length;
+  const dl = fx.queueCounts.OrderEvents.deadLetters;
+  const cdc = fx.cdc.availability;
+
+  return `
+    <div class="banner banner-warning">
+      <span aria-hidden="true">▲</span>
+      <div><strong>CDC fell back to polling once</strong> since 09:15 — <code class="mono">fallbackCount = 1</code>.
+      Availability is <strong>ACTIVE</strong> now; the WAL tailer is not running in this instance.</div>
+    </div>
+
+    <div class="kpi-row">
+      ${tile('Locks held', held + ' <span class="tile-sub" style="font-size:13px">/ ' + fx.locks.length + '</span>')}
+      ${tile('Queues', fx.queueNames.length, 'OrderEvents busiest')}
+      ${tile('Dead-letter messages', dl, dl ? 'needs attention' : 'none', dl > 0)}
+      ${tile('Subscriptions', fx.subscriptions.length, '2 aggregate types')}
+      ${tile('CDC', badge('good', cdc.state), 'slot ' + cdc.slotName)}
+    </div>
+
+    <div class="grid-2">
+      ${card('Subscription lag', table(
+        [{ label: 'Subscriber' }, { label: 'Aggregate type' }, { label: 'Current global order', num: true }],
+        fx.subscriptions.map(s => `<tr><td>${esc(s.subscriberId)}</td><td>${esc(s.aggregateType)}</td>
+          <td class="num">${n(s.currentGlobalOrder)}</td></tr>`)), 'highest order loaded on demand', true)}
+
+      ${card('Cache hit ratio', Object.entries(fx.cacheHitRatio).map(([t, v]) => `
+        <div class="meter-row">
+          <span class="mono">${esc(t)}</span>
+          <span class="meter-track" role="img" aria-label="${v.cacheHitRatio}%"><span class="meter-fill" style="width:${v.cacheHitRatio}%"></span></span>
+          <span class="meter-val">${v.cacheHitRatio}%</span>
+        </div>`).join(''), 'ratio against 100%')}
+    </div>`;
+};
+
+views.locks = () => {
+  const rows = fx.locks.map(l => {
+    const held = l.currentToken != null;
+    return `<tr>
+      <td class="mono">${esc(l.lockName)}</td>
+      <td>${held ? badge('good', 'Held') : badge('neutral', 'Free')}</td>
+      <td class="num">${n(l.currentToken)}</td>
+      <td>${l.lockedByLockManagerInstanceId ? esc(l.lockedByLockManagerInstanceId) : nil()}</td>
+      <td>${ts(l.lockAcquiredTimestamp)}</td>
+      <td>${ts(l.lockLastConfirmedTimestamp)}</td>
+      <td class="actions"><button class="btn btn-sm btn-danger" data-act="release" data-name="${esc(l.lockName)}" ${held ? '' : 'disabled'}>Release</button></td>
+    </tr>`;
+  });
+
+  return `
+    <div class="banner banner-info">
+      <span aria-hidden="true">ℹ</span>
+      <div>Releasing a lock requires <code class="mono">essentials_lock_writer</code> or <code class="mono">essentials_admin</code>.
+      A free lock has no token or holder — those fields are optional in the contract.</div>
+    </div>
+    ${card('Fenced locks', table([
+      { label: 'Lock name' }, { label: 'Status' }, { label: 'Token', num: true }, { label: 'Held by' },
+      { label: 'Acquired' }, { label: 'Last confirmed' }, { label: '', width: '96px', sticky: true }
+    ], rows, { empty: 'No fenced locks exist yet' }), 'GET /fenced-locks', true)}`;
+};
+
+views.queues = () => {
+  const stats = fx.queueStats.OrderEvents;
+  const counts = fx.queueCounts.OrderEvents;
+
+  const msgRow = (m) => `<tr data-msg="${esc(m.id)}">
+      <td><button class="link" data-msg="${esc(m.id)}">${esc(m.id.slice(0, 18))}…</button></td>
+      <td class="truncate mono">${m.payload == null
+        ? `<span class="nil" title="Requires essentials_queue_payload_reader">redacted</span>`
+        : `<button class="link" data-msg="${esc(m.id)}" title="View full payload">${esc(m.payload)}</button>`}</td>
+      <td>${ts(m.addedTimestamp)}</td>
+      <td class="num">${m.totalDeliveryAttempts}</td>
+      <td class="num">${m.redeliveryAttempts}</td>
+      <td class="truncate">${m.lastDeliveryError ? badge('serious', m.lastDeliveryError) : nil()}</td>
+      <td>${m.isBeingDelivered ? badge('warning', 'Delivering') : (m.isDeadLetterMessage ? badge('critical', 'Dead letter') : badge('neutral', 'Queued'))}</td>
+      <td class="actions">
+        ${m.isDeadLetterMessage
+          ? `<button class="btn btn-sm" data-act="resurrect" data-name="${esc(m.id)}">Resurrect</button>`
+          : `<button class="btn btn-sm" data-act="dlq" data-name="${esc(m.id)}">Dead-letter</button>`}
+        <button class="btn btn-sm btn-danger" data-act="delete" data-name="${esc(m.id)}">Delete</button>
+      </td>
+    </tr>`;
+
+  const cols = [
+    { label: 'Entry id' }, { label: 'Payload' }, { label: 'Added' },
+    { label: 'Attempts', num: true }, { label: 'Redel.', num: true }, { label: 'Last error' },
+    { label: 'State' }, { label: '', width: '170px', sticky: true }
+  ];
+
+  return `
+    <div class="toolbar">
+      <label>Queue
+        <select><option>OrderEvents</option><option>ShipmentCommands</option><option>EmailOutbox</option><option>PaymentInbox</option></select>
+      </label>
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true" data-qtab="queued">Queued (${counts.queued})</button>
+        <button class="tab" role="tab" aria-selected="false" data-qtab="dead">Dead letters (${counts.deadLetters})</button>
+      </div>
+      <label><input type="text" placeholder="Filter by queue entry id"></label>
+      <div class="spacer"></div>
+      <label>Sort
+        <select><option>ASC</option><option>DESC</option></select>
+      </label>
+      <button class="btn btn-sm btn-danger" data-act="purge" data-name="OrderEvents">Purge queue</button>
+    </div>
+
+    <div class="kpi-row">
+      ${tile('Queued', n(counts.queued))}
+      ${tile('Dead letters', n(counts.deadLetters), 'oldest 08:11', counts.deadLetters > 0)}
+      ${tile('Delivered', n(stats.totalMessagesDelivered), 'since ' + ts(stats.fromTimestamp).slice(0, 10))}
+      ${tile('Avg delivery latency', stats.avgDeliveryLatencyMs + ' <span class="tile-sub" style="font-size:13px">ms</span>')}
+      ${tile('Last delivery', ts(stats.lastDelivery).slice(11), ts(stats.lastDelivery).slice(0, 10))}
+    </div>
+
+    <div id="qQueued">
+      ${card('Queued messages', table(cols, fx.queued.map(msgRow)) +
+        `<div class="pager"><button class="btn btn-sm" disabled>Previous</button>
+         <span>1–3 of ${counts.queued}</span><button class="btn btn-sm">Next</button>
+         <div class="spacer"></div><span>Page size 100</span></div>`,
+        'GET /durable-queues/queues/OrderEvents/messages', true)}
+    </div>
+
+    <div id="qDead" style="display:none">
+      ${card('Dead-letter messages', table(cols, fx.deadLetters.map(msgRow)) +
+        `<div class="pager"><button class="btn btn-sm" disabled>Previous</button>
+         <span>1–3 of ${counts.deadLetters}</span><button class="btn btn-sm" disabled>Next</button></div>`,
+        'GET /durable-queues/queues/OrderEvents/dead-letter-messages', true)}
+    </div>`;
+};
+
+views.subscriptions = () => {
+  const rows = fx.subscriptions.map((s, i) => `<tr>
+      <td>${esc(s.subscriberId)}</td>
+      <td><span class="chip">${esc(s.aggregateType)}</span></td>
+      <td class="num">${n(s.currentGlobalOrder)}</td>
+      <td class="num" id="hi${i}">${nil('not loaded')}</td>
+      <td>${ts(s.lastUpdated)}</td>
+      <td class="actions"><button class="btn btn-sm" data-hi="${i}" data-agg="${esc(s.aggregateType)}">Load highest</button></td>
+    </tr>`);
+
+  return `
+    <div class="banner banner-warning">
+      <span aria-hidden="true">▲</span>
+      <div><strong>Loading the highest global order is expensive.</strong> It runs a scan per aggregate type,
+      so it stays on demand per row rather than loading with the table — calling it frequently affects
+      event-store performance.</div>
+    </div>
+    ${card('Subscriptions', table([
+      { label: 'Subscriber' }, { label: 'Aggregate type' }, { label: 'Current global order', num: true },
+      { label: 'Highest persisted', num: true }, { label: 'Last updated' }, { label: '', width: '120px', sticky: true }
+    ], rows, { empty: 'No active subscriptions' }), 'GET /event-store/subscriptions', true)}`;
+};
+
+views.scheduler = () => {
+  const jobRows = fx.pgCronJobs.map(j => `<tr>
+      <td class="num">${j.jobId}</td>
+      <td>${esc(j.jobName)}</td>
+      <td class="mono">${esc(j.schedule)}</td>
+      <td class="truncate mono">${esc(j.command)}</td>
+      <td>${esc(j.nodeName)}:${j.nodePort}</td>
+      <td>${esc(j.database)}</td>
+      <td>${j.active ? badge('good', 'Active') : badge('neutral', 'Paused')}</td>
+      <td class="actions"><button class="btn btn-sm">Run details</button></td>
+    </tr>`);
+
+  const runRows = fx.pgCronRunDetails.map(r => `<tr>
+      <td class="num">${r.runId}</td>
+      <td class="num">${r.jobId}</td>
+      <td>${r.status === 'succeeded' ? badge('good', 'Succeeded') : badge('critical', 'Failed')}</td>
+      <td>${ts(r.startTime)}</td>
+      <td>${ts(r.endTime)}</td>
+      <td class="truncate">${r.returnMessage ? esc(r.returnMessage) : nil()}</td>
+      <td>${esc(r.username)}</td>
+    </tr>`);
+
+  const execRows = fx.executorJobs.map(e => `<tr>
+      <td>${esc(e.name)}</td>
+      <td class="num">${e.initialDelay}</td>
+      <td class="num">${e.period}</td>
+      <td>${esc(e.unit)}</td>
+      <td>${ts(e.scheduledAt)}</td>
+    </tr>`);
+
+  return `
+    ${card('pg_cron jobs', table([
+      { label: 'Job', num: true }, { label: 'Name' }, { label: 'Schedule' }, { label: 'Command' },
+      { label: 'Node' }, { label: 'Database' }, { label: 'State' }, { label: '', width: '110px', sticky: true }
+    ], jobRows, { empty: 'pg_cron is not installed or exposes no jobs' }) +
+      `<div class="pager"><button class="btn btn-sm" disabled>Previous</button><span>1–3 of 3</span>
+       <button class="btn btn-sm" disabled>Next</button></div>`,
+      'GET /scheduler/pg-cron-jobs', true)}
+
+    ${card('Run details — job 1 (ttl-eventstore_cdc_inbox)', table([
+      { label: 'Run', num: true }, { label: 'Job', num: true }, { label: 'Status' }, { label: 'Started' },
+      { label: 'Ended' }, { label: 'Message' }, { label: 'User' }
+    ], runRows), 'GET /scheduler/pg-cron-jobs/1/run-details', true)}
+
+    ${card('Executor jobs', table([
+      { label: 'Name' }, { label: 'Initial delay', num: true }, { label: 'Period', num: true },
+      { label: 'Unit' }, { label: 'Scheduled at' }
+    ], execRows), 'GET /scheduler/executor-jobs', true)}`;
+};
+
+views.postgresql = () => {
+  const maxMean = Math.max(...fx.slowQueries.map(q => q.meanTime));
+  const qRows = fx.slowQueries.map(q => `<tr>
+      <td class="truncate mono" title="${esc(q.query)}">${esc(q.query)}</td>
+      <td class="num">${n(q.calls)}</td>
+      <td class="num">${q.totalTime.toLocaleString('en-US', { maximumFractionDigits: 0 })} ms</td>
+      <td>${bar(q.meanTime, maxMean, q.meanTime.toFixed(2) + ' ms')}</td>
+    </tr>`);
+
+  const parseMb = (s) => parseFloat(s);
+  const maxSize = Math.max(...Object.values(fx.tableSizes).map(v => parseMb(v.totalSize)));
+  const sRows = Object.entries(fx.tableSizes).map(([t, v]) => `<tr>
+      <td class="mono">${esc(t)}</td>
+      <td>${bar(parseMb(v.totalSize), maxSize, esc(v.totalSize))}</td>
+      <td class="num">${esc(v.tableSize)}</td>
+      <td class="num">${esc(v.indexSize)}</td>
+    </tr>`);
+
+  const aRows = Object.entries(fx.tableActivity).map(([t, v]) => `<tr>
+      <td class="mono">${esc(t)}</td>
+      <td class="num">${n(v.seq_scan)}</td>
+      <td class="num">${n(v.idx_scan)}</td>
+      <td class="num">${n(v.idx_tup_fetch)}</td>
+      <td class="num">${n(v.n_tup_ins)}</td>
+      <td class="num">${n(v.n_tup_upd)}</td>
+      <td class="num">${n(v.n_tup_del)}</td>
+    </tr>`);
+
+  return `
+    ${card('Ten slowest queries', table([
+      { label: 'Query' }, { label: 'Calls', num: true }, { label: 'Total time', num: true }, { label: 'Mean time', num: true }
+    ], qRows, { empty: 'pg_stat_statements is not enabled' }), 'GET /postgresql/query-statistics/top-ten-slowest', true)}
+
+    <div class="grid-2">
+      ${card('Table sizes', table([
+        { label: 'Table' }, { label: 'Total', num: true }, { label: 'Heap', num: true }, { label: 'Indexes', num: true }
+      ], sRows), 'table-sizes', true)}
+
+      ${card('Cache hit ratio', Object.entries(fx.cacheHitRatio).map(([t, v]) => {
+        const low = v.cacheHitRatio < 90;
+        return `<div class="meter-row">
+          <span class="mono">${esc(t)} ${low ? badge('warning', 'low') : ''}</span>
+          <span class="meter-track" role="img" aria-label="${v.cacheHitRatio}%"><span class="meter-fill" style="width:${v.cacheHitRatio}%"></span></span>
+          <span class="meter-val">${v.cacheHitRatio}%</span></div>`;
+      }).join(''), 'table-cache-hit-ratio')}
+    </div>
+
+    ${card('Table activity', table([
+      { label: 'Table' }, { label: 'Seq scans', num: true }, { label: 'Index scans', num: true },
+      { label: 'Index tuples', num: true }, { label: 'Inserts', num: true }, { label: 'Updates', num: true }, { label: 'Deletes', num: true }
+    ], aRows), 'table-activity', true)}`;
+};
+
+views.cdc = () => {
+  const c = fx.cdc;
+  const a = c.availability;
+  const s = c.slot;
+  const d = c.dispatcher;
+
+  const stateBadge = { ACTIVE: badge('good', 'ACTIVE'), INACTIVE: badge('neutral', 'INACTIVE'), FAILED: badge('critical', 'FAILED') }[a.state] || badge('warning', a.state);
+  const bool = (v) => v == null ? nil() : (v ? badge('good', 'yes') : badge('neutral', 'no'));
+
+  const kv = (obj, fmt = {}) => `<div class="kv">${Object.entries(obj).map(([k, v]) =>
+    `<div class="kv-item"><span class="kv-key">${esc(k)}</span>
+       <span class="kv-val">${fmt[k] ? fmt[k](v) : (v == null ? nil() : (typeof v === 'boolean' ? (v ? 'true' : 'false') : esc(String(v))))}</span></div>`).join('')}</div>`;
+
+  return `
+    <div class="banner banner-warning">
+      <span aria-hidden="true">▲</span>
+      <div><strong>CDC has fallen back to polling once</strong> (<code class="mono">fallbackCount = 1</code>).
+      In <code class="mono">AUTO</code> mode a fallback is silent by design — polling keeps delivering events, so this
+      is the only place it surfaces.</div>
+    </div>
+
+    <div class="kpi-row">
+      ${tile('Availability', stateBadge, 'changed ' + epoch(a.lastChangedEpochMs).slice(11))}
+      ${tile('Published events', n(d.publishedEvents), 'last batch ' + d.lastBatchSize)}
+      ${tile('Poison rows', n(d.poisonRows), d.poisonRows ? 'inspect inbox' : 'none', d.poisonRows > 0)}
+      ${tile('Fallbacks', n(a.fallbackCount), 'since start', a.fallbackCount > 0)}
+      ${tile('Slot WAL', '<span class="is-text">' + esc(s.walStatus) + '</span>', 'safe ' + (s.safeWalSize / 1073741824).toFixed(0) + ' GiB')}
+    </div>
+
+    <div class="grid-2">
+      ${card('Availability', kv({
+        state: a.state, slotName: a.slotName, reason: a.reason,
+        lastChanged: epoch(a.lastChangedEpochMs), fallbackCount: a.fallbackCount
+      }, { state: () => stateBadge, lastChanged: (v) => v, reason: (v) => v == null ? nil('no reason reported') : esc(v) }))}
+
+      ${card('Replication slot', kv({
+        slotName: s.slotName, exists: s.exists, active: s.active, activePid: s.activePid,
+        plugin: s.plugin, expectedPluginMatches: s.expectedPluginMatches, configuredMode: s.configuredMode,
+        slotType: s.slotType, database: s.database, temporary: s.temporary, restartLsn: s.restartLsn,
+        confirmedFlushLsn: s.confirmedFlushLsn, walStatus: s.walStatus,
+        safeWalSize: s.safeWalSize, inactiveSince: s.inactiveSince, conflicting: s.conflicting,
+        invalidationReason: s.invalidationReason, failover: s.failover, synced: s.synced
+      }, {
+        exists: bool, active: bool, expectedPluginMatches: bool, temporary: bool, failover: bool, synced: bool,
+        safeWalSize: (v) => n(v), activePid: (v) => n(v),
+        invalidationReason: (v) => v == null ? nil('none') : badge('critical', v)
+      }), 'GET /event-store/cdc/status')}
+    </div>
+
+    <div class="grid-2">
+      ${card('WAL tailer', `
+        <div class="empty">
+          <div class="empty-icon" aria-hidden="true">◌</div>
+          <div><strong>Not running in this instance</strong></div>
+          <div class="card-note" style="margin-top:4px">The contract marks <code class="mono">tailer</code> nullable —
+          only the instance holding the slot lock runs it. Events still arrive via the inbox dispatcher below.</div>
+        </div>`, 'tailer = null')}
+
+      ${card('Inbox dispatcher', kv({
+        started: d.started, stopping: d.stopping, ticks: d.ticks, lastTick: epoch(d.lastTickEpochMs),
+        lastBatchSize: d.lastBatchSize, publishedEvents: d.publishedEvents, poisonRows: d.poisonRows,
+        tickFailures: d.tickFailures, conversionFailures: d.conversionFailures, gapExtractionFailures: d.gapExtractionFailures
+      }, {
+        started: bool, stopping: bool, ticks: (v) => n(v), publishedEvents: (v) => n(v), lastTick: (v) => v,
+        poisonRows: (v) => v > 0 ? badge('serious', n(v)) : n(v),
+        tickFailures: (v) => v > 0 ? badge('critical', n(v)) : n(v),
+        conversionFailures: (v) => v > 0 ? badge('critical', n(v)) : n(v),
+        gapExtractionFailures: (v) => v > 0 ? badge('critical', n(v)) : n(v)
+      }))}
+    </div>
+
+    ${card('Effective configuration', kv(c.configuration, { enabled: bool }), '20 fields, reflected from CdcProperties')}`;
+};
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   Message detail drawer — backs GET /durable-queues/messages/{queueEntryId}
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* payload is a String in the contract, not necessarily JSON. Pretty-print when it parses, show it
+   verbatim when it does not — never assume a format the contract does not promise. */
+function formatPayload(raw) {
+  try {
+    return { text: JSON.stringify(JSON.parse(raw), null, 2), kind: 'JSON' };
+  } catch {
+    return { text: raw, kind: 'text' };
+  }
+}
+
+function byteLength(str) {
+  return new TextEncoder().encode(str).length;
+}
+
+function findMessage(id) {
+  return fx.queued.find(m => m.id === id) || fx.deadLetters.find(m => m.id === id);
+}
+
+function payloadField(m) {
+  if (m.payload == null) {
+    /* Null by design, not an error — name the role so the reader knows what to ask for. */
+    return `<div class="field">
+        <div class="field-label"><span>Payload</span><span class="nil">not returned</span></div>
+        <div class="banner banner-info" style="margin:0">
+          <span aria-hidden="true">ℹ</span>
+          <div>The payload is withheld because the signed-in caller does not hold
+          <code class="mono">essentials_queue_payload_reader</code> or
+          <code class="mono">essentials_admin</code>. Every other field on the message is still readable.</div>
+        </div>
+      </div>`;
+  }
+  const p = formatPayload(m.payload);
+  return `<div class="field">
+      <div class="field-label">
+        <span>Payload <span class="nil">· ${p.kind} · ${byteLength(m.payload)} bytes</span></span>
+        <span class="field-actions"><button class="btn btn-sm" data-copy="${esc(m.id)}">Copy</button></span>
+      </div>
+      <pre class="code" id="payloadCode">${esc(p.text)}</pre>
+    </div>`;
+}
+
+function openDrawer(id) {
+  const m = findMessage(id);
+  if (!m) return;
+
+  const state = m.isBeingDelivered ? badge('warning', 'Delivering')
+              : (m.isDeadLetterMessage ? badge('critical', 'Dead letter') : badge('neutral', 'Queued'));
+
+  const kvItem = (k, v) => `<div class="kv-item"><span class="kv-key">${esc(k)}</span><span class="kv-val">${v}</span></div>`;
+
+  document.getElementById('drawer').innerHTML = `
+    <div class="drawer-head">
+      <div>
+        <div class="drawer-title" id="drawerTitle">Message detail ${state}</div>
+        <div class="drawer-sub mono">${esc(m.id)}</div>
+      </div>
+      <button class="btn btn-sm" id="drawerClose" aria-label="Close">Close</button>
+    </div>
+
+    <div class="drawer-body">
+      ${payloadField(m)}
+
+      ${m.lastDeliveryError ? `<div class="field">
+        <div class="field-label"><span>Last delivery error</span></div>
+        <pre class="code is-trace">${esc(m.lastDeliveryError)}</pre>
+      </div>` : ''}
+
+      <div class="field">
+        <div class="field-label"><span>Delivery</span></div>
+        <div class="kv" style="grid-template-columns:1fr">
+          ${kvItem('queueName', esc(m.queueName))}
+          ${kvItem('addedTimestamp', ts(m.addedTimestamp))}
+          ${kvItem('nextDeliveryTimestamp', ts(m.nextDeliveryTimestamp))}
+          ${kvItem('deliveryTimestamp', ts(m.deliveryTimestamp))}
+          ${kvItem('totalDeliveryAttempts', m.totalDeliveryAttempts)}
+          ${kvItem('redeliveryAttempts', m.redeliveryAttempts)}
+          ${kvItem('isDeadLetterMessage', m.isDeadLetterMessage ? 'true' : 'false')}
+          ${kvItem('isBeingDelivered', m.isBeingDelivered ? 'true' : 'false')}
+        </div>
+      </div>
+    </div>
+
+    <div class="drawer-foot">
+      ${m.isDeadLetterMessage
+        ? `<button class="btn btn-sm" data-act="resurrect" data-name="${esc(m.id)}">Resurrect…</button>`
+        : `<button class="btn btn-sm" data-act="dlq" data-name="${esc(m.id)}">Mark as dead letter</button>`}
+      <div class="spacer"></div>
+      <button class="btn btn-sm btn-danger" data-act="delete" data-name="${esc(m.id)}">Delete message</button>
+    </div>`;
+
+  document.getElementById('drawer').classList.add('is-open');
+  document.getElementById('scrim').classList.add('is-open');
+  document.querySelectorAll('tbody tr[data-msg]').forEach(tr =>
+    tr.classList.toggle('is-selected', tr.dataset.msg === id));
+  document.getElementById('drawerClose').focus();
+}
+
+function closeDrawer() {
+  document.getElementById('drawer').classList.remove('is-open');
+  document.getElementById('scrim').classList.remove('is-open');
+  document.querySelectorAll('tbody tr.is-selected').forEach(tr => tr.classList.remove('is-selected'));
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#drawerClose') || e.target.closest('#scrim')) { closeDrawer(); return; }
+
+  const copy = e.target.closest('[data-copy]');
+  if (copy) {
+    const m = findMessage(copy.dataset.copy);
+    navigator.clipboard?.writeText(m.payload).catch(() => {});
+    copy.textContent = 'Copied';
+    setTimeout(() => { copy.textContent = 'Copy'; }, 1200);
+    return;
+  }
+
+  /* Explicit affordance, or anywhere on the row except the action buttons. */
+  const trigger = e.target.closest('[data-msg]');
+  if (trigger && !e.target.closest('.actions')) openDrawer(trigger.dataset.msg);
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  /* Innermost layer first: a dialog over the drawer must not close both at once. */
+  if (document.getElementById('modal').classList.contains('is-open')) closeDialog();
+  else closeDrawer();
+});
+
+const actions = {
+  release: (name) => ({
+    title: 'Release fenced lock?',
+    danger: true,
+    confirmLabel: 'Release lock',
+    body: `<p>Releases <code class="mono">${esc(name)}</code>. Whichever instance currently holds it loses it, and
+           another instance may acquire it immediately — any work in flight under this lock is no longer fenced.</p>
+           <p>Requires <code class="mono">essentials_lock_writer</code>.</p>`
+  }),
+  delete: (id) => ({
+    title: 'Delete message?',
+    danger: true,
+    confirmLabel: 'Delete message',
+    body: `<p>Permanently removes <code class="mono">${esc(id)}</code> from its queue. The payload is not recoverable
+           afterwards — copy it from the detail drawer first if it may be needed.</p>`
+  }),
+  dlq: (id) => ({
+    title: 'Mark as dead letter?',
+    danger: false,
+    confirmLabel: 'Mark as dead letter',
+    body: `<p>Stops delivery attempts for <code class="mono">${esc(id)}</code> and moves it to the dead-letter set.
+           Reversible — it can be resurrected afterwards.</p>`
+  }),
+  resurrect: (id) => ({
+    title: 'Resurrect dead-letter message',
+    danger: false,
+    confirmLabel: 'Resurrect',
+    body: `<p>Re-queues <code class="mono">${esc(id)}</code> for delivery.</p>
+           <label for="delay">Delivery delay</label>
+           <select id="delay">
+             <option value="PT0S">Immediately (PT0S)</option>
+             <option value="PT30S">In 30 seconds (PT30S)</option>
+             <option value="PT5M">In 5 minutes (PT5M)</option>
+             <option value="PT1H">In 1 hour (PT1H)</option>
+           </select>
+           <p style="margin-top:10px">Sent as <code class="mono">deliveryDelay</code> in the request body; the contract
+           requires the field, so "immediately" is an explicit <code class="mono">PT0S</code> rather than an omission.</p>`
+  }),
+  purge: (queue) => ({
+    title: 'Purge queue?',
+    danger: true,
+    confirmLabel: 'Purge queue',
+    /* The one irreversible bulk action in the API — typed confirmation, not just a second click. */
+    requireText: queue,
+    body: `<div class="banner banner-critical" style="margin:0 0 4px">
+             <span aria-hidden="true">■</span>
+             <div>Deletes <strong>every</strong> message on <code class="mono">${esc(queue)}</code>, including its
+             3 dead letters. This cannot be undone.</div>
+           </div>`
+  })
+};
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-act]');
+  if (!btn || btn.disabled) return;
+  const spec = actions[btn.dataset.act]?.(btn.dataset.name);
+  if (spec) openDialog({ ...spec, onConfirm: () => {} });
+});
+
+views.states = () => `
+    <div class="banner banner-info">
+      <span aria-hidden="true">ℹ</span>
+      <div>Not a real view — a gallery of every component and state, so a look-and-feel regression shows
+      up in one screenshot rather than being found view by view. It would not ship.</div>
+    </div>
+
+    <div class="gallery-grid">
+      ${card('Loading', loadingRows(4, ['30%', '18%', '22%', '14%']), 'per-card skeleton', true)}
+      ${card('Empty', table([{ label: 'Lock name' }, { label: 'Status' }], [], { empty: 'No fenced locks exist yet' }), 'no rows', true)}
+      ${card('401 · unauthenticated', errorState({ status: 401 }), 'no principal resolved', true)}
+      ${card('403 · missing role', errorState({ status: 403, message: 'Unauthorized access required role is missing, expected \'essentials_queue_reader,essentials_admin\'' }), 'Error.message present', true)}
+      ${card('500 · server error', errorState({ status: 500 }), 'Error.message absent by design', true)}
+      ${card('Unreachable', errorState({ status: 0 }), 'request never completed', true)}
+    </div>
+
+    ${card('Status badges', `<div class="swatch-row">
+        ${badge('good', 'Held')} ${badge('good', 'Active')} ${badge('good', 'Succeeded')}
+        ${badge('neutral', 'Free')} ${badge('neutral', 'Queued')} ${badge('neutral', 'Paused')}
+        ${badge('warning', 'Delivering')} ${badge('warning', 'low')}
+        ${badge('serious', 'Connection reset by peer')}
+        ${badge('critical', 'Dead letter')} ${badge('critical', 'Failed')}
+      </div>
+      <p class="card-note" style="margin:10px 0 0">Every badge carries an icon and a label, so colour is never
+      the only signal. Status hues are reserved and never reused as series colours.</p>`)}
+
+    <div class="gallery-grid">
+      ${card('Stat tiles', `<div class="kpi-row" style="margin:0">
+          ${tile('Queued', '128')}
+          ${tile('Dead letters', '3', 'needs attention', true)}
+          ${tile('Avg latency', '34 <span class="tile-sub" style="font-size:13px">ms</span>')}
+        </div>`)}
+
+      ${card('Meters and bars', `
+        <div class="meter-row"><span class="mono">orders_events</span>
+          <span class="meter-track"><span class="meter-fill" style="width:99%"></span></span>
+          <span class="meter-val">99%</span></div>
+        <div class="meter-row"><span class="mono">eventstore_cdc_inbox ${badge('warning', 'low')}</span>
+          <span class="meter-track"><span class="meter-fill" style="width:71%"></span></span>
+          <span class="meter-val">71%</span></div>
+        <div style="margin-top:12px">${bar(2.02, 2.38, '2.02 ms')}</div>
+        <div>${bar(0.10, 2.38, '0.10 ms')}</div>`)}
+    </div>
+
+    ${card('Destructive confirmations', `<div class="swatch-row">
+        <button class="btn btn-sm btn-danger" data-act="release" data-name="EventProcessor-OrderProcessor">Release lock…</button>
+        <button class="btn btn-sm" data-act="dlq" data-name="018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa01">Mark as dead letter…</button>
+        <button class="btn btn-sm" data-act="resurrect" data-name="018f2b04-51cc-7a10-9d22-71bb0e77dd10">Resurrect…</button>
+        <button class="btn btn-sm btn-danger" data-act="delete" data-name="018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa01">Delete message…</button>
+        <button class="btn btn-sm btn-danger" data-act="purge" data-name="OrderEvents">Purge queue…</button>
+      </div>
+      <p class="card-note" style="margin:10px 0 0">Cancel holds focus on a destructive dialog. Purge additionally
+      requires the queue name to be typed — it is the only irreversible bulk operation in the contract.</p>`)}`;
+
+/* ══════════════════════════════════════════════════════════════════════════════════════════
+   Wiring
+   ══════════════════════════════════════════════════════════════════════════════════════════ */
+const titles = {
+  overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
+  locks: ['Fenced locks', 'Distributed locks held across service instances'],
+  queues: ['Durable queues', 'Queued and dead-letter messages, delivery statistics'],
+  scheduler: ['Scheduler', 'pg_cron jobs, run history and executor jobs'],
+  subscriptions: ['Subscriptions', 'Event-store subscription resume points'],
+  cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],
+  postgresql: ['PostgreSQL statistics', 'Query, size, activity and cache statistics'],
+  states: ['Component states', 'Mockup-only gallery of every component and state']
+};
+
+function show(view) {
+  document.querySelectorAll('.nav-item').forEach(b =>
+    b.getAttribute('data-view') === view ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'));
+  document.querySelectorAll('.section').forEach(s => s.classList.toggle('is-active', s.dataset.section === view));
+
+  const host = document.querySelector(`.section[data-section="${view}"]`);
+  if (!host.dataset.rendered) { host.innerHTML = views[view](); host.dataset.rendered = '1'; }
+
+  document.getElementById('pageTitle').textContent = titles[view][0];
+  document.getElementById('pageSub').textContent = titles[view][1];
+}
+
+document.getElementById('nav').addEventListener('click', (e) => {
+  const b = e.target.closest('.nav-item');
+  if (b && !b.disabled) show(b.dataset.view);
+});
+
+/* Queued / dead-letter tabs */
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-qtab]');
+  if (t) {
+    document.querySelectorAll('[data-qtab]').forEach(x => x.setAttribute('aria-selected', String(x === t)));
+    document.getElementById('qQueued').style.display = t.dataset.qtab === 'queued' ? '' : 'none';
+    document.getElementById('qDead').style.display = t.dataset.qtab === 'dead' ? '' : 'none';
+  }
+
+  /* On-demand highest global order — one call per click, never eagerly */
+  const hi = e.target.closest('[data-hi]');
+  if (hi) {
+    const cell = document.getElementById('hi' + hi.dataset.hi);
+    cell.innerHTML = '<span class="skeleton" style="display:inline-block;width:64px"></span>';
+    setTimeout(() => { cell.textContent = n(fx.highestGlobalOrder[hi.dataset.agg]); }, 550);
+  }
+});
+
+const themeBtn = document.getElementById('themeBtn');
+themeBtn.addEventListener('click', () => {
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+  themeBtn.textContent = dark ? 'Dark' : 'Light';
+});
+
+document.getElementById('refreshBtn').addEventListener('click', () => {
+  /* Show the skeleton where the data will land, then re-render — the same shape a real fetch takes. */
+  const host = document.querySelector('.section.is-active');
+  const view = host.dataset.section;
+  host.querySelectorAll('.card-body').forEach(b => { b.innerHTML = loadingRows(3, ['28%', '20%', '24%', '12%']); });
+  setTimeout(() => { host.innerHTML = views[view](); }, 700);
+});
+
+show('overview');
+</script>
+</body>
+</html>

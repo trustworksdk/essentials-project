@@ -44,7 +44,10 @@ components/
   postgresql-{distributed-fenced-lock,queue,document-db}/
   springdata-mongo-{distributed-fenced-lock,queue}/
   kotlin-eventsourcing/          # Kotlin DSL for event sourcing
-  vaadin-ui/                     # Admin views
+  admin-api-spec/                # Code-first OpenAPI contract for the admin *Api SPIs
+  admin-api-client-java/         # Java client generated from that contract
+  spring-boot-starter-admin-api/ # HTTP adapter serving the contract
+  spring-boot-starter-admin-ui/  # Optional default UI — Thymeleaf + vanilla JS, no Node
   spring-boot-starter-*/         # Auto-configuration starters
 examples/                        # Demo projects — not part of release
 LLM/                             # Consumer-facing LLM doc tree
@@ -69,6 +72,8 @@ Topic rules, path-scoped so they load only when relevant:
 - **No timestamp ordering** — event ordering via EventOrder/GlobalEventOrder, never timestamps
 - **Docker required for integration tests** — `mvn test` runs without Docker; `mvn verify` needs Docker (TestContainers)
 - **Stable central APIs** — breaking changes only in new major; always additive in patch/minor
+- **No Node / JavaScript build deps** — the whole build runs on a JVM alone. Any UI work uses Thymeleaf + vanilla JS; no npm, bundler, or JS framework
+- **Admin surface = one contract** — an admin operation lives in 3 synced places: the `*Api` SPI, the `EssentialsAdminApiSpec` mapping table, and a controller in `spring-boot-starter-admin-api`
 
 ## graphify
 

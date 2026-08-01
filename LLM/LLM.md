@@ -75,7 +75,7 @@ Consolidated view of all component modules [LLM-components.md](LLM-components.md
 | **springdata-mongo-distributed-fenced-lock** | Distributed locking via Spring Data MongoDB | [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) |
 | **springdata-mongo-queue** | Durable queues with Spring Data MongoDB | [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md) |
 | **kotlin-eventsourcing** | Kotlin DSL for event sourcing | [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) |
-| **vaadin-ui** | Vaadin UI components | [LLM-vaadin-ui.md](LLM-vaadin-ui.md) |
+| **admin-api-spec** / **spring-boot-starter-admin-api** | HTTP admin/monitoring API over the admin SPIs | [LLM-admin-api.md](LLM-admin-api.md) |
 
 ### Spring Boot Starters
 
@@ -86,7 +86,7 @@ Consolidated view of all component modules [LLM-components.md](LLM-components.md
 | `spring-boot-starter-postgresql` | Jdbi, FencedLock, Queues, Inbox/Outbox, CommandBus | Microservices + PostgreSQL |
 | `spring-boot-starter-postgresql-event-store` | Above + EventStore, Subscriptions, EventProcessors | Event-sourced apps + PostgreSQL |
 | `spring-boot-starter-mongodb` | MongoTemplate, FencedLock, Queues, Inbox/Outbox | Microservices + MongoDB |
-| `spring-boot-starter-admin-ui` | Vaadin admin views for EventStore | Monitoring/management UI |
+| `spring-boot-starter-admin-api` | HTTP admin API over locks, queues, scheduler, event store, CDC, statistics | Monitoring/management |
 
 ---
 
@@ -503,7 +503,7 @@ public void processOrder(OrderId orderId, long fenceToken) {
 - [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md)
 - [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md), [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md)
 - [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md), [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md)
-- [LLM-vaadin-ui.md](LLM-vaadin-ui.md)
+- [LLM-admin-api.md](LLM-admin-api.md)
 
 **Spring Boot:**
 - [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md)
