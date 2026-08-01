@@ -21,7 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.PgOutputToPersistedEventConverter;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.WalGlobalOrdersExtractor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorIT;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
@@ -236,7 +236,7 @@ public class CdcModeAutoRequireIT {
                                                       CdcMode mode) {
         var props = tailerProps();
         var pgConverter = new PgOutputToPersistedEventConverter(
-                new JacksonJSONEventSerializer(EventProcessorIT.createObjectMapper()),
+                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
                 table -> null);
         return new WalReplicationTailer(
                 adminReplicationDataSource, adminJdbi, new EventStoreManagedUnitOfWorkFactory(adminJdbi),

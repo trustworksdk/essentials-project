@@ -26,7 +26,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
@@ -86,7 +86,7 @@ class EventStoreSubscriptionManager_exclusivelySubscribeToAggregateEventsAsynchr
 
         var unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         var eventMapper       = new TestPersistableEventMapper();
-        var jsonSerializer    = new JacksonJSONEventSerializer(createObjectMapper());
+        var jsonSerializer    = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,

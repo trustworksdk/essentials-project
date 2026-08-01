@@ -47,6 +47,9 @@ public final class EssentialTypesJacksonModule extends SimpleModule {
                            JSR310SingleValueTypeMixIn.class);
 
         super.setupModule(context);
+        // After super, so this sits ahead of the introspector chain super installed.
+        context.insertAnnotationIntrospector(new SingleValueTypeCreatorIntrospector());
+        context.addKeyDeserializers(new SingleValueTypeKeyDeserializers());
     }
 
     private interface JSR310SingleValueTypeMixIn<VALUE_TYPE> {

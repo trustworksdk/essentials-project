@@ -49,12 +49,12 @@
 | | `spring-boot-starter-postgresql` | Auto-config for PostgreSQL components                                                        | PostgreSQL | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
 | | `spring-boot-starter-postgresql-event-store` | Auto-config for EventStore  + Postgresql components                                          | PostgreSQL | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
 | | `spring-boot-starter-mongodb` | Auto-config for MongoDB components                                                           | MongoDB | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
-| | `spring-boot-starter-admin-ui` | Admin UI for EventStore                                                                      | PostgreSQL | [LLM-spring-boot-starter-modules.md](LLM-spring-boot-starter-modules.md) |
+| | `spring-boot-starter-admin-api` | HTTP admin API for EventStore, locks, queues, scheduler                                     | PostgreSQL | [LLM-admin-api.md](LLM-admin-api.md) |
 | **MongoDB** | `springdata-mongo-queue` | Durable queues implementation                                                                | MongoDB | [LLM-springdata-mongo-queue.md](LLM-springdata-mongo-queue.md) |
 | | `springdata-mongo-distributed-fenced-lock` | Distributed locking                                                                          | MongoDB | [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) |
 | **Event Sourcing** | `eventsourced-aggregates` | Event-sourced aggregate implementations                                                      | Any | [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) |
 | | `kotlin-eventsourcing` | Kotlin DSL for event sourcing                                                                | Any | [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) |
-| **UI** | `vaadin-ui` | Vaadin UI components                                                                         | N/A | [LLM-vaadin-ui.md](LLM-vaadin-ui.md) |
+| **Admin API** | `admin-api-spec` | OpenAPI contract for the admin SPIs + generated Java client                                  | N/A | [LLM-admin-api.md](LLM-admin-api.md) |
 
 **Scope:** Intra-service coordination (multiple instances of SAME service sharing DB). For cross-service messaging, use Kafka/RabbitMQ.
 
@@ -158,7 +158,7 @@ var tableName = userInput + "_events";  // SQL injection risk!
 | Use Case | Required Modules | Optional |
 |----------|-----------------|----------|
 | **Event Sourcing (PostgreSQL)** | `postgresql-event-store`, `eventsourced-aggregates` | `spring-postgresql-event-store`, `kotlin-eventsourcing` |
-| **Event Sourcing (Spring Boot)** | `spring-boot-starter-postgresql-event-store`, `eventsourced-aggregates` | `spring-boot-starter-admin-ui` |
+| **Event Sourcing (Spring Boot)** | `spring-boot-starter-postgresql-event-store`, `eventsourced-aggregates` | `spring-boot-starter-admin-api` |
 | **Microservices (PostgreSQL)** | `foundation`, `postgresql-queue`, `postgresql-distributed-fenced-lock` | `spring-boot-starter-postgresql` |
 | **Microservices (MongoDB)** | `foundation`, `springdata-mongo-queue`, `springdata-mongo-distributed-fenced-lock` | `spring-boot-starter-mongodb` |
 | **Distributed Locking** | `foundation` + (`postgresql-distributed-fenced-lock` OR `springdata-mongo-distributed-fenced-lock`) | N/A |
@@ -431,7 +431,7 @@ public class MongoFencedLockManager implements FencedLockManager {
 | `spring-boot-starter-postgresql` | Jdbi, FencedLock, Queues, Inbox/Outbox, CommandBus | `essentials.` |
 | `spring-boot-starter-postgresql-event-store` | Above + EventStore, Subscriptions | `essentials.eventstore` |
 | `spring-boot-starter-mongodb` | MongoTemplate, FencedLock, Queues, Inbox/Outbox | `essentials.` |
-| `spring-boot-starter-admin-ui` | Vaadin admin views for EventStore | `essentials.admin-ui` |
+| `spring-boot-starter-admin-api` | HTTP admin API over the admin SPIs | `essentials.admin-api` |
 
 ### Configuration Example (PostgreSQL Event Store)
 
@@ -535,18 +535,18 @@ class OrderStateEvolver : Evolver<OrderEvent, OrderState> {
 
 ---
 
-## UI Components
+## Admin API
 
-### Vaadin UI
+### HTTP Admin API
 
-**Module:** `vaadin-ui`
-**Docs:** [LLM-vaadin-ui.md](LLM-vaadin-ui.md)
+**Modules:** `admin-api-spec`, `spring-boot-starter-admin-api`, `admin-api-client-java`
+**Docs:** [LLM-admin-api.md](LLM-admin-api.md)
 
-Package: `dk.trustworks.essentials.components.vaadin`
+Package: `dk.trustworks.essentials.components.adminapi.rest`
 
-Key views: `EventProcessorsView`, `SubscriptionsView`, `LocksView`, `QueuesView`, `SchedulerView`
+27 operations over fenced locks, durable queues, scheduler, event-store subscriptions, CDC status and PostgreSQL statistics, generated code-first from the `*Api` SPIs.
 
-**Usage:** Include `spring-boot-starter-admin-ui` for auto-configured admin interface.
+**Usage:** Include `spring-boot-starter-admin-api` and implement `EssentialsAuthenticatedUser` + `EssentialsSecurityProvider`. Build any UI on the published contract or the generated Java client.
 
 ---
 
@@ -568,10 +568,10 @@ Key views: `EventProcessorsView`, `SubscriptionsView`, `LocksView`, `QueuesView`
         <artifactId>eventsourced-aggregates</artifactId>
     </dependency>
 
-    <!-- Optional: Admin UI -->
+    <!-- Optional: HTTP admin/monitoring API -->
     <dependency>
         <groupId>dk.trustworks.essentials.components</groupId>
-        <artifactId>spring-boot-starter-admin-ui</artifactId>
+        <artifactId>spring-boot-starter-admin-api</artifactId>
     </dependency>
 </dependencies>
 ```
@@ -654,7 +654,7 @@ Key views: `EventProcessorsView`, `SubscriptionsView`, `LocksView`, `QueuesView`
 - [LLM-springdata-mongo-distributed-fenced-lock.md](LLM-springdata-mongo-distributed-fenced-lock.md) - MongoDB locks
 - [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) - Aggregates
 - [LLM-kotlin-eventsourcing.md](LLM-kotlin-eventsourcing.md) - Kotlin DSL for event sourcing
-- [LLM-vaadin-ui.md](LLM-vaadin-ui.md) - Vaadin UI
+- [LLM-admin-api.md](LLM-admin-api.md) - Admin API
 
 ### README Files
 - [components/README.md](../components/README.md) - Complete overview

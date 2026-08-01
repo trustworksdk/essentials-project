@@ -32,7 +32,7 @@
 | PostgreSQL | `spring-boot-starter-postgresql` | Microservices + PostgreSQL, not event-sourced |
 | MongoDB | `spring-boot-starter-mongodb` | Microservices + MongoDB, not event-sourced |
 | Event Store | `spring-boot-starter-postgresql-event-store` | Event-sourced apps + PostgreSQL |
-| Admin UI | `spring-boot-starter-admin-ui` | Monitoring/management web UI (requires Vaadin) |
+| Admin API | `spring-boot-starter-admin-api` | HTTP monitoring/management API (requires Spring WebMVC) |
 
 **Starter Relationships:**
 - Event Store includes PostgreSQL starter transitively
@@ -140,23 +140,24 @@ See [spring-boot-starter-postgresql-event-store README](../components/spring-boo
 - `EventStoreApi` - Query events, manage subscriptions
 - `PostgresqlEventStoreStatisticsApi` - Event store statistics
 
-### Admin UI Starter
+### Admin API Starter
 
-Package: `dk.trustworks.essentials.components.boot.autoconfigure.adminui`
+Package: `dk.trustworks.essentials.components.boot.autoconfigure.admin.api`
 
 **Includes:** All Event Store starter beans
 
 **Auto-Configuration:**
 ```java
 @AutoConfiguration
-@EnableVaadin("dk.trustworks.essentials.ui")
-@ComponentScan("dk.trustworks.essentials.ui")
-public class EssentialsAdminUIAutoConfiguration
+@ConditionalOnClass(RestController.class)
+@ConditionalOnWebApplication
+@ConditionalOnProperty(prefix = "essentials.admin-api", name = "enabled", matchIfMissing = true)
+public class EssentialsAdminApiAutoConfiguration
 ```
 
-**Views:** See [spring-boot-starter-admin-ui README](../components/spring-boot-starter-admin-ui/README.md) for full list
+**Endpoints:** 27 operations under `/api/essentials/admin/v1` — see [LLM-admin-api.md](LLM-admin-api.md)
 
-**Required:** Implement `dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser` bean
+**Required:** Implement `EssentialsAuthenticatedUser` and `EssentialsSecurityProvider` beans. Both default to no-access, so an application that implements neither exposes nothing.
 
 ---
 
@@ -382,14 +383,17 @@ essentials:
 - `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.RecordExecutionTimeEventStoreInterceptor`
 - `dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver`
 
-### Admin UI Starter
+### Admin API Starter
 
-**No additional config** - uses Event Store starter config
+| Property | Default | Purpose |
+|----------|---------|---------|
+| `essentials.admin-api.enabled` | `true` | Set `false` to expose nothing |
+| `essentials.admin-api.base-path` | `/api/essentials/admin/v1` | Relocate the mount point |
 
 **Required Setup:**
 1. Implement `dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser` bean
-2. Configure Spring Security with `VaadinWebSecurity`
-3. Add Vaadin + Spring Security dependencies
+2. Implement `dk.trustworks.essentials.shared.security.EssentialsSecurityProvider` bean
+3. Authenticate requests however the host application prefers — the API prescribes no scheme
 
 ---
 
@@ -531,13 +535,17 @@ public class SpringSecurityAuthenticatedUser implements EssentialsAuthenticatedU
     }
 }
 
+// Authentication is entirely the host's choice — the admin API prescribes no scheme.
+// This example requires an authenticated caller for the admin paths; role checks are
+// then applied per operation by your EssentialsSecurityProvider implementation.
 @Configuration
 @EnableWebSecurity
-public class SecurityConfig extends VaadinWebSecurity {
-    @Override
-    protected void configure(HttpSecurity http) throws Exception {
-        super.configure(http);
-        setLoginView(http, AdminLoginView.class);
+public class SecurityConfig {
+    @Bean
+    SecurityFilterChain adminApi(HttpSecurity http) throws Exception {
+        return http.securityMatcher("/api/essentials/admin/**")
+                   .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+                   .build();
     }
 }
 ```
@@ -646,9 +654,9 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 ```xml
 <dependency>
     <groupId>dk.trustworks.essentials.components</groupId>
-    <artifactId>spring-boot-starter-admin-ui</artifactId>
+    <artifactId>spring-boot-starter-admin-api</artifactId>
 </dependency>
-<!-- Required: vaadin-spring-boot-starter, spring-boot-starter-security -->
+<!-- Required: spring-boot-starter-webmvc; authentication is the host's choice -->
 ```
 
 ---
@@ -680,4 +688,4 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 - [PostgreSQL Starter](../components/spring-boot-starter-postgresql/README.md)
 - [MongoDB Starter](../components/spring-boot-starter-mongodb/README.md)
 - [Event Store Starter](../components/spring-boot-starter-postgresql-event-store/README.md)
-- [Admin UI Starter](../components/spring-boot-starter-admin-ui/README.md)
+- [Admin API](LLM-admin-api.md)

@@ -12,7 +12,8 @@ Each module has own `CLAUDE.md` with contributor/dev context.
 ## Commands
 
 ```bash
-mvn test                                              # unit only, no Docker
+mvn test                                              # unit only, no Docker (Jackson 3 flavor — the default)
+mvn -Pjackson2 test                                   # same, against the Jackson 2 flavor
 mvn verify                                            # unit + integration (needs Docker)
 mvn test -pl types -am                                # single module, unit
 mvn verify -pl components/postgresql-event-store -am  # single module, integration
@@ -44,7 +45,10 @@ components/
   postgresql-{distributed-fenced-lock,queue,document-db}/
   springdata-mongo-{distributed-fenced-lock,queue}/
   kotlin-eventsourcing/          # Kotlin DSL for event sourcing
-  vaadin-ui/                     # Admin views
+  admin-api-spec/                # Code-first OpenAPI contract for the admin *Api SPIs
+  admin-api-client-java/         # Java client generated from that contract
+  spring-boot-starter-admin-api/ # HTTP adapter serving the contract
+  spring-boot-starter-admin-ui/  # Optional default UI — Thymeleaf + vanilla JS, no Node
   spring-boot-starter-*/         # Auto-configuration starters
 examples/                        # Demo projects — not part of release
 LLM/                             # Consumer-facing LLM doc tree
@@ -68,7 +72,15 @@ Topic rules, path-scoped so they load only when relevant:
 - **EventOrder vs GlobalEventOrder** — per-stream vs across all streams of an AggregateType; don't conflate
 - **No timestamp ordering** — event ordering via EventOrder/GlobalEventOrder, never timestamps
 - **Docker required for integration tests** — `mvn test` runs without Docker; `mvn verify` needs Docker (TestContainers)
+- **The flavor profile does not survive transitivity** — a profile only overrides `essentials.types-jackson.artifactId` for modules in the *current reactor*. Installed POMs keep the property unresolved (`flattenMode=resolveCiFriendliesOnly`) and it then resolves from the Essentials parent's **default**, now Jackson 3. So the non-default flavor is the exposed one: `mvn -Pjackson2 -pl <module>` can put **both** flavors on the classpath (same FQCNs) when a sibling comes from the local repo instead of the reactor. Add `-am`, or verify with the full reactor. `EssentialsJacksonModules` fails loudly on the mismatch — believe it rather than the profile
+- **Jackson-flavor-neutral test wiring** — tests must build serializers via `EssentialsObjectMappers.createJSONSerializer()` / `EssentialsJSONEventSerializers.createForActiveJacksonFlavor()`. Hardcoding `new JacksonJSONSerializer(...)` makes the test silently exercise Jackson 2, and under `-Pjackson3` it either throws the flavor-mismatch error or persists value types as `{"value":"…"}`
 - **Stable central APIs** — breaking changes only in new major; always additive in patch/minor
+- **No Node / JavaScript build deps** — the whole build runs on a JVM alone. Any UI work uses Thymeleaf + vanilla JS; no npm, bundler, or JS framework
+- **Two Jackson flavors, one wire format** — a build picks Jackson 3 (default, matching Spring Boot 4) or Jackson 2 (`-Pjackson2`) via `essentials.types-jackson.artifactId`; `types-jackson`/`types-jackson3` share FQCNs so only one is ever on the classpath. All persistence mappers must come from `EssentialsObjectMappers` so both majors write byte-identical JSON — existing persisted data must stay readable after an upgrade. CDC included. Touching serialization means running both profiles
+- **Jackson 3 needs two per-type pins** — it disabled final-field mutation (Jackson 2's default), which is how immutable payloads get populated, so `EssentialsObjectMappers` re-enables it. That in turn makes a type that *is* a collection or scalar wrapper look like a bean, so those are pinned to delegating creators: `Jackson3CollectionWrapperModule` (foundation, by shape) and `SingleValueTypeCreatorIntrospector` (types-jackson3). Never do it with annotations on the Essentials types themselves
+- **Under Jackson 3 a constructor parameter *name* is part of the JSON contract.** J3 reads parameter names from the bytecode and uses any constructor as an implicit properties-based creator — even when a no-arg constructor exists. The J2 mapper registers no parameter-names module, so it never did this and populated fields instead. A parameter whose name does not match the JSON property it ends up in therefore receives `null`, and the class either fails its own `requireNonNull` guard or comes back half-populated. Two shapes bite: a parameter named differently from the field it assigns (`priceValidity` → field `priceValidityPeriod`), and a parameter that is not a property at all because the value is routed elsewhere (classic `Event<ID>` subclasses taking `orderId` and calling `aggregateId(...)`, which persists as `aggregateId`). Fix on the type — rename the parameter, or `@JsonProperty("…")` (that annotation package is shared by both majors). `ConstructorDetector.EXPLICIT_ONLY` does **not** avoid it: with no other way to construct, J3 uses the sole constructor regardless
+- **Map keys keyed by a value type need no annotation under Jackson 3** — `types-jackson3` registers `SingleValueTypeKeyDeserializers`. Under Jackson 2 they need `@JsonDeserialize(keyUsing=…)`, and that annotation is in J2's `com.fasterxml.jackson.databind.annotation` package which J3 does not read — so on upgrade it silently stops applying. It surfaced as aggregate snapshots deserializing into `BrokenSnapshot`
+- **Admin surface = one contract** — an admin operation lives in 3 synced places: the `*Api` SPI, the `EssentialsAdminApiSpec` mapping table, and a controller in `spring-boot-starter-admin-api`
 
 ## graphify
 

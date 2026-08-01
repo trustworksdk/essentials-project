@@ -112,6 +112,15 @@
             <artifactId>jackson-databind</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Jackson 3: DurableQueuesSerialization builds its default payload mapper through EssentialsObjectMappers,
+             which takes the Jackson 3 branch when that flavour is active. foundation declares Jackson 3 as optional,
+             so it is not transitive and has to be named here too. -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jdk8</artifactId>

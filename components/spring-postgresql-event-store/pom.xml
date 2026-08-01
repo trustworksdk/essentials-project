@@ -146,6 +146,15 @@
             <artifactId>jackson-databind</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Jackson 3, required when essentials.types-jackson.artifactId selects that flavour: the Essentials Jackson
+             module then extends tools.jackson.databind.module.SimpleModule, which has to be loadable wherever that
+             module class is. Declared provided upstream, so it is not transitive. -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jdk8</artifactId>

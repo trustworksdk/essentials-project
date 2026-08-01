@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 
 import com.fasterxml.jackson.core.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 
 import java.io.IOException;
 import java.util.*;
@@ -52,13 +52,23 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
      * to filtering. Typical wiring passes
      * {@code () -> persistenceStrategy.getSeparateTablePerEventStreamTableNameAggregates().keySet()}.
      */
-    public DefaultWalMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
-                                   Supplier<Collection<String>> aggregateEventStreamTableNamesSupplier) {
-        this.jsonFactory = requireNonNull(jacksonJSONSerializer, "jacksonJSONSerializer cannot be null")
-                .getObjectMapper()
-                .getFactory();
+    public DefaultWalMessageFilter(Supplier<Collection<String>> aggregateEventStreamTableNamesSupplier) {
+        // Pre-filtering only scans tokens for "kind"/"table", so it needs a streaming parser — not the mapper's
+        // configuration and not the Essentials value-type modules. Owning a plain factory keeps this filter
+        // independent of which serializer the application uses.
+        this.jsonFactory = new JsonFactory();
         this.aggregateEventStreamTableNamesSupplier = requireNonNull(aggregateEventStreamTableNamesSupplier,
                                                                      "aggregateEventStreamTableNamesSupplier cannot be null");
+    }
+
+    /**
+     * @deprecated the serializer is no longer needed — pre-filtering uses its own streaming parser. Use
+     *             {@link #DefaultWalMessageFilter(Supplier)}.
+     */
+    @Deprecated(forRemoval = true)
+    public DefaultWalMessageFilter(JSONEventSerializer jsonSerializer,
+                                   Supplier<Collection<String>> aggregateEventStreamTableNamesSupplier) {
+        this(aggregateEventStreamTableNamesSupplier);
     }
 
     /**
@@ -66,10 +76,9 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
      * map. Wraps the keySet in a constant supplier — use the {@link Supplier} constructor when
      * runtime registrations matter.
      */
-    public DefaultWalMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
+    public DefaultWalMessageFilter(JSONEventSerializer jsonSerializer,
                                    Map<String, AggregateType> aggregateEventStreamTableNames) {
-        this(jacksonJSONSerializer,
-             () -> requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null").keySet());
+        this(() -> requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null").keySet());
     }
 
     /**
@@ -77,10 +86,9 @@ public class DefaultWalMessageFilter implements WalMessageFilter {
      * names. Wraps the collection in a constant supplier — use the {@link Supplier} constructor
      * when runtime registrations matter.
      */
-    public DefaultWalMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
+    public DefaultWalMessageFilter(JSONEventSerializer jsonSerializer,
                                    Collection<String> aggregateEventStreamTableNames) {
-        this(jacksonJSONSerializer,
-             () -> requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null"));
+        this(() -> requireNonNull(aggregateEventStreamTableNames, "aggregateEventStreamTableNames cannot be null"));
     }
 
     @Override

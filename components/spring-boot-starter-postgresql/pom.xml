@@ -147,6 +147,16 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Jackson 3, required when essentials.types-jackson.artifactId resolves to the Jackson 3 flavour: the
+             EssentialTypesJacksonModule/EssentialsImmutableJacksonModule @Bean return types then extend
+             tools.jackson.databind.module.SimpleModule, and Spring must load that hierarchy to introspect this
+             configuration class at all. Without it the whole auto-configuration fails to parse. -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.jdbi</groupId>
             <artifactId>jdbi3-core</artifactId>

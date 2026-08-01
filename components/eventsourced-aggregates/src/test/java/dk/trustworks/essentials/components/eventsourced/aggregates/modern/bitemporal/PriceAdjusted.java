@@ -26,8 +26,8 @@ public class PriceAdjusted extends ProductPriceEvent {
      */
     public final Money price;
 
-    public PriceAdjusted(ProductId forProduct, PriceId priceId, Money price, TimeWindow priceValidity) {
-        super(forProduct, priceId, priceValidity);
+    public PriceAdjusted(ProductId forProduct, PriceId priceId, Money price, TimeWindow priceValidityPeriod) {
+        super(forProduct, priceId, priceValidityPeriod);
         this.price = requireNonNull(price, "No price provided");
     }
 

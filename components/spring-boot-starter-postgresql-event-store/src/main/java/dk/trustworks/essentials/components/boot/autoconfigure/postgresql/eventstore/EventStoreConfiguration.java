@@ -42,6 +42,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.*;
+import dk.trustworks.essentials.components.foundation.json.EssentialsJacksonModules;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.SpringTransactionAwareEventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
@@ -556,6 +557,11 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public JSONEventSerializer jsonSerializer(List<Module> additionalModules) {
+        if (EssentialsJacksonModules.isJackson3Flavor()) {
+            // The application is on Jackson 3, so no Jackson 2 Module beans can exist to collect. A Jackson 3
+            // deployment that needs extra modules defines its own JSONEventSerializer bean, which this backs off from.
+            return EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
+        }
         var objectMapperBuilder = JsonMapper.builder()
                                             .disable(MapperFeature.AUTO_DETECT_GETTERS)
                                             .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
@@ -739,14 +745,14 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public LogicalReplicationToPersistedEventConverter logicalReplicationToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
+    public LogicalReplicationToPersistedEventConverter logicalReplicationToPersistedEventConverter(JSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
         return new JacksonWal2JsonToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
     }
 
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter(JacksonJSONEventSerializer jsonSerializer,
+    public PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter(JSONEventSerializer jsonSerializer,
                                                                                AggregateTypeResolver aggregateTypeResolver) {
         return new PgOutputToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
     }
@@ -754,7 +760,7 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public WalGlobalOrdersExtractor walGlobalOrdersExtractor(JacksonJSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
+    public WalGlobalOrdersExtractor walGlobalOrdersExtractor(JSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
         return new JacksonWalGlobalOrdersExtractor(jsonSerializer, aggregateTypeResolver);
     }
 
@@ -772,7 +778,7 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public WalMessageFilter walMessageFilter(JacksonJSONEventSerializer jacksonJSONSerializer,
+    public WalMessageFilter walMessageFilter(JSONEventSerializer jsonSerializer,
                                              @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                                              EssentialsEventStoreProperties properties) {
         // Pass a live supplier rather than a snapshot — aggregates registered at runtime via
@@ -792,7 +798,7 @@ public class EventStoreConfiguration {
             return new dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.filter.PgOutputRawPayloadFilter(
                     tablesSupplier);
         }
-        return new DefaultWalMessageFilter(jacksonJSONSerializer, tablesSupplier);
+        return WalMessageFilters.createForActiveJacksonFlavor(tablesSupplier);
     }
 
     @Bean

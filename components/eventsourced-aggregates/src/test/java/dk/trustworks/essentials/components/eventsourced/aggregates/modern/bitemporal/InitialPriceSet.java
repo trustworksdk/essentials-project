@@ -26,8 +26,8 @@ public class InitialPriceSet extends ProductPriceEvent {
      */
     public final Money price;
 
-    public InitialPriceSet(ProductId forProduct, PriceId priceId, Money price, TimeWindow priceValidity) {
-        super(forProduct, priceId, priceValidity);
+    public InitialPriceSet(ProductId forProduct, PriceId priceId, Money price, TimeWindow priceValidityPeriod) {
+        super(forProduct, priceId, priceValidityPeriod);
         this.price = requireNonNull(price, "No price provided");
     }
 

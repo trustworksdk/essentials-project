@@ -198,6 +198,9 @@
     <suppress>
         <notes><![CDATA[
    file name: android-json-0.0.20131108.vaadin1.jar
+   Despite the com.vaadin.external.google coordinates this is NOT Vaadin residue and must not be removed along with
+   the Vaadin modules: it is how org.skyscreamer:jsonassert ships, and jsonassert arrives transitively through
+   spring-boot-starter-test.
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/com\.vaadin\.external\.google/android\-json@.*$</packageUrl>
         <cpe>cpe:/a:json-java_project:json-java</cpe>

@@ -54,6 +54,18 @@
     </dependencies>
 
     <build>
+        <testResources>
+            <testResource>
+                <directory>${project.basedir}/src/test/resources</directory>
+            </testResource>
+            <!-- The golden wire-format document is owned by types-jackson, which defines the legacy format. Reading
+                 the very same file here is what makes WireFormatCompatibilityTest a real proof that Jackson 3 can
+                 read what Jackson 2 persisted, rather than two copies drifting apart. -->
+            <testResource>
+                <directory>${project.basedir}/../types-jackson/src/test/resources</directory>
+            </testResource>
+        </testResources>
+
         <pluginManagement>
             <plugins>
                 <plugin>

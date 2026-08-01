@@ -20,7 +20,6 @@ import dk.trustworks.essentials.components.document_db.*
 import dk.trustworks.essentials.components.document_db.annotations.DocumentEntity
 import dk.trustworks.essentials.components.document_db.annotations.Id
 import dk.trustworks.essentials.components.document_db.annotations.Indexed
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory
 import org.assertj.core.api.Assertions.assertThat
 import org.jdbi.v3.core.Jdbi
@@ -61,7 +60,7 @@ class CompositeDocumentDbRepositoryIT {
         val repositoryFactory = DocumentDbRepositoryFactory(
             jdbi,
             JdbiUnitOfWorkFactory(jdbi),
-            JacksonJSONSerializer(TestObjectMappers.createKotlinObjectMapper())
+            TestObjectMappers.createJSONSerializer()
         )
 
         repository = repositoryFactory.createForCompositeId(CompositeOrder::class) { "${it.orderId.value}:${it.shippingOrderId.value}" }

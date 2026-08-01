@@ -35,7 +35,7 @@ class AnnotationBasedInMemoryProjectorTest {
 
     private static final AggregateType ORDERS = AggregateType.of("Orders");
     private static final JSONEventSerializer JSON_SERIALIZER =
-            new JacksonJSONEventSerializer(TestFasterxmlObjectMapperFactory.createObjectMapper());
+            EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
 
     private final AnnotationBasedInMemoryProjector projector = new AnnotationBasedInMemoryProjector();
 

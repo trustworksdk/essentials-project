@@ -29,7 +29,6 @@ import org.springframework.test.context.*;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.*;
 
-import static dk.trustworks.essentials.components.queue.springdata.mongodb.MongoDurableQueues.createDefaultObjectMapper;
 
 @Testcontainers
 @DataMongoTest
@@ -54,7 +53,7 @@ class MongoDurableQueuesIT extends DurableQueuesIT<MongoDurableQueues, SpringMon
 
     @Override
     protected JSONSerializer createJSONSerializer() {
-        return new JacksonJSONSerializer(createDefaultObjectMapper());
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 
     @Override

@@ -194,7 +194,7 @@ OrderId orderId = OrderId.of("order-123");
 | `spring-boot-starter-postgresql` | ✅ FencedLocks, DurableQueues, Inbox/Outbox, UnitOfWork, CommandBus, EventBus | ❌ |
 | `spring-boot-starter-postgresql-event-store` | ✅ All foundation components | ✅ EventStore, Subscriptions, EventProcessor, Aggregates |
 | `spring-boot-starter-mongodb` | ✅ FencedLocks, DurableQueues, Inbox/Outbox, UnitOfWork, CommandBus, EventBus | ❌ |
-| `spring-boot-starter-admin-ui` | N/A | ✅ Web UI for EventStore monitoring |
+| `spring-boot-starter-admin-api` | N/A | ✅ HTTP API for EventStore/locks/queues monitoring |
 
 **Choose your path:**
 - **Foundation only**: Use `spring-boot-starter-postgresql` or `spring-boot-starter-mongodb` for distributed coordination without event sourcing
@@ -765,13 +765,13 @@ For detailed examples of specific patterns, see the individual module READMEs:
 | [spring-boot-starter-postgresql](spring-boot-starter-postgresql/README.md) | Auto-configures: `UnitOfWorkFactory`, `CommandBus`, `EventBus`, `PostgresqlDurableQueues`, `PostgresqlFencedLockManager`, `Inbox`/`Outbox`, `JSONSerializer` | [LLM](../LLM/LLM-spring-boot-starter-modules.md) |
 | [spring-boot-starter-postgresql-event-store](spring-boot-starter-postgresql-event-store/README.md) | Everything from above plus: `EventStore`, `EventStoreSubscriptionManager`, `EventProcessor`s, aggregate repositories                                         | [LLM](../LLM/LLM-spring-boot-starter-modules.md) |
 | [spring-boot-starter-mongodb](spring-boot-starter-mongodb/README.md) | MongoDB equivalents: `UnitOfWorkFactory`, `CommandBus`, `EventBus`, `MongoDurableQueues`, `MongoFencedLockManager`, `Inbox`/`Outbox`, `JSONSerializer`       | [LLM](../LLM/LLM-spring-boot-starter-modules.md) |
-| [spring-boot-starter-admin-ui](spring-boot-starter-admin-ui/README.md) | Administrative web interface for monitoring and operations                                                                                                   | [LLM](../LLM/LLM-spring-boot-starter-modules.md) |
+| [spring-boot-starter-admin-api](spring-boot-starter-admin-api/CLAUDE.md) | HTTP administration/monitoring API over the admin SPIs, conformant to the published OpenAPI contract                                                          | [LLM](../LLM/LLM-admin-api.md) |
 
 ### Specialized Modules
 
 | Module | Purpose | Documentation |
 |--------|---------|---------------|
-| [vaadin-ui](vaadin-ui/README.md) | Vaadin-based administrative UI components | [LLM](../LLM/LLM-vaadin-ui.md) |
+| [admin-api-spec](admin-api-spec/CLAUDE.md) | Code-first OpenAPI contract for the admin SPIs, plus the generated `admin-api-client-java` | [LLM](../LLM/LLM-admin-api.md) |
 
 ---
 

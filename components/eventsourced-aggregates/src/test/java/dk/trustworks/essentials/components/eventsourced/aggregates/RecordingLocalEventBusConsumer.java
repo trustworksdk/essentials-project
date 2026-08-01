@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.reactive.EventHandler;
 
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Shared test implementation of EventHandler for recording events from the local event bus.
@@ -28,9 +29,9 @@ import java.util.*;
  */
 public class RecordingLocalEventBusConsumer implements EventHandler {
 
-    public final List<PersistedEvent> beforeCommitPersistedEvents = new ArrayList<>();
-    public final List<PersistedEvent> afterCommitPersistedEvents = new ArrayList<>();
-    public final List<PersistedEvent> afterRollbackPersistedEvents = new ArrayList<>();
+    public final List<PersistedEvent> beforeCommitPersistedEvents = new CopyOnWriteArrayList<>();
+    public final List<PersistedEvent> afterCommitPersistedEvents = new CopyOnWriteArrayList<>();
+    public final List<PersistedEvent> afterRollbackPersistedEvents = new CopyOnWriteArrayList<>();
 
     @Override
     public void handle(Object event) {

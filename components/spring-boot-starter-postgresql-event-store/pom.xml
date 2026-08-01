@@ -137,6 +137,17 @@
             <artifactId>jackson-databind</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Jackson 3, required when essentials.types-jackson.artifactId resolves to the Jackson 3 flavour. This starter
+             builds on spring-boot-starter-postgresql, whose EssentialsComponentsConfiguration declares @Bean methods
+             returning the Essentials Jackson module types; those then extend tools.jackson.databind.module.SimpleModule,
+             and Spring has to load that hierarchy to introspect the class at all. The sibling declares it as provided,
+             which is not transitive, so it has to be named here too or the whole auto-configuration fails to parse. -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jdk8</artifactId>

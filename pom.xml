@@ -80,9 +80,12 @@
         <skipDependencyCheck>false</skipDependencyCheck>
 
         <spring-boot.version>4.0.3</spring-boot.version>
-        <essentials.jackson.flavor>jackson2</essentials.jackson.flavor>
-        <essentials.types-jackson.artifactId>types-jackson</essentials.types-jackson.artifactId>
-        <essentials.immutable-jackson.artifactId>immutable-jackson</essentials.immutable-jackson.artifactId>
+        <!-- The default Jackson flavour. Jackson 3 is the default because that is what Spring Boot 4 ships with; build
+             or depend with -Pjackson2 to stay on Jackson 2. Both flavours publish the same class names, so exactly one
+             is ever on the classpath, and both write byte-identical JSON — see EssentialsObjectMappers. -->
+        <essentials.jackson.flavor>jackson3</essentials.jackson.flavor>
+        <essentials.types-jackson.artifactId>types-jackson3</essentials.types-jackson.artifactId>
+        <essentials.immutable-jackson.artifactId>immutable-jackson3</essentials.immutable-jackson.artifactId>
         <objenesis.version>3.5</objenesis.version>
         <postgresql.version>42.7.13</postgresql.version>
         <slf4j.version>2.0.18</slf4j.version>
@@ -101,9 +104,6 @@
         <commons-compress.version>1.28.0</commons-compress.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
         <xmlunit-core.version>2.10.4</xmlunit-core.version>
-        <vaadin.version>25.0.7</vaadin.version>
-        <kaributesting.version>2.7.0</kaributesting.version>
-        <kaributesting.servlet.version>1.3.24</kaributesting.servlet.version>
         <archunit-junit5.version>1.4.2</archunit-junit5.version>
 
         <dokka.version>2.1.0</dokka.version>
@@ -159,7 +159,9 @@
         <module>components/springdata-mongo-queue</module>
         <module>components/kotlin-eventsourcing</module>
         <module>components/postgresql-document-db</module>
-        <module>components/vaadin-ui</module>
+        <module>components/admin-api-client-java</module>
+        <module>components/admin-api-spec</module>
+        <module>components/spring-boot-starter-admin-api</module>
         <module>components/spring-boot-starter-admin-ui</module>
         <module>examples/essentials-performance-lab</module>
     </modules>
@@ -222,13 +224,6 @@
                 <artifactId>commons-lang3</artifactId>
                 <version>${commons-lang3.version}</version>
                 <scope>provided</scope>
-            </dependency>
-            <dependency>
-                <groupId>com.vaadin</groupId>
-                <artifactId>vaadin-bom</artifactId>
-                <version>${vaadin.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -578,6 +573,17 @@
     </build>
 
     <profiles>
+        <!-- Builds and tests against Jackson 2 instead of the default Jackson 3. -->
+        <profile>
+            <id>jackson2</id>
+            <properties>
+                <essentials.jackson.flavor>jackson2</essentials.jackson.flavor>
+                <essentials.types-jackson.artifactId>types-jackson</essentials.types-jackson.artifactId>
+                <essentials.immutable-jackson.artifactId>immutable-jackson</essentials.immutable-jackson.artifactId>
+            </properties>
+        </profile>
+        <!-- Retained as a no-op alias now that Jackson 3 is the default, so existing commands and CI jobs that pass
+             -Pjackson3 keep working and keep meaning the same thing. -->
         <profile>
             <id>jackson3</id>
             <properties>

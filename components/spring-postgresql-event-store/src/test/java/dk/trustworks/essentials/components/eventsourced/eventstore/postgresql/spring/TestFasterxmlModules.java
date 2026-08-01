@@ -36,8 +36,10 @@ public final class TestFasterxmlModules {
             if (instance instanceof com.fasterxml.jackson.databind.Module module) {
                 modules.add(module);
             }
-        } catch (ReflectiveOperationException ignored) {
-            // Optional test support module for the active Jackson flavor.
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            // Not a Jackson 2 module under the active Jackson flavor, so there is nothing to register here.
+            // LinkageError matters: the class file exists under either flavor, so loading fails while resolving
+            // its superclass (NoClassDefFoundError), not with ClassNotFoundException.
         }
     }
 }

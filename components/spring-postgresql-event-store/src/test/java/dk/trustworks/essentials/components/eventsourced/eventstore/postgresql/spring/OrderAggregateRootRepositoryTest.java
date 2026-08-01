@@ -27,7 +27,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bu
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.spring.test_data.Order;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
@@ -108,7 +108,7 @@ abstract class OrderAggregateRootRepositoryTest {
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
-                                                                                       SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                       SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration(EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
                                                                                                                                                                                       IdentifierColumnType.UUID,
                                                                                                                                                                                       JSONColumnType.JSONB));
 
@@ -529,9 +529,9 @@ abstract class OrderAggregateRootRepositoryTest {
     }
 
     private static class RecordingLocalEventBusConsumer implements EventHandler {
-        private final List<PersistedEvent> beforeCommitPersistedEvents  = new ArrayList<>();
-        private final List<PersistedEvent> afterCommitPersistedEvents   = new ArrayList<>();
-        private final List<PersistedEvent> afterRollbackPersistedEvents = new ArrayList<>();
+        private final List<PersistedEvent> beforeCommitPersistedEvents  = new CopyOnWriteArrayList<>();
+        private final List<PersistedEvent> afterCommitPersistedEvents   = new CopyOnWriteArrayList<>();
+        private final List<PersistedEvent> afterRollbackPersistedEvents = new CopyOnWriteArrayList<>();
 
         @Override
         public void handle(Object event) {

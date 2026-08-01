@@ -35,7 +35,6 @@ import org.testcontainers.junit.jupiter.*;
 import java.time.Duration;
 import java.util.UUID;
 
-import static dk.trustworks.essentials.components.queue.springdata.mongodb.MongoDurableQueues.createDefaultObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
@@ -55,7 +54,7 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
 
     @Override
     protected JSONSerializer createJSONSerializer() {
-        return new JacksonJSONSerializer(createDefaultObjectMapper());
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 
     @Override
