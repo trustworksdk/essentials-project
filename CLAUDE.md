@@ -51,6 +51,8 @@ components/
   spring-boot-starter-admin-ui/  # Optional default UI — Thymeleaf + vanilla JS, no Node
   spring-boot-starter-*/         # Auto-configuration starters
 examples/                        # Demo projects — not part of release
+  essentials-performance-lab/    # CDC/EventStore/DurableQueues performance scenarios
+  essentials-spring-examples/    # Spring Boot apps: postgresql-cqrs, postgresql-inbox-outbox, mongodb-inbox-outbox
 LLM/                             # Consumer-facing LLM doc tree
 ```
 

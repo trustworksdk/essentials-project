@@ -167,6 +167,7 @@
         <module>components/spring-boot-starter-admin-api</module>
         <module>components/spring-boot-starter-admin-ui</module>
         <module>examples/essentials-performance-lab</module>
+        <module>examples/essentials-spring-examples</module>
     </modules>
 
 
