@@ -124,7 +124,7 @@ class PostgresqlAggregateSnapshotRepository_deleteAllHistoricSnapshotsIT {
             assertThat(snapshotOptional.get().aggregateImplType).isEqualTo(Order.class);
             assertThat((CharSequence) snapshotOptional.get().aggregateType).isEqualTo(ORDERS);
             assertThat(snapshotOptional.get().aggregateSnapshot).usingRecursiveComparison()
-                                                                .ignoringFieldsMatchingRegexes("invoker")
+                                                                .ignoringFieldsMatchingRegexes(AggregateSnapshotComparison.FRAMEWORK_RUNTIME_FIELDS)
                                                                 .isEqualTo(order);
         });
     }
@@ -153,7 +153,7 @@ class PostgresqlAggregateSnapshotRepository_deleteAllHistoricSnapshotsIT {
             assertThat(snapshotOptional.get().aggregateImplType).isEqualTo(Order.class);
             assertThat((CharSequence) snapshotOptional.get().aggregateType).isEqualTo(ORDERS);
             assertThat(snapshotOptional.get().aggregateSnapshot).usingRecursiveComparison()
-                                                                .ignoringFieldsMatchingRegexes("invoker")
+                                                                .ignoringFieldsMatchingRegexes(AggregateSnapshotComparison.FRAMEWORK_RUNTIME_FIELDS)
                                                                 .isEqualTo(order);
 
         });
@@ -196,7 +196,7 @@ class PostgresqlAggregateSnapshotRepository_deleteAllHistoricSnapshotsIT {
                 assertThat(snapshot.aggregateSnapshot)
                         .describedAs("Round: %s", roundAsString)
                         .usingRecursiveComparison()
-                        .ignoringFieldsMatchingRegexes("invoker")
+                        .ignoringFieldsMatchingRegexes(AggregateSnapshotComparison.FRAMEWORK_RUNTIME_FIELDS)
                         .isEqualTo(order);
             });
         }

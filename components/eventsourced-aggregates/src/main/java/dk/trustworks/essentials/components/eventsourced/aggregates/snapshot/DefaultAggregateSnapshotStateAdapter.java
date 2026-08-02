@@ -119,6 +119,9 @@ public class DefaultAggregateSnapshotStateAdapter implements AggregateSnapshotSt
                 if (!domainState.containsKey(field.getName())) {
                     continue;
                 }
+                if (!shouldApply(field)) {
+                    continue;
+                }
                 field.setAccessible(true);
                 var rawValue = domainState.get(field.getName());
                 if (rawValue == null) {
@@ -212,6 +215,27 @@ public class DefaultAggregateSnapshotStateAdapter implements AggregateSnapshotSt
             return false;
         }
         return !SnapshotRuntimeStateSupport.isFrameworkRuntimeDeclaringType(field.getDeclaringClass());
+    }
+
+    /**
+     * The mirror of {@link #shouldInclude(Field)} for the deserialization side.
+     * <p>
+     * Framework runtime state is restored from the snapshot metadata by
+     * {@link SnapshotRuntimeStateSupport#restore(Object, Object, EventOrder)}, never from the snapshot body — a
+     * snapshot that does carry those fields (one written by serializing the whole aggregate rather than through
+     * {@link #serializeSnapshotState(Object)}) would otherwise overwrite that restored state with the raw JSON values,
+     * e.g. replacing the typed aggregate id with the plain string it was persisted as, or reinstating events that were
+     * already committed.
+     * <p>
+     * Aggregate-state fields are the exception, exactly as in {@link #shouldInclude(Field)}: they are declared by the
+     * framework but hold domain state.
+     */
+    private boolean shouldApply(Field field) {
+        int modifiers = field.getModifiers();
+        if (Modifier.isStatic(modifiers) || Modifier.isTransient(modifiers) || field.isSynthetic()) {
+            return false;
+        }
+        return isAggregateStateField(field) || !SnapshotRuntimeStateSupport.isFrameworkRuntimeDeclaringType(field.getDeclaringClass());
     }
 
     private boolean isAggregateStateField(Field field) {

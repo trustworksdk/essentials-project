@@ -148,7 +148,7 @@ class PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshot
             assertThat(snapshotOptional.get().aggregateImplType).isEqualTo(Order.class);
             assertThat((CharSequence) snapshotOptional.get().aggregateType).isEqualTo(ORDERS);
             assertThat(snapshotOptional.get().aggregateSnapshot).usingRecursiveComparison()
-                                                                .ignoringFieldsMatchingRegexes("invoker")
+                                                                .ignoringFieldsMatchingRegexes(AggregateSnapshotComparison.FRAMEWORK_RUNTIME_FIELDS)
                                                                 .isEqualTo(order);
         });
     }
@@ -220,13 +220,13 @@ class PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshot
                         assertThat(snapshot.aggregateSnapshot)
                                 .describedAs("Snapshots-Produced: %d, Round: %s, SnapshotIndex: %d", snapshotsProduced, roundAsString, snapShotIndex)
                                 .usingRecursiveComparison()
-                                .ignoringFieldsMatchingRegexes("invoker")
+                                .ignoringFieldsMatchingRegexes(AggregateSnapshotComparison.FRAMEWORK_RUNTIME_FIELDS)
                                 .isEqualTo(order);
                     } else {
                         assertThat(snapshot.aggregateSnapshot)
                                 .describedAs("Snapshots-Produced: %d, Round: %s, SnapshotIndex: %d", snapshotsProduced, roundAsString, snapShotIndex)
                                 .usingRecursiveComparison()
-                                .ignoringFieldsMatchingRegexes("invoker")
+                                .ignoringFieldsMatchingRegexes(AggregateSnapshotComparison.FRAMEWORK_RUNTIME_FIELDS)
                                 .isNotEqualTo(order);
                     }
                 }

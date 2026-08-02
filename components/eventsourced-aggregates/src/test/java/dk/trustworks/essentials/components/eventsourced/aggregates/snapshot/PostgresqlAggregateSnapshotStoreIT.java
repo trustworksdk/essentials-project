@@ -116,7 +116,7 @@ class PostgresqlAggregateSnapshotStoreIT {
         assertThat(loadedLatestSnapshot).isPresent();
         assertThat(loadedLatestSnapshot.get().eventOrderOfLastIncludedEvent).isEqualTo(EventOrder.of(3));
         assertThat(loadedLatestSnapshot.get().aggregateSnapshot).usingRecursiveComparison()
-                                                                .ignoringFieldsMatchingRegexes("invoker")
+                                                                .ignoringFieldsMatchingRegexes(AggregateSnapshotComparison.FRAMEWORK_RUNTIME_FIELDS)
                                                                 .isEqualTo(latestSnapshot);
 
         var loadedEarlierSnapshot = snapshotStore.loadSnapshot(ORDERS,
@@ -126,7 +126,7 @@ class PostgresqlAggregateSnapshotStoreIT {
         assertThat(loadedEarlierSnapshot).isPresent();
         assertThat(loadedEarlierSnapshot.get().eventOrderOfLastIncludedEvent).isEqualTo(EventOrder.of(1));
         assertThat(loadedEarlierSnapshot.get().aggregateSnapshot).usingRecursiveComparison()
-                                                                 .ignoringFieldsMatchingRegexes("invoker")
+                                                                 .ignoringFieldsMatchingRegexes(AggregateSnapshotComparison.FRAMEWORK_RUNTIME_FIELDS)
                                                                  .isEqualTo(firstSnapshot);
 
         var allSnapshots = snapshotStore.loadAllSnapshots(ORDERS,

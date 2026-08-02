@@ -71,7 +71,10 @@ class AggregateSnapshotDurableQueueMeasurementSupport {
     void registerQueueDepthGauge(String status, Supplier<Number> supplier) {
         requireNonNull(status, "No status provided");
         requireNonNull(supplier, "No supplier provided");
-        meterRegistryOptional.ifPresent(meterRegistry -> Gauge.builder(METRIC_PREFIX + ".queue_depth", supplier, registeredSupplier -> registeredSupplier.get().doubleValue())
+        // Gauge.builder(name, stateObject, valueFunction) holds the state object weakly, and the suppliers registered
+        // here are lambdas nothing else keeps alive, so all queue-depth gauges started reporting NaN as soon as a GC
+        // ran. The Supplier overload holds it strongly.
+        meterRegistryOptional.ifPresent(meterRegistry -> Gauge.builder(METRIC_PREFIX + ".queue_depth", supplier)
                                                               .description("Current durable aggregate snapshot queue depth by job status")
                                                               .tag("status", status)
                                                               .register(meterRegistry));
