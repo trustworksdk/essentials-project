@@ -1,0 +1,129 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.examples.trading.accounts;
+
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateArchiveApi;
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.ApiArchivedGeneration;
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi;
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.ApiClosingBooksGenerationEventStream;
+import dk.trustworks.essentials.components.eventsourced.aggregates.archive.AggregateGenerationArchiver;
+import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.GenerationState;
+import dk.trustworks.essentials.examples.trading.config.TradingDemoAggregateConfiguration;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.IOException;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.List;
+
+/**
+ * Read-only query service used by the demo admin API to inspect trading account rollover state.
+ */
+@Service
+public class TradingAccountAdminQueryService {
+    private final TradingAccountService tradingAccountService;
+    private final AggregateLifecycleApi aggregateLifecycleApi;
+    private final AggregateArchiveApi aggregateArchiveApi;
+    private final AggregateGenerationArchiver aggregateGenerationArchiver;
+
+    public TradingAccountAdminQueryService(TradingAccountService tradingAccountService,
+                                           AggregateLifecycleApi aggregateLifecycleApi,
+                                           AggregateArchiveApi aggregateArchiveApi,
+                                           AggregateGenerationArchiver aggregateGenerationArchiver) {
+        this.tradingAccountService = tradingAccountService;
+        this.aggregateLifecycleApi = aggregateLifecycleApi;
+        this.aggregateArchiveApi = aggregateArchiveApi;
+        this.aggregateGenerationArchiver = aggregateGenerationArchiver;
+    }
+
+    @Transactional(readOnly = true)
+    public TradingAccountAdminView getAccountView(TradingAccountId accountId) {
+        var account = tradingAccountService.load(accountId);
+        var currentGeneration = aggregateLifecycleApi.findCurrentClosingBooksGeneration("demo-admin",
+                                                                                        TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                                                        accountId.toString())
+                                                     .orElseThrow(() -> new IllegalStateException("Couldn't resolve current generation for trading account " + accountId));
+        var generations = aggregateLifecycleApi.findClosingBooksGenerations("demo-admin",
+                                                                            TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                                            accountId.toString());
+
+        return new TradingAccountAdminView(account.logicalAccountId.toString(),
+                                           account.ownerId,
+                                           account.periodId,
+                                           account.cashBalance,
+                                           account.reservedFunds,
+                                           account.realizedPnl,
+                                           account.booksClosed,
+                                           currentGeneration.generation(),
+                                           currentGeneration.streamAggregateId(),
+                                           generations.stream()
+                                                      .map(generation -> new TradingAccountGenerationView(generation.generation(),
+                                                                                                          generation.streamAggregateId(),
+                                                                                                          GenerationState.valueOf(generation.state()),
+                                                                                                          generation.openedAt(),
+                                                                                                          generation.closedAt()))
+                                                      .toList());
+    }
+
+    @Transactional(readOnly = true)
+    public ApiClosingBooksGenerationEventStream getGenerationEventStream(TradingAccountId accountId, long generation) {
+        return aggregateLifecycleApi.findClosingBooksGenerationEventStream("demo-admin",
+                                                                           TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                                           accountId.toString(),
+                                                                           generation)
+                                    .orElseThrow(() -> new IllegalStateException("Couldn't resolve generation " + generation + " for trading account " + accountId));
+    }
+
+    @Transactional(readOnly = true)
+    public List<ApiArchivedGeneration> getArchivedGenerations(TradingAccountId accountId) {
+        return aggregateArchiveApi.findArchivedGenerations("demo-admin",
+                                                           TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                           accountId.toString());
+    }
+
+    @Transactional(readOnly = true)
+    public String getArchiveContent(TradingAccountId accountId, long generation) {
+        var archivedGeneration = aggregateArchiveApi.findArchivedGeneration("demo-admin",
+                                                                            TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                                            accountId.toString(),
+                                                                            generation)
+                                                    .orElseThrow(() -> new IllegalStateException("Couldn't resolve archived generation " + generation + " for trading account " + accountId));
+        var archiveUri = URI.create(archivedGeneration.archiveLocation());
+        if (!"file".equalsIgnoreCase(archiveUri.getScheme())) {
+            throw new IllegalStateException("Only file-based archive locations are currently supported in the trading demo, but got '" + archivedGeneration.archiveLocation() + "'");
+        }
+        try {
+            return Files.readString(Paths.get(archiveUri));
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to read archive content from '" + archivedGeneration.archiveLocation() + "'", e);
+        }
+    }
+
+    @Transactional
+    public ApiArchivedGeneration archiveGeneration(TradingAccountId accountId, long generation) {
+        var archivedGeneration = aggregateGenerationArchiver.archiveGeneration(TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                                               accountId.toString(),
+                                                                               generation);
+        return aggregateArchiveApi.findArchivedGeneration("demo-admin",
+                                                          TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                          accountId.toString(),
+                                                          generation)
+                                 .orElseThrow(() -> new IllegalStateException("Archived generation " + generation + " for trading account " + accountId + " could not be reloaded"));
+    }
+}

@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Essentials Trading Demo Dashboard</title>
+    <style>
+        :root {
+            --bg: #f3efe5;
+            --panel: rgba(255, 252, 245, 0.9);
+            --ink: #182022;
+            --muted: #5e6a6f;
+            --accent: #b85c38;
+            --accent-2: #2f6c6d;
+            --border: rgba(24, 32, 34, 0.12);
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(184, 92, 56, 0.18), transparent 30%),
+                radial-gradient(circle at top right, rgba(47, 108, 109, 0.15), transparent 24%),
+                linear-gradient(180deg, #f9f6ef 0%, var(--bg) 100%);
+        }
+        .wrap {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 32px 20px 48px;
+        }
+        h1, h2 {
+            margin: 0 0 12px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+        }
+        p {
+            margin: 0;
+            color: var(--muted);
+        }
+        .hero {
+            display: grid;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .actions, .grid {
+            display: grid;
+            gap: 14px;
+        }
+        .actions {
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            margin: 22px 0 28px;
+        }
+        .stack {
+            display: grid;
+            gap: 14px;
+            margin-top: 14px;
+        }
+        .section-title {
+            margin: 4px 0 0;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+        .grid {
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        }
+        .two-up {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .five-up {
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+        }
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 18px;
+            box-shadow: 0 18px 60px rgba(24, 32, 34, 0.08);
+            backdrop-filter: blur(8px);
+        }
+        .panel.compact {
+            padding: 16px;
+        }
+        .panel.fill {
+            height: 100%;
+        }
+        .kpis {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+            margin: 18px 0 24px;
+        }
+        .kpi {
+            padding: 14px;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.55);
+            border: 1px solid var(--border);
+        }
+        .kpi .label {
+            display: block;
+            font-size: 0.82rem;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+        .kpi .value {
+            font-size: 1.6rem;
+        }
+        button {
+            appearance: none;
+            border: none;
+            border-radius: 999px;
+            padding: 12px 16px;
+            font: inherit;
+            background: var(--ink);
+            color: #fff;
+            cursor: pointer;
+            transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+        }
+        button.secondary { background: var(--accent-2); }
+        button.accent { background: var(--accent); }
+        button:hover { transform: translateY(-1px); }
+        button:disabled { opacity: 0.5; cursor: wait; transform: none; }
+        .button-note {
+            font-size: 0.85rem;
+            color: var(--muted);
+            margin-top: 6px;
+        }
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .table th, .table td {
+            text-align: left;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        .table th {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+        .links a {
+            color: var(--accent-2);
+            text-decoration: none;
+            word-break: break-all;
+        }
+        .muted {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+        .status-line {
+            margin-top: 10px;
+            min-height: 1.2em;
+            color: var(--accent);
+        }
+        .ticker-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .ticker {
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.55);
+            border: 1px solid var(--border);
+        }
+        .summary-card {
+            margin-top: 12px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.6);
+            border: 1px solid var(--border);
+        }
+        .summary-card strong {
+            display: block;
+            margin-bottom: 6px;
+        }
+        .inline-stats {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .inline-stat {
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.55);
+            border: 1px solid var(--border);
+        }
+        .inline-stat .label {
+            display: block;
+            font-size: 0.76rem;
+            color: var(--muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .projection-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .projection-link {
+            display: block;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.55);
+            border: 1px solid var(--border);
+            color: var(--accent-2);
+            text-decoration: none;
+        }
+        .projection-link strong {
+            display: block;
+            color: var(--ink);
+            margin-bottom: 4px;
+        }
+        .ticker .symbol {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--muted);
+            margin-bottom: 4px;
+        }
+        select, input {
+            font: inherit;
+        }
+        .control-field {
+            width: 100%;
+            margin-top: 10px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.7);
+        }
+        @media (max-width: 700px) {
+            .wrap { padding: 24px 14px 40px; }
+            .two-up, .five-up {
+                grid-template-columns: 1fr;
+            }
+            .inline-stats, .projection-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <section class="hero">
+        <h1>Essentials Trading Demo</h1>
+        <p>Plain HTML admin/dashboard for inspecting load generation, snapshots, and closing-books behavior while the demo is running.</p>
+    </section>
+
+    <section class="panel">
+        <h2>Overview</h2>
+        <div class="kpis" id="kpis"></div>
+        <div class="status-line" id="statusLine"></div>
+    </section>
+
+    <section class="stack">
+        <div class="section-title">Trading Flow</div>
+        <div class="actions five-up">
+            <div class="panel compact">
+                <button id="startGenerator">Start Live Generator</button>
+                <div class="button-note">POST `/api/admin/load-generator/start`</div>
+            </div>
+            <div class="panel compact">
+                <button class="secondary" id="stopGenerator">Stop Live Generator</button>
+                <div class="button-note">POST `/api/admin/load-generator/stop`</div>
+            </div>
+            <div class="panel compact">
+                <button class="accent" data-endpoint="/api/admin/load-generator/burst/trades?count=100">Create 100 Trades</button>
+                <div class="button-note">Leaves them pending for settlement.</div>
+            </div>
+            <div class="panel compact">
+                <button class="accent" data-endpoint="/api/admin/load-generator/burst/settlements?count=100">Settle 100 Trades</button>
+                <div class="button-note">Consumes pending generated trades.</div>
+            </div>
+            <div class="panel compact">
+                <button class="accent" data-endpoint="/api/admin/load-generator/burst/trade-lifecycles?count=100">Run 100 Full Lifecycles</button>
+                <div class="button-note">Creates and settles in one call.</div>
+            </div>
+        </div>
+
+        <div class="section-title">Price Stress</div>
+        <div class="actions five-up">
+            <div class="panel compact">
+                <label for="priceStressMode"><strong>Price Stress Mode</strong></label>
+                <select id="priceStressMode" class="control-field">
+                    <option value="aggregate-event-sourced">aggregate-event-sourced</option>
+                    <option value="direct-write">direct-write</option>
+                </select>
+                <div class="button-note">Choose whether price stress uses the event-sourced aggregate path or a direct-write latest-price table.</div>
+            </div>
+            <div class="panel compact">
+                <button class="accent" data-endpoint="/api/admin/load-generator/price-stress/start?count=500&intervalMs=100">Realistic Feed</button>
+                <div class="button-note">500 updates at 100 ms. Good for live ticker behavior.</div>
+            </div>
+            <div class="panel compact">
+                <button class="accent" data-endpoint="/api/admin/load-generator/price-stress/start?count=500&intervalMs=10">Fast Stress</button>
+                <div class="button-note">500 updates at 10 ms. Good for a quicker stress run.</div>
+            </div>
+            <div class="panel compact">
+                <button class="accent" data-endpoint="/api/admin/load-generator/price-stress/start?count=1000&intervalMs=0">Max Throughput</button>
+                <div class="button-note">1000 updates with no intentional delay.</div>
+            </div>
+            <div class="panel compact">
+                <button class="secondary" id="stopPriceStress">Stop Price Stress</button>
+                <div class="button-note">Stops the async price stress run.</div>
+            </div>
+        </div>
+        <div class="actions">
+            <div class="panel compact">
+                <button class="secondary" data-endpoint="/api/admin/load-generator/comparisons/price-path?count=100">Run Price Path Comparison</button>
+                <div class="button-note">Runs the same 100 price updates through both paths and records the latest comparison result.</div>
+            </div>
+            <div class="panel compact">
+                <button class="secondary" data-endpoint="/api/admin/load-generator/comparisons/trading-account?count=90&readPasses=25&eventThreshold=20">Run TradingAccount Comparison</button>
+                <div class="button-note">Runs the same account mutation and repeated-read workload with manual-only vs event-count rollover.</div>
+            </div>
+        </div>
+
+        <div class="section-title">Closing Books</div>
+        <div class="actions two-up">
+            <div class="panel fill">
+                <label for="closingBooksMode"><strong>Closing-Books Mode</strong></label>
+                <select id="closingBooksMode" class="control-field">
+                    <option value="manual-only">manual-only</option>
+                    <option value="event-count">event-count</option>
+                    <option value="time-boundary">time-boundary</option>
+                    <option value="event-count-or-time-boundary">event-count-or-time-boundary</option>
+                </select>
+                <button class="secondary" id="updateClosingBooksMode" style="margin-top: 12px;">Apply Closing-Books Mode</button>
+                <div class="button-note">POST `/api/admin/trading-accounts/closing-books/mode?value=time-boundary`</div>
+            </div>
+            <div class="panel fill">
+                <label for="timeBoundary"><strong>Time Boundary</strong></label>
+                <select id="timeBoundary" class="control-field">
+                    <option value="none">none</option>
+                    <option value="end-of-day">end-of-day</option>
+                    <option value="end-of-week">end-of-week</option>
+                    <option value="end-of-month">end-of-month</option>
+                    <option value="end-of-year">end-of-year</option>
+                    <option value="every-n-days">every-n-days</option>
+                </select>
+                <input id="timeBoundaryZoneId" type="text" placeholder="Europe/Copenhagen" class="control-field" style="margin-top: 10px;">
+                <input id="timeBoundaryIntervalDays" type="number" min="1" placeholder="Interval days (for every-n-days)" class="control-field" style="margin-top: 10px;">
+                <button class="secondary" id="updateTimeBoundary" style="margin-top: 12px;">Apply Time Boundary</button>
+                <div class="button-note">POST `/api/admin/trading-accounts/closing-books/time-boundary`, `/zone-id`, `/interval-days`</div>
+            </div>
+        </div>
+    </section>
+
+    <section class="grid" style="margin-top: 14px;">
+        <div class="panel">
+            <h2>Trading Accounts</h2>
+            <table class="table">
+                <thead>
+                <tr>
+                    <th>Account</th>
+                    <th>Generations</th>
+                    <th>Generation</th>
+                    <th>Statement</th>
+                    <th>Cash</th>
+                </tr>
+                </thead>
+                <tbody id="accountsBody"></tbody>
+            </table>
+            <div class="summary-card">
+                <strong id="accountScenarioWinner">No TradingAccount comparison run yet</strong>
+                <p class="muted" id="accountScenarioSummary"></p>
+            </div>
+        </div>
+    </section>
+
+    <section class="grid" style="margin-top: 14px;">
+        <div class="panel">
+            <h2>Snapshot Metrics</h2>
+            <table class="table">
+                <thead>
+                <tr>
+                    <th>Metric</th>
+                    <th>Count</th>
+                    <th>Total ms</th>
+                    <th>Max ms</th>
+                </tr>
+                </thead>
+                <tbody id="metricsBody"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="grid two-up" style="margin-top: 14px;">
+        <div class="panel">
+            <h2>Live Price Stress</h2>
+            <p class="muted" id="priceStressSummary">No active price stress run.</p>
+            <div class="inline-stats">
+                <div class="inline-stat">
+                    <span class="label">Current Mode</span>
+                    <strong id="priceStressModeLabel">aggregate-event-sourced</strong>
+                </div>
+                <div class="inline-stat">
+                    <span class="label">Requested</span>
+                    <strong id="priceStressRequested">0</strong>
+                </div>
+                <div class="inline-stat">
+                    <span class="label">Completed</span>
+                    <strong id="priceStressCompleted">0</strong>
+                </div>
+            </div>
+            <div class="ticker-grid" id="priceTickers"></div>
+        </div>
+        <div class="panel">
+            <h2>Price Path Comparison</h2>
+            <p class="muted" id="pricePathNote"></p>
+            <div class="summary-card">
+                <strong id="priceScenarioWinner">No comparison run yet</strong>
+                <p class="muted" id="priceScenarioSummary"></p>
+            </div>
+            <table class="table" style="margin-top: 12px;">
+                <thead>
+                <tr>
+                    <th>Mode</th>
+                    <th>Ops</th>
+                    <th>Avg ms</th>
+                    <th>Max ms</th>
+                </tr>
+                </thead>
+                <tbody id="pricePathBody"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="grid two-up" style="margin-top: 14px;">
+        <div class="panel links">
+            <h2>Quick Links</h2>
+            <div id="accountLinks" class="muted"></div>
+            <div id="sampleLinks" class="muted" style="margin-top: 12px;"></div>
+        </div>
+        <div class="panel">
+            <h2>Projections</h2>
+            <p class="muted">Two read models are available and use different Essentials processor styles.</p>
+            <div class="projection-grid">
+                <a class="projection-link" href="/api/admin/projections/account-statements">
+                    <strong>Account Statements</strong>
+                    Durable `ViewEventProcessor` projection of latest statement state
+                </a>
+                <a class="projection-link" href="/api/admin/projections/trade-settlements">
+                    <strong>Trade Settlements</strong>
+                    `EventProcessor` projection combining trade and settlement lifecycle state
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <section class="grid" style="margin-top: 14px;">
+        <div class="panel">
+            <h2>How To Verify</h2>
+            <p class="muted">
+                Burst trades and settlements, watch account generations rise above 1 for closing-books behavior,
+                and inspect the snapshot metric table after repeated load. The dashboard summary is sourced from
+                <code>/api/admin/dashboard</code>.
+            </p>
+        </div>
+    </section>
+</div>
+
+<script>
+    const statusLine = document.getElementById("statusLine");
+
+    async function postAndRefresh(endpoint) {
+        setBusy(true);
+        statusLine.textContent = `Running ${endpoint} ...`;
+        try {
+            if (endpoint.includes("/price-stress/start")) {
+                const selectedMode = encodeURIComponent(document.getElementById("priceStressMode").value);
+                endpoint = `${endpoint}&mode=${selectedMode}`;
+            }
+            const response = await fetch(endpoint, { method: "POST" });
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || `Request failed with ${response.status}`);
+            }
+            await refresh();
+            statusLine.textContent = `Completed ${endpoint}`;
+        } catch (error) {
+            statusLine.textContent = `Failed: ${error.message}`;
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    function setBusy(isBusy) {
+        document.querySelectorAll("button").forEach(button => {
+            button.disabled = isBusy;
+        });
+    }
+
+    function renderKpis(summary) {
+        const items = [
+            ["Accounts present", summary.accountsPresent],
+            ["Rolled over", summary.closingBooks.accountsRolledOver],
+            ["Total generations", summary.closingBooks.totalGenerations],
+            ["Max generation", summary.closingBooks.maxGeneration],
+            ["Generated trades", summary.loadGenerator.generatedTradeCount],
+            ["Generated settlements", summary.loadGenerator.generatedSettlementCount],
+            ["Price updates", summary.loadGenerator.generatedPriceUpdateCount],
+            ["Pending settlements", summary.loadGenerator.pendingSettlementCount]
+        ];
+        document.getElementById("kpis").innerHTML = items.map(([label, value]) => `
+            <div class="kpi">
+                <span class="label">${label}</span>
+                <span class="value">${value}</span>
+            </div>
+        `).join("");
+    }
+
+    function renderAccounts(summary) {
+        document.getElementById("accountsBody").innerHTML = summary.accounts.map(account => `
+            <tr>
+                <td><a href="/api/admin/trading-accounts/${account.accountId}">${account.accountId}</a></td>
+                <td>${account.generationCount}</td>
+                <td>${account.currentGeneration}</td>
+                <td>${account.periodId}</td>
+                <td>${account.cashBalance}</td>
+            </tr>
+        `).join("");
+        document.getElementById("accountLinks").innerHTML = summary.accounts
+            .map(account => `<div><a href="/api/admin/trading-accounts/${account.accountId}">${account.accountId}</a></div>`)
+            .join("");
+        const scenario = summary.latestTradingAccountScenario;
+        document.getElementById("accountScenarioWinner").textContent = !scenario || !scenario.available
+            ? "No TradingAccount comparison run yet"
+            : `${scenario.winnerMode} won the latest ${scenario.requestedMutationCount}-mutation TradingAccount scenario`;
+        document.getElementById("accountScenarioSummary").textContent = !scenario || !scenario.available
+            ? "Run the explicit TradingAccount comparison to record a no-rollover vs event-count result."
+            : `Bootstrap-only total ${scenario.bootstrapOnly.totalElapsedMillis.toFixed(2)} ms with ${scenario.bootstrapOnly.totalGenerations} generations, event-count total ${scenario.eventCount.totalElapsedMillis.toFixed(2)} ms with ${scenario.eventCount.totalGenerations} generations. Snapshot load delta: ${scenario.bootstrapOnly.snapshotLoadDelta} vs ${scenario.eventCount.snapshotLoadDelta}.`;
+    }
+
+    function renderMetrics(summary) {
+        document.getElementById("metricsBody").innerHTML = summary.snapshotMetrics.map(metric => `
+            <tr>
+                <td>${metric.name}</td>
+                <td>${metric.count}</td>
+                <td>${metric.totalTimeMs.toFixed(2)}</td>
+                <td>${metric.maxMs.toFixed(2)}</td>
+            </tr>
+        `).join("");
+    }
+
+    function renderPriceStress(summary) {
+        const load = summary.loadGenerator;
+        document.getElementById("priceStressMode").value = load.currentPriceStressMode || "aggregate-event-sourced";
+        document.getElementById("priceStressModeLabel").textContent = load.currentPriceStressMode || "aggregate-event-sourced";
+        document.getElementById("priceStressRequested").textContent = load.priceStressRequestedCount ?? 0;
+        document.getElementById("priceStressCompleted").textContent = load.priceStressCompletedCount ?? 0;
+        const runningText = load.priceStressRunning
+            ? `Running ${load.priceStressCompletedCount}/${load.priceStressRequestedCount} updates at ${load.priceStressIntervalMillis} ms using ${load.currentPriceStressMode}`
+            : load.priceStressRequestedCount > 0
+                ? `Last run completed ${load.priceStressCompletedCount}/${load.priceStressRequestedCount} updates at ${load.priceStressIntervalMillis} ms using ${load.currentPriceStressMode}`
+                : "No active price stress run.";
+        document.getElementById("priceStressSummary").textContent = runningText;
+        document.getElementById("priceTickers").innerHTML = (load.latestPrices || []).map(price => `
+            <div class="ticker">
+                <span class="symbol">${price.instrumentId}</span>
+                <strong>${price.latestPrice}</strong>
+            </div>
+        `).join("");
+    }
+
+    function renderPricePathComparison(summary) {
+        const comparison = summary.pricePathComparison;
+        document.getElementById("pricePathNote").textContent = comparison.note;
+        document.getElementById("pricePathBody").innerHTML = (comparison.performances || []).map(performance => `
+            <tr>
+                <td>${performance.mode}</td>
+                <td>${performance.operationCount}</td>
+                <td>${performance.averageMillis.toFixed(2)}</td>
+                <td>${performance.maxMillis.toFixed(2)}</td>
+            </tr>
+        `).join("");
+        const scenario = summary.latestPricePathScenario;
+        document.getElementById("priceScenarioWinner").textContent = !scenario || !scenario.available
+            ? "No comparison run yet"
+            : `${scenario.winnerMode} won the latest ${scenario.requestedCount}-update scenario`;
+        document.getElementById("priceScenarioSummary").textContent = !scenario || !scenario.available
+            ? "Run the explicit comparison scenario to record a side-by-side result."
+            : `Aggregate elapsed ${scenario.aggregateEventSourced.elapsedMillis.toFixed(2)} ms vs direct-write ${scenario.directWrite.elapsedMillis.toFixed(2)} ms. Difference: ${scenario.elapsedDifferenceMillis.toFixed(2)} ms.`;
+    }
+
+    function renderLinks(summary) {
+        const tradeLinks = summary.sampleTradeIds
+            .map(id => `<div><a href="/api/admin/trades/${id}">${id}</a></div>`)
+            .join("");
+        const settlementLinks = summary.sampleSettlementIds
+            .map(id => `<div><a href="/api/admin/settlements/${id}">${id}</a></div>`)
+            .join("");
+        document.getElementById("sampleLinks").innerHTML = `
+            <div><strong>Projections</strong></div>
+            <div><a href="/api/admin/projections/account-statements">Account statements</a></div>
+            <div><a href="/api/admin/projections/trade-settlements">Trade settlements</a></div>
+            <div style="margin-top: 10px;"><strong>Trades</strong></div>${tradeLinks}
+            <div style="margin-top: 10px;"><strong>Settlements</strong></div>${settlementLinks}
+        `;
+    }
+
+    function renderSummaryText(summary) {
+        document.getElementById("closingBooksMode").value = summary.closingBooks.mode || "event-count-or-time-boundary";
+        document.getElementById("timeBoundary").value = summary.closingBooks.timeBoundary || "none";
+        document.getElementById("timeBoundaryZoneId").value = summary.closingBooks.zoneId || "";
+        document.getElementById("timeBoundaryIntervalDays").value = summary.closingBooks.intervalDays || "";
+        statusLine.textContent =
+            `Generator started: ${summary.loadGenerator.started}. ` +
+            `${summary.snapshotStats.aggregateType} snapshot saves: ${summary.snapshotStats.saveCount}. ` +
+            `Snapshot loads: ${summary.snapshotStats.loadCount}. ` +
+            `Avg generations/account: ${summary.closingBooks.averageGenerationsPerAccount.toFixed(2)}. ` +
+            `Closing books policy: ${summary.closingBooks.policyDescription}. ` +
+            `Time boundary: ${summary.closingBooks.timeBoundary} in ${summary.closingBooks.zoneId}.`;
+    }
+
+    async function refresh() {
+        const response = await fetch("/api/admin/dashboard");
+        if (!response.ok) {
+            throw new Error(`Could not load dashboard summary (${response.status})`);
+        }
+        const summary = await response.json();
+        renderKpis(summary);
+        renderAccounts(summary);
+        renderMetrics(summary);
+        renderPriceStress(summary);
+        renderPricePathComparison(summary);
+        renderLinks(summary);
+        renderSummaryText(summary);
+    }
+
+    document.getElementById("startGenerator").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/start"));
+    document.getElementById("stopGenerator").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/stop"));
+    document.getElementById("stopPriceStress").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/price-stress/stop"));
+    document.getElementById("updateClosingBooksMode").addEventListener("click", async () => {
+        const select = document.getElementById("closingBooksMode");
+        const value = select.value;
+        await postAndRefresh(`/api/admin/trading-accounts/closing-books/mode?value=${encodeURIComponent(value)}`);
+    });
+    document.getElementById("updateTimeBoundary").addEventListener("click", async () => {
+        const boundary = document.getElementById("timeBoundary").value;
+        const zoneId = document.getElementById("timeBoundaryZoneId").value.trim();
+        const intervalDays = document.getElementById("timeBoundaryIntervalDays").value.trim();
+        await postAndRefresh(`/api/admin/trading-accounts/closing-books/time-boundary?value=${encodeURIComponent(boundary)}`);
+        if (zoneId) {
+            await postAndRefresh(`/api/admin/trading-accounts/closing-books/zone-id?value=${encodeURIComponent(zoneId)}`);
+        }
+        if (intervalDays) {
+            await postAndRefresh(`/api/admin/trading-accounts/closing-books/interval-days?value=${encodeURIComponent(intervalDays)}`);
+        }
+    });
+    document.querySelectorAll("[data-endpoint]").forEach(button => {
+        button.addEventListener("click", () => postAndRefresh(button.dataset.endpoint));
+    });
+
+    refresh().catch(error => {
+        statusLine.textContent = `Failed to load dashboard: ${error.message}`;
+    });
+
+    const eventSource = new EventSource("/api/admin/dashboard/stream");
+    eventSource.addEventListener("summary", event => {
+        const summary = JSON.parse(event.data);
+        renderKpis(summary);
+        renderAccounts(summary);
+        renderMetrics(summary);
+        renderPriceStress(summary);
+        renderPricePathComparison(summary);
+        renderLinks(summary);
+        renderSummaryText(summary);
+    });
+    eventSource.onerror = () => {
+        statusLine.textContent = "Live dashboard stream disconnected, falling back to manual refresh.";
+    };
+</script>
+</body>
+</html>
