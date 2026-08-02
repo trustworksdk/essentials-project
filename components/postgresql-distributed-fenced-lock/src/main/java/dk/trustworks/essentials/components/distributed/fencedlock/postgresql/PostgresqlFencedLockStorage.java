@@ -106,6 +106,7 @@ public final class PostgresqlFencedLockStorage implements FencedLockStorage<Hand
     @Override
     public final void initializeLockStorage(DBFencedLockManager<HandleAwareUnitOfWork, DBFencedLock> lockManager, HandleAwareUnitOfWork unitOfWork) {
         PostgresqlUtil.checkIsValidTableOrColumnName(fencedLocksTableName);
+        PostgresqlUtil.acquireBootstrapLock(unitOfWork.handle());
         unitOfWork.handle().execute("CREATE TABLE IF NOT EXISTS " + this.fencedLocksTableName + " (\n" +
                                             "lock_name TEXT NOT NULL,\n" +      // The name of the lock
                                             "last_issued_fence_token BIGINT,\n" +    // The token issued at lock_last_confirmed_ts. Every time a lock is acquired or confirmed a new token is issued (ever growing value)

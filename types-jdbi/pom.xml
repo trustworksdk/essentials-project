@@ -65,7 +65,6 @@
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <version>2.3.232</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -123,6 +122,12 @@
                         <arg>-Xjsr305=strict</arg>
                     </args>
                     <jvmTarget>${java.version}</jvmTarget>
+                    <!-- Pin language/API level (root pom properties) so artifacts compiled with a
+                         newer Kotlin compiler remain binary- and metadata-compatible for consumers on
+                         Kotlin 2.1. apiVersion prevents binding to newer stdlib APIs (stdlib is
+                         'provided', so the consumer supplies their own). -->
+                    <languageVersion>${kotlinLanguage.version}</languageVersion>
+                    <apiVersion>${kotlinApi.version}</apiVersion>
                 </configuration>
                 <dependencies>
                     <dependency>

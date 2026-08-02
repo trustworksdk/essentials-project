@@ -36,18 +36,20 @@
     <name>postgresql-event-store</name>
     <packaging>jar</packaging>
 
+    <properties>
+        <byte-buddy-agent.version>1.17.8</byte-buddy-agent.version>
+    </properties>
+
 
     <dependencies>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
-            <version>${micrometer.version}</version>
             <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing</artifactId>
-            <version>${micrometer-tracing.version}</version>
             <optional>true</optional>
         </dependency>
         <dependency>
@@ -68,12 +70,12 @@
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>types-jackson</artifactId>
+            <artifactId>${essentials.types-jackson.artifactId}</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
-            <artifactId>immutable-jackson</artifactId>
+            <artifactId>${essentials.immutable-jackson.artifactId}</artifactId>
             <version>${project.version}</version>
             <optional>true</optional>
         </dependency>
@@ -137,6 +139,11 @@
             <artifactId>mockito-core</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
 
         <!-- Transient dependencies not included because Essentials uses the provided scope -->
         <dependency>
@@ -148,6 +155,15 @@
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <scope>provided</scope>
+        </dependency>
+        <!-- Both Jackson majors are compiled against, as in foundation: JacksonJSONEventSerializer targets Jackson 2
+             and Jackson3JSONEventSerializer targets Jackson 3, so an application can pick either. Optional, so a
+             consumer only pulls the one it actually uses. -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
@@ -187,7 +203,6 @@
         <dependency>
             <groupId>com.zaxxer</groupId>
             <artifactId>HikariCP</artifactId>
-            <version>5.1.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -210,6 +225,13 @@
         </pluginManagement>
 
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy-agent.version}/byte-buddy-agent-${byte-buddy-agent.version}.jar</argLine>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
@@ -245,6 +267,12 @@
                         <arg>-Xjsr305=strict</arg>
                     </args>
                     <jvmTarget>${java.version}</jvmTarget>
+                    <!-- Pin language/API level (root pom properties) so artifacts compiled with a
+                         newer Kotlin compiler remain binary- and metadata-compatible for consumers on
+                         Kotlin 2.1. apiVersion prevents binding to newer stdlib APIs (stdlib is
+                         'provided', so the consumer supplies their own). -->
+                    <languageVersion>${kotlinLanguage.version}</languageVersion>
+                    <apiVersion>${kotlinApi.version}</apiVersion>
                 </configuration>
                 <dependencies>
                     <dependency>
@@ -253,6 +281,14 @@
                         <version>${kotlin.version}</version>
                     </dependency>
                 </dependencies>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                </configuration>
             </plugin>
         </plugins>
     </build>

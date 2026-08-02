@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dk.trustworks.essentials</groupId>
+        <artifactId>parent</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+    <description>
+        Code-first OpenAPI contract for the Essentials admin/monitoring *Api SPIs (locks, queues,
+        scheduler, event-store, CDC, statistics). The committed openapi/essentials-admin-api.yaml is
+        generated from the SPI interfaces by reflection and kept in sync by a drift test; it is the
+        single source of truth consumed by the admin-api-client-* modules.
+    </description>
+
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>admin-api-spec</artifactId>
+    <name>admin-api-spec</name>
+    <packaging>jar</packaging>
+
+    <properties>
+        <!-- Keep swagger-core aligned with the swagger-parser that openapi-diff parses with (parser 2.1.31 →
+             swagger-core 2.2.34). swagger-models and swagger-models-jakarta share the io.swagger.v3.oas.models
+             package, so a version skew between the two shows up as a NoSuchMethodError inside openapi-diff. -->
+        <swagger-core.version>2.2.34</swagger-core.version>
+        <swagger-parser.version>2.1.31</swagger-parser.version>
+        <openapi-diff.version>2.1.7</openapi-diff.version>
+        <build-helper-maven-plugin.version>3.6.1</build-helper-maven-plugin.version>
+    </properties>
+
+    <dependencies>
+        <!-- The SPI interfaces + DTOs the spec is generated from. postgresql-event-store
+             transitively brings foundation, so all 7 *Api interfaces are on the classpath. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-event-store</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- OpenAPI model + reflection-based schema resolution + YAML serialization -->
+        <dependency>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-core-jakarta</artifactId>
+            <version>${swagger-core.version}</version>
+        </dependency>
+
+        <!-- Test: contract validation gate. Replaces the previous Node-based redocly lint, so validating the
+             contract needs nothing but a JVM. -->
+        <dependency>
+            <groupId>io.swagger.parser.v3</groupId>
+            <artifactId>swagger-parser</artifactId>
+            <version>${swagger-parser.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Test: backwards-compatibility gate (junit-jupiter + assertj-core inherited from parent) -->
+        <dependency>
+            <groupId>org.openapitools.openapidiff</groupId>
+            <artifactId>openapi-diff-core</artifactId>
+            <version>${openapi-diff.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <!-- Same package as the swagger-models-jakarta the generator compiles against; keeping both on the
+                     test classpath makes which one wins depend on ordering. -->
+                <exclusion>
+                    <groupId>io.swagger.core.v3</groupId>
+                    <artifactId>swagger-models</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <resources>
+            <resource>
+                <directory>${project.basedir}/src/main/resources</directory>
+            </resource>
+            <!-- Ship the contract inside the jar as well as alongside it, so an adapter (and its conformance test)
+                 can read it from the classpath instead of reaching into this module's directory. -->
+            <resource>
+                <directory>${project.basedir}/openapi</directory>
+                <targetPath>openapi</targetPath>
+                <includes>
+                    <include>essentials-admin-api.yaml</include>
+                </includes>
+            </resource>
+        </resources>
+
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <configuration>
+                        <archive>
+                            <manifestEntries>
+                                <Automatic-Module-Name>dk.trustworks.essentials.components.adminapi.spec</Automatic-Module-Name>
+                            </manifestEntries>
+                        </archive>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                </configuration>
+            </plugin>
+
+            <!-- Publish the contract itself, so consumers and non-Maven toolchains can resolve
+                 dk.trustworks.essentials.components:admin-api-spec:<version>:yaml:openapi instead of copying the
+                 file out of the repository. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>${build-helper-maven-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>attach-openapi-contract</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>attach-artifact</goal>
+                        </goals>
+                        <configuration>
+                            <artifacts>
+                                <artifact>
+                                    <file>${project.basedir}/openapi/essentials-admin-api.yaml</file>
+                                    <type>yaml</type>
+                                    <classifier>openapi</classifier>
+                                </artifact>
+                            </artifacts>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

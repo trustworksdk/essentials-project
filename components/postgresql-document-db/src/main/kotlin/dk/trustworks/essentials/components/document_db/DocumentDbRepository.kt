@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwa
 import dk.trustworks.essentials.components.foundation.types.RandomIdGenerator
 import dk.trustworks.essentials.kotlin.types.StringValueType
 import org.jdbi.v3.core.Jdbi
+import java.util.function.Function
 import kotlin.reflect.KClass
 
 /**
@@ -150,6 +151,21 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
     fun addIndex(index: Index<ENTITY>): DocumentDbRepository<ENTITY, ID>
 
     /**
+     * Java-friendly index overload that takes a [List] of [Property] instances.
+     */
+    fun addIndex(name: String, properties: List<Property<ENTITY, *>>): DocumentDbRepository<ENTITY, ID> {
+        return addIndex(Index(name, properties))
+    }
+
+    /**
+     * Java-friendly index overload that takes dot-separated JSON property paths.
+     * Example path values: `name`, `address.city`, `contact.address.zipCode`.
+     */
+    fun addIndexByPaths(name: String, vararg propertyPaths: String): DocumentDbRepository<ENTITY, ID> {
+        return addIndex(Index.fromPaths(name, *propertyPaths))
+    }
+
+    /**
      * Remove an index from the repository.
      * @param index The index to remove
      * @return this [DocumentDbRepository] to allow chaining of method calls
@@ -176,6 +192,14 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
     fun save(entity: ENTITY, initialVersion: Version = Version.ZERO): ENTITY
 
     /**
+     * Java-friendly overload of [save], allowing callers to provide the initial version as a primitive [Long]
+     * instead of [Version].
+     */
+    fun save(entity: ENTITY, initialVersionValue: Long): ENTITY {
+        return save(entity, Version(initialVersionValue))
+    }
+
+    /**
      * Update an existing entity (i.e. an entity that has previously been saved using [save])
      * @param entity The entity to save. The [VersionedEntity.version] will automatically be incremented
      * @return the [entity] provided with the [VersionedEntity.version] and [VersionedEntity.lastUpdated] properties updated
@@ -193,6 +217,14 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
      * [VersionedEntity.version] in the database doesn't match the [VersionedEntity.version] of the [entity])
      */
     fun update(entity: ENTITY, nextVersion: Version): ENTITY
+
+    /**
+     * Java-friendly overload of [update], allowing callers to provide the next version as a primitive [Long]
+     * instead of [Version].
+     */
+    fun update(entity: ENTITY, nextVersionValue: Long): ENTITY {
+        return update(entity, Version(nextVersionValue))
+    }
 
     /**
      * Find matching entities using the [query] as criteria
@@ -534,6 +566,15 @@ class DocumentDbRepositoryFactory(
         )
     }
 
+    /**
+     * Java-friendly overload of [createForStringId] that accepts [Class].
+     */
+    fun <ENTITY : VersionedEntity<String, ENTITY>> createForStringId(
+        entityClass: Class<ENTITY>
+    ): DocumentDbRepository<ENTITY, String> {
+        return createForStringId(entityClass.kotlin)
+    }
+
 
     /**
      * Create a new [DocumentDbRepository] (based on [PostgresqlDocumentDbRepository]) instance for the given [VersionedEntity] [entityClass],
@@ -552,6 +593,15 @@ class DocumentDbRepositoryFactory(
             jsonSerializer,
             stringValueTypeIdSerializer as IdSerializer<ID>
         )
+    }
+
+    /**
+     * Java-friendly overload of [create] that accepts [Class].
+     */
+    fun <ENTITY : VersionedEntity<ID, ENTITY>, ID : StringValueType<ID>> create(
+        entityClass: Class<ENTITY>
+    ): DocumentDbRepository<ENTITY, ID> {
+        return create(entityClass.kotlin)
     }
 
     /**
@@ -574,6 +624,26 @@ class DocumentDbRepositoryFactory(
             jsonSerializer,
             idSerializer
         )
+    }
+
+    /**
+     * Java-friendly overload of [createForCompositeId] that accepts [Class].
+     */
+    fun <ENTITY : VersionedEntity<ID, ENTITY>, ID> createForCompositeId(
+        entityClass: Class<ENTITY>,
+        idSerializer: IdSerializer<ID>
+    ): DocumentDbRepository<ENTITY, ID> {
+        return createForCompositeId(entityClass.kotlin, idSerializer)
+    }
+
+    /**
+     * Java-friendly overload of [createForCompositeId] that accepts [Class] and [Function].
+     */
+    fun <ENTITY : VersionedEntity<ID, ENTITY>, ID> createForCompositeId(
+        entityClass: Class<ENTITY>,
+        idSerializer: Function<ID, String>
+    ): DocumentDbRepository<ENTITY, ID> {
+        return createForCompositeId(entityClass.kotlin) { id -> idSerializer.apply(id) }
     }
 }
 
@@ -617,6 +687,19 @@ data class Index<T>(
         PostgresqlUtil.checkIsValidTableOrColumnName(name)
         require(properties.isNotEmpty()) { "You have to specify at least 1 property" }
         properties.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it.name()) }
+    }
+
+    companion object {
+        /**
+         * Java-friendly helper that creates an [Index] from dot-separated JSON paths.
+         */
+        @JvmStatic
+        fun <T> fromPaths(name: String, vararg propertyPaths: String): Index<T> {
+            return Index(
+                name,
+                propertyPaths.map { path -> JsonPathProperty<T>(path) }
+            )
+        }
     }
 }
 

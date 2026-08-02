@@ -32,7 +32,7 @@ class MongoDurableQueuesTest {
         assertThatThrownBy(() ->
                                    new MongoDurableQueues(
                                            mock(MongoTemplate.class),
-                                           mock(Duration.class),
+                                           Duration.ofSeconds(30),
                                            mock(JSONSerializer.class),
                                            "system.collection",
                                            null
@@ -42,7 +42,7 @@ class MongoDurableQueuesTest {
         assertThatThrownBy(() ->
                                    new MongoDurableQueues(
                                            mock(MongoTemplate.class),
-                                           mock(Duration.class),
+                                           Duration.ofSeconds(30),
                                            mock(JSONSerializer.class),
                                            "my$_collection",
                                            null
@@ -51,7 +51,7 @@ class MongoDurableQueuesTest {
         assertThatThrownBy(() ->
                                    new MongoDurableQueues(
                                            mock(MongoTemplate.class),
-                                           mock(Duration.class),
+                                           Duration.ofSeconds(30),
                                            mock(JSONSerializer.class),
                                            "collection\0name",
                                            null
@@ -60,7 +60,7 @@ class MongoDurableQueuesTest {
         assertThatThrownBy(() ->
                                    new MongoDurableQueues(
                                            mock(MongoTemplate.class),
-                                           mock(Duration.class),
+                                           Duration.ofSeconds(30),
                                            mock(JSONSerializer.class),
                                            "Invalid Name With Spaces",
                                            null

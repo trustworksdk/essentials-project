@@ -66,68 +66,68 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <java.version>17</java.version>
-        <maven.compiler.source>${java.version}</maven.compiler.source>
-        <maven.compiler.target>${java.version}</maven.compiler.target>
+        <java.build.version>25</java.build.version>
+        <java.release.version>21</java.release.version>
+        <java.version>${java.release.version}</java.version>
+        <maven.compiler.release>${java.release.version}</maven.compiler.release>
         <kotlin.version>2.1.21</kotlin.version>
+        <!-- Language/API level artifacts are compiled against, kept independent of the compiler
+             (kotlin.version) so a newer compiler still emits Kotlin 2.1-compatible binaries/metadata
+             for consumers on Kotlin 2.1. -->
+        <kotlinLanguage.version>2.1</kotlinLanguage.version>
+        <kotlinApi.version>2.1</kotlinApi.version>
         <revision>DEV-SNAPSHOT</revision>
         <skipDependencyCheck>false</skipDependencyCheck>
 
-        <spring-boot.version>3.3.13</spring-boot.version>
-        <spring-framework-bom.version>6.1.21</spring-framework-bom.version>
-        <reactor-bom.version>2024.0.14</reactor-bom.version>
-        <spring-data-mongodb.version>4.3.13</spring-data-mongodb.version>
-        <spring-data-jpa.version>3.3.13</spring-data-jpa.version>
-        <objenesis.version>3.4</objenesis.version>
-        <postgresql.version>42.7.9</postgresql.version>
-        <slf4j.version>2.0.17</slf4j.version>
+        <spring-boot.version>4.0.3</spring-boot.version>
+        <!-- The default Jackson flavour. Jackson 3 is the default because that is what Spring Boot 4 ships with; build
+             or depend with -Pjackson2 to stay on Jackson 2. Both flavours publish the same class names, so exactly one
+             is ever on the classpath, and both write byte-identical JSON — see EssentialsObjectMappers. -->
+        <essentials.jackson.flavor>jackson3</essentials.jackson.flavor>
+        <essentials.types-jackson.artifactId>types-jackson3</essentials.types-jackson.artifactId>
+        <essentials.immutable-jackson.artifactId>immutable-jackson3</essentials.immutable-jackson.artifactId>
+        <objenesis.version>3.5</objenesis.version>
+        <postgresql.version>42.7.13</postgresql.version>
+        <slf4j.version>2.0.18</slf4j.version>
         <awaitility.version>4.3.0</awaitility.version>
         <assertj.version>3.27.7</assertj.version>
-        <mongodb-driver-sync.version>5.0.1</mongodb-driver-sync.version>
-        <log4j-to-slf4j.version>2.25.3</log4j-to-slf4j.version>
-        <json-smart.version>2.5.2</json-smart.version>
+        <log4j-to-slf4j.version>2.25.5</log4j-to-slf4j.version>
+        <json-smart.version>2.6.0</json-smart.version>
         <json-path.version>2.9.0</json-path.version>
-        <snakeyaml.version>2.4</snakeyaml.version>
-        <micrometer.version>1.13.15</micrometer.version>
-        <micrometer-tracing.version>1.3.13</micrometer-tracing.version>
-        <junit-bom.version>5.14.2</junit-bom.version>
-        <testcontainers-bom.version>2.0.3</testcontainers-bom.version>
-        <jdbi3-bom.version>3.51.0</jdbi3-bom.version>
-        <jackson-bom.version>2.20.2</jackson-bom.version>
-        <mockito-bom.version>5.21.0</mockito-bom.version>
-        <logback.version>1.5.25</logback.version>
+        <junit-bom.version>6.0.3</junit-bom.version>
+        <testcontainers-bom.version>2.0.5</testcontainers-bom.version>
+        <jdbi3-bom.version>3.54.0</jdbi3-bom.version>
+        <jackson3-bom.version>3.0.4</jackson3-bom.version>
+        <jackson-bom.version>2.22.1</jackson-bom.version>
+        <mockito-bom.version>5.23.0</mockito-bom.version>
         <avro.version>1.12.1</avro.version>
         <commons-compress.version>1.28.0</commons-compress.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
         <xmlunit-core.version>2.10.4</xmlunit-core.version>
-        <vaadin.version>24.7.14</vaadin.version>
-        <spring.security.version>6.3.10</spring.security.version>
-        <kaributesting.version>2.3.0</kaributesting.version>
-        <kaributesting.servlet.version>1.3.24</kaributesting.servlet.version>
-        <tomcat-embed.version>10.1.50</tomcat-embed.version>
+        <archunit-junit5.version>1.4.2</archunit-junit5.version>
 
-        <dokka.version>2.0.0</dokka.version>
-        <maven-dependency-plugin.version>3.9.0</maven-dependency-plugin.version>
+        <dokka.version>2.1.0</dokka.version>
+        <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
         <maven-project-info-reports-plugin.version>3.9.0</maven-project-info-reports-plugin.version>
         <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
         <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
-        <maven-resources-plugin.version>3.4.0</maven-resources-plugin.version>
+        <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
         <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
-        <maven-site-plugin.version>3.21.0</maven-site-plugin.version>
+        <maven-site-plugin.version>3.22.0</maven-site-plugin.version>
         <maven-jar-plugin.version>3.5.0</maven-jar-plugin.version>
         <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
         <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
-        <maven-failsafe-plugin.version>3.5.4</maven-failsafe-plugin.version>
-        <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
-        <maven-compiler-plugin.version>3.14.1</maven-compiler-plugin.version>
+        <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
+        <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+        <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
         <versions-maven-plugin.version>2.21.0</versions-maven-plugin.version>
-        <maven-enforcer-plugin.version>3.6.2</maven-enforcer-plugin.version>
+        <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
         <minimum-maven-version>3.8.8</minimum-maven-version>
-        <dependency-check-maven.version>12.2.0</dependency-check-maven.version>
+        <dependency-check-maven.version>12.2.2</dependency-check-maven.version>
         <flatten-maven-plugin.version>1.7.3</flatten-maven-plugin.version>
         <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
-        <maven.docker.plugin.version>0.48.0</maven.docker.plugin.version>
-        <central-publishing-maven-plugin.version>0.10.0</central-publishing-maven-plugin.version>
+        <maven.docker.plugin.version>0.48.1</maven.docker.plugin.version>
+        <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
         <essentials.postgres.base-image>postgres:17.5-bookworm</essentials.postgres.base-image>
         <essentials.postgres.image>essentials-postgres:17.5</essentials.postgres.image>
     </properties>
@@ -136,6 +136,7 @@
         <module>shared</module>
         <module>types</module>
         <module>types-jackson</module>
+        <module>types-jackson3</module>
         <module>types-springdata-mongo</module>
         <module>types-springdata-jpa</module>
         <module>types-jdbi</module>
@@ -143,6 +144,7 @@
         <module>types-spring-web</module>
         <module>immutable</module>
         <module>immutable-jackson</module>
+        <module>immutable-jackson3</module>
         <module>reactive</module>
         <module>components/foundation</module>
         <module>components/foundation-types</module>
@@ -160,20 +162,16 @@
         <module>components/springdata-mongo-queue</module>
         <module>components/kotlin-eventsourcing</module>
         <module>components/postgresql-document-db</module>
-        <module>components/vaadin-ui</module>
+        <module>components/admin-api-client-java</module>
+        <module>components/admin-api-spec</module>
+        <module>components/spring-boot-starter-admin-api</module>
         <module>components/spring-boot-starter-admin-ui</module>
+        <module>examples/essentials-performance-lab</module>
     </modules>
 
 
     <dependencyManagement>
         <dependencies>
-            <dependency>
-                <groupId>org.junit</groupId>
-                <artifactId>junit-bom</artifactId>
-                <version>${junit-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>testcontainers-bom</artifactId>
@@ -189,23 +187,23 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>tools.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson3-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
                 <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
                 <version>${jackson-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>io.projectreactor</groupId>
-                <artifactId>reactor-bom</artifactId>
-                <version>${reactor-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework</groupId>
-                <artifactId>spring-framework-bom</artifactId>
-                <version>${spring-framework-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -229,13 +227,6 @@
                 <artifactId>commons-lang3</artifactId>
                 <version>${commons-lang3.version}</version>
                 <scope>provided</scope>
-            </dependency>
-            <dependency>
-                <groupId>com.vaadin</groupId>
-                <artifactId>vaadin-bom</artifactId>
-                <version>${vaadin.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -280,7 +271,6 @@
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-            <version>${logback.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -472,8 +462,7 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>${maven-compiler-plugin.version}</version>
                     <configuration>
-                        <source>${java.version}</source>
-                        <target>${java.version}</target>
+                        <release>${maven.compiler.release}</release>
                         <compilerArgs>
                             <arg>-parameters</arg>
                         </compilerArgs>
@@ -519,7 +508,7 @@
                                     <version>${minimum-maven-version}</version>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
-                                    <version>${java.version}</version>
+                                    <version>[${java.release.version},26)</version>
                                 </requireJavaVersion>
                             </rules>
                         </configuration>
@@ -587,6 +576,25 @@
     </build>
 
     <profiles>
+        <!-- Builds and tests against Jackson 2 instead of the default Jackson 3. -->
+        <profile>
+            <id>jackson2</id>
+            <properties>
+                <essentials.jackson.flavor>jackson2</essentials.jackson.flavor>
+                <essentials.types-jackson.artifactId>types-jackson</essentials.types-jackson.artifactId>
+                <essentials.immutable-jackson.artifactId>immutable-jackson</essentials.immutable-jackson.artifactId>
+            </properties>
+        </profile>
+        <!-- Retained as a no-op alias now that Jackson 3 is the default, so existing commands and CI jobs that pass
+             -Pjackson3 keep working and keep meaning the same thing. -->
+        <profile>
+            <id>jackson3</id>
+            <properties>
+                <essentials.jackson.flavor>jackson3</essentials.jackson.flavor>
+                <essentials.types-jackson.artifactId>types-jackson3</essentials.types-jackson.artifactId>
+                <essentials.immutable-jackson.artifactId>immutable-jackson3</essentials.immutable-jackson.artifactId>
+            </properties>
+        </profile>
         <profile>
             <id>release</id>
             <build>

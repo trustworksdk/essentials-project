@@ -1,0 +1,445 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+ * Design tokens and components for the Essentials admin UI.
+ *
+ * Plain CSS with custom properties — no preprocessor, no build step, nothing to compile. Colour values
+ * come from a validated palette: one sequential hue for magnitude, a reserved four-colour status ramp,
+ * and light/dark as two separately stepped sets rather than an inverted flip.
+ *
+ * Kept in step with docs/openapi/admin-ui-mockup/index.html, which is where the visual language is
+ * reviewed before it lands here.
+ */
+
+/* ── Tokens ────────────────────────────────────────────────────────────────────────────
+   Values from the data-viz reference palette. Light and dark are both selected sets:
+   dark is the same hues re-stepped for the dark surface, never an automatic flip.        */
+:root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --ink-primary: #0b0b0b;
+    --ink-secondary: #52514e;
+    --ink-muted: #898781;
+    --gridline: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --accent: #2a78d6;            /* categorical slot 1 / sequential hue */
+    --seq-track: #cde2fb;         /* sequential step 100 — track only, never data */
+    --seq-fill: #2a78d6;          /* sequential step 450 */
+    --success-text: #006300;
+    /* Status palette — fixed, never themed. Always paired with an icon + label. */
+    --status-good: #0ca30c;
+    --status-warning: #fab219;
+    --status-serious: #ec835a;
+    --status-critical: #d03b3b;
+    --radius: 8px;
+    --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+        color-scheme: dark;
+        --surface-1: #1a1a19;
+        --page: #0d0d0d;
+        --ink-primary: #ffffff;
+        --ink-secondary: #c3c2b7;
+        --ink-muted: #898781;
+        --gridline: #2c2c2a;
+        --baseline: #383835;
+        --border: rgba(255, 255, 255, 0.10);
+        --accent: #3987e5;
+        --seq-track: #184f95;
+        --seq-fill: #3987e5;
+        --success-text: #0ca30c;
+    }
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --ink-primary: #ffffff;
+    --ink-secondary: #c3c2b7;
+    --ink-muted: #898781;
+    --gridline: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5;
+    --seq-track: #184f95;
+    --seq-fill: #3987e5;
+    --success-text: #0ca30c;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-primary);
+    background: var(--page);
+    display: grid;
+    grid-template-columns: 232px 1fr;
+    min-height: 100vh;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────────────────────────── */
+.sidebar {
+    background: var(--surface-1);
+    border-right: 1px solid var(--border);
+    padding: 20px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+}
+
+.brand { padding: 0 8px; }
+.brand-name { font-weight: 600; letter-spacing: -0.01em; }
+.brand-sub { color: var(--ink-muted); font-size: 12px; }
+
+.nav { display: flex; flex-direction: column; gap: 2px; }
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    color: var(--ink-secondary);
+    cursor: pointer;
+    border: none;
+    background: none;
+    font: inherit;
+    text-align: left;
+    width: 100%;
+}
+
+.nav-item:hover { background: color-mix(in oklab, var(--ink-primary) 6%, transparent); }
+
+.nav-item[aria-current="page"] {
+    background: color-mix(in oklab, var(--accent) 12%, transparent);
+    color: var(--ink-primary);
+    font-weight: 500;
+}
+
+.nav-item .ic { width: 16px; text-align: center; color: var(--ink-muted); }
+.nav-item[aria-current="page"] .ic { color: var(--accent); }
+
+/* A nav item the caller's roles do not permit: visible but inert, so the UI explains
+   itself rather than silently hiding capability. */
+.nav-item[disabled] { opacity: 0.45; cursor: not-allowed; }
+
+.nav-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); padding: 0 8px; margin-bottom: 4px; }
+
+.sidebar-footer { margin-top: auto; padding: 0 8px; font-size: 12px; color: var(--ink-muted); }
+
+/* ── Main ──────────────────────────────────────────────────────────────────────────── */
+.main {
+    padding: 20px 24px 48px;
+    max-width: 1400px;
+    /* A grid item's automatic minimum size is min-content, so wide content (a many-column table, a long
+       toolbar) would stretch this column past its track and put the whole page into horizontal scroll —
+       even though the table has its own scroll container. */
+    min-width: 0;
+}
+
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.page-title { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.page-sub { color: var(--ink-secondary); margin: 2px 0 0; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+
+.chip {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--ink-secondary);
+    background: var(--surface-1);
+    font-variant-numeric: tabular-nums;
+}
+
+.btn {
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--ink-primary);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn:hover { background: color-mix(in oklab, var(--ink-primary) 5%, transparent); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-danger { color: var(--status-critical); border-color: color-mix(in oklab, var(--status-critical) 35%, var(--border)); }
+.btn-sm { font-size: 12px; padding: 3px 8px; }
+
+/* ── Card ──────────────────────────────────────────────────────────────────────────── */
+.card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+}
+
+.card-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--gridline);
+}
+
+.card-title { font-weight: 600; font-size: 14px; }
+.card-note { color: var(--ink-muted); font-size: 12px; }
+.card-body { padding: 12px 14px; }
+.card-body.flush { padding: 0; }
+
+/* ── Stat tiles (KPI row) ──────────────────────────────────────────────────────────── */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+
+.tile {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    /* A grid track sized 1fr cannot shrink below its content, so an unexpectedly long value would
+       otherwise widen the row and push the whole page into horizontal scroll. */
+    min-width: 0;
+    overflow: hidden;
+}
+
+.tile-label { color: var(--ink-secondary); font-size: 12px; }
+/* Proportional figures for standalone numbers; tabular is reserved for columns. */
+.tile-value { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-top: 2px; overflow-wrap: anywhere; }
+.tile-sub { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
+.tile-value.is-critical { color: var(--status-critical); }
+.tile-value.is-text { font-size: 18px; font-weight: 600; }
+
+/* ── Status badge — colour NEVER carries meaning alone: icon + label always ─────────── */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+.badge .dot { font-size: 11px; line-height: 1; }
+.badge-good { color: var(--success-text); background: color-mix(in oklab, var(--status-good) 10%, transparent); border-color: color-mix(in oklab, var(--status-good) 30%, var(--border)); }
+.badge-warning { color: var(--ink-primary); background: color-mix(in oklab, var(--status-warning) 18%, transparent); border-color: color-mix(in oklab, var(--status-warning) 45%, var(--border)); }
+.badge-serious { color: var(--ink-primary); background: color-mix(in oklab, var(--status-serious) 18%, transparent); border-color: color-mix(in oklab, var(--status-serious) 45%, var(--border)); }
+.badge-critical { color: var(--status-critical); background: color-mix(in oklab, var(--status-critical) 10%, transparent); border-color: color-mix(in oklab, var(--status-critical) 30%, var(--border)); }
+.badge-neutral { color: var(--ink-secondary); }
+
+/* ── Table ─────────────────────────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 12px;
+    color: var(--ink-secondary);
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--baseline);
+    white-space: nowrap;
+    background: var(--surface-1);
+}
+
+td { padding: 8px 12px; border-bottom: 1px solid var(--gridline); vertical-align: middle; white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: color-mix(in oklab, var(--accent) 5%, transparent); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+.truncate { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nil { color: var(--ink-muted); }
+.actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* A wide table scrolls horizontally; the action column must not scroll out of reach. */
+td.actions, th.sticky {
+    position: sticky;
+    right: 0;
+    background: var(--surface-1);
+    box-shadow: -1px 0 0 var(--gridline);
+}
+
+/* ── Inline magnitude bar (sequential, one hue) ─────────────────────────────────────
+   Ranked magnitude where the label is long text → bar in the cell, not a chart.
+   The number is always shown beside it (relief rule), so the bar is never the only
+   carrier of the value.                                                              */
+.bar-cell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.bar-track { display: block; width: 84px; height: 8px; background: var(--seq-track); border-radius: 4px; overflow: hidden; flex: none; }
+.bar-fill { display: block; height: 100%; background: var(--seq-fill); border-radius: 0 4px 4px 0; }
+.bar-num { font-variant-numeric: tabular-nums; min-width: 68px; text-align: right; }
+
+/* ── Meter — a single ratio against a limit (not a 2-slice pie) ─────────────────────── */
+.meter-row { display: grid; grid-template-columns: 1fr 160px 64px; gap: 12px; align-items: center; padding: 7px 0; }
+.meter-row + .meter-row { border-top: 1px solid var(--gridline); }
+.meter-track { display: block; height: 8px; background: var(--seq-track); border-radius: 4px; overflow: hidden; }
+.meter-fill { display: block; height: 100%; border-radius: 0 4px 4px 0; background: var(--seq-fill); }
+.meter-val { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ── Key/value grid (CDC configuration, slot detail) ───────────────────────────────── */
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 28px; }
+.kv-item { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--gridline); }
+.kv-key { color: var(--ink-secondary); }
+.kv-val { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ── States ────────────────────────────────────────────────────────────────────────── */
+.empty { padding: 28px 14px; text-align: center; color: var(--ink-secondary); }
+.empty-icon { font-size: 20px; color: var(--ink-muted); }
+
+.banner {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    margin-bottom: 16px;
+    font-size: 13px;
+}
+
+.banner-warning { background: color-mix(in oklab, var(--status-warning) 12%, var(--surface-1)); border-color: color-mix(in oklab, var(--status-warning) 40%, var(--border)); }
+.banner-critical { background: color-mix(in oklab, var(--status-critical) 8%, var(--surface-1)); border-color: color-mix(in oklab, var(--status-critical) 30%, var(--border)); }
+.banner-info { background: var(--surface-1); }
+.banner strong { font-weight: 600; }
+
+.skeleton { height: 13px; border-radius: 4px; background: linear-gradient(90deg, var(--gridline), color-mix(in oklab, var(--gridline) 40%, var(--surface-1)), var(--gridline)); background-size: 200% 100%; animation: sk 1.2s ease-in-out infinite; }
+@keyframes sk { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ── Tabs / toolbar ────────────────────────────────────────────────────────────────── */
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.tabs { display: inline-flex; gap: 2px; background: color-mix(in oklab, var(--ink-primary) 5%, transparent); padding: 2px; border-radius: 8px; }
+.tab { font: inherit; font-size: 13px; border: none; background: none; padding: 4px 10px; border-radius: 6px; cursor: pointer; color: var(--ink-secondary); }
+.tab[aria-selected="true"] { background: var(--surface-1); color: var(--ink-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
+select, input[type="text"] { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-primary); }
+.spacer { flex: 1; }
+.pager { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--gridline); color: var(--ink-secondary); font-size: 12px; }
+
+/* ── Detail drawer ──────────────────────────────────────────────────────────────────
+   A drawer rather than a modal: triaging dead letters means stepping through messages one
+   after another, and a modal forces a close/reopen cycle per message. The table stays
+   visible and the drawer just re-renders.                                                */
+.scrim {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32);
+    opacity: 0; pointer-events: none; transition: opacity 0.15s ease; z-index: 50;
+}
+.scrim.is-open { opacity: 1; pointer-events: auto; }
+
+.drawer {
+    position: fixed; top: 0; right: 0; height: 100vh; width: 580px; max-width: 92vw;
+    background: var(--surface-1); border-left: 1px solid var(--border);
+    transform: translateX(100%); transition: transform 0.18s ease; z-index: 51;
+    display: flex; flex-direction: column;
+}
+.drawer.is-open { transform: none; }
+
+.drawer-head { padding: 14px 16px; border-bottom: 1px solid var(--gridline); display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.drawer-title { font-weight: 600; }
+.drawer-body { padding: 14px 16px; overflow-y: auto; flex: 1; }
+.drawer-foot { padding: 12px 16px; border-top: 1px solid var(--gridline); display: flex; gap: 8px; align-items: center; }
+.drawer-sub { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
+
+.code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.55;
+    white-space: pre-wrap; word-break: break-word;
+    background: var(--page); border: 1px solid var(--gridline); border-radius: 6px;
+    padding: 10px 12px; max-height: 300px; overflow: auto; margin: 0;
+}
+
+.code.is-trace {
+    white-space: pre;
+    word-break: normal;
+    overflow-x: auto;
+    max-height: 240px;
+}
+
+.field { margin-bottom: 14px; }
+.field-label { font-size: 12px; color: var(--ink-secondary); display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.field-actions { display: flex; gap: 6px; }
+
+/* Entry id doubles as the affordance that opens the drawer — a real button, so it is
+   keyboard reachable rather than relying on the row click alone. */
+.link {
+    background: none; border: none; padding: 0; font: inherit;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
+    color: var(--accent); cursor: pointer; text-align: left;
+}
+.link:hover { text-decoration: underline; }
+
+tbody tr.is-selected { background: color-mix(in oklab, var(--accent) 9%, transparent); }
+
+/* ── Error & loading states ─────────────────────────────────────────────────────────
+   Rendered inside the card whose fetch failed, so one failing panel never blanks the page. */
+.state { padding: 24px 14px; text-align: center; }
+.state-icon { font-size: 20px; line-height: 1; margin-bottom: 6px; }
+.state-title { font-weight: 600; margin-bottom: 3px; }
+.state-detail { color: var(--ink-secondary); font-size: 13px; max-width: 460px; margin: 0 auto; }
+.state-actions { margin-top: 12px; display: flex; gap: 8px; justify-content: center; }
+.state-401 .state-icon, .state-403 .state-icon { color: var(--status-warning); }
+.state-5xx .state-icon { color: var(--status-critical); }
+
+.sk-row { display: flex; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--gridline); }
+.sk-row:last-child { border-bottom: none; }
+
+/* ── Dialog — a modal IS right here: a destructive confirm must block. ──────────────── */
+.modal-scrim {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.42);
+    opacity: 0; pointer-events: none; transition: opacity 0.12s ease; z-index: 60;
+}
+.modal-scrim.is-open { opacity: 1; pointer-events: auto; }
+
+.modal {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -48%) scale(0.99);
+    width: 460px; max-width: 92vw; z-index: 61;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+    opacity: 0; pointer-events: none; transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.modal.is-open { opacity: 1; pointer-events: auto; transform: translate(-50%, -50%) scale(1); }
+.modal-head { padding: 14px 16px 0; font-weight: 600; }
+.modal-body { padding: 8px 16px 14px; color: var(--ink-secondary); font-size: 13px; }
+.modal-foot { padding: 12px 16px; border-top: 1px solid var(--gridline); display: flex; gap: 8px; justify-content: flex-end; }
+.modal-body label { display: block; color: var(--ink-primary); margin: 12px 0 4px; font-size: 12px; }
+.modal-body input[type="text"], .modal-body select { width: 100%; }
+.btn-solid-danger {
+    background: var(--status-critical); border-color: var(--status-critical); color: #fff;
+}
+.btn-solid-danger:hover { filter: brightness(0.94); background: var(--status-critical); }
+.btn-solid-danger:disabled { opacity: 0.4; }
+
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; }
+.swatch-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.section { display: none; }
+.section.is-active { display: block; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+h3.sub { font-size: 13px; margin: 0 0 8px; color: var(--ink-secondary); font-weight: 500; }

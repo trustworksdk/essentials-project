@@ -68,5 +68,45 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>enforce-module-dependency-direction</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <!--
+                                      Artifact-level guard for the core dependency chain:
+                                      shared -> types/reactive -> foundation-types -> foundation
+                                      -> postgresql-event-store -> eventsourced-aggregates.
+                                      foundation-types may depend only on types/ (and shared/
+                                      transitively). This is where the postgresql-event-store
+                                      boundary is enforced: EssentialsArchitectureTest cannot
+                                      express it because foundation-types declares the event-store
+                                      type primitives under the shared ...eventstore.postgresql...
+                                      package namespace, so a POM-level ban is the precise gate.
+                                    -->
+                                    <excludes>
+                                        <exclude>dk.trustworks.essentials*:*</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>dk.trustworks.essentials:shared</include>
+                                        <include>dk.trustworks.essentials:types</include>
+                                    </includes>
+                                    <message>foundation-types may depend only on types/ (and shared/ transitively) - never on foundation, postgresql-event-store, or any downstream module.</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 </project>

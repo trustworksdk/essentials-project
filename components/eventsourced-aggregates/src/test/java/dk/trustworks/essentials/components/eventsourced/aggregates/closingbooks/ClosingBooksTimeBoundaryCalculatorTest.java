@@ -57,7 +57,7 @@ class ClosingBooksTimeBoundaryCalculatorTest {
                                                                                            null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid currentPeriodId '2026-4'")
-                .hasMessageContaining("Expected format: yyyy-MM");
+                .hasMessageContaining("Expected format: 'yyyy-MM'");
     }
 
     @Test
@@ -71,7 +71,7 @@ class ClosingBooksTimeBoundaryCalculatorTest {
                                                                                            null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid currentPeriodId '2026-W60'")
-                .hasMessageContaining("Expected format: yyyy-Www");
+                .hasMessageContaining("Expected format: 'yyyy-Www'");
     }
 
     @Test
@@ -84,6 +84,6 @@ class ClosingBooksTimeBoundaryCalculatorTest {
                                                                                            " ",
                                                                                            7))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Expected format: yyyy-MM-dd");
+                .hasMessageContaining("Expected format: 'yyyy-MM-dd'");
     }
 }

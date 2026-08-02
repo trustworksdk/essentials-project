@@ -21,9 +21,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.types.*;
 import dk.trustworks.essentials.types.spring.web.model.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
@@ -36,8 +37,9 @@ import java.util.Map;
 import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
-@SpringBootTest
+@SpringBootTest(classes = WebMvcSpringWebApplication.class)
 @AutoConfigureMockMvc
+@EnabledIfSystemProperty(named = "essentials.jackson.flavor", matches = "jackson2")
 public class WebMvcControllerTest {
     @Autowired
     private ObjectMapper objectMapper;

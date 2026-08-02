@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.projection;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
+import dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
@@ -33,7 +34,8 @@ import static org.mockito.Mockito.*;
 class AnnotationBasedInMemoryProjectorTest {
 
     private static final AggregateType ORDERS = AggregateType.of("Orders");
-    private static final JSONEventSerializer JSON_SERIALIZER = mock(JSONEventSerializer.class);
+    private static final JSONEventSerializer JSON_SERIALIZER =
+            EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
 
     private final AnnotationBasedInMemoryProjector projector = new AnnotationBasedInMemoryProjector();
 
@@ -255,9 +257,8 @@ class AnnotationBasedInMemoryProjectorTest {
     private PersistedEvent createPersistedEvent(String aggregateId, long eventOrder, Object event) {
         var eventJSON = new EventJSON(JSON_SERIALIZER,
                                       event,
-                                      EventType.of(event.getClass()),
+                                      new EventType(event.getClass().getName()),
                                       "{}");
-        var metaDataJSON = new EventMetaDataJSON(JSON_SERIALIZER, (String) null, "{}");
 
         return PersistedEvent.from(
                 EventId.random(),
@@ -267,7 +268,7 @@ class AnnotationBasedInMemoryProjectorTest {
                 EventOrder.of(eventOrder),
                 EventRevision.of(1),
                 GlobalEventOrder.of(eventOrder + 1),
-                metaDataJSON,
+                new EventMetaDataJSON(JSON_SERIALIZER, Map.of(), Map.class.getName(), "{}"),
                 OffsetDateTime.now(),
                 Optional.empty(),
                 Optional.of(CorrelationId.random()),

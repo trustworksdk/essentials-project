@@ -126,7 +126,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         this(unitOfWorkFactory,
-             new JacksonJSONSerializer(DurableQueuesSerialization.createDefaultObjectMapper()),
+             DurableQueuesSerialization.createDefaultJSONSerializer(),
              DEFAULT_DURABLE_QUEUES_TABLE_NAME,
              null,
              null);
@@ -150,7 +150,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory) {
         this(unitOfWorkFactory,
-             new JacksonJSONSerializer(DurableQueuesSerialization.createDefaultObjectMapper()),
+             DurableQueuesSerialization.createDefaultJSONSerializer(),
              DEFAULT_DURABLE_QUEUES_TABLE_NAME,
              null,
              queuePollingOptimizerFactory);
@@ -410,6 +410,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private void initializeQueueTables() {
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
         unitOfWorkFactory.usingUnitOfWork(handleAwareUnitOfWork -> {
+            PostgresqlUtil.acquireBootstrapLock(handleAwareUnitOfWork.handle());
             handleAwareUnitOfWork.handle().getJdbi().registerArgument(new QueueNameArgumentFactory());
             handleAwareUnitOfWork.handle().getJdbi().registerColumnMapper(new QueueNameColumnMapper());
             handleAwareUnitOfWork.handle().getJdbi().registerArgument(new QueueEntryIdArgumentFactory());

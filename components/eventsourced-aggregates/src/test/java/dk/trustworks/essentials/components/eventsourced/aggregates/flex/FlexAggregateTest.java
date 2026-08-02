@@ -27,8 +27,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.types.EventId;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.types.LongRange;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -137,7 +135,7 @@ public class FlexAggregateTest {
     // -------------------------- Supporting methods -------------------------------------
 
     private static ObjectMapper        objectMapper   = createObjectMapper();
-    private static JSONEventSerializer jsonSerializer = new JacksonJSONEventSerializer(objectMapper);
+    private static JSONEventSerializer jsonSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
 
     private static PersistedEvent typedEvent(Object aggregateId, Object event, long eventOrder) {
         return PersistedEvent.from(EventId.random(),
@@ -168,8 +166,7 @@ public class FlexAggregateTest {
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
+                                     .addModules(dk.trustworks.essentials.components.eventsourced.aggregates.TestFasterxmlObjectMapperFactory.optionalEssentialsModules())
                                      .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()

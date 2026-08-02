@@ -99,7 +99,8 @@ Write your domain logic once. Integrate with your preferred frameworks through d
 
 | Framework | Module | Purpose                                                      |
 |-----------|--------|--------------------------------------------------------------|
-| Jackson | `types-jackson` | JSON serialization for **Semantic Types**                     |
+| Jackson 3 | `types-jackson3` | JSON serialization for **Semantic Types** (Jackson 3 — the default, matching Spring Boot 4) |
+| Jackson 2 | `types-jackson` | JSON serialization for **Semantic Types** (Jackson 2) |
 | Spring Data MongoDB | `types-springdata-mongo` | MongoDB persistence for **Semantic Types**                    |
 | Spring Data JPA | `types-springdata-jpa` | JPA persistence for **Semantic Types**                        |
 | JDBI v3 | `types-jdbi` | `Jdbi` SQL argument and result mapping for **Semantic Types** |
@@ -114,21 +115,77 @@ You control which versions of Jackson, Spring, and other frameworks your applica
 ```xml
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
-    <artifactId>types-jackson</artifactId>
+    <artifactId>types-jackson3</artifactId>
     <version>${essentials.version}</version>
 </dependency>
 <!-- You add Jackson yourself at your preferred version -->
 <dependency>
-    <groupId>com.fasterxml.jackson.core</groupId>
+    <groupId>tools.jackson.core</groupId>
     <artifactId>jackson-databind</artifactId>
     <version>${jackson.version}</version>
 </dependency>
 ```
 
+### ✅ Choosing the Jackson Major
+
+`types-jackson3`/`immutable-jackson3` (Jackson 3, group `tools.jackson.core`) are the default, matching Spring Boot 4.
+`types-jackson`/`immutable-jackson` (Jackson 2, group `com.fasterxml.jackson.core`) remain supported.
+
+Both publish the **same class names**, so exactly one may be on the classpath. The components modules pull the Jackson 3
+flavour transitively; to stay on Jackson 2, exclude it and declare the Jackson 2 flavour yourself:
+
+```xml
+<dependency>
+    <groupId>dk.trustworks.essentials.components</groupId>
+    <artifactId>postgresql-event-store</artifactId>
+    <version>${essentials.version}</version>
+    <exclusions>
+        <exclusion>
+            <groupId>dk.trustworks.essentials</groupId>
+            <artifactId>types-jackson3</artifactId>
+        </exclusion>
+    </exclusions>
+</dependency>
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>types-jackson</artifactId>
+    <version>${essentials.version}</version>
+</dependency>
+```
+
+Both majors write **byte-identical JSON**, so data persisted by a Jackson 2 deployment stays readable after moving to
+Jackson 3 — that equivalence is enforced by golden wire-format tests that run under both flavours. Build every mapper
+used for persistence through `EssentialsObjectMappers`; a hand-assembled one drifts from that contract.
+
+#### Two things to check in your own event/payload classes when moving to Jackson 3
+
+Both are silent — the JSON keeps being *written* correctly and only fails on the way back in.
+
+1. **Constructor parameter names now matter.** Jackson 3 reads them from the bytecode and treats any constructor as an
+   implicit properties-based creator, even when a no-arg constructor exists; Jackson 2 populated fields instead. A
+   parameter whose name differs from the JSON property it ends up in receives `null`, so the object fails its own
+   validation or comes back half-populated:
+
+   ```java
+   // Breaks under Jackson 3: the parameter is "priceValidity", the persisted property is "priceValidityPeriod"
+   public InitialPriceSet(ProductId forProduct, PriceId priceId, Money price, TimeWindow priceValidity) {
+       super(forProduct, priceId, priceValidity);   // assigns this.priceValidityPeriod
+   }
+   ```
+
+   Rename the parameter to match the property, or annotate it with `@JsonProperty("priceValidityPeriod")` — that
+   annotation lives in `com.fasterxml.jackson.annotation`, which both majors share. The same applies to classic
+   `Event<ID>` subclasses that take an `orderId` and pass it to `aggregateId(...)`: the property is `aggregateId`.
+
+2. **`@JsonDeserialize(keyUsing = …)` stops applying.** It lives in Jackson 2's
+   `com.fasterxml.jackson.databind.annotation` package, which Jackson 3 does not read. For maps keyed by an Essentials
+   value type you no longer need it at all — `types-jackson3` handles those keys itself. For other key types, switch the
+   import to `tools.jackson.databind.annotation`.
+
 ### ✅ Production-Ready Infrastructure Components
 
 For distributed applications, Essentials Components provide:
-- **Event Store** with subscriptions and processors (PostgreSQL)
+- **Event Store** with subscriptions, processors, and optional Hybrid CDC (`pgoutput` default, `wal2json` optional) fallback-to-polling (PostgreSQL)
 - **Event Sourcing** with `AggregateRoot`s, `Decider`, `Evolver`, `Repositories`, `Snapshot Repositories` (PostgreSQL)
 - **Distributed Fenced Locks** for leader election and singleton workers
 - **Durable Queues** with retry, DLQ, and ordered delivery
@@ -276,7 +333,7 @@ See [Essentials Components](components/README.md) for complete documentation.
 │ SPRING BOOT AUTO-CONFIGURATION                                                                  │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
 │  spring-boot-starter-postgresql          spring-boot-starter-postgresql-event-store             │
-│  spring-boot-starter-mongodb             spring-boot-starter-admin-ui                           │
+│  spring-boot-starter-mongodb             spring-boot-starter-admin-api                          │
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
                                                    │
                                                    ▼
@@ -307,11 +364,11 @@ See [Essentials Components](components/README.md) for complete documentation.
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ COMPONENTS - Foundation & UI                                                                    │
+│ COMPONENTS - Foundation & Admin API                                                             │
 ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
-│  │ foundation-types │  │ foundation       │  │ foundation-test  │  │ vaadin-ui        │         │
-│  │ (Common Types)   │  │ (UnitOfWork,     │  │ (Test Utils)     │  │ (Admin UI)       │         │
+│  │ foundation-types │  │ foundation       │  │ foundation-test  │  │ admin-api-spec   │         │
+│  │ (Common Types)   │  │ (UnitOfWork,     │  │ (Test Utils)     │  │ (Admin contract) │         │
 │  │                  │  │  Inbox/Outbox)   │  │                  │  │                  │         │
 │  └──────────────────┘  └──────────────────┘  └──────────────────┘  └──────────────────┘         │
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -438,7 +495,7 @@ Components [LLM Documentation](LLM/LLM-components.md)
 
 | Module | Purpose                                                       | LLM Documentation |
 |--------|---------------------------------------------------------------|-------------------|
-| [postgresql-event-store](components/postgresql-event-store/README.md) | Full-featured Event Store with subscriptions and gap handling | [LLM](LLM/LLM-postgresql-event-store.md) |
+| [postgresql-event-store](components/postgresql-event-store/README.md) | Full-featured Event Store with subscriptions, gap handling, and optional Hybrid CDC (`pgoutput` default, `wal2json` optional) | [LLM](LLM/LLM-postgresql-event-store.md) |
 | [eventsourced-aggregates](components/eventsourced-aggregates/README.md) | AggregateRoot, Decider, Evolver patterns for DDD              | [LLM](LLM/LLM-eventsourced-aggregates.md) |
 | [postgresql-distributed-fenced-lock](components/postgresql-distributed-fenced-lock/README.md) | PostgreSQL distributed locking with fence tokens              | [LLM](LLM/LLM-postgresql-distributed-fenced-lock.md) |
 | [postgresql-queue](components/postgresql-queue/README.md) | PostgreSQL durable message queues with retry and DLQ          | [LLM](LLM/LLM-postgresql-queue.md) |

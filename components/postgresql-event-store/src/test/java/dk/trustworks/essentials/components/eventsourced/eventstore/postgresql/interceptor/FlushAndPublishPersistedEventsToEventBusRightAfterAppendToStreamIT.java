@@ -29,15 +29,13 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ob
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.reactive.EventHandler;
 import dk.trustworks.essentials.types.LongRange;
 import org.jdbi.v3.core.Jdbi;
@@ -48,6 +46,7 @@ import org.testcontainers.junit.jupiter.*;
 
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -88,7 +87,7 @@ class FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStreamIT {
                                                                                        eventMapper,
                                                                                        standardSingleTenantConfiguration(aggregateType_ -> aggregateType_ + "_events",
                                                                                                                          EventStreamTableColumnNames.defaultColumnNames(),
-                                                                                                                         new JacksonJSONEventSerializer(createObjectMapper()),
+                                                                                                                         EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
                                                                                                                          IdentifierColumnType.UUID,
                                                                                                                          JSONColumnType.JSONB));
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory,
@@ -254,10 +253,10 @@ class FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStreamIT {
     
 
     private static class RecordingLocalEventBusConsumer implements EventHandler {
-        private final List<PersistedEvent> beforeCommitPersistedEvents  = new ArrayList<>();
-        private final List<PersistedEvent> afterCommitPersistedEvents   = new ArrayList<>();
-        private final List<PersistedEvent> afterRollbackPersistedEvents = new ArrayList<>();
-        private final List<PersistedEvent> flushPersistedEvents = new ArrayList<>();
+        private final List<PersistedEvent> beforeCommitPersistedEvents  = new CopyOnWriteArrayList<>();
+        private final List<PersistedEvent> afterCommitPersistedEvents   = new CopyOnWriteArrayList<>();
+        private final List<PersistedEvent> afterRollbackPersistedEvents = new CopyOnWriteArrayList<>();
+        private final List<PersistedEvent> flushPersistedEvents = new CopyOnWriteArrayList<>();
 
         @Override
         public void handle(Object event) {
@@ -316,8 +315,7 @@ class FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStreamIT {
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
+                                     .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
                                      .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()

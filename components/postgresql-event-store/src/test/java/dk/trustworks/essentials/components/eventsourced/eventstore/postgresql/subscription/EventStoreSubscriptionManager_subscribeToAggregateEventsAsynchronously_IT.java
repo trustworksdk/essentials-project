@@ -27,15 +27,13 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -46,6 +44,7 @@ import org.testcontainers.shaded.org.awaitility.Awaitility;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.*;
 import java.util.stream.*;
 
@@ -83,7 +82,7 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new TestPersistableEventMapper();
-        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
+        var jsonSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
@@ -153,7 +152,11 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
 
         var testEvents = createTestEvents();
 
-        var productEventsReceived = new ArrayList<PersistedEvent>();
+        // CopyOnWriteArrayList: events are appended on the subscription handler thread but read
+        // (size()/stream()) on the Awaitility/main thread — a plain ArrayList would expose stale or
+        // mid-write state across threads, which is a flakiness source under the connectivity-disruption
+        // scenario where delivery and the assertions race.
+        var productEventsReceived = new CopyOnWriteArrayList<PersistedEvent>();
         var productsSubscription = eventStoreSubscriptionManagerNode1.subscribeToAggregateEventsAsynchronously(
                 SubscriberId.of("ProductsSub1"),
                 PRODUCTS,
@@ -182,7 +185,7 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
                 });
         System.out.println("productsSubscription: " + productsSubscription);
 
-        var orderEventsReceived = new ArrayList<PersistedEvent>();
+        var orderEventsReceived = new CopyOnWriteArrayList<PersistedEvent>();
         var ordersSubscription = eventStoreSubscriptionManagerNode1.subscribeToAggregateEventsAsynchronously(
                 SubscriberId.of("OrdersSub1"),
                 ORDERS,
@@ -252,11 +255,15 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
                                                  .get();
         System.out.println("Total number of Order Events: " + totalNumberOfOrderEvents);
 
-        // Verify we received all Product and Order events
-        Awaitility.waitAtMost(Duration.ofSeconds(10))
+        // Verify we received all Product and Order events. The window must absorb recovery after the
+        // simulated connectivity loss: reconnect + fenced-lock re-acquisition (3s TTL) + resume polling
+        // can take well over the original 5s/10s. Awaitility returns as soon as the count is reached, so
+        // the happy-path (subscribe()) run stays fast; the generous ceiling only matters under disruption.
+        var deliveryTimeout = simulateDbConnectivityIssues ? Duration.ofSeconds(40) : Duration.ofSeconds(10);
+        Awaitility.waitAtMost(deliveryTimeout)
                   .untilAsserted(() -> assertThat(productEventsReceived.size()).isEqualTo(totalNumberOfProductEvents));
 
-        Awaitility.waitAtMost(Duration.ofSeconds(5))
+        Awaitility.waitAtMost(deliveryTimeout)
                   .untilAsserted(() -> assertThat(orderEventsReceived.size()).isEqualTo(totalNumberOfOrderEvents));
 
         // Sleep a little to verify that no additional events were delivered
@@ -294,9 +301,19 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
         productsSubscription.stop();
         ordersSubscription.stop();
 
-        // Check the ResumePoints are updated and saved
-        var lastEventOrder   = orderEventsReceived.get(totalNumberOfOrderEvents - 1);
-        var lastProductEvent = productEventsReceived.get(totalNumberOfProductEvents - 1);
+        // Check the ResumePoints are updated and saved.
+        // Select by highest GlobalEventOrder rather than by arrival position: under the
+        // connectivity-disruption scenario events can arrive out of order (which is why the
+        // GlobalEventOrder assertions above sort first), so the last *received* event is not
+        // necessarily the one with the highest GlobalEventOrder. The resume point always tracks
+        // the highest order consumed, so it must be compared against the maximum. With in-order
+        // delivery the maximum is also the last arrival, so this is equivalent for subscribe().
+        var lastEventOrder   = orderEventsReceived.stream()
+                                                  .max(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                                  .orElseThrow();
+        var lastProductEvent = productEventsReceived.stream()
+                                                    .max(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                                    .orElseThrow();
 
         assertThat(ordersSubscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()); // When the subscriber is stopped we store the next global event order
         var ordersSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(ordersSubscription.subscriberId(), ordersSubscription.aggregateType());
@@ -594,8 +611,7 @@ class EventStoreSubscriptionManager_subscribeToAggregateEventsAsynchronously_IT 
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
+                                     .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
                                      .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()

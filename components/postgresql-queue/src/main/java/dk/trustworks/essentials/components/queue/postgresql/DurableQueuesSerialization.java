@@ -16,19 +16,26 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
- import com.fasterxml.jackson.annotation.JsonAutoDetect;
- import com.fasterxml.jackson.databind.*;
- import com.fasterxml.jackson.databind.json.JsonMapper;
- import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
- import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
- import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
- import dk.trustworks.essentials.components.foundation.messaging.queue.*;
- import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
- import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
+import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer;
+import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
+import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueDeserializationException;
+import dk.trustworks.essentials.components.foundation.messaging.queue.MessageMetaData;
+import dk.trustworks.essentials.components.foundation.messaging.queue.QueueEntryId;
+import dk.trustworks.essentials.components.foundation.messaging.queue.QueueName;
 
- import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
- import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
- import static dk.trustworks.essentials.shared.MessageFormatter.msg;
+import static dk.trustworks.essentials.shared.Exceptions.rethrowIfCriticalError;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Helper class for serialization operations used by PostgresqlDurableQueues.
@@ -91,34 +98,22 @@ public class DurableQueuesSerialization {
     }
 
     /**
+     * Create default {@link JSONSerializer}. Uses Jackson 3 when the Jackson 3 Essentials modules are present,
+     * otherwise falls back to Jackson 2.
+     */
+    public static JSONSerializer createDefaultJSONSerializer() {
+        return EssentialsObjectMappers.createJSONSerializer();
+    }
+
+    /**
      * Default {@link ObjectMapper} supporting {@link Jdk8Module}, {@link JavaTimeModule}, {@link EssentialTypesJacksonModule} and {@link EssentialsImmutableJacksonModule}, which
      * is used together with the {@link JSONSerializer}
      *
      * @return the default {@link ObjectMapper}
      */
     public static ObjectMapper createDefaultObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+        return EssentialsObjectMappers.createJackson2ObjectMapper();
     }
+
+
 }

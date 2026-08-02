@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.document_db.DocumentDbRepositoryFacto
 import dk.trustworks.essentials.components.document_db.VersionedEntity
 import dk.trustworks.essentials.components.document_db.annotations.DocumentEntity
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer
+import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil
 import dk.trustworks.essentials.kotlin.types.*
 import java.math.BigDecimal
 import java.math.BigInteger
@@ -30,6 +31,25 @@ import kotlin.reflect.KClass
 import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
 import kotlin.reflect.full.isSuperclassOf
+import kotlin.reflect.full.createType
+
+/**
+ * PostgreSQL type used when casting JSON path values in Java-friendly APIs.
+ */
+enum class DbType(val sql: String) {
+    TEXT("TEXT"),
+    INTEGER("INTEGER"),
+    BIGINT("BIGINT"),
+    REAL("REAL"),
+    DOUBLE_PRECISION("DOUBLE PRECISION"),
+    NUMERIC("NUMERIC"),
+    BOOLEAN("BOOLEAN"),
+    SMALLINT("SMALLINT"),
+    DATE("DATE"),
+    TIME("TIME"),
+    TIMESTAMP("TIMESTAMP"),
+    TIMESTAMPTZ("TIMESTAMPTZ")
+}
 
 
 /**
@@ -147,6 +167,62 @@ class Condition<T>(val jsonSerializer: JSONSerializer) {
      * ```
      */
     infix fun KProperty1<T, String>.like(value: String): Condition<T> = applyCondition(this, "LIKE", value)
+
+    /**
+     * Java-friendly variant of [eq] using a dot-separated JSON path.
+     * Example paths: `name`, `address.city`, `contact.address.zip`.
+     */
+    fun eq(path: String, value: Any?): Condition<T> = applyPathCondition(path, "=", value, null)
+
+    /**
+     * Java-friendly variant of [eq] using a dot-separated JSON path and explicit [DbType] cast.
+     */
+    fun eq(path: String, value: Any?, dbType: DbType): Condition<T> = applyPathCondition(path, "=", value, dbType)
+
+    /**
+     * Java-friendly variant of [lt] using a dot-separated JSON path.
+     */
+    fun lt(path: String, value: Any?): Condition<T> = applyPathCondition(path, "<", value, null)
+
+    /**
+     * Java-friendly variant of [lt] using a dot-separated JSON path and explicit [DbType] cast.
+     */
+    fun lt(path: String, value: Any?, dbType: DbType): Condition<T> = applyPathCondition(path, "<", value, dbType)
+
+    /**
+     * Java-friendly variant of [lte] using a dot-separated JSON path.
+     */
+    fun lte(path: String, value: Any?): Condition<T> = applyPathCondition(path, "<=", value, null)
+
+    /**
+     * Java-friendly variant of [lte] using a dot-separated JSON path and explicit [DbType] cast.
+     */
+    fun lte(path: String, value: Any?, dbType: DbType): Condition<T> = applyPathCondition(path, "<=", value, dbType)
+
+    /**
+     * Java-friendly variant of [gt] using a dot-separated JSON path.
+     */
+    fun gt(path: String, value: Any?): Condition<T> = applyPathCondition(path, ">", value, null)
+
+    /**
+     * Java-friendly variant of [gt] using a dot-separated JSON path and explicit [DbType] cast.
+     */
+    fun gt(path: String, value: Any?, dbType: DbType): Condition<T> = applyPathCondition(path, ">", value, dbType)
+
+    /**
+     * Java-friendly variant of [gte] using a dot-separated JSON path.
+     */
+    fun gte(path: String, value: Any?): Condition<T> = applyPathCondition(path, ">=", value, null)
+
+    /**
+     * Java-friendly variant of [gte] using a dot-separated JSON path and explicit [DbType] cast.
+     */
+    fun gte(path: String, value: Any?, dbType: DbType): Condition<T> = applyPathCondition(path, ">=", value, dbType)
+
+    /**
+     * Java-friendly variant of [like] using a dot-separated JSON path.
+     */
+    fun like(path: String, value: String): Condition<T> = applyPathCondition(path, "LIKE", value, DbType.TEXT)
 
 //    infix fun KProperty1<T, Collection<String>>.anyLike(value: String): KProperty1<T, Collection<String>> {
 //        val conditionProperty = SingleProperty(this)
@@ -277,6 +353,29 @@ class Condition<T>(val jsonSerializer: JSONSerializer) {
         return this
     }
 
+    internal fun applyPathCondition(path: String, operator: String, value: Any?, dbType: DbType?): Condition<T> {
+        val property = JsonPathProperty<T>(path)
+        val bindName = uniqueBindName(property)
+        val condition = if (dbType != null) {
+            "CAST(${property.toJSONValueArrowPath()} AS ${dbType.sql}) $operator :$bindName"
+        } else {
+            "${property.toJSONValueArrowPath()} $operator :$bindName"
+        }
+
+        conditions.add(condition)
+        bindings[bindName] = toBindingValue(value)
+        return this
+    }
+
+    private fun toBindingValue(value: Any?): Any? = when (value) {
+        is LocalDate -> value.format(DateTimeFormatter.ISO_LOCAL_DATE)
+        is LocalTime -> value.format(DateTimeFormatter.ISO_LOCAL_TIME)
+        is LocalDateTime -> value.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+        is OffsetDateTime -> value.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+        is ZonedDateTime -> value.format(DateTimeFormatter.ISO_ZONED_DATE_TIME)
+        else -> value
+    }
+
     internal fun build(): Pair<String, Map<String, Any?>> = Pair(conditions.joinToString(" AND "), bindings)
 }
 
@@ -288,6 +387,41 @@ interface Property<T, R> {
     fun toJSONArrowPath(): String
     fun returnType(): KType
     fun name(): String
+}
+
+/**
+ * A JSON path based [Property], intended for Java callers that can't use Kotlin [KProperty1] references.
+ * Paths are dot-separated, e.g. `address.city`.
+ */
+class JsonPathProperty<T>(private val path: String) : Property<T, Any?> {
+    private val segments = path.split('.').map { it.trim() }.filter { it.isNotEmpty() }
+
+    init {
+        require(segments.isNotEmpty()) { "Path must contain at least one segment" }
+        segments.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it) }
+    }
+
+    override fun toJSONValueArrowPath(): String {
+        return if (segments.size == 1) {
+            "data->>'${segments.first()}'"
+        } else {
+            "data->" + segments.dropLast(1).joinToString(separator = "->") { "'$it'" } + "->>'${segments.last()}'"
+        }
+    }
+
+    override fun toJSONArrowPath(): String {
+        return "data->" + segments.joinToString(separator = "->") { "'$it'" }
+    }
+
+    override fun returnType(): KType {
+        return Any::class.createType(nullable = true)
+    }
+
+    override fun name(): String {
+        return segments.joinToString(separator = "_")
+    }
+
+    fun path(): String = path
 }
 
 /**
@@ -532,6 +666,7 @@ class QueryBuilder<ID, ENTITY : VersionedEntity<ID, ENTITY>>(
 ) {
     private val conditions = mutableListOf<Condition<ENTITY>>()
     private val orderByFields = mutableListOf<Pair<Property<ENTITY, *>, Order>>()
+    private val orderByPathFields = mutableListOf<Triple<JsonPathProperty<ENTITY>, Order, DbType?>>()
 
     //    private val groupByFields = mutableListOf<Property<ENTITY, *>>()
     private var limitValue: Int? = null
@@ -676,6 +811,20 @@ class QueryBuilder<ID, ENTITY : VersionedEntity<ID, ENTITY>>(
      */
     fun orderBy(property: NestedProperty<ENTITY, *>, order: Order = Order.ASC) = apply { orderByFields.add(property to order) }
 
+    /**
+     * Java-friendly order by using a dot-separated JSON path (e.g. `address.city`).
+     */
+    fun orderBy(path: String, order: Order = Order.ASC) = apply {
+        orderByPathFields.add(Triple(JsonPathProperty(path), order, null))
+    }
+
+    /**
+     * Java-friendly order by using a dot-separated JSON path with explicit [DbType] cast.
+     */
+    fun orderBy(path: String, dbType: DbType, order: Order = Order.ASC) = apply {
+        orderByPathFields.add(Triple(JsonPathProperty(path), order, dbType))
+    }
+
 //    fun groupBy(vararg properties: KProperty1<ENTITY, *>) = apply { groupByFields.addAll(properties.map { SingleProperty(it) }) }
 //    fun groupBy(vararg properties: NestedProperty<ENTITY, *>) = apply { groupByFields.addAll(properties) }
 
@@ -751,6 +900,14 @@ class QueryBuilder<ID, ENTITY : VersionedEntity<ID, ENTITY>>(
         if (orderByFields.isNotEmpty()) {
             sql.append(" ORDER BY ").append(orderByFields.joinToString(", ") { castOrderBy(it) + " ${it.second}" })
         }
+        if (orderByPathFields.isNotEmpty()) {
+            val prefix = if (orderByFields.isEmpty()) " ORDER BY " else ", "
+            sql.append(prefix).append(orderByPathFields.joinToString(", ") {
+                val expression = it.third?.let { dbType -> "CAST(${it.first.toJSONValueArrowPath()} AS ${dbType.sql})" }
+                    ?: it.first.toJSONValueArrowPath()
+                "$expression ${it.second}"
+            })
+        }
 
         limitValue?.let { sql.append(" LIMIT :limit"); bindings["limit"] = it }
         offsetValue?.let { sql.append(" OFFSET :offset"); bindings["offset"] = it }
@@ -791,6 +948,13 @@ fun <T, R> KProperty1<T, R>.asProperty(): Property<T, R> {
     return SingleProperty(this)
 }
 
+/**
+ * Java-friendly helper for creating a [Property] from a dot-separated JSON path.
+ */
+fun <T> pathProperty(path: String): Property<T, Any?> {
+    return JsonPathProperty(path)
+}
+
 internal class NoJSONSerializer : JSONSerializer {
     override fun serialize(obj: Any?): String {
         throw NotImplementedError("Not supported")
@@ -824,7 +988,6 @@ internal class NoJSONSerializer : JSONSerializer {
         throw NotImplementedError("Not supported")
     }
 }
-
 
 
 

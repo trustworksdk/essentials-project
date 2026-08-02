@@ -20,6 +20,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pe
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
 import org.junit.jupiter.api.*;
 
+import java.lang.reflect.Field;
+
 import static dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EventJSONTest.createSerializer;
 import static org.assertj.core.api.Assertions.*;
 
@@ -77,9 +79,7 @@ class EventMetaDataJSONTest {
     void givenEventMetaDataJSONWithoutSerializer_whenCallingDeserialize_thenThrowsException() {
         // Given
         var eventMetaDataJSON = new EventMetaDataJSON(jsonEventSerializer, JAVA_TYPE, json);
-
-        // When
-        eventMetaDataJSON = jsonEventSerializer.deserialize(jsonEventSerializer.serialize(eventMetaDataJSON), EventMetaDataJSON.class);
+        clearSerializer(eventMetaDataJSON);
 
         // When
         assertThatThrownBy(eventMetaDataJSON::deserialize)
@@ -147,5 +147,15 @@ class EventMetaDataJSONTest {
         // When & Then
         assertThat(eventMetaDataJSON.getJavaType()).isNotPresent();
         assertThat(eventMetaDataJSON.getJson()).isEqualTo(json);
+    }
+
+    private static void clearSerializer(EventMetaDataJSON eventMetaDataJSON) {
+        try {
+            Field field = EventMetaDataJSON.class.getDeclaredField("jsonSerializer");
+            field.setAccessible(true);
+            field.set(eventMetaDataJSON, null);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Failed to clear EventMetaDataJSON serializer", e);
+        }
     }
 }

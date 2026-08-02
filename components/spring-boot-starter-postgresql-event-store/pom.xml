@@ -62,7 +62,6 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
-            <version>${snakeyaml.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -79,16 +78,22 @@
             <version>${spring-boot.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Spring Boot 4 moved the health contributor API and its @ConditionalOnEnabledHealthIndicator
+             out of spring-boot-actuator-autoconfigure into the separate spring-boot-health module. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-health</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
-            <version>${micrometer.version}</version>
             <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing</artifactId>
-            <version>${micrometer-tracing.version}</version>
             <optional>true</optional>
         </dependency>
 
@@ -130,6 +135,17 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Jackson 3, required when essentials.types-jackson.artifactId resolves to the Jackson 3 flavour. This starter
+             builds on spring-boot-starter-postgresql, whose EssentialsComponentsConfiguration declares @Bean methods
+             returning the Essentials Jackson module types; those then extend tools.jackson.databind.module.SimpleModule,
+             and Spring has to load that hierarchy to introspect the class at all. The sibling declares it as provided,
+             which is not transitive, so it has to be named here too or the whole auto-configuration fails to parse. -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>

@@ -16,8 +16,8 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
+import dk.trustworks.essentials.components.foundation.json.Jackson3JSONSerializer;
 import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JSONEventSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
@@ -26,6 +26,7 @@ import org.objenesis.ObjenesisStd;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -111,7 +112,7 @@ public class DefaultAggregateSnapshotStateAdapter implements AggregateSnapshotSt
     }
 
     private void applyDomainState(Object target, Map<String, Object> domainState) throws IllegalAccessException {
-        var objectMapper = objectMapper();
+        var valueConverter = valueConverter();
         Class<?> type = target.getClass();
         while (type != null && type != Object.class) {
             for (Field field : type.getDeclaredFields()) {
@@ -127,42 +128,57 @@ public class DefaultAggregateSnapshotStateAdapter implements AggregateSnapshotSt
                 if (isAggregateStateField(field) && rawValue instanceof Map<?, ?> nestedStateMap) {
                     var existingState = field.get(target);
                     if (existingState == null) {
-                        field.set(target, convertFieldValue(field, rawValue, objectMapper));
+                        field.set(target, convertFieldValue(field, rawValue, valueConverter));
                     } else {
                         @SuppressWarnings("unchecked")
                         var nestedDomainState = (Map<String, Object>) nestedStateMap;
                         applyDomainState(existingState, nestedDomainState);
                     }
                 } else {
-                    field.set(target, convertFieldValue(field, rawValue, objectMapper));
+                    field.set(target, convertFieldValue(field, rawValue, valueConverter));
                 }
             }
             type = type.getSuperclass();
         }
     }
 
-    private Object convertFieldValue(Field field, Object rawValue, ObjectMapper objectMapper) {
+    private Object convertFieldValue(Field field, Object rawValue, SnapshotValueConverter valueConverter) {
         if (rawValue instanceof Map<?, ?> rawMap && Map.class.isAssignableFrom(field.getType())) {
-            return convertMapFieldValue(field, rawMap, objectMapper);
+            return convertMapFieldValue(field, rawMap, valueConverter);
         }
-        return objectMapper.convertValue(rawValue, objectMapper.constructType(field.getGenericType()));
+        return valueConverter.convert(rawValue, field.getGenericType());
     }
 
-    private Object convertMapFieldValue(Field field, Map<?, ?> rawMap, ObjectMapper objectMapper) {
+    private Object convertMapFieldValue(Field field, Map<?, ?> rawMap, SnapshotValueConverter valueConverter) {
         if (field.getGenericType() instanceof ParameterizedType parameterizedType && parameterizedType.getActualTypeArguments().length == 2) {
-            var keyType = objectMapper.constructType(parameterizedType.getActualTypeArguments()[0]);
-            var valueType = objectMapper.constructType(parameterizedType.getActualTypeArguments()[1]);
+            var keyType   = parameterizedType.getActualTypeArguments()[0];
+            var valueType = parameterizedType.getActualTypeArguments()[1];
             var convertedMap = new LinkedHashMap<>();
-            rawMap.forEach((key, value) -> convertedMap.put(objectMapper.convertValue(key, keyType),
-                                                            objectMapper.convertValue(value, valueType)));
+            rawMap.forEach((key, value) -> convertedMap.put(valueConverter.convert(key, keyType),
+                                                            valueConverter.convert(value, valueType)));
             return convertedMap;
         }
-        return objectMapper.convertValue(rawMap, objectMapper.constructType(field.getGenericType()));
+        return valueConverter.convert(rawMap, field.getGenericType());
     }
 
-    private ObjectMapper objectMapper() {
+    /**
+     * Converts a raw JSON value (as produced by binding the snapshot to a {@link Map}) into the target field's type,
+     * using the Jackson mapper of whichever flavour the {@link JSONEventSerializer} wraps. Both Jackson majors are
+     * supported because a build picks one of them and the snapshot has to be readable under either.
+     */
+    @FunctionalInterface
+    private interface SnapshotValueConverter {
+        Object convert(Object rawValue, Type targetType);
+    }
+
+    private SnapshotValueConverter valueConverter() {
         if (jsonSerializer instanceof JacksonJSONSerializer jacksonJSONSerializer) {
-            return jacksonJSONSerializer.getObjectMapper();
+            var objectMapper = jacksonJSONSerializer.getObjectMapper();
+            return (rawValue, targetType) -> objectMapper.convertValue(rawValue, objectMapper.constructType(targetType));
+        }
+        if (jsonSerializer instanceof Jackson3JSONSerializer jackson3JSONSerializer) {
+            var objectMapper = jackson3JSONSerializer.getObjectMapper();
+            return (rawValue, targetType) -> objectMapper.convertValue(rawValue, objectMapper.constructType(targetType));
         }
         throw new IllegalStateException("DefaultAggregateSnapshotStateAdapter requires a Jackson-based JSONEventSerializer, but got " + jsonSerializer.getClass().getName());
     }

@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import com.zaxxer.hikari.HikariDataSource;
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DuplicateConsumptionDurableQueuesIT;
@@ -69,7 +69,7 @@ abstract class PostgresqlDuplicateConsumptionDurableQueuesIT extends DuplicateCo
         var pollingIntervalMillis                = 20;
         var maxPollingIntervalMillis             = 2000;
         var centralizedPollingDelayBackOffFactor = 1.5d;
-        var jsonSerializer                       = new JacksonJSONSerializer(DurableQueuesSerialization.createDefaultObjectMapper());
+        var jsonSerializer                       = EssentialsObjectMappers.createJSONSerializer();
         var eventBus = LocalEventBus.builder()
                                     .busName("default")
                                     .build();

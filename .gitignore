@@ -1,7 +1,9 @@
 target/
+.m2/
 
 .idea/
 *.iml
+.factorypath
 
 .settings/
 .classpath
@@ -19,3 +21,25 @@ webpack.generated.js
 tsconfig.json
 types.d.ts
 vite.generated.ts
+
+/.m2/
+
+# Claude
+/.claude/worktrees/
+CLAUDE.local.md
+.claude/agent-memory
+
+# DevContainer — local-only / per-developer (never committed)
+.devcontainer/.plugin-marketplace/
+.devcontainer/.env.local
+.claude/settings.local.json
+# Project MCP servers — machine/IDE-specific (e.g. the JetBrains "idea" bridge on
+# localhost); enablement lives in the gitignored .claude/settings.local.json.
+.mcp.json
+.devcontainer/scripts/local-init.sh
+.claude/reports
+# >>> devcontainer-stack (managed) >>>
+# graphify: ignore the rebuildable cache,  graph.json / wiki.
+graphify-out
+.claude/skills/graphify
+# <<< managed <<<

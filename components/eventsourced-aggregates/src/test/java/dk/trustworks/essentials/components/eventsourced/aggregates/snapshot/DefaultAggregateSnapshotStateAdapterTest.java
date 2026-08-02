@@ -16,17 +16,12 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.snapshot;
 
-import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.databind.*;
 import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.eventsourced.aggregates.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.modern.OrderEvent;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -34,7 +29,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DefaultAggregateSnapshotStateAdapterTest {
-    private final AggregateSnapshotStateAdapter adapter = new DefaultAggregateSnapshotStateAdapter(new JacksonJSONEventSerializer(createObjectMapper()));
+    private final AggregateSnapshotStateAdapter adapter = new DefaultAggregateSnapshotStateAdapter(EssentialsJSONEventSerializers.createForActiveJacksonFlavor());
 
     @Test
     void serializes_domain_state_without_framework_runtime_fields_for_plain_modern_aggregate() {
@@ -85,6 +80,12 @@ class DefaultAggregateSnapshotStateAdapterTest {
         // must deserialize even if the user has NOT registered EssentialsImmutableJacksonModule
         // (and therefore Jackson alone cannot instantiate the type from "{}"). Objenesis is used
         // directly by DefaultAggregateSnapshotStateAdapter to bypass the constructor.
+        //
+        // Deliberately pinned to a bare Jackson 2 mapper rather than going through
+        // EssentialsJSONEventSerializers: the scenario needs a mapper that CANNOT instantiate the type,
+        // and Jackson 3 reads a lone single-argument constructor as a creator, which would construct the
+        // aggregate itself and never reach the Objenesis fallback this test covers. No Essentials Jackson
+        // module is registered here, so nothing flavor-specific is exercised.
         var jsonMapper = JsonMapper.builder()
                                    .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
                                    .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -116,29 +117,4 @@ class DefaultAggregateSnapshotStateAdapterTest {
         }
     }
 
-    static ObjectMapper createObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
-    }
 }

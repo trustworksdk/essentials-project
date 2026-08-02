@@ -183,12 +183,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
         }
 
         // Save resume point to be the next global order event AFTER the one we know we just handled
-        log.info("[{}-{}] Storing ResumePoint with resumeFromAndIncluding {}",
-                subscriberId,
-                aggregateType,
-                resumePoint.getResumeFromAndIncluding());
-
-        durableSubscriptionRepository.saveResumePoint(resumePoint);
+        persistResumePointUntilSettled(durableSubscriptionRepository, resumePoint);
         active = false;
         log.info("[{}-{}] Stopped subscription",
                 subscriberId,
