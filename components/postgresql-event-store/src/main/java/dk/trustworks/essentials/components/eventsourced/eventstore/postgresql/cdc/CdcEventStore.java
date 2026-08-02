@@ -22,6 +22,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ga
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.EventStoreInterceptor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
 import dk.trustworks.essentials.components.foundation.types.*;
@@ -51,13 +53,21 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * over the base EventStore implementation, adding support for backfills, event gap handling,
  * and advanced features for capturing data changes.
  * <p>
+ * <p>
+ * It decorates a {@link ConfigurableEventStore} and is itself a {@link ConfigurableEventStore}: the CDC store is
+ * registered as the {@code @Primary} {@link EventStore} bean, so anything resolving the event store — including
+ * {@code AbstractEventProcessor}, which narrows it to {@link ConfigurableEventStore} to look up an
+ * {@link AggregateIdSerializer} — receives this decorator rather than the store it wraps. Implementing the
+ * configuration contract and forwarding it to the delegate is what keeps that narrowing valid. The mutators return
+ * {@code this} so a caller that configures through the decorator keeps hold of the decorator.
+ * <p>
  * Public Constructors:
- * - CdcEventStore(EventStore delegate, EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
- *   EventStreamGapHandler<?> eventStreamGapHandler, CdcEventBus cdcBus, CdcProperties cdcProperties,
+ * - CdcEventStore(ConfigurableEventStore&lt;CONFIG&gt; delegate, EventStoreUnitOfWorkFactory&lt;? extends EventStoreUnitOfWork&gt; unitOfWorkFactory,
+ *   EventStreamGapHandler&lt;?&gt; eventStreamGapHandler, CdcEventBus cdcBus, CdcProperties cdcProperties,
  *   CdcAvailability availability)
- * - CdcEventStore(EventStore delegate, EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
- *   EventStreamGapHandler<?> eventStreamGapHandler, CdcEventBus cdcBus, CdcProperties cdcProperties,
- *   CdcAvailability availability, Optional<MeterRegistry> meterRegistry)
+ * - CdcEventStore(ConfigurableEventStore&lt;CONFIG&gt; delegate, EventStoreUnitOfWorkFactory&lt;? extends EventStoreUnitOfWork&gt; unitOfWorkFactory,
+ *   EventStreamGapHandler&lt;?&gt; eventStreamGapHandler, CdcEventBus cdcBus, CdcProperties cdcProperties,
+ *   CdcAvailability availability, Optional&lt;MeterRegistry&gt; meterRegistry)
  * <p>
  * Public Methods:
  * - pollEvents: Polls a stream of persisted events based on the provided aggregate type and filtering criteria.
@@ -81,11 +91,11 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * - backfillFlux: Generates a flux of events during backfill, supporting pagination and optional gap handling.
  * - backfillOnePageAndEmit: Processes a single page of backfill operations, with support for emitting events to a consumer.
  */
-public class CdcEventStore implements EventStore {
+public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> implements ConfigurableEventStore<CONFIG> {
 
     private static final Logger log = LoggerFactory.getLogger(CdcEventStore.class);
 
-    private final EventStore                                                  eventStore;
+    private final ConfigurableEventStore<CONFIG>                              eventStore;
     private final EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
     private final EventStreamGapHandler<?>                                    eventStreamGapHandler;
     private final CdcEventBus                                                 cdcBus;
@@ -130,7 +140,7 @@ public class CdcEventStore implements EventStore {
      */
     private final AtomicInteger                                               backfillLiveBufferSize = new AtomicInteger(0);
 
-    public CdcEventStore(EventStore delegate,
+    public CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
                          CdcEventBus cdcBus,
@@ -139,7 +149,7 @@ public class CdcEventStore implements EventStore {
         this(delegate, unitOfWorkFactory, eventStreamGapHandler, cdcBus, cdcProperties, availability, Optional.empty());
     }
 
-    public CdcEventStore(EventStore delegate,
+    public CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
                          CdcEventBus cdcBus,
@@ -640,6 +650,77 @@ public class CdcEventStore implements EventStore {
     @Override
     public Flux<PersistedEvent> unboundedPollForEvents(AggregateType aggregateType, long fromInclusiveGlobalOrder, Optional<Integer> loadEventsByGlobalOrderBatchSize, Optional<Duration> pollingInterval, Optional<Tenant> onlyIncludeEventIfItBelongsToTenant, Optional<SubscriberId> subscriptionId) {
         return eventStore.unboundedPollForEvents(aggregateType, fromInclusiveGlobalOrder, loadEventsByGlobalOrderBatchSize, pollingInterval, onlyIncludeEventIfItBelongsToTenant, subscriptionId);
+    }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // ConfigurableEventStore — configuration lives on the wrapped store; the mutators return this decorator so a
+    // caller that configures through it does not silently end up holding the undecorated store.
+    // ------------------------------------------------------------------------------------------------------------
+
+    @Override
+    public ConfigurableEventStore<CONFIG> addAggregateEventStreamConfiguration(CONFIG eventStreamConfiguration) {
+        eventStore.addAggregateEventStreamConfiguration(eventStreamConfiguration);
+        return this;
+    }
+
+    @Override
+    public ConfigurableEventStore<CONFIG> addAggregateEventStreamConfiguration(AggregateType aggregateType,
+                                                                               AggregateIdSerializer aggregateIdSerializer) {
+        eventStore.addAggregateEventStreamConfiguration(aggregateType, aggregateIdSerializer);
+        return this;
+    }
+
+    @Override
+    public ConfigurableEventStore<CONFIG> addAggregateEventStreamConfiguration(AggregateType aggregateType,
+                                                                               Class<?> aggregateIdType) {
+        eventStore.addAggregateEventStreamConfiguration(aggregateType, aggregateIdType);
+        return this;
+    }
+
+    @Override
+    public CONFIG getAggregateEventStreamConfiguration(AggregateType aggregateType) {
+        return eventStore.getAggregateEventStreamConfiguration(aggregateType);
+    }
+
+    @Override
+    public Optional<CONFIG> findAggregateEventStreamConfiguration(AggregateType aggregateType) {
+        return eventStore.findAggregateEventStreamConfiguration(aggregateType);
+    }
+
+    @Override
+    public ConfigurableEventStore<CONFIG> addGenericInMemoryProjector(InMemoryProjector inMemoryProjector) {
+        eventStore.addGenericInMemoryProjector(inMemoryProjector);
+        return this;
+    }
+
+    @Override
+    public ConfigurableEventStore<CONFIG> removeGenericInMemoryProjector(InMemoryProjector inMemoryProjector) {
+        eventStore.removeGenericInMemoryProjector(inMemoryProjector);
+        return this;
+    }
+
+    @Override
+    public ConfigurableEventStore<CONFIG> addSpecificInMemoryProjector(Class<?> projectionType, InMemoryProjector inMemoryProjector) {
+        eventStore.addSpecificInMemoryProjector(projectionType, inMemoryProjector);
+        return this;
+    }
+
+    @Override
+    public ConfigurableEventStore<CONFIG> removeSpecificInMemoryProjector(Class<?> projectionType) {
+        eventStore.removeSpecificInMemoryProjector(projectionType);
+        return this;
+    }
+
+    @Override
+    public ConfigurableEventStore<CONFIG> addEventStoreInterceptor(EventStoreInterceptor eventStoreInterceptor) {
+        eventStore.addEventStoreInterceptor(eventStoreInterceptor);
+        return this;
+    }
+
+    @Override
+    public ConfigurableEventStore<CONFIG> removeEventStoreInterceptor(EventStoreInterceptor eventStoreInterceptor) {
+        eventStore.removeEventStoreInterceptor(eventStoreInterceptor);
+        return this;
     }
 
     record BackfillResult(long next, long emitted) {

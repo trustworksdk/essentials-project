@@ -31,6 +31,12 @@
     <packaging>jar</packaging>
     <description>Spring Boot lab module for showcasing Essentials features and running repeatable performance scenarios</description>
 
+    <properties>
+        <!-- Demo module: it builds and tests with the rest of the reactor, but it is not a published artifact.
+             `mvn deploy -P release` runs over the whole reactor, so the exclusion has to live here. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>

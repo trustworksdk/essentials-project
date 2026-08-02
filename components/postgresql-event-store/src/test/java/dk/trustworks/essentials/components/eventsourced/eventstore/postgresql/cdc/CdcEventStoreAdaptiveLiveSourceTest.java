@@ -16,11 +16,13 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStorePollingOptimizer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -298,7 +300,7 @@ class CdcEventStoreAdaptiveLiveSourceTest {
 
     @SuppressWarnings("unchecked")
     private static Fixture fixture(Duration cutbackDebounce) {
-        EventStore delegate = mock(EventStore.class);
+        ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(ConfigurableEventStore.class);
         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> uowFactory = mock(EventStoreUnitOfWorkFactory.class);
         EventStreamGapHandler<?> gapHandler = mock(EventStreamGapHandler.class);
 
@@ -319,7 +321,7 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         var availability = new CdcAvailability();
         var bus = new CdcEventBus();
 
-        var cdcEventStore = new CdcEventStore(
+        var cdcEventStore = new CdcEventStore<>(
                 delegate,
                 uowFactory,
                 gapHandler,
@@ -357,8 +359,8 @@ class CdcEventStoreAdaptiveLiveSourceTest {
         return events.stream().map(e -> e.globalEventOrder().longValue()).toList();
     }
 
-    private record Fixture(EventStore delegate,
-                           CdcEventStore cdcEventStore,
+    private record Fixture(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate,
+                           CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore,
                            CdcEventBus bus,
                            CdcAvailability availability) {
     }

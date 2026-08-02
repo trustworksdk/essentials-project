@@ -689,6 +689,16 @@ public class EventStoreConfiguration {
         return new CdcHealthIndicator(availability, tailer, dispatcher, properties);
     }
 
+    /**
+     * The declared return type stays {@link EventStore} even though {@link CdcEventStore} now also implements
+     * {@link ConfigurableEventStore}. Spring matches a not-yet-created {@code @Bean} on its declared return type, so
+     * keeping it narrow leaves every {@code ConfigurableEventStore} injection point resolving to the undecorated
+     * store exactly as before — widening it would silently hand the decorator to the subscription manager,
+     * persistence wiring and application repositories as well. What the wider interface buys is the runtime
+     * narrowing: {@code AbstractEventProcessor} casts the injected {@code EventStore} to
+     * {@link ConfigurableEventStore} to resolve an aggregate-id serializer, and that cast used to fail for every
+     * {@code EventProcessor} whenever CDC was enabled.
+     */
     @Bean
     @Primary
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
@@ -699,7 +709,7 @@ public class EventStoreConfiguration {
                                     EssentialsEventStoreProperties essentialsProperties,
                                     CdcAvailability availability,
                                     Optional<MeterRegistry> meterRegistry) {
-        return new CdcEventStore(
+        return new CdcEventStore<>(
                 eventStore,
                 eventStoreUnitOfWorkFactory,
                 eventStreamGapHandler,

@@ -38,6 +38,11 @@
     </modules>
 
     <properties>
+        <!-- Demo modules: they build and test with the rest of the reactor, but they are not published artifacts.
+             `mvn deploy -P release` runs over the whole reactor, so the exclusion has to live here. Inherited by
+             the three example modules. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+
         <!-- Versions for libraries only used by the examples and therefore not managed by the Essentials parent POM
              nor by the Spring Boot BOM it imports. -->
         <loki-logback-appender.version>2.1.0</loki-logback-appender.version>
