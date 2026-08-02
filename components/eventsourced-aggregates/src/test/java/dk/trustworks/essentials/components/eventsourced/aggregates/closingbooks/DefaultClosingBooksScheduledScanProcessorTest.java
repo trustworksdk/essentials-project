@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
 
@@ -101,5 +102,86 @@ class DefaultClosingBooksScheduledScanProcessorTest {
             assertThat(openGeneration.generation()).isEqualTo(2L);
             assertThat(openGeneration.streamAggregateId()).isEqualTo("Order-123#2");
         });
+    }
+
+    /**
+     * A batch is the oldest N open generations, so a generation the scan can never make progress on used to sit at the
+     * head of every batch forever. With a batch size of 1 that starves the younger generation completely.
+     */
+    @Test
+    void a_generation_whose_aggregate_cannot_be_loaded_is_deferred_so_it_does_not_starve_the_others() {
+        var aggregateType = AggregateType.of("Orders");
+        var clock         = Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC);
+        var repository    = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
+                                                        clock);
+
+        // The unloadable one is opened first, so it sorts ahead of the healthy one.
+        var unloadable = coordinator.resolveOrOpenCurrentGeneration(new LogicalAggregateId<>("Order-broken"));
+        var healthy    = coordinator.resolveOrOpenCurrentGeneration(new LogicalAggregateId<>("Order-healthy"));
+
+        var acceptedOrder = new Order(OrderId.random(), CustomerId.random(), 1234);
+        acceptedOrder.accept();
+
+        var processor = new DefaultClosingBooksScheduledScanProcessor<>(aggregateType,
+                                                                       repository,
+                                                                       streamAggregateId -> streamAggregateId.equals(healthy.streamAggregateId())
+                                                                               ? java.util.Optional.of(acceptedOrder)
+                                                                               : java.util.Optional.empty(),
+                                                                       ClosingBooksDecisionPolicies.<String, Order>closeOnlyOnScheduledScan(order -> order.accepted),
+                                                                       coordinator,
+                                                                       java.util.Optional.empty(),
+                                                                       clock,
+                                                                       Duration.ofMinutes(5));
+
+        // Batch of one: the first poll only ever sees the unloadable generation.
+        assertThat(processor.processNextBatch(1)).describedAs("nothing could be processed in the first poll")
+                                                .isZero();
+        assertThat(repository.loadOpenGenerations(aggregateType, 10, OffsetDateTime.now(clock)))
+                .describedAs("the unloadable generation must be deferred out of the next batch")
+                .extracting(AggregateGeneration::streamAggregateId)
+                .containsExactly(healthy.streamAggregateId());
+
+        // Second poll now reaches the healthy generation instead of hitting the same wall.
+        assertThat(processor.processNextBatch(1)).isEqualTo(1);
+        assertThat(repository.resolveCurrentGeneration(aggregateType, new LogicalAggregateId<>("Order-healthy"))).isEmpty();
+
+        // The deferral is a delay, not a write-off: it lapses once the retry delay has passed.
+        var afterRetryDelay = OffsetDateTime.now(clock).plusMinutes(6);
+        assertThat(repository.loadOpenGenerations(aggregateType, 10, afterRetryDelay))
+                .extracting(AggregateGeneration::streamAggregateId)
+                .containsExactly(unloadable.streamAggregateId());
+    }
+
+    @Test
+    void a_generation_whose_policy_throws_is_deferred() {
+        var aggregateType      = AggregateType.of("Orders");
+        var clock              = Clock.fixed(Instant.parse("2026-03-29T10:15:30Z"), ZoneOffset.UTC);
+        var logicalAggregateId = new LogicalAggregateId<>("Order-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
+                                                        clock);
+        coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+
+        var processor = new DefaultClosingBooksScheduledScanProcessor<String, Order>(aggregateType,
+                                                                                     repository,
+                                                                                     streamAggregateId -> java.util.Optional.of(new Order(OrderId.random(), CustomerId.random(), 1234)),
+                                                                                     context -> {
+                                                                                         throw new IllegalStateException("policy blew up");
+                                                                                     },
+                                                                                     coordinator,
+                                                                                     java.util.Optional.empty(),
+                                                                                     clock,
+                                                                                     Duration.ofMinutes(5));
+
+        assertThat(processor.processNextBatch(10)).isZero();
+        assertThat(repository.loadOpenGenerations(aggregateType, 10, OffsetDateTime.now(clock))).isEmpty();
+        assertThat(repository.loadOpenGenerations(aggregateType, 10, OffsetDateTime.now(clock).plusMinutes(6))).hasSize(1);
     }
 }

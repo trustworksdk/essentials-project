@@ -28,10 +28,15 @@ import dk.trustworks.essentials.shared.functional.CheckedConsumer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
+import org.awaitility.Awaitility;
+
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -309,6 +314,104 @@ class PostgresqlAggregateSnapshotJobProcessorTest {
                 .isNotNull()
                 .extracting(counter -> counter.count())
                 .isEqualTo(1.0d);
+    }
+
+    @Test
+    void does_not_process_a_job_twice_when_it_is_reclaimed_while_still_running() throws Exception {
+        var snapshotStore = mock(AggregateSnapshotStore.class);
+        var jobRepository = mock(AggregateSnapshotJobRepository.class);
+        var job           = pendingJob();
+        var processor     = processorFor(snapshotStore, jobRepository);
+
+        // Both polls see the same job: the second time because the reclaim branch of lockNextBatch treats a
+        // long-running PROCESSING row as stale, which is indistinguishable from one orphaned by a dead node.
+        when(jobRepository.lockNextBatch(anyInt(), any(), any())).thenReturn(List.of(job));
+
+        var jobStarted   = new CountDownLatch(1);
+        var releaseJob   = new CountDownLatch(1);
+        blockSaveSnapshotOn(snapshotStore, jobStarted, releaseJob);
+
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            assertThat(processor.processNextBatch(executor)).isEqualTo(1);
+            assertThat(jobStarted.await(5, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(processor.processNextBatch(executor)).describedAs("the reclaimed duplicate must not be submitted")
+                                                            .isZero();
+        } finally {
+            releaseJob.countDown();
+            executor.shutdown();
+        }
+        assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+
+        verify(snapshotStore, times(1)).saveSnapshot(any(), any(), any(), any(), any());
+        verify(jobRepository, times(1)).markCompleted(job.jobId());
+    }
+
+    @Test
+    void processes_a_reclaimed_job_again_once_the_previous_attempt_has_finished() throws Exception {
+        var snapshotStore = mock(AggregateSnapshotStore.class);
+        var jobRepository = mock(AggregateSnapshotJobRepository.class);
+        var job           = pendingJob();
+        var processor     = processorFor(snapshotStore, jobRepository);
+
+        when(jobRepository.lockNextBatch(anyInt(), any(), any())).thenReturn(List.of(job));
+
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            assertThat(processor.processNextBatch(executor)).isEqualTo(1);
+            Awaitility.waitAtMost(Duration.ofSeconds(5))
+                      .untilAsserted(() -> verify(jobRepository).markCompleted(job.jobId()));
+
+            // The job is no longer held locally, so a genuine reclaim after a failed attempt has to be picked up.
+            assertThat(processor.processNextBatch(executor)).isEqualTo(1);
+        } finally {
+            executor.shutdown();
+        }
+        assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
+
+    private static void blockSaveSnapshotOn(AggregateSnapshotStore snapshotStore,
+                                            CountDownLatch started,
+                                            CountDownLatch release) {
+        doAnswer(invocation -> {
+            started.countDown();
+            release.await(10, TimeUnit.SECONDS);
+            return null;
+        }).when(snapshotStore).saveSnapshot(any(), any(), any(), any(), any());
+    }
+
+    private static PostgresqlAggregateSnapshotJobProcessor processorFor(AggregateSnapshotStore snapshotStore,
+                                                                        AggregateSnapshotJobRepository jobRepository) {
+        var eventStore     = mock(ConfigurableEventStore.class);
+        var jsonSerializer = mock(JSONEventSerializer.class);
+        var config = SeparateTablePerAggregateEventStreamConfiguration.standardSingleTenantConfiguration(AggregateType.of("Orders"),
+                                                                                                         jsonSerializer,
+                                                                                                         new AggregateIdSerializer.StringIdSerializer(),
+                                                                                                         IdentifierColumnType.TEXT,
+                                                                                                         JSONColumnType.JSONB);
+        when(eventStore.getAggregateEventStreamConfiguration(AggregateType.of("Orders"))).thenReturn(config);
+        return new PostgresqlAggregateSnapshotJobProcessor(eventStore,
+                                                          snapshotStore,
+                                                          jobRepository,
+                                                          inlineUnitOfWorkFactory(),
+                                                          new DurableAsyncSnapshotSettings(Duration.ofSeconds(1), 25, 2, 3, Duration.ofSeconds(5)));
+    }
+
+    private static AggregateSnapshotJob pendingJob() {
+        return new AggregateSnapshotJob(UUID.randomUUID(),
+                                        "Orders",
+                                        "order-1",
+                                        TestAggregate.class.getName(),
+                                        7L,
+                                        "{\"snapshot\":true}",
+                                        false,
+                                        List.of(),
+                                        OffsetDateTime.now(),
+                                        OffsetDateTime.now(),
+                                        1,
+                                        AggregateSnapshotJobStatus.PROCESSING,
+                                        null);
     }
 
     private static HandleAwareUnitOfWorkFactory<HandleAwareUnitOfWork> inlineUnitOfWorkFactory() {

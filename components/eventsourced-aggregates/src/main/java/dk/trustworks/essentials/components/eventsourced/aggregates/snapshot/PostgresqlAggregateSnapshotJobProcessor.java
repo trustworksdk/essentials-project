@@ -28,7 +28,11 @@ import org.slf4j.*;
 
 import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -53,6 +57,17 @@ public class PostgresqlAggregateSnapshotJobProcessor {
     private final DurableAsyncSnapshotSettings                                        settings;
     private final AggregateSnapshotDurableQueueMeasurementSupport                     measurementSupport;
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>       unitOfWorkFactory;
+
+    /**
+     * The jobs this node has locked and either submitted or is still running.
+     * <p>
+     * {@link AggregateSnapshotJobRepository#lockNextBatch(int, OffsetDateTime, OffsetDateTime)} reclaims
+     * {@code PROCESSING} rows whose {@code processing_started_ts} is older than
+     * {@link DurableAsyncSnapshotSettings#processingTimeout()}, which is how a job orphaned by a crashed node gets
+     * picked back up. A job that is merely taking a long time on this node looks exactly the same from the database,
+     * so without this set the reclaim would hand the same job to a second worker while the first is still running it.
+     */
+    private final Set<UUID> locallyHeldJobIds = ConcurrentHashMap.newKeySet();
 
     public PostgresqlAggregateSnapshotJobProcessor(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                    AggregateSnapshotStore snapshotStore,
@@ -82,13 +97,57 @@ public class PostgresqlAggregateSnapshotJobProcessor {
         this.measurementSupport = new AggregateSnapshotDurableQueueMeasurementSupport(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"));
     }
 
+    /**
+     * Lock a batch of jobs and hand them to {@code workerExecutor}.
+     * <p>
+     * The returned count is the number of jobs actually submitted, which can be lower than the number locked: a job
+     * the reclaim branch handed back while this node is still running it is skipped rather than processed twice.
+     * <p>
+     * This method does not wait for the submitted jobs to finish, so the caller has to be the one that bounds
+     * in-flight work — see {@link DurableAsyncSnapshotManager}, which passes a bounded executor that runs jobs on the
+     * polling thread once its queue is full. With an unbounded executor a poll interval shorter than the time it takes
+     * to drain a batch makes the executor queue — and with it the retained snapshot payloads — grow without limit.
+     *
+     * @param workerExecutor the executor to run the locked jobs on; should apply backpressure when saturated
+     * @return the number of jobs submitted to {@code workerExecutor}
+     */
     public int processNextBatch(ExecutorService workerExecutor) {
+        requireNonNull(workerExecutor, "No workerExecutor provided");
         var now = OffsetDateTime.now();
         var jobs = jobRepository.lockNextBatch(settings.batchSize(),
                                                 now,
                                                 now.minus(settings.processingTimeout()));
-        jobs.forEach(job -> workerExecutor.submit(() -> processJob(job)));
-        return jobs.size();
+        var submitted = 0;
+        for (var job : jobs) {
+            if (!locallyHeldJobIds.add(job.jobId())) {
+                log.debug("Skipping AggregateSnapshotJob '{}' for aggregate '{}:{}' because this node is already processing it — " +
+                                  "it was reclaimed as stale after {} while still in progress",
+                          job.jobId(),
+                          job.aggregateType(),
+                          job.serializedAggregateId(),
+                          settings.processingTimeout());
+                measurementSupport.incrementProcessOutcome(job, "already_in_progress");
+                continue;
+            }
+            try {
+                workerExecutor.execute(() -> {
+                    try {
+                        processJob(job);
+                    } finally {
+                        locallyHeldJobIds.remove(job.jobId());
+                    }
+                });
+                submitted++;
+            } catch (RejectedExecutionException e) {
+                // The executor is shutting down. Leave the row PROCESSING so the reclaim branch picks it up, either
+                // after a restart or on another node.
+                locallyHeldJobIds.remove(job.jobId());
+                log.debug("AggregateSnapshotJob '{}' was rejected by the worker executor — leaving it to be reclaimed",
+                          job.jobId(),
+                          e);
+            }
+        }
+        return submitted;
     }
 
     void processJob(AggregateSnapshotJob job) {

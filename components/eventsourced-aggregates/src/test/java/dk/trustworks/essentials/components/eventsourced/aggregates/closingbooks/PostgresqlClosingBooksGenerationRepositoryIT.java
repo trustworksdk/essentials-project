@@ -26,7 +26,10 @@ import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
+import java.time.OffsetDateTime;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Testcontainers
@@ -158,5 +161,58 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
         assertThat(typedRepository.loadOpenGenerations(ACCOUNTS, 10))
                 .extracting(generation -> generation.logicalAggregateId().value())
                 .contains(123);
+    }
+
+    @Test
+    void a_deferred_generation_is_excluded_from_scan_batches_until_its_deadline() {
+        var deferred = new LogicalAggregateId<>("Account-deferred");
+        var eligible = new LogicalAggregateId<>("Account-eligible");
+        repository.openNextGeneration(ACCOUNTS, deferred, "Account-deferred#1");
+        repository.openNextGeneration(ACCOUNTS, eligible, "Account-eligible#1");
+
+        var now = OffsetDateTime.now();
+        repository.deferScan(ACCOUNTS, deferred, now.plusMinutes(5));
+
+        assertThat(repository.loadOpenGenerations(ACCOUNTS, 10, now))
+                .extracting(AggregateGeneration::streamAggregateId)
+                .containsExactly("Account-eligible#1");
+
+        assertThat(repository.loadOpenGenerations(ACCOUNTS, 10, now.plusMinutes(6)))
+                .extracting(AggregateGeneration::streamAggregateId)
+                .containsExactlyInAnyOrder("Account-deferred#1", "Account-eligible#1");
+
+        // The overload without an eligibility cut-off is unfiltered, so an explicit rollover is never blocked by a
+        // deferral.
+        assertThat(repository.loadOpenGenerations(ACCOUNTS, 10))
+                .extracting(AggregateGeneration::streamAggregateId)
+                .containsExactlyInAnyOrder("Account-deferred#1", "Account-eligible#1");
+    }
+
+    @Test
+    void opening_the_next_generation_clears_a_deferral() {
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#1");
+
+        var now = OffsetDateTime.now();
+        repository.deferScan(ACCOUNTS, logicalAggregateId, now.plusMinutes(5));
+        assertThat(repository.loadOpenGenerations(ACCOUNTS, 10, now)).isEmpty();
+
+        repository.closeCurrentGeneration(ACCOUNTS, logicalAggregateId);
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#2");
+
+        assertThat(repository.loadOpenGenerations(ACCOUNTS, 10, now))
+                .describedAs("the new generation is a fresh scan target")
+                .extracting(AggregateGeneration::streamAggregateId)
+                .containsExactly("Account-123#2");
+    }
+
+    @Test
+    void deferring_a_generation_that_is_no_longer_open_is_a_no_op() {
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#1");
+        repository.closeCurrentGeneration(ACCOUNTS, logicalAggregateId);
+
+        assertThatCode(() -> repository.deferScan(ACCOUNTS, logicalAggregateId, OffsetDateTime.now().plusMinutes(5)))
+                .doesNotThrowAnyException();
     }
 }

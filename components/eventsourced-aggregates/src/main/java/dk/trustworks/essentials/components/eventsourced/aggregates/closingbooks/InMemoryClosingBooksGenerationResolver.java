@@ -30,7 +30,12 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
  * In-memory {@link ClosingBooksOpenGenerationRepository} implementation used primarily for tests and local coordination.
  */
 public class InMemoryClosingBooksGenerationResolver<ID> implements ClosingBooksOpenGenerationRepository<ID> {
-    private final Map<GenerationKey<ID>, List<AggregateGeneration<ID>>> generations = new ConcurrentHashMap<>();
+    private final Map<GenerationKey<ID>, List<AggregateGeneration<ID>>> generations   = new ConcurrentHashMap<>();
+    /**
+     * Keyed per logical aggregate rather than per generation: a deferral only ever applies to the open generation, and
+     * opening the next one supersedes it — {@link #openNextGeneration} clears the entry.
+     */
+    private final Map<GenerationKey<ID>, OffsetDateTime>                deferredScans = new ConcurrentHashMap<>();
 
     @Override
     public Optional<AggregateGeneration<ID>> resolveCurrentGeneration(AggregateType aggregateType,
@@ -55,6 +60,13 @@ public class InMemoryClosingBooksGenerationResolver<ID> implements ClosingBooksO
     @Override
     public List<AggregateGeneration<ID>> loadOpenGenerations(AggregateType aggregateType,
                                                              int limit) {
+        return loadOpenGenerations(aggregateType, limit, null);
+    }
+
+    @Override
+    public List<AggregateGeneration<ID>> loadOpenGenerations(AggregateType aggregateType,
+                                                             int limit,
+                                                             OffsetDateTime eligibleAt) {
         requireNonNull(aggregateType, "No aggregateType provided");
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be >= 1");
@@ -65,10 +77,32 @@ public class InMemoryClosingBooksGenerationResolver<ID> implements ClosingBooksO
                           .filter(entry -> entry.getKey().aggregateType().equals(aggregateType))
                           .flatMap(entry -> entry.getValue().stream())
                           .filter(AggregateGeneration::isOpen)
+                          .filter(generation -> isEligibleForScan(aggregateType, generation, eligibleAt))
                           .sorted(Comparator.comparing(AggregateGeneration<ID>::openedAt)
                                             .thenComparingLong(AggregateGeneration::generation))
                           .limit(limit)
                           .toList();
+    }
+
+    @Override
+    public void deferScan(AggregateType aggregateType,
+                          LogicalAggregateId<ID> logicalAggregateId,
+                          OffsetDateTime nextScanTs) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
+        requireNonNull(nextScanTs, "No nextScanTs provided");
+
+        deferredScans.put(new GenerationKey<>(aggregateType, logicalAggregateId), nextScanTs);
+    }
+
+    private boolean isEligibleForScan(AggregateType aggregateType,
+                                      AggregateGeneration<ID> generation,
+                                      OffsetDateTime eligibleAt) {
+        if (eligibleAt == null) {
+            return true;
+        }
+        var deferredUntil = deferredScans.get(new GenerationKey<>(aggregateType, generation.logicalAggregateId()));
+        return deferredUntil == null || !deferredUntil.isAfter(eligibleAt);
     }
 
     @Override
@@ -102,6 +136,9 @@ public class InMemoryClosingBooksGenerationResolver<ID> implements ClosingBooksO
             mutableGenerations.add(nextGeneration);
             return mutableGenerations;
         });
+        // The new generation is a fresh scan target — matches the Postgres implementation, where the inserted row
+        // starts with next_scan_ts NULL.
+        deferredScans.remove(key);
         return lastGenerationOrThrow(updatedGenerations,
                                      aggregateType,
                                      logicalAggregateId,

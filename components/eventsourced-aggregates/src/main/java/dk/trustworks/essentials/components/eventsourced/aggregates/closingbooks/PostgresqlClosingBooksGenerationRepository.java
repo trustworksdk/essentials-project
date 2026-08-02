@@ -114,11 +114,18 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
                                                                               state TEXT NOT NULL,
                                                                               opened_ts TIMESTAMP WITH TIME ZONE NOT NULL,
                                                                               closed_ts TIMESTAMP WITH TIME ZONE,
+                                                                              next_scan_ts TIMESTAMP WITH TIME ZONE,
                                                                               PRIMARY KEY (aggregate_type, logical_aggregate_id, generation),
                                                                               UNIQUE (aggregate_type, stream_aggregate_id)
                                                                           )
                                                                           """, arg("tableName", tableName))));
         unitOfWorkFactory.withUnitOfWork(uow -> {
+            // Added after the table shipped without it, so existing installations get it here rather than only via
+            // CREATE TABLE. NULL means "eligible for scanning now", which is what every pre-existing row should be.
+            uow.handle().execute(bind("""
+                                      ALTER TABLE {:tableName}
+                                      ADD COLUMN IF NOT EXISTS next_scan_ts TIMESTAMP WITH TIME ZONE
+                                      """, arg("tableName", tableName)));
             uow.handle().execute(bind("""
                                       CREATE UNIQUE INDEX IF NOT EXISTS {:indexName}
                                       ON {:tableName} (aggregate_type, logical_aggregate_id)
@@ -174,26 +181,70 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
     @Override
     public List<AggregateGeneration<ID>> loadOpenGenerations(AggregateType aggregateType,
                                                              int limit) {
+        return loadOpenGenerations(aggregateType, limit, null);
+    }
+
+    @Override
+    public List<AggregateGeneration<ID>> loadOpenGenerations(AggregateType aggregateType,
+                                                             int limit,
+                                                             OffsetDateTime eligibleAt) {
         requireNonNull(aggregateType, "No aggregateType provided");
         if (limit < 1) {
             throw new IllegalArgumentException("limit must be >= 1");
         }
 
-        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(bind("""
-                                                                                     SELECT *
-                                                                                     FROM {:tableName}
-                                                                                     WHERE aggregate_type = :aggregate_type
-                                                                                       AND state = :open_state
-                                                                                     ORDER BY opened_ts ASC, generation ASC
-                                                                                     LIMIT :limit
-                                                                                     """, arg("tableName", tableName)))
-                                                          .bind("aggregate_type", aggregateType.value())
-                                                          .bind("open_state", GenerationState.OPEN.name())
-                                                          .bind("limit", limit)
-                                                          .map((rs, ctx) -> mapAggregateGeneration(rs,
-                                                                                                   aggregateType,
-                                                                                                   logicalAggregateIdSerializer.deserialize(rs.getString("logical_aggregate_id"))))
-                                                          .list());
+        // Built in two shapes rather than binding a nullable :eligible_at, because Postgres cannot infer the type of a
+        // NULL parameter that only ever appears in an IS NULL test.
+        var eligibilityFilter = eligibleAt != null
+                                ? "AND (next_scan_ts IS NULL OR next_scan_ts <= :eligible_at)"
+                                : "";
+        return unitOfWorkFactory.withUnitOfWork(uow -> {
+            var query = uow.handle().createQuery(bind("""
+                                                      SELECT *
+                                                      FROM {:tableName}
+                                                      WHERE aggregate_type = :aggregate_type
+                                                        AND state = :open_state
+                                                        {:eligibilityFilter}
+                                                      ORDER BY opened_ts ASC, generation ASC
+                                                      LIMIT :limit
+                                                      """,
+                                                      arg("tableName", tableName),
+                                                      arg("eligibilityFilter", eligibilityFilter)))
+                           .bind("aggregate_type", aggregateType.value())
+                           .bind("open_state", GenerationState.OPEN.name())
+                           .bind("limit", limit);
+            if (eligibleAt != null) {
+                query = query.bind("eligible_at", eligibleAt);
+            }
+            return query.map((rs, ctx) -> mapAggregateGeneration(rs,
+                                                                 aggregateType,
+                                                                 logicalAggregateIdSerializer.deserialize(rs.getString("logical_aggregate_id"))))
+                        .list();
+        });
+    }
+
+    @Override
+    public void deferScan(AggregateType aggregateType,
+                          LogicalAggregateId<ID> logicalAggregateId,
+                          OffsetDateTime nextScanTs) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
+        requireNonNull(nextScanTs, "No nextScanTs provided");
+
+        // Scoped to the open row: a generation closed in the meantime needs no deferral, and updating 0 rows is a
+        // valid outcome rather than an error.
+        unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().createUpdate(bind("""
+                                                                               UPDATE {:tableName}
+                                                                               SET next_scan_ts = :next_scan_ts
+                                                                               WHERE aggregate_type = :aggregate_type
+                                                                                 AND logical_aggregate_id = :logical_aggregate_id
+                                                                                 AND state = :open_state
+                                                                               """, arg("tableName", tableName)))
+                                                    .bind("next_scan_ts", nextScanTs)
+                                                    .bind("aggregate_type", aggregateType.value())
+                                                    .bind("logical_aggregate_id", serializeLogicalAggregateId(logicalAggregateId))
+                                                    .bind("open_state", GenerationState.OPEN.name())
+                                                    .execute());
     }
 
     @Override

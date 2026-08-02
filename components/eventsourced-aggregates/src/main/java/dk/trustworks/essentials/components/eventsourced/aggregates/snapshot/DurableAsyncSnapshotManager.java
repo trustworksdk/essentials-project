@@ -68,11 +68,25 @@ public class DurableAsyncSnapshotManager implements Lifecycle {
                                                                                    .nameFormat("durable-async-snapshot-scheduler-%d")
                                                                                    .daemon(true)
                                                                                    .build());
-        workerExecutor = Executors.newFixedThreadPool(settings.workerThreads(),
-                                                      ThreadFactoryBuilder.builder()
-                                                                          .nameFormat("durable-async-snapshot-worker-%d")
-                                                                          .daemon(true)
-                                                                          .build());
+        // Bounded queue plus CallerRunsPolicy, deliberately not Executors.newFixedThreadPool: that one queues into an
+        // unbounded LinkedBlockingQueue, and since processNextBatch submits a whole locked batch without waiting for
+        // it, a poll interval shorter than the time to drain a batch made the queue — and the serialized snapshot
+        // payload each queued job retains — grow without limit. With the defaults (poll 1s, batch 25, 2 workers) that
+        // needed only ~80ms of work per job to start running away.
+        //
+        // Once the queue is full the polling thread runs the job itself, which throttles polling to the rate the
+        // workers can actually sustain. That also keeps a job's queue wait to a few job durations, so
+        // processingTimeout stays a signal about genuinely stuck work rather than about backlog.
+        workerExecutor = new ThreadPoolExecutor(settings.workerThreads(),
+                                                settings.workerThreads(),
+                                                0L,
+                                                TimeUnit.MILLISECONDS,
+                                                new ArrayBlockingQueue<>(Math.max(1, settings.workerThreads())),
+                                                ThreadFactoryBuilder.builder()
+                                                                    .nameFormat("durable-async-snapshot-worker-%d")
+                                                                    .daemon(true)
+                                                                    .build(),
+                                                new ThreadPoolExecutor.CallerRunsPolicy());
         pollingFuture = scheduler.scheduleWithFixedDelay(() -> {
             if (!started.get()) {
                 return;
