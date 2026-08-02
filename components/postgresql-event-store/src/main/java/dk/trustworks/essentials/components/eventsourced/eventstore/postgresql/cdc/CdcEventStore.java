@@ -55,11 +55,14 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * <p>
  * <p>
  * It decorates a {@link ConfigurableEventStore} and is itself a {@link ConfigurableEventStore}: the CDC store is
- * registered as the {@code @Primary} {@link EventStore} bean, so anything resolving the event store — including
- * {@code AbstractEventProcessor}, which narrows it to {@link ConfigurableEventStore} to look up an
- * {@link AggregateIdSerializer} — receives this decorator rather than the store it wraps. Implementing the
- * configuration contract and forwarding it to the delegate is what keeps that narrowing valid. The mutators return
- * {@code this} so a caller that configures through the decorator keeps hold of the decorator.
+ * registered as the {@code @Primary} bean under the {@link ConfigurableEventStore} type, so every injection point —
+ * whether it asks for {@link EventStore} or {@link ConfigurableEventStore} — receives this one decorator rather than
+ * the store it wraps. Implementing the whole configuration contract is what makes that single identity possible, and
+ * it is also what keeps {@code AbstractEventProcessor} working: it narrows the injected {@code EventStore} to
+ * {@link ConfigurableEventStore} to look up an {@link AggregateIdSerializer}. Were the decorator to expose only
+ * {@link EventStore}, applications would hold two different stores and the {@link ConfigurableEventStore}-typed one
+ * would silently poll without CDC. The mutators return {@code this} so a caller that configures through the decorator
+ * keeps hold of the decorator.
  * <p>
  * Public Constructors:
  * - CdcEventStore(ConfigurableEventStore&lt;CONFIG&gt; delegate, EventStoreUnitOfWorkFactory&lt;? extends EventStoreUnitOfWork&gt; unitOfWorkFactory,

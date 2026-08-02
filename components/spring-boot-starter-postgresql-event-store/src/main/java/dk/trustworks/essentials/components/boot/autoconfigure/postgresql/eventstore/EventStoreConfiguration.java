@@ -690,25 +690,43 @@ public class EventStoreConfiguration {
     }
 
     /**
-     * The declared return type stays {@link EventStore} even though {@link CdcEventStore} now also implements
-     * {@link ConfigurableEventStore}. Spring matches a not-yet-created {@code @Bean} on its declared return type, so
-     * keeping it narrow leaves every {@code ConfigurableEventStore} injection point resolving to the undecorated
-     * store exactly as before — widening it would silently hand the decorator to the subscription manager,
-     * persistence wiring and application repositories as well. What the wider interface buys is the runtime
-     * narrowing: {@code AbstractEventProcessor} casts the injected {@code EventStore} to
-     * {@link ConfigurableEventStore} to resolve an aggregate-id serializer, and that cast used to fail for every
-     * {@code EventProcessor} whenever CDC was enabled.
+     * The declared return type is {@link ConfigurableEventStore}, not just {@link EventStore}, so that when CDC is
+     * enabled <em>every</em> injection point resolves to the same object. Spring matches a not-yet-created
+     * {@code @Bean} on its declared return type, so a narrower {@code EventStore} here would leave
+     * {@code @Autowired EventStore} and {@code @Autowired ConfigurableEventStore} handing out two different
+     * instances in the same application. That split is a footgun rather than a feature: {@code
+     * ConfigurableEventStore} extends {@code EventStore}, so {@link EventStore#pollEvents} is callable through it
+     * and would silently bypass CDC — the same defect class as the {@link ClassCastException} that
+     * {@code AbstractEventProcessor} hit when it narrowed an injected {@code EventStore} to
+     * {@link ConfigurableEventStore} to resolve an aggregate-id serializer.
+     * <p>
+     * Widening is behaviour-neutral for the existing configurable-typed consumers — the projector registration
+     * below, the aggregate repositories, the snapshot repository and the decider adapters only configure, append
+     * and load, and {@link CdcEventStore} overrides only {@code pollEvents} and delegates everything else.
+     * <p>
+     * The {@code delegate} parameter must be qualified. With the wider return type it would otherwise be a
+     * self-reference; Spring does filter those out of the candidate set, but it resolves only because
+     * {@code essentialsEventStore} happens to be the sole remaining candidate — an application declaring its own
+     * {@code ConfigurableEventStore} bean would make it ambiguous. The qualifier also remains the documented way
+     * for an application to obtain the undecorated store.
+     * <p>
+     * Keep this method declared <em>after</em> {@link #eventStore}. The wider return type means this bean now
+     * satisfies the {@code @ConditionalOnMissingBean} on {@code eventStore}, and that condition is evaluated
+     * against the definitions registered so far, in declaration order. Reordering the two would suppress
+     * {@code essentialsEventStore} entirely and leave this bean with nothing to wrap.
+     * {@code StarterAutoConfigurationIT.cdc_event_store_is_the_one_instance_behind_both_event_store_types}
+     * catches that by asserting the wrapped store is still present under its name.
      */
     @Bean
     @Primary
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
-    public EventStore cdcEventStore(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
-                                    EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
-                                    EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
-                                    CdcEventBus cdcEventBus,
-                                    EssentialsEventStoreProperties essentialsProperties,
-                                    CdcAvailability availability,
-                                    Optional<MeterRegistry> meterRegistry) {
+    public ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore(@Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                                                                                                   EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
+                                                                                                   EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
+                                                                                                   CdcEventBus cdcEventBus,
+                                                                                                   EssentialsEventStoreProperties essentialsProperties,
+                                                                                                   CdcAvailability availability,
+                                                                                                   Optional<MeterRegistry> meterRegistry) {
         return new CdcEventStore<>(
                 eventStore,
                 eventStoreUnitOfWorkFactory,
