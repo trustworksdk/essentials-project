@@ -1,7 +1,8 @@
 ## spring-boot-starter-admin-api
 
 HTTP adapter serving the `admin-api-spec` contract over Spring WebMVC. Maven: `spring-boot-starter-admin-api`.
-Delegates to the 7 `*Api` SPI beans wired by `spring-boot-starter-postgresql` / `-postgresql-event-store`.
+Delegates to the 11 `*Api` SPI beans wired by `spring-boot-starter-postgresql` / `-postgresql-event-store`
+/ `eventsourced-aggregates`.
 Replaces `vaadin-ui` + `spring-boot-starter-admin-ui` as the admin surface.
 
 Consumer-facing docs: `docs/openapi/README.md`.
@@ -10,7 +11,7 @@ Consumer-facing docs: `docs/openapi/README.md`.
 
 | Package | Contents |
 |---|---|
-| `dk.trustworks.essentials.components.adminapi.rest` | 7 controllers, principal resolver, exception handler, Jackson module, paths |
+| `dk.trustworks.essentials.components.adminapi.rest` | 11 controllers, principal resolver, exception handler, Jackson module, paths |
 | `.rest.dto` | Contract wrapper shapes — `CountResult`, `ReleaseResult`, `DeleteResult`, `PurgeResult`, `QueueNameResult`, `GlobalEventOrderResult`, `ApiError`, `ResurrectDeadLetterMessageRequest` |
 | `dk.trustworks.essentials.components.boot.autoconfigure.admin.api` | `@AutoConfiguration` + `@ConfigurationProperties` |
 
@@ -22,8 +23,8 @@ Consumer-facing docs: `docs/openapi/README.md`.
 | `AdminApiPrincipalResolver` | Only security touch point — `EssentialsAuthenticatedUser` → principal, throws `AdminApiUnauthenticatedException` when unauthenticated |
 | `AdminApiExceptionHandler` | `@RestControllerAdvice` scoped by `basePackageClasses` → contract statuses + `Error` body |
 | `AdminApiJacksonModule` | Jackson **3** serializers: `CharSequenceType` → string, `NumberType` → number |
-| `EssentialsAdminApiAutoConfiguration` | Declares every controller as a bean; all `@ConditionalOnMissingBean` |
-| `<Tag>Controller` ×7 | One per contract tag; each method = one contract operation |
+| `EssentialsAdminApiAutoConfiguration` | Declares every controller as a bean; all `@ConditionalOnMissingBean`. The 4 aggregate controllers sit in a nested `@ConditionalOnClass` config and are additionally `@ConditionalOnBean` of their SPI |
+| `<Tag>Controller` ×11 | One per contract tag; each method = one contract operation |
 
 ## Test Structure
 

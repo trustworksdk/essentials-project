@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.admin.api;
 
 import dk.trustworks.essentials.components.adminapi.rest.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
@@ -91,5 +92,42 @@ class EssentialsAdminApiAutoConfigurationTest {
 
         contextRunner.withBean("customPrincipalResolver", AdminApiPrincipalResolver.class, () -> custom)
                      .run(context -> assertThat(context.getBean(AdminApiPrincipalResolver.class)).isSameAs(custom));
+    }
+
+    /**
+     * eventsourced-aggregates is optional for an application using the admin API, and even with it present the archive
+     * SPI beans only exist when essentials.eventstore.archives.enabled is true. Declaring these controllers
+     * unconditionally would fail the whole context for a subsystem the application does not run.
+     */
+    @Test
+    void the_aggregate_controllers_are_absent_when_their_spi_beans_are_not_present() {
+        contextRunner.run(context -> assertThat(context).hasNotFailed()
+                                                        .doesNotHaveBean(AggregateLifecycleController.class)
+                                                        .doesNotHaveBean(AggregateLifecycleStatisticsController.class)
+                                                        .doesNotHaveBean(AggregateArchiveController.class)
+                                                        .doesNotHaveBean(AggregateArchiveStatisticsController.class));
+    }
+
+    @Test
+    void the_aggregate_controllers_are_wired_when_their_spi_beans_are_present() {
+        contextRunner.withBean(AggregateLifecycleApi.class, () -> mock(AggregateLifecycleApi.class))
+                     .withBean(AggregateLifecycleStatisticsApi.class, () -> mock(AggregateLifecycleStatisticsApi.class))
+                     .withBean(AggregateArchiveApi.class, () -> mock(AggregateArchiveApi.class))
+                     .withBean(AggregateArchiveStatisticsApi.class, () -> mock(AggregateArchiveStatisticsApi.class))
+                     .run(context -> assertThat(context).hasSingleBean(AggregateLifecycleController.class)
+                                                        .hasSingleBean(AggregateLifecycleStatisticsController.class)
+                                                        .hasSingleBean(AggregateArchiveController.class)
+                                                        .hasSingleBean(AggregateArchiveStatisticsController.class));
+    }
+
+    /** Only the archive SPIs missing — the lifecycle half must still be served. */
+    @Test
+    void the_lifecycle_controllers_are_wired_even_when_the_archive_spi_beans_are_absent() {
+        contextRunner.withBean(AggregateLifecycleApi.class, () -> mock(AggregateLifecycleApi.class))
+                     .withBean(AggregateLifecycleStatisticsApi.class, () -> mock(AggregateLifecycleStatisticsApi.class))
+                     .run(context -> assertThat(context).hasSingleBean(AggregateLifecycleController.class)
+                                                        .hasSingleBean(AggregateLifecycleStatisticsController.class)
+                                                        .doesNotHaveBean(AggregateArchiveController.class)
+                                                        .doesNotHaveBean(AggregateArchiveStatisticsController.class));
     }
 }

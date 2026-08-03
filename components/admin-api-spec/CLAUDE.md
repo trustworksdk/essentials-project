@@ -1,6 +1,6 @@
 ## admin-api-spec
 
-Code-first OpenAPI contract for the seven Essentials admin `*Api` SPIs. Maven: `admin-api-spec`.
+Code-first OpenAPI contract for the eleven Essentials admin `*Api` SPIs. Maven: `admin-api-spec`.
 Committed `openapi/essentials-admin-api.yaml` = single source of truth for `admin-api-client-java`.
 Served by `spring-boot-starter-admin-api`, whose conformance test gates contract-vs-implementation drift.
 

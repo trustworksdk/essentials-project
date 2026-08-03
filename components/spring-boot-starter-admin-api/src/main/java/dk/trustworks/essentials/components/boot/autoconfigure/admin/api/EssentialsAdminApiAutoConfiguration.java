@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.admin.api;
 
 import dk.trustworks.essentials.components.adminapi.rest.*;
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
@@ -28,6 +29,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -149,6 +151,50 @@ public class EssentialsAdminApiAutoConfiguration {
                      ### The Essentials admin HTTP API is exposed with AllAccessSecurityProvider: every caller is \
                      authorized for every operation, including destructive ones (purge queue, delete message, \
                      release lock). Do not run this in production. ###""");
+        }
+    }
+
+    /**
+     * The aggregate lifecycle and archive controllers, unlike the other seven, cannot be declared unconditionally.
+     * {@code eventsourced-aggregates} is an optional dependency of an application using the admin API at all, and even
+     * with it on the classpath the SPI beans are conditional: the archive ones only exist when
+     * {@code essentials.eventstore.archives.enabled} is true. Each controller is therefore gated on its own SPI bean,
+     * so enabling the admin API never fails a context for a subsystem the application does not run.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(AggregateLifecycleApi.class)
+    public static class AggregateAdminApiConfiguration {
+
+        @Bean
+        @ConditionalOnBean(AggregateLifecycleApi.class)
+        @ConditionalOnMissingBean
+        public AggregateLifecycleController essentialsAggregateLifecycleController(AggregateLifecycleApi aggregateLifecycleApi,
+                                                                                  AdminApiPrincipalResolver principalResolver) {
+            return new AggregateLifecycleController(aggregateLifecycleApi, principalResolver);
+        }
+
+        @Bean
+        @ConditionalOnBean(AggregateLifecycleStatisticsApi.class)
+        @ConditionalOnMissingBean
+        public AggregateLifecycleStatisticsController essentialsAggregateLifecycleStatisticsController(AggregateLifecycleStatisticsApi aggregateLifecycleStatisticsApi,
+                                                                                                      AdminApiPrincipalResolver principalResolver) {
+            return new AggregateLifecycleStatisticsController(aggregateLifecycleStatisticsApi, principalResolver);
+        }
+
+        @Bean
+        @ConditionalOnBean(AggregateArchiveApi.class)
+        @ConditionalOnMissingBean
+        public AggregateArchiveController essentialsAggregateArchiveController(AggregateArchiveApi aggregateArchiveApi,
+                                                                              AdminApiPrincipalResolver principalResolver) {
+            return new AggregateArchiveController(aggregateArchiveApi, principalResolver);
+        }
+
+        @Bean
+        @ConditionalOnBean(AggregateArchiveStatisticsApi.class)
+        @ConditionalOnMissingBean
+        public AggregateArchiveStatisticsController essentialsAggregateArchiveStatisticsController(AggregateArchiveStatisticsApi aggregateArchiveStatisticsApi,
+                                                                                                  AdminApiPrincipalResolver principalResolver) {
+            return new AggregateArchiveStatisticsController(aggregateArchiveStatisticsApi, principalResolver);
         }
     }
 }

@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.adminapi.spec;
 
 import dk.trustworks.essentials.components.adminapi.spec.OpenApiSpecGenerator.SpecBuilder;
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues.QueueingSortOrder;
@@ -47,7 +48,7 @@ final class EssentialsAdminApiSpec {
     private EssentialsAdminApiSpec() {
     }
 
-    /** The seven SPI interfaces the contract covers (parity-checked against the operations below). */
+    /** The SPI interfaces the contract covers (parity-checked against the operations below). */
     static final List<Class<?>> API_INTERFACES = List.of(
             DBFencedLockApi.class,
             SchedulerApi.class,
@@ -55,7 +56,11 @@ final class EssentialsAdminApiSpec {
             DurableQueuesApi.class,
             EventStoreApi.class,
             CdcApi.class,
-            PostgresqlEventStoreStatisticsApi.class);
+            PostgresqlEventStoreStatisticsApi.class,
+            AggregateLifecycleApi.class,
+            AggregateLifecycleStatisticsApi.class,
+            AggregateArchiveApi.class,
+            AggregateArchiveStatisticsApi.class);
 
     /** DTO record types reflected into {@code components.schemas} (nested types are resolved transitively). */
     static final List<Class<?>> DTO_CLASSES = List.of(
@@ -70,7 +75,16 @@ final class EssentialsAdminApiSpec {
             ApiQueuedMessage.class,
             ApiQueuedStatistics.class,
             ApiSubscription.class,
-            ApiCdcStatus.class);
+            ApiCdcStatus.class,
+            ApiAggregateSnapshotPolicy.class,
+            ApiAggregateClosingBooksPolicy.class,
+            ApiClosingBooksGeneration.class,
+            ApiClosingBooksGenerationEventStream.class,
+            ApiAggregateSnapshot.class,
+            ApiAggregateSnapshotStatistics.class,
+            ApiAggregateClosingBooksStatistics.class,
+            ApiArchivedGeneration.class,
+            ApiAggregateArchiveStatistics.class);
 
     /**
      * Reference-typed DTO properties that are verified to always be present, and are therefore marked
@@ -109,6 +123,10 @@ final class EssentialsAdminApiSpec {
         put("event-store", "Inspect event-store subscriptions and persisted event order.");
         put("cdc", "Inspect Change Data Capture runtime state and effective configuration.");
         put("event-store-statistics", "Inspect event-store table size, activity, and cache-hit statistics.");
+        put("aggregate-lifecycle", "Inspect aggregate snapshot and closing-books policies, generations, and snapshots.");
+        put("aggregate-lifecycle-statistics", "Inspect aggregate snapshot and closing-books runtime statistics.");
+        put("aggregate-archive", "Inspect archived closing-books generations.");
+        put("aggregate-archive-statistics", "Inspect aggregate archive runtime statistics.");
     }};
 
     // Wire role strings (kept in sync with EssentialsSecurityRoles).
@@ -312,6 +330,92 @@ final class EssentialsAdminApiSpec {
          .summary("Return cache-hit ratio per event-store table.")
          .roles(STATS_R, ADMIN)
          .responseMap("ApiTableCacheHitRatio", "Table name to cache-hit ratio.");
+
+        // ---- aggregate-lifecycle ----
+        b.operation(AggregateLifecycleApi.class, "findAllAggregateSnapshotPolicies")
+         .tag("aggregate-lifecycle").get("/aggregate-lifecycle/snapshot-policies")
+         .summary("List the aggregate snapshot policies registered in this instance.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .responseArray("ApiAggregateSnapshotPolicy");
+
+        b.operation(AggregateLifecycleApi.class, "findAllAggregateClosingBooksPolicies")
+         .tag("aggregate-lifecycle").get("/aggregate-lifecycle/closing-books-policies")
+         .summary("List the aggregate closing-books policies registered in this instance.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .responseArray("ApiAggregateClosingBooksPolicy");
+
+        b.operation(AggregateLifecycleApi.class, "findClosingBooksGenerations")
+         .tag("aggregate-lifecycle").get("/aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations")
+         .summary("List all closing-books generations for a logical aggregate, oldest first.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("logicalAggregateId", new StringSchema(), "The logical aggregate id, i.e. the id spanning all generations.")
+         .responseArray("ApiClosingBooksGeneration");
+
+        b.operation(AggregateLifecycleApi.class, "findCurrentClosingBooksGeneration")
+         .tag("aggregate-lifecycle").get("/aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations/current")
+         .summary("Return the currently open closing-books generation for a logical aggregate.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("logicalAggregateId", new StringSchema(), "The logical aggregate id, i.e. the id spanning all generations.")
+         .responseOptionalRef("ApiClosingBooksGeneration", "The currently open generation.");
+
+        b.operation(AggregateLifecycleApi.class, "findClosingBooksGenerationEventStream")
+         .tag("aggregate-lifecycle").get("/aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations/{generation}/event-stream")
+         .summary("Return the persisted event stream of one closing-books generation.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("logicalAggregateId", new StringSchema(), "The logical aggregate id, i.e. the id spanning all generations.")
+         .pathParam("generation", new IntegerSchema().format("int64"), "The generation number.")
+         .responseOptionalRef("ApiClosingBooksGenerationEventStream", "The event stream of the generation.");
+
+        b.operation(AggregateLifecycleApi.class, "findSnapshots")
+         .tag("aggregate-lifecycle").get("/aggregate-lifecycle/aggregate-types/{aggregateType}/aggregates/{aggregateId}/snapshots")
+         .summary("List the stored snapshots of an aggregate instance, oldest first.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("aggregateId", new StringSchema(), "The aggregate instance id.")
+         .queryParam("includeSnapshotPayload", new BooleanSchema()._default(false), false,
+                     "Include the serialized snapshot payload. Off by default, since payloads can be large.")
+         .responseArray("ApiAggregateSnapshot");
+
+        // ---- aggregate-lifecycle-statistics ----
+        b.operation(AggregateLifecycleStatisticsApi.class, "findAggregateSnapshotStatistics")
+         .tag("aggregate-lifecycle-statistics").get("/aggregate-lifecycle-statistics/snapshots")
+         .summary("Return aggregate snapshot statistics per aggregate type.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .responseArray("ApiAggregateSnapshotStatistics");
+
+        b.operation(AggregateLifecycleStatisticsApi.class, "findAggregateClosingBooksStatistics")
+         .tag("aggregate-lifecycle-statistics").get("/aggregate-lifecycle-statistics/closing-books")
+         .summary("Return aggregate closing-books statistics per aggregate type.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .responseArray("ApiAggregateClosingBooksStatistics");
+
+        // ---- aggregate-archive ----
+        b.operation(AggregateArchiveApi.class, "findArchivedGenerations")
+         .tag("aggregate-archive").get("/aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations")
+         .summary("List the archived generations of a logical aggregate.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("logicalAggregateId", new StringSchema(), "The logical aggregate id, i.e. the id spanning all generations.")
+         .responseArray("ApiArchivedGeneration");
+
+        b.operation(AggregateArchiveApi.class, "findArchivedGeneration")
+         .tag("aggregate-archive").get("/aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations/{generation}")
+         .summary("Return the archive entry of one generation of a logical aggregate.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type.")
+         .pathParam("logicalAggregateId", new StringSchema(), "The logical aggregate id, i.e. the id spanning all generations.")
+         .pathParam("generation", new IntegerSchema().format("int64"), "The generation number.")
+         .responseOptionalRef("ApiArchivedGeneration", "The archive entry of the generation.");
+
+        // ---- aggregate-archive-statistics ----
+        b.operation(AggregateArchiveStatisticsApi.class, "findAggregateArchiveStatistics")
+         .tag("aggregate-archive-statistics").get("/aggregate-archive-statistics")
+         .summary("Return aggregate archive statistics per aggregate type.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .responseArray("ApiAggregateArchiveStatistics");
     }
 
     private static StringSchema sortOrderSchema() {
