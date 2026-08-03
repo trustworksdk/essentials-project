@@ -45,6 +45,7 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final String tableName;
+    private final String archivedTsIndexName;
 
     public PostgresqlAggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         this(unitOfWorkFactory, Optional.empty());
@@ -54,11 +55,15 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
                                               Optional<String> tableName) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tableName = requireNonNull(tableName, "No tableName provided").orElse(DEFAULT_TABLE_NAME).toLowerCase();
+        this.archivedTsIndexName = this.tableName + "_aggregate_type_archived_ts_idx";
         initializeStorage();
     }
 
     private void initializeStorage() {
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        // Derived, so it can exceed PostgresqlUtil.MAX_IDENTIFIER_LENGTH even when the table name does not. Postgres
+        // would silently truncate it to 63 characters, and two long table names could then derive the same index name.
+        PostgresqlUtil.checkIsValidTableOrColumnName(archivedTsIndexName);
         // One transaction, holding the framework's bootstrap lock: CREATE ... IF NOT EXISTS is not atomic against
         // concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a duplicate
         // catalog entry. See PostgresqlUtil#acquireBootstrapLock. Keeping the table and its index in the same
@@ -86,7 +91,7 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
                                       CREATE INDEX IF NOT EXISTS {:indexName}
                                       ON {:tableName} (aggregate_type, archived_ts DESC)
                                       """,
-                                      arg("indexName", tableName + "_aggregate_type_archived_ts_idx"),
+                                      arg("indexName", archivedTsIndexName),
                                       arg("tableName", tableName)));
         });
         log.info("Ensured that aggregate archive table '{}' exists", tableName);

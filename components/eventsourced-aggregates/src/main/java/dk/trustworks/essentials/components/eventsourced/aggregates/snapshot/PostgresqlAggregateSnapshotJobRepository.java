@@ -42,6 +42,8 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final String                                                        tableName;
     private final AggregateSnapshotDurableQueueMeasurementSupport               measurementSupport;
+    private final String                                                        pendingIndexName;
+    private final String                                                        processingIndexName;
 
     public PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         this(unitOfWorkFactory, Optional.empty());
@@ -67,12 +69,18 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tableName = requireNonNull(tableName, "No tableName provided").orElse(DEFAULT_TABLE_NAME).toLowerCase();
         this.measurementSupport = new AggregateSnapshotDurableQueueMeasurementSupport(meterRegistryOptional);
+        this.pendingIndexName = this.tableName + "_pending_idx";
+        this.processingIndexName = this.tableName + "_processing_idx";
         initializeStorage();
         registerQueueDepthGauges();
     }
 
     private void initializeStorage() {
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        // Derived, so they can exceed PostgresqlUtil.MAX_IDENTIFIER_LENGTH even when the table name does not. Postgres
+        // would silently truncate them to 63 characters, and two long table names could then derive the same index name.
+        PostgresqlUtil.checkIsValidTableOrColumnName(pendingIndexName);
+        PostgresqlUtil.checkIsValidTableOrColumnName(processingIndexName);
         // One transaction, holding the framework's bootstrap lock: CREATE ... IF NOT EXISTS is not atomic against
         // concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a duplicate
         // catalog entry. See PostgresqlUtil#acquireBootstrapLock.
@@ -98,11 +106,11 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
             // Hot-path index for the PENDING/FAILED branch of `lockNextBatch`. The third column
             // (`created_ts`) covers the ORDER BY so Postgres can yield rows in queue order
             // without an external sort step.
-            uow.handle().execute("CREATE INDEX IF NOT EXISTS " + tableName + "_pending_idx ON " + tableName + " (status, next_attempt_ts, created_ts)");
+            uow.handle().execute("CREATE INDEX IF NOT EXISTS " + pendingIndexName + " ON " + tableName + " (status, next_attempt_ts, created_ts)");
             // Recovery-path partial index for the PROCESSING reclaim branch. Small in steady
             // state (PROCESSING rows are short-lived) and supports `processing_started_ts <= ...`
             // ordered by `created_ts`.
-            uow.handle().execute("CREATE INDEX IF NOT EXISTS " + tableName + "_processing_idx ON " + tableName + " (processing_started_ts, created_ts) WHERE status = 'PROCESSING'");
+            uow.handle().execute("CREATE INDEX IF NOT EXISTS " + processingIndexName + " ON " + tableName + " (processing_started_ts, created_ts) WHERE status = 'PROCESSING'");
         });
         log.info("Ensured that aggregate snapshot job table '{}' exists", tableName);
     }

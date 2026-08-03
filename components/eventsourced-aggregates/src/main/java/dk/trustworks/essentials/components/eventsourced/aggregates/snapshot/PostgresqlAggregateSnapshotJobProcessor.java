@@ -157,11 +157,12 @@ public class PostgresqlAggregateSnapshotJobProcessor {
                 measurementSupport.incrementProcessOutcome(job, "completed");
             } catch (Exception e) {
                 var retryCountExceeded = job.attempts() >= settings.maxRetries();
+                var error              = describe(e);
                 if (retryCountExceeded) {
-                    jobRepository.markParked(job.jobId(), e.getMessage(), OffsetDateTime.now());
+                    jobRepository.markParked(job.jobId(), error, OffsetDateTime.now());
                 } else {
                     jobRepository.markFailed(job.jobId(),
-                                             e.getMessage(),
+                                             error,
                                              OffsetDateTime.now().plus(settings.retryDelay()));
                 }
                 measurementSupport.incrementProcessOutcome(job, retryCountExceeded ? "retry_exhausted" : "retry_scheduled");
@@ -175,6 +176,15 @@ public class PostgresqlAggregateSnapshotJobProcessor {
                          e);
             }
         });
+    }
+
+    /**
+     * {@code last_error} is what an operator has to work from when a job ends up FAILED or PARKED, and plenty of
+     * exceptions carry no message — a bare NullPointerException or ClassCastException would have stored SQL NULL and
+     * left the row saying nothing at all about why. Falls back to the exception's type.
+     */
+    private static String describe(Exception e) {
+        return e.getMessage() != null ? e.getMessage() : e.toString();
     }
 
     private void applyJob(AggregateSnapshotJob job) {
