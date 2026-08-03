@@ -75,7 +75,7 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
 
         var firstGeneration = repository.openNextGeneration(ACCOUNTS,
                                                             logicalAggregateId,
-                                                            "Account-123#1");
+                                                            (type, id, generation) -> "Account-123#" + generation);
 
         assertThat(firstGeneration.generation()).isEqualTo(1);
         assertThat(firstGeneration.isOpen()).isTrue();
@@ -91,7 +91,7 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
 
         var secondGeneration = repository.openNextGeneration(ACCOUNTS,
                                                              logicalAggregateId,
-                                                             "Account-123#2");
+                                                             (type, id, generation) -> "Account-123#" + generation);
 
         assertThat(secondGeneration.generation()).isEqualTo(2);
         assertThat(secondGeneration.isOpen()).isTrue();
@@ -101,7 +101,7 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
     @Test
     void coordinator_close_and_open_next_generation_rolls_back_close_when_open_fails() {
         var logicalAggregateId = new LogicalAggregateId<>("Account-123");
-        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#1");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, (type, id, generation) -> "Account-123#" + generation);
 
         ClosingBooksStreamIdGenerator<String> failingStreamIdGenerator = (type, id, generation) -> {
             throw new RuntimeException("boom");
@@ -132,11 +132,11 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
         var logicalAggregateId = new LogicalAggregateId<>("Account-123");
         repository.openNextGeneration(ACCOUNTS,
                                       logicalAggregateId,
-                                      "Account-123#1");
+                                      (type, id, generation) -> "Account-123#" + generation);
 
         assertThatThrownBy(() -> repository.openNextGeneration(ACCOUNTS,
                                                                logicalAggregateId,
-                                                               "Account-123#2"))
+                                                               (type, id, generation) -> "Account-123#" + generation))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("already has an open generation");
     }
@@ -160,7 +160,7 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
 
         var firstGeneration = typedRepository.openNextGeneration(ACCOUNTS,
                                                                  logicalAggregateId,
-                                                                 "Account-123#1");
+                                                                 (type, id, generation) -> "Account-123#" + generation);
 
         assertThat(firstGeneration.logicalAggregateId().value()).isEqualTo(123);
         assertThat(typedRepository.resolveCurrentGeneration(ACCOUNTS, logicalAggregateId))
@@ -174,8 +174,8 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
     void a_deferred_generation_is_excluded_from_scan_batches_until_its_deadline() {
         var deferred = new LogicalAggregateId<>("Account-deferred");
         var eligible = new LogicalAggregateId<>("Account-eligible");
-        repository.openNextGeneration(ACCOUNTS, deferred, "Account-deferred#1");
-        repository.openNextGeneration(ACCOUNTS, eligible, "Account-eligible#1");
+        repository.openNextGeneration(ACCOUNTS, deferred, (type, id, generation) -> "Account-deferred#" + generation);
+        repository.openNextGeneration(ACCOUNTS, eligible, (type, id, generation) -> "Account-eligible#" + generation);
 
         var now = OffsetDateTime.now();
         repository.deferScan(ACCOUNTS, deferred, now.plusMinutes(5));
@@ -198,14 +198,14 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
     @Test
     void opening_the_next_generation_clears_a_deferral() {
         var logicalAggregateId = new LogicalAggregateId<>("Account-123");
-        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#1");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, (type, id, generation) -> "Account-123#" + generation);
 
         var now = OffsetDateTime.now();
         repository.deferScan(ACCOUNTS, logicalAggregateId, now.plusMinutes(5));
         assertThat(repository.loadOpenGenerations(ACCOUNTS, 10, now)).isEmpty();
 
         repository.closeCurrentGeneration(ACCOUNTS, logicalAggregateId);
-        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#2");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, (type, id, generation) -> "Account-123#" + generation);
 
         assertThat(repository.loadOpenGenerations(ACCOUNTS, 10, now))
                 .describedAs("the new generation is a fresh scan target")
@@ -216,7 +216,7 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
     @Test
     void deferring_a_generation_that_is_no_longer_open_is_a_no_op() {
         var logicalAggregateId = new LogicalAggregateId<>("Account-123");
-        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#1");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, (type, id, generation) -> "Account-123#" + generation);
         repository.closeCurrentGeneration(ACCOUNTS, logicalAggregateId);
 
         assertThatCode(() -> repository.deferScan(ACCOUNTS, logicalAggregateId, OffsetDateTime.now().plusMinutes(5)))
@@ -231,7 +231,7 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
     @Test
     void concurrent_rollovers_from_separate_connections_are_serialized() throws Exception {
         var logicalAggregateId = new LogicalAggregateId<>("Account-123");
-        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#1");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, (type, id, generation) -> "Account-123#" + generation);
 
         var rollovers = 4;
         var barrier   = new CyclicBarrier(rollovers);
@@ -311,7 +311,9 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
             // Blocks on the partial unique index, then fails once the competing transaction commits.
             var blockedOpen = Executors.newSingleThreadExecutor();
             try {
-                var attempt = blockedOpen.submit(() -> repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#other"));
+                var attempt = blockedOpen.submit(() -> repository.openNextGeneration(ACCOUNTS,
+                                                                                    logicalAggregateId,
+                                                                                    (type, id, generation) -> "Account-123#other"));
                 Thread.sleep(250);
                 releaseCompeting.countDown();
 
@@ -335,5 +337,41 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
                                postgreSQLContainer.getPassword());
         jdbi.installPlugin(new PostgresPlugin());
         return new EventStoreManagedUnitOfWorkFactory(jdbi);
+    }
+
+    /**
+     * The generation number the row records and the number the stream aggregate id is derived from come from one
+     * place — the repository hands its own MAX(generation) + 1 to the generator. A caller cannot pass a stream id
+     * built from a number it guessed, which is what used to let the two disagree and leave events in a stream whose
+     * name misidentifies the generation they belong to.
+     */
+    @Test
+    void the_stream_aggregate_id_is_derived_from_the_generation_number_actually_assigned() {
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        // Records what the repository offered the generator, alongside what it persisted.
+        var offeredToGenerator = new java.util.ArrayList<Long>();
+        ClosingBooksStreamIdGenerator<String> recordingGenerator = (type, id, generation) -> {
+            offeredToGenerator.add(generation);
+            return id.value() + "#" + generation;
+        };
+
+        var first = repository.openNextGeneration(ACCOUNTS, logicalAggregateId, recordingGenerator);
+        repository.closeCurrentGeneration(ACCOUNTS, logicalAggregateId);
+        var second = repository.openNextGeneration(ACCOUNTS, logicalAggregateId, recordingGenerator);
+        repository.closeCurrentGeneration(ACCOUNTS, logicalAggregateId);
+        var third = repository.openNextGeneration(ACCOUNTS, logicalAggregateId, recordingGenerator);
+
+        assertThat(offeredToGenerator).containsExactly(1L, 2L, 3L);
+        assertThat(first.generation()).isEqualTo(1L);
+        assertThat(first.streamAggregateId()).isEqualTo("Account-123#1");
+        assertThat(second.generation()).isEqualTo(2L);
+        assertThat(second.streamAggregateId()).isEqualTo("Account-123#2");
+        assertThat(third.generation()).isEqualTo(3L);
+        assertThat(third.streamAggregateId()).isEqualTo("Account-123#3");
+
+        assertThat(repository.loadGenerations(ACCOUNTS, logicalAggregateId))
+                .allSatisfy(generation -> assertThat(generation.streamAggregateId())
+                        .describedAs("stream id must name the generation of the row it is stored on")
+                        .endsWith("#" + generation.generation()));
     }
 }

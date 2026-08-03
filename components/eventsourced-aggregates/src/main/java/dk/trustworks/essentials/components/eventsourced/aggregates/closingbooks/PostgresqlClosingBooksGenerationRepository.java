@@ -121,6 +121,9 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
 
     private void initializeStorage() {
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        // Derived, so it can exceed PostgresqlUtil.MAX_IDENTIFIER_LENGTH even when the table name does not. Postgres
+        // would silently truncate it to 63 characters, and two long table names could then derive the same index name.
+        PostgresqlUtil.checkIsValidTableOrColumnName(oneOpenGenerationIndexName);
         // One transaction, holding the framework's bootstrap lock: CREATE / ALTER ... IF NOT EXISTS is not atomic
         // against concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a
         // duplicate catalog entry. See PostgresqlUtil#acquireBootstrapLock. Keeping the table, its column additions and
@@ -294,10 +297,10 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
     @Override
     public AggregateGeneration<ID> openNextGeneration(AggregateType aggregateType,
                                                       LogicalAggregateId<ID> logicalAggregateId,
-                                                      String streamAggregateId) {
+                                                      ClosingBooksStreamIdGenerator<ID> streamIdGenerator) {
         requireNonNull(aggregateType, "No aggregateType provided");
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
-        requireNonNull(streamAggregateId, "No streamAggregateId provided");
+        requireNonNull(streamIdGenerator, "No streamIdGenerator provided");
 
         try {
             return unitOfWorkFactory.withUnitOfWork(uow -> {
@@ -317,6 +320,8 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
                                         .bind("logical_aggregate_id", serializeLogicalAggregateId(logicalAggregateId))
                                         .mapTo(Long.class)
                                         .one();
+                var streamAggregateId = requireNonNull(streamIdGenerator.generate(aggregateType, logicalAggregateId, nextGeneration),
+                                                       "streamIdGenerator returned no streamAggregateId");
                 var openedAt = OffsetDateTime.now();
 
                 return uow.handle().createQuery(bind("""

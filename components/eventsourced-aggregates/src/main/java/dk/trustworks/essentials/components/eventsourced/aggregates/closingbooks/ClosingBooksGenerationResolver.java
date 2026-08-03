@@ -64,12 +64,19 @@ public interface ClosingBooksGenerationResolver<ID> {
 
     /**
      * Open the next generation for the logical aggregate.
+     * <p>
+     * The implementation decides the generation number and passes it to {@code streamIdGenerator}, rather than taking a
+     * ready-made stream aggregate id: the number and the id derived from it then cannot disagree. A caller that
+     * computed the number itself would be duplicating the implementation's rule, and any divergence would persist a
+     * {@code streamAggregateId} naming one generation on a row recording another — events would land in a stream whose
+     * name misidentifies the books they belong to.
      *
+     * @param streamIdGenerator names the event stream for the generation number being opened
      * @throws IllegalStateException if an open generation already exists or the generation cannot be persisted
      */
     AggregateGeneration<ID> openNextGeneration(AggregateType aggregateType,
                                                LogicalAggregateId<ID> logicalAggregateId,
-                                               String streamAggregateId);
+                                               ClosingBooksStreamIdGenerator<ID> streamIdGenerator);
 
     /**
      * Close the currently open generation for the logical aggregate.

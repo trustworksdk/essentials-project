@@ -134,10 +134,10 @@ public class InMemoryClosingBooksGenerationResolver<ID> implements ClosingBooksO
     @Override
     public AggregateGeneration<ID> openNextGeneration(AggregateType aggregateType,
                                                       LogicalAggregateId<ID> logicalAggregateId,
-                                                      String streamAggregateId) {
+                                                      ClosingBooksStreamIdGenerator<ID> streamIdGenerator) {
         requireNonNull(aggregateType, "No aggregateType provided");
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
-        requireNonNull(streamAggregateId, "No streamAggregateId provided");
+        requireNonNull(streamIdGenerator, "No streamIdGenerator provided");
 
         var key = new GenerationKey<>(aggregateType, logicalAggregateId);
         var updatedGenerations = generations.compute(key, (ignored, existingGenerations) -> {
@@ -152,10 +152,17 @@ public class InMemoryClosingBooksGenerationResolver<ID> implements ClosingBooksO
                                                     currentGeneration.get().generation()));
             }
 
+            // Highest generation seen plus one, matching the MAX(generation) + 1 the PostgreSQL implementation uses.
+            // Counting the list instead would only agree with it while generations are contiguous and never pruned.
+            var nextGenerationNumber = mutableGenerations.stream()
+                                                         .mapToLong(AggregateGeneration::generation)
+                                                         .max()
+                                                         .orElse(0L) + 1L;
             var nextGeneration = new AggregateGeneration<>(aggregateType,
                                                            logicalAggregateId,
-                                                           mutableGenerations.size() + 1L,
-                                                           streamAggregateId,
+                                                           nextGenerationNumber,
+                                                           requireNonNull(streamIdGenerator.generate(aggregateType, logicalAggregateId, nextGenerationNumber),
+                                                                          "streamIdGenerator returned no streamAggregateId"),
                                                            GenerationState.OPEN,
                                                            OffsetDateTime.now(),
                                                            Optional.empty());

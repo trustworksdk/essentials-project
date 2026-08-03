@@ -29,14 +29,16 @@ class ClosingBooksAggregateIdResolversTest {
         var generationResolver = new InMemoryClosingBooksGenerationResolver<String>();
         generationResolver.openNextGeneration(aggregateType,
                                              new LogicalAggregateId<>("Account-123"),
-                                             "Account-123#7");
+                                             (type, id, generation) -> "Account-123#" + generation);
 
         AggregateIdResolver<String, String> logicalAggregateIdResolver = command -> java.util.Optional.of(command);
         var streamAggregateIdResolver = ClosingBooksAggregateIdResolvers.resolveCurrentStreamAggregateId(aggregateType,
                                                                                                          logicalAggregateIdResolver,
                                                                                                          generationResolver);
 
-        assertThat(streamAggregateIdResolver.resolveFrom("Account-123")).contains("Account-123#7");
+        // Generation 1, hence the stream id the generator produced for it. This used to assert an unrelated "#7",
+        // which the API no longer allows: the repository supplies the number the stream id is built from.
+        assertThat(streamAggregateIdResolver.resolveFrom("Account-123")).contains("Account-123#1");
         assertThat(streamAggregateIdResolver.resolveFrom("Unknown")).isEmpty();
     }
 }

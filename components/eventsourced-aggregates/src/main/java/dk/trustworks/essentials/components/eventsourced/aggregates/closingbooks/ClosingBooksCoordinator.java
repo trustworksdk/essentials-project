@@ -112,16 +112,14 @@ public class ClosingBooksCoordinator<ID> {
     public AggregateGeneration<ID> closeAndOpenNextGeneration(LogicalAggregateId<ID> logicalAggregateId) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
         return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> unitOfWorkFactory.withUnitOfWork(uow -> {
-            var currentGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
-                                                       .orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
+            generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
+                                .orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
             generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
-            var nextGenerationNumber = currentGeneration.generation() + 1;
-            var nextStreamAggregateId = streamIdGenerator.generate(aggregateType,
-                                                                   logicalAggregateId,
-                                                                   nextGenerationNumber);
+            // The repository decides the next generation number and feeds it to the generator, so the stream id it
+            // persists always names the generation on the row it is stored with.
             return generationRepository.openNextGeneration(aggregateType,
                                                            logicalAggregateId,
-                                                           nextStreamAggregateId);
+                                                           streamIdGenerator);
         }));
     }
 
@@ -159,20 +157,11 @@ public class ClosingBooksCoordinator<ID> {
     }
 
     private AggregateGeneration<ID> openFirstGeneration(LogicalAggregateId<ID> logicalAggregateId) {
-        return unitOfWorkFactory.withUnitOfWork(uow -> {
-            // Compute the actual next generation number from any existing closed rows so the
-            // stream-id matches the row inserted by the repository (which also uses MAX+1).
-            var existing = generationRepository.loadGenerations(aggregateType, logicalAggregateId);
-            var nextGeneration = existing.stream()
-                                          .mapToLong(AggregateGeneration::generation)
-                                          .max()
-                                          .orElse(0L) + 1L;
-            var streamAggregateId = streamIdGenerator.generate(aggregateType,
-                                                               logicalAggregateId,
-                                                               nextGeneration);
-            return generationRepository.openNextGeneration(aggregateType,
-                                                           logicalAggregateId,
-                                                           streamAggregateId);
-        });
+        // "First" only in the sense of the first one currently open: closed generations may already exist, and the
+        // repository numbers past them. It used to load every generation here to work that number out for the stream
+        // id, duplicating the repository's own rule; the repository now supplies it to the generator instead.
+        return unitOfWorkFactory.withUnitOfWork(uow -> generationRepository.openNextGeneration(aggregateType,
+                                                                                              logicalAggregateId,
+                                                                                              streamIdGenerator));
     }
 }

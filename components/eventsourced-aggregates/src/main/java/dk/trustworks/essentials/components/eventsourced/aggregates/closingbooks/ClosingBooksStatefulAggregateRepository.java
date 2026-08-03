@@ -73,10 +73,10 @@ public class ClosingBooksStatefulAggregateRepository<LOGICAL_ID,
     }
 
     public AggregateGeneration<LOGICAL_ID> openNextGeneration(LogicalAggregateId<LOGICAL_ID> logicalAggregateId,
-                                                              String streamAggregateId) {
+                                                              ClosingBooksStreamIdGenerator<LOGICAL_ID> streamIdGenerator) {
         return generationResolver.openNextGeneration(aggregateType,
                                                      logicalAggregateId,
-                                                     streamAggregateId);
+                                                     streamIdGenerator);
     }
 
     public AggregateGeneration<LOGICAL_ID> closeCurrentGeneration(LogicalAggregateId<LOGICAL_ID> logicalAggregateId) {

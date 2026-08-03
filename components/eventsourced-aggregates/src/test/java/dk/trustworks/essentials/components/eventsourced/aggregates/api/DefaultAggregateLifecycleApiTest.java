@@ -145,9 +145,9 @@ class DefaultAggregateLifecycleApiTest {
         private TestClosingBooksGenerationAccess() {
             repository = new InMemoryClosingBooksGenerationResolver<>();
             var logicalAggregateId = new LogicalAggregateId<>("order-1");
-            repository.openNextGeneration(aggregateType(), logicalAggregateId, "order-1#1");
+            repository.openNextGeneration(aggregateType(), logicalAggregateId, (type, id, generation) -> "order-1#" + generation);
             repository.closeCurrentGeneration(aggregateType(), logicalAggregateId);
-            repository.openNextGeneration(aggregateType(), logicalAggregateId, "order-1#2");
+            repository.openNextGeneration(aggregateType(), logicalAggregateId, (type, id, generation) -> "order-1#" + generation);
         }
 
         @Override

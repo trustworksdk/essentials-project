@@ -34,7 +34,7 @@ class ClosingBooksStatefulAggregateRepositoryTest {
         var generationResolver = new InMemoryClosingBooksGenerationResolver<String>();
         generationResolver.openNextGeneration(aggregateType,
                                              logicalAggregateId,
-                                             "Account-123#1");
+                                             (type, id, generation) -> "Account-123#" + generation);
 
         @SuppressWarnings("unchecked")
         var delegate = mock(StatefulAggregateRepository.class);

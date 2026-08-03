@@ -31,7 +31,7 @@ class InMemoryClosingBooksGenerationResolverTest {
 
         var firstGeneration = resolver.openNextGeneration(aggregateType,
                                                           logicalAggregateId,
-                                                          "Account-123#1");
+                                                          (type, id, generation) -> "Account-123#" + generation);
 
         assertThat(firstGeneration.generation()).isEqualTo(1);
         assertThat(firstGeneration.streamAggregateId()).isEqualTo("Account-123#1");
@@ -48,7 +48,7 @@ class InMemoryClosingBooksGenerationResolverTest {
 
         var secondGeneration = resolver.openNextGeneration(aggregateType,
                                                            logicalAggregateId,
-                                                           "Account-123#2");
+                                                           (type, id, generation) -> "Account-123#" + generation);
 
         assertThat(secondGeneration.generation()).isEqualTo(2);
         assertThat(secondGeneration.isOpen()).isTrue();
@@ -63,11 +63,11 @@ class InMemoryClosingBooksGenerationResolverTest {
 
         resolver.openNextGeneration(aggregateType,
                                     logicalAggregateId,
-                                    "Account-123#1");
+                                    (type, id, generation) -> "Account-123#" + generation);
 
         assertThatThrownBy(() -> resolver.openNextGeneration(aggregateType,
                                                              logicalAggregateId,
-                                                             "Account-123#2"))
+                                                             (type, id, generation) -> "Account-123#" + generation))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("already has an open generation");
     }
