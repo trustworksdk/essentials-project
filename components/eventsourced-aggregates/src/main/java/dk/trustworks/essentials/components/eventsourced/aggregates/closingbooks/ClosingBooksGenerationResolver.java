@@ -20,11 +20,36 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Resolves and mutates aggregate generation metadata used for closing-books rollovers.
  */
 public interface ClosingBooksGenerationResolver<ID> {
+    /**
+     * Run {@code rollover} with exclusive access to the generation state of one logical aggregate, so a
+     * resolve-then-act sequence cannot interleave with another rollover of the same logical aggregate.
+     * <p>
+     * Rollovers are read-then-write: resolve the open generation, decide, close it, open the next. Without
+     * serialization two callers can resolve the same open generation and both act on it, leaving only the storage
+     * constraint to catch them — and that surfaces as an opaque failure in the middle of whatever business operation
+     * triggered the rollover, rather than the outcome
+     * {@link #openNextGeneration(AggregateType, LogicalAggregateId, String)} and
+     * {@link #closeCurrentGeneration(AggregateType, LogicalAggregateId)} document.
+     * <p>
+     * The default implementation gives no isolation and simply runs {@code rollover}, which is correct for
+     * implementations that are single-threaded or hold no shared state. Implementations serving concurrent callers
+     * should override it.
+     *
+     * @param rollover the critical section; run exactly once
+     * @return whatever {@code rollover} returns
+     */
+    default <R> R withGenerationLock(AggregateType aggregateType,
+                                     LogicalAggregateId<ID> logicalAggregateId,
+                                     Supplier<R> rollover) {
+        return rollover.get();
+    }
+
     /**
      * Resolve the currently open generation for the logical aggregate, if one exists.
      */

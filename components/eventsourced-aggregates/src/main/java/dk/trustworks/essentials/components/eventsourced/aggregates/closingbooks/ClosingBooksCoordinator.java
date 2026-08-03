@@ -91,7 +91,12 @@ public class ClosingBooksCoordinator<ID> {
     public AggregateGeneration<ID> resolveOrOpenCurrentGeneration(LogicalAggregateId<ID> logicalAggregateId) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
         return generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
-                                   .orElseGet(() -> openFirstGeneration(logicalAggregateId));
+                                   .orElseGet(() -> generationRepository.withGenerationLock(aggregateType,
+                                                                                            logicalAggregateId,
+                                                                                            // Re-resolved under the lock: another caller may have opened the
+                                                                                            // first generation between the resolve above and this point.
+                                                                                            () -> generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
+                                                                                                                      .orElseGet(() -> openFirstGeneration(logicalAggregateId))));
     }
 
     /**
@@ -106,7 +111,7 @@ public class ClosingBooksCoordinator<ID> {
      */
     public AggregateGeneration<ID> closeAndOpenNextGeneration(LogicalAggregateId<ID> logicalAggregateId) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
-        return unitOfWorkFactory.withUnitOfWork(uow -> {
+        return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> unitOfWorkFactory.withUnitOfWork(uow -> {
             var currentGeneration = generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
                                                        .orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
             generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
@@ -117,7 +122,7 @@ public class ClosingBooksCoordinator<ID> {
             return generationRepository.openNextGeneration(aggregateType,
                                                            logicalAggregateId,
                                                            nextStreamAggregateId);
-        });
+        }));
     }
 
     /**
@@ -132,19 +137,25 @@ public class ClosingBooksCoordinator<ID> {
         requireNonNull(triggerMode, "No triggerMode provided");
         requireNonNull(policy, "No policy provided");
 
-        var currentGeneration = resolveOrOpenCurrentGeneration(logicalAggregateId);
-        var decision = policy.decide(new ClosingBooksEvaluationContext<>(aggregateType,
-                                                                         logicalAggregateId,
-                                                                         currentGeneration,
-                                                                         aggregate,
-                                                                         triggerMode,
-                                                                         OffsetDateTime.now(clock)));
+        // The whole evaluation is one critical section: the policy decides against the generation resolved here, and
+        // acting on a generation another caller has meanwhile closed or rolled would either fail outright or close a
+        // generation the policy never saw. Both lock implementations are reentrant, so the nested acquisition in
+        // closeAndOpenNextGeneration is a no-op.
+        return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> {
+            var currentGeneration = resolveOrOpenCurrentGeneration(logicalAggregateId);
+            var decision = policy.decide(new ClosingBooksEvaluationContext<>(aggregateType,
+                                                                             logicalAggregateId,
+                                                                             currentGeneration,
+                                                                             aggregate,
+                                                                             triggerMode,
+                                                                             OffsetDateTime.now(clock)));
 
-        return switch (decision) {
-            case KEEP_OPEN -> currentGeneration;
-            case CLOSE_ONLY -> generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
-            case CLOSE_AND_OPEN_NEXT -> closeAndOpenNextGeneration(logicalAggregateId);
-        };
+            return switch (decision) {
+                case KEEP_OPEN -> currentGeneration;
+                case CLOSE_ONLY -> generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
+                case CLOSE_AND_OPEN_NEXT -> closeAndOpenNextGeneration(logicalAggregateId);
+            };
+        });
     }
 
     private AggregateGeneration<ID> openFirstGeneration(LogicalAggregateId<ID> logicalAggregateId) {

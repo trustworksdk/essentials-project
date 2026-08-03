@@ -22,6 +22,8 @@ import dk.trustworks.essentials.shared.collections.Lists;
 import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -36,6 +38,30 @@ public class InMemoryClosingBooksGenerationResolver<ID> implements ClosingBooksO
      * opening the next one supersedes it — {@link #openNextGeneration} clears the entry.
      */
     private final Map<GenerationKey<ID>, OffsetDateTime>                deferredScans = new ConcurrentHashMap<>();
+    /**
+     * One lock per logical aggregate, created on demand. Never evicted: an entry is a bare {@link ReentrantLock}, and
+     * the number of logical aggregates an in-memory resolver sees is bounded by the test or single-node coordination it
+     * exists for.
+     */
+    private final Map<GenerationKey<ID>, ReentrantLock>                 generationLocks = new ConcurrentHashMap<>();
+
+    @Override
+    public <R> R withGenerationLock(AggregateType aggregateType,
+                                    LogicalAggregateId<ID> logicalAggregateId,
+                                    Supplier<R> rollover) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
+        requireNonNull(rollover, "No rollover provided");
+
+        var lock = generationLocks.computeIfAbsent(new GenerationKey<>(aggregateType, logicalAggregateId),
+                                                   ignored -> new ReentrantLock());
+        lock.lock();
+        try {
+            return rollover.get();
+        } finally {
+            lock.unlock();
+        }
+    }
 
     @Override
     public Optional<AggregateGeneration<ID>> resolveCurrentGeneration(AggregateType aggregateType,

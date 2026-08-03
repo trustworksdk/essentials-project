@@ -27,6 +27,13 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.OffsetDateTime;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -214,5 +221,119 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
 
         assertThatCode(() -> repository.deferScan(ACCOUNTS, logicalAggregateId, OffsetDateTime.now().plusMinutes(5)))
                 .doesNotThrowAnyException();
+    }
+
+    /**
+     * Two nodes rolling the same logical aggregate over at the same time must queue rather than collide: each resolves
+     * the open generation and closes it, so without serialization the loser fails mid-business-operation. The advisory
+     * lock in withGenerationLock is transaction-scoped, so this needs genuinely separate connections to be meaningful.
+     */
+    @Test
+    void concurrent_rollovers_from_separate_connections_are_serialized() throws Exception {
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#1");
+
+        var rollovers = 4;
+        var barrier   = new CyclicBarrier(rollovers);
+        var executor  = Executors.newFixedThreadPool(rollovers);
+        try {
+            List<Callable<Long>> tasks = IntStream.range(0, rollovers)
+                                                  .<Callable<Long>>mapToObj(ignored -> () -> {
+                                                      // Its own factory, so its own connection and its own transaction.
+                                                      var ownFactory    = newUnitOfWorkFactory();
+                                                      var ownRepository = new PostgresqlClosingBooksGenerationRepository<String>(ownFactory);
+                                                      var coordinator = new ClosingBooksCoordinator<>(ACCOUNTS,
+                                                                                                      ownRepository,
+                                                                                                      (type, id, nextGeneration) -> id.value() + "#" + nextGeneration,
+                                                                                                      ownFactory);
+                                                      barrier.await(30, TimeUnit.SECONDS);
+                                                      return coordinator.closeAndOpenNextGeneration(logicalAggregateId).generation();
+                                                  })
+                                                  .toList();
+            var openedGenerations = executor.invokeAll(tasks, 60, TimeUnit.SECONDS)
+                                            .stream()
+                                            .map(future -> {
+                                                try {
+                                                    return future.get();
+                                                } catch (Exception e) {
+                                                    throw new AssertionError("A concurrent rollover failed instead of waiting its turn", e);
+                                                }
+                                            })
+                                            .sorted()
+                                            .toList();
+
+            assertThat(openedGenerations).containsExactlyElementsOf(IntStream.rangeClosed(2, rollovers + 1)
+                                                                            .mapToObj(Long::valueOf)
+                                                                            .toList());
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(repository.resolveCurrentGeneration(ACCOUNTS, logicalAggregateId))
+                .hasValueSatisfying(generation -> assertThat(generation.generation()).isEqualTo(rollovers + 1L));
+    }
+
+    /**
+     * openNextGeneration documents IllegalStateException when a generation is already open, and a caller that bypasses
+     * withGenerationLock must still get that rather than a driver-level constraint violation. Driven deterministically:
+     * a competing OPEN row is inserted but left uncommitted, so the repository's own check cannot see it and its insert
+     * blocks on the partial unique index until the competing transaction commits.
+     */
+    @Test
+    void opening_a_generation_that_another_uncommitted_transaction_is_opening_reports_it_as_already_open() throws Exception {
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+
+        var competingInserted = new CountDownLatch(1);
+        var releaseCompeting  = new CountDownLatch(1);
+        var executor          = Executors.newSingleThreadExecutor();
+        try {
+            var competing = executor.submit(() -> {
+                var jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(),
+                                       postgreSQLContainer.getUsername(),
+                                       postgreSQLContainer.getPassword());
+                jdbi.installPlugin(new PostgresPlugin());
+                jdbi.useTransaction(handle -> {
+                    handle.createUpdate("INSERT INTO " + PostgresqlClosingBooksGenerationRepository.DEFAULT_TABLE_NAME +
+                                                " (aggregate_type, logical_aggregate_id, generation, stream_aggregate_id, state, opened_ts)" +
+                                                " VALUES (:aggregate_type, :logical_aggregate_id, 1, 'Account-123#1', 'OPEN', :opened_ts)")
+                          .bind("aggregate_type", ACCOUNTS.value())
+                          .bind("logical_aggregate_id", "Account-123")
+                          .bind("opened_ts", OffsetDateTime.now())
+                          .execute();
+                    competingInserted.countDown();
+                    releaseCompeting.await(30, TimeUnit.SECONDS);
+                });
+                return null;
+            });
+
+            assertThat(competingInserted.await(30, TimeUnit.SECONDS)).isTrue();
+
+            // Blocks on the partial unique index, then fails once the competing transaction commits.
+            var blockedOpen = Executors.newSingleThreadExecutor();
+            try {
+                var attempt = blockedOpen.submit(() -> repository.openNextGeneration(ACCOUNTS, logicalAggregateId, "Account-123#other"));
+                Thread.sleep(250);
+                releaseCompeting.countDown();
+
+                assertThatThrownBy(attempt::get)
+                        .hasCauseInstanceOf(IllegalStateException.class)
+                        .cause()
+                        .hasMessageContaining("already has an open generation");
+            } finally {
+                blockedOpen.shutdownNow();
+            }
+            competing.get(30, TimeUnit.SECONDS);
+        } finally {
+            releaseCompeting.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private EventStoreManagedUnitOfWorkFactory newUnitOfWorkFactory() {
+        var jdbi = Jdbi.create(postgreSQLContainer.getJdbcUrl(),
+                               postgreSQLContainer.getUsername(),
+                               postgreSQLContainer.getPassword());
+        jdbi.installPlugin(new PostgresPlugin());
+        return new EventStoreManagedUnitOfWorkFactory(jdbi);
     }
 }

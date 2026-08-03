@@ -22,6 +22,12 @@ import org.junit.jupiter.api.Test;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -126,5 +132,55 @@ class ClosingBooksCoordinatorTest {
         assertThat(generation.isOpen()).isTrue();
         assertThat(generation.streamAggregateId()).isEqualTo("Account-123#2");
         assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(2);
+    }
+
+    /**
+     * Rolling over is resolve-then-act, so concurrent rollovers of the same logical aggregate used to race: each
+     * resolved the same open generation and tried to close it, and the loser got an "already has an open generation" or
+     * "doesn't have an open generation to close" failure in the middle of whatever business operation triggered it.
+     * They are now serialized, so every caller rolls forward and the generation numbers form an unbroken sequence.
+     */
+    @Test
+    void concurrent_rollovers_of_the_same_logical_aggregate_are_serialized() throws Exception {
+        var aggregateType      = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var repository         = new InMemoryClosingBooksGenerationResolver<String>();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        repository,
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline());
+        coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+
+        var rollovers = 8;
+        var barrier   = new CyclicBarrier(rollovers);
+        var executor  = Executors.newFixedThreadPool(rollovers);
+        try {
+            List<Callable<Long>> tasks = IntStream.range(0, rollovers)
+                                                  .<Callable<Long>>mapToObj(ignored -> () -> {
+                                                      barrier.await(10, TimeUnit.SECONDS);
+                                                      return coordinator.closeAndOpenNextGeneration(logicalAggregateId).generation();
+                                                  })
+                                                  .toList();
+            var futures = executor.invokeAll(tasks, 30, TimeUnit.SECONDS);
+
+            var openedGenerations = futures.stream().map(future -> {
+                try {
+                    return future.get();
+                } catch (Exception e) {
+                    throw new AssertionError("A concurrent rollover failed instead of waiting its turn", e);
+                }
+            }).sorted().toList();
+
+            // Started at 1, so eight rollovers must have produced exactly generations 2..9.
+            assertThat(openedGenerations).containsExactlyElementsOf(IntStream.rangeClosed(2, rollovers + 1)
+                                                                             .mapToObj(Long::valueOf)
+                                                                             .toList());
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(repository.resolveCurrentGeneration(aggregateType, logicalAggregateId))
+                .hasValueSatisfying(generation -> assertThat(generation.generation()).isEqualTo(rollovers + 1L));
+        assertThat(repository.loadGenerations(aggregateType, logicalAggregateId)).hasSize(rollovers + 1);
     }
 }

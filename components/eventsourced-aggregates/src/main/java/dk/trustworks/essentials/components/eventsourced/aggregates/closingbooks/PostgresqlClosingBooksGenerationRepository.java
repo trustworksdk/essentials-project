@@ -24,11 +24,14 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwa
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.postgresql.util.PSQLException;
+
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
@@ -46,9 +49,20 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
 
     public static final String DEFAULT_TABLE_NAME = "aggregate_generations";
 
+    /**
+     * Classifier for the two-argument advisory-lock key space used by {@link #withGenerationLock}. Postgres keeps the
+     * one-argument and two-argument advisory-lock spaces separate, so this cannot collide with
+     * {@link PostgresqlUtil#ESSENTIALS_BOOTSTRAP_LOCK_KEY}; within the two-argument space this classifier separates
+     * closing-books rollovers from an application's own keys. 0xE55E is the same "ESSE" marker the bootstrap key uses.
+     */
+    private static final int GENERATION_LOCK_CLASSIFIER = 0xE55E_C10B;
+
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final String                                                        tableName;
     private final ClosingBooksLogicalAggregateIdSerializer<ID>                  logicalAggregateIdSerializer;
+    private final String                                                        oneOpenGenerationIndexName;
+    /** Postgres' default name for the unnamed PRIMARY KEY declared by {@link #initializeStorage()}. */
+    private final String                                                        primaryKeyName;
 
     /**
      * Constructs an instance of {@code PostgresqlClosingBooksGenerationRepository} using the specified unit of work
@@ -100,6 +114,8 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tableName = requireNonNull(tableName, "No tableName provided").orElse(DEFAULT_TABLE_NAME).toLowerCase();
         this.logicalAggregateIdSerializer = requireNonNull(logicalAggregateIdSerializer, "No logicalAggregateIdSerializer provided");
+        this.oneOpenGenerationIndexName = this.tableName + "_one_open_idx";
+        this.primaryKeyName = this.tableName + "_pkey";
         initializeStorage();
     }
 
@@ -131,11 +147,35 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
                                       ON {:tableName} (aggregate_type, logical_aggregate_id)
                                       WHERE state = 'OPEN'
                                       """,
-                                      arg("indexName", tableName + "_one_open_idx"),
+                                      arg("indexName", oneOpenGenerationIndexName),
                                       arg("tableName", tableName)));
             return null;
         });
         log.info("Ensured that closing books generation table '{}' exists", tableName);
+    }
+
+    /**
+     * Serialized with a transaction-scoped advisory lock on the logical aggregate, so concurrent rollovers of the same
+     * logical aggregate queue instead of racing. The lock is released when the surrounding transaction ends.
+     * <p>
+     * {@code hashtext} means two different logical aggregate ids can share a lock key, which costs contention but
+     * never correctness. The partial unique index remains the authority on the one-open-generation invariant, for
+     * callers that bypass this method entirely.
+     */
+    @Override
+    public <R> R withGenerationLock(AggregateType aggregateType,
+                                    LogicalAggregateId<ID> logicalAggregateId,
+                                    Supplier<R> rollover) {
+        requireNonNull(aggregateType, "No aggregateType provided");
+        requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
+        requireNonNull(rollover, "No rollover provided");
+
+        return unitOfWorkFactory.withUnitOfWork(uow -> {
+            uow.handle().execute("SELECT pg_advisory_xact_lock(?, hashtext(?))",
+                                 GENERATION_LOCK_CLASSIFIER,
+                                 aggregateType.value() + "/" + serializeLogicalAggregateId(logicalAggregateId));
+            return rollover.get();
+        });
     }
 
     @Override
@@ -309,8 +349,45 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
             if (e.getCause() instanceof IllegalStateException illegalStateException) {
                 throw illegalStateException;
             }
+            // The check above and the insert are one transaction but not one atomic step: at READ COMMITTED a
+            // concurrent opener is invisible until it commits, so both can pass the check and the partial unique index
+            // rejects the loser. That is the same condition the check reports, so report it the same way instead of
+            // letting a driver-level constraint violation escape to a caller that is documented to get an
+            // IllegalStateException. withGenerationLock avoids the race for callers that use it; this covers the rest.
+            if (lostRaceToOpenGeneration(e)) {
+                throw new IllegalStateException(msg("AggregateType '{}' with logicalAggregateId '{}' already has an open generation",
+                                                    aggregateType,
+                                                    logicalAggregateId),
+                                                e);
+            }
             throw e;
         }
+    }
+
+    /**
+     * Whether {@code throwable} says a concurrent caller got there first with its own open generation.
+     * <p>
+     * Which constraint catches the loser depends on how the two callers raced. Two openers starting from the same state
+     * both compute the same {@code MAX(generation) + 1} and collide on the primary key; an opener racing a
+     * close-and-open, where the generation numbers differ, collides on the one-open-generation partial index. Both mean
+     * the same thing to the caller. The table's remaining unique constraint, on
+     * {@code (aggregate_type, stream_aggregate_id)}, does not: reusing a stream aggregate id is a caller mistake and
+     * has to keep surfacing as itself.
+     */
+    private boolean lostRaceToOpenGeneration(Throwable throwable) {
+        for (var cause = throwable; cause != null && cause.getCause() != cause; cause = cause.getCause()) {
+            if (cause instanceof PSQLException psqlException && "23505".equals(psqlException.getSQLState())) {
+                var serverErrorMessage = psqlException.getServerErrorMessage();
+                var violatedConstraint = serverErrorMessage != null ? serverErrorMessage.getConstraint() : null;
+                if (violatedConstraint != null) {
+                    return oneOpenGenerationIndexName.equals(violatedConstraint) || primaryKeyName.equals(violatedConstraint);
+                }
+                // Not every driver path populates the structured server message; fall back to the text.
+                var message = psqlException.getMessage();
+                return message != null && (message.contains(oneOpenGenerationIndexName) || message.contains(primaryKeyName));
+            }
+        }
+        return false;
     }
 
     @Override
