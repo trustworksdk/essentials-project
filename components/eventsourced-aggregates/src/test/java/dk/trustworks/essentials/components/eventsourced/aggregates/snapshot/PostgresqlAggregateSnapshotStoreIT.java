@@ -39,13 +39,16 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
 class PostgresqlAggregateSnapshotStoreIT {
-    private static final AggregateType ORDERS = AggregateType.of("Orders");
+    private static final AggregateType ORDERS         = AggregateType.of("Orders");
+    /** A second aggregate type sharing the Order implementation class, to pin snapshot isolation between them. */
+    private static final AggregateType ARCHIVED_ORDERS = AggregateType.of("ArchivedOrders");
 
     @Container
     private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest").withDatabaseName("event-store")
@@ -74,6 +77,7 @@ class PostgresqlAggregateSnapshotStoreIT {
                                                                                                      new TestPersistableEventMapper(),
                                                                                                      aggregateEventStreamConfigurationFactory));
         eventStore.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
+        eventStore.addAggregateEventStreamConfiguration(ARCHIVED_ORDERS, OrderId.class);
         snapshotStore = new PostgresqlAggregateSnapshotStore(eventStore,
                                                              unitOfWorkFactory,
                                                              Optional.empty(),
@@ -293,6 +297,82 @@ class PostgresqlAggregateSnapshotStoreIT {
                 .isNotNull()
                 .extracting(timer -> timer.count())
                 .isEqualTo(2L);
+    }
+
+    /**
+     * Every snapshot is identified by its {@link AggregateType} as well as its implementation type and id. The same
+     * aggregate class registered under two aggregate types therefore keeps two independent snapshot histories, instead
+     * of the second save being swallowed by the first one's row and the deletes reaching across.
+     */
+    @Test
+    void snapshots_of_the_same_aggregate_id_and_impl_type_are_isolated_per_aggregate_type() {
+        var orderId          = OrderId.random();
+        var ordersProductId   = ProductId.random();
+        var archivedProductId = ProductId.random();
+        var ordersOrder       = new Order(orderId, CustomerId.random(), 1111);
+        var archivedOrder     = new Order(orderId, CustomerId.random(), 2222);
+        ordersOrder.addProduct(ordersProductId, 1);
+        archivedOrder.addProduct(archivedProductId, 2);
+
+        snapshotStore.saveSnapshot(ORDERS,
+                                   orderId,
+                                   Order.class,
+                                   EventOrder.of(1),
+                                   eventStore.getAggregateEventStreamConfiguration(ORDERS).jsonSerializer.serialize(ordersOrder));
+        snapshotStore.saveSnapshot(ARCHIVED_ORDERS,
+                                   orderId,
+                                   Order.class,
+                                   EventOrder.of(1),
+                                   eventStore.getAggregateEventStreamConfiguration(ARCHIVED_ORDERS).jsonSerializer.serialize(archivedOrder));
+
+        assertThat(snapshotStore.loadAllSnapshots(ORDERS, orderId, Order.class, false)).hasSize(1);
+        assertThat(snapshotStore.loadAllSnapshots(ARCHIVED_ORDERS, orderId, Order.class, false)).hasSize(1);
+        assertThat(snapshotStore.<OrderId, Order>loadSnapshot(ORDERS, orderId, EventOrder.MAX_EVENT_ORDER, Order.class))
+                .hasValueSatisfying(snapshot -> {
+                    assertThat((CharSequence) snapshot.aggregateType).isEqualTo(ORDERS);
+                    assertThat(snapshot.aggregateSnapshot.productAndQuantity).containsExactly(Map.entry(ordersProductId, 1));
+                });
+        assertThat(snapshotStore.<OrderId, Order>loadSnapshot(ARCHIVED_ORDERS, orderId, EventOrder.MAX_EVENT_ORDER, Order.class))
+                .hasValueSatisfying(snapshot -> {
+                    assertThat((CharSequence) snapshot.aggregateType).isEqualTo(ARCHIVED_ORDERS);
+                    assertThat(snapshot.aggregateSnapshot.productAndQuantity).containsExactly(Map.entry(archivedProductId, 2));
+                });
+
+        // A newer snapshot under one aggregate type must not suppress a save under the other.
+        snapshotStore.saveSnapshot(ORDERS,
+                                   orderId,
+                                   Order.class,
+                                   EventOrder.of(5),
+                                   eventStore.getAggregateEventStreamConfiguration(ORDERS).jsonSerializer.serialize(ordersOrder));
+        snapshotStore.saveSnapshot(ARCHIVED_ORDERS,
+                                   orderId,
+                                   Order.class,
+                                   EventOrder.of(2),
+                                   eventStore.getAggregateEventStreamConfiguration(ARCHIVED_ORDERS).jsonSerializer.serialize(archivedOrder));
+
+        assertThat(snapshotStore.findMostRecentLastIncludedEventOrder(ORDERS, orderId, Order.class)).contains(EventOrder.of(5));
+        assertThat(snapshotStore.findMostRecentLastIncludedEventOrder(ARCHIVED_ORDERS, orderId, Order.class)).contains(EventOrder.of(2));
+
+        // Deleting one aggregate type's snapshots leaves the other's alone.
+        snapshotStore.deleteSnapshots(ORDERS, orderId, Order.class);
+
+        assertThat(snapshotStore.loadAllSnapshots(ORDERS, orderId, Order.class, false)).isEmpty();
+        assertThat(snapshotStore.loadAllSnapshots(ARCHIVED_ORDERS, orderId, Order.class, false)).hasSize(2);
+    }
+
+    @Test
+    void delete_all_snapshots_for_an_implementation_type_spans_aggregate_types() {
+        var orderId = OrderId.random();
+        var order   = new Order(orderId, CustomerId.random(), 1234);
+        snapshotStore.saveSnapshot(ORDERS, orderId, Order.class, EventOrder.of(1),
+                                   eventStore.getAggregateEventStreamConfiguration(ORDERS).jsonSerializer.serialize(order));
+        snapshotStore.saveSnapshot(ARCHIVED_ORDERS, orderId, Order.class, EventOrder.of(1),
+                                   eventStore.getAggregateEventStreamConfiguration(ARCHIVED_ORDERS).jsonSerializer.serialize(order));
+
+        snapshotStore.deleteAllSnapshots(Order.class);
+
+        assertThat(snapshotStore.loadAllSnapshots(ORDERS, orderId, Order.class, false)).isEmpty();
+        assertThat(snapshotStore.loadAllSnapshots(ARCHIVED_ORDERS, orderId, Order.class, false)).isEmpty();
     }
 
     private static class TestPersistableEventMapper implements PersistableEventMapper {

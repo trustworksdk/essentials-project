@@ -113,9 +113,10 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                                           snapshot JSONB NOT NULL,
                                                                           created_ts TIMESTAMP WITH TIME ZONE NOT NULL,
                                                                           statistics JSONB,
-                                                                          PRIMARY KEY (aggregate_impl_type,
+                                                                          PRIMARY KEY (aggregate_type,
+                                                                                       aggregate_impl_type,
                                                                                        aggregate_id,
-                                                                                      last_included_event_order)
+                                                                                       last_included_event_order)
                                                                           )""", arg("tableName", snapshotTableName))));
         log.info("Ensured that aggregate snapshot table '{}' exists", snapshotTableName);
     }
@@ -136,12 +137,14 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                      () -> unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(bind("""
                                                                                                                                      SELECT *
                                                                                                                                      FROM {:tableName}
-                                                                                                                                     WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                     WHERE aggregate_type = :aggregate_type
+                                                                                                                                       AND aggregate_impl_type = :aggregate_impl_type
                                                                                                                                        AND aggregate_id = :aggregate_id
                                                                                                                                        AND last_included_event_order <= :last_included_event_order
                                                                                                                                      ORDER BY last_included_event_order DESC
                                                                                                                                      LIMIT 1
                                                                                                                                      """, arg("tableName", snapshotTableName)))
+                                                                                                      .bind("aggregate_type", aggregateType.value())
                                                                                                       .bind("aggregate_impl_type", aggregateImplType.getName())
                                                                                                       .bind("aggregate_id", serializedAggregateId)
                                                                                                       .bind("last_included_event_order", withLastIncludedEventOrderLessThanOrEqualTo)
@@ -168,12 +171,14 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                          () -> unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(bind("""
                                                                                                                                      SELECT {:selectColumns}
                                                                                                                                      FROM {:tableName}
-                                                                                                                                     WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                     WHERE aggregate_type = :aggregate_type
+                                                                                                                                       AND aggregate_impl_type = :aggregate_impl_type
                                                                                                                                        AND aggregate_id = :aggregate_id
                                                                                                                                      ORDER BY last_included_event_order ASC
                                                                                                                                      """,
                                                                                                                                      arg("selectColumns", selectColumns),
                                                                                                                                      arg("tableName", snapshotTableName)))
+                                                                                                          .bind("aggregate_type", aggregateType.value())
                                                                                                           .bind("aggregate_impl_type", aggregateImplType.getName())
                                                                                                           .bind("aggregate_id", serializedAggregateId)
                                                                                                           .map(includeSnapshotPayload ? aggregateSnapshotWithSnapshotPayloadRowMapper : aggregateSnapshotWithoutSnapshotPayloadRowMapper)
@@ -196,9 +201,11 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                                              () -> unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(bind("""
                                                                                                                                                              SELECT coalesce(MAX(last_included_event_order), -1)
                                                                                                                                                              FROM {:tableName}
-                                                                                                                                                             WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                                             WHERE aggregate_type = :aggregate_type
+                                                                                                                                                               AND aggregate_impl_type = :aggregate_impl_type
                                                                                                                                                                AND aggregate_id = :aggregate_id
                                                                                                                                                              """, arg("tableName", snapshotTableName)))
+                                                                                                                              .bind("aggregate_type", aggregateType.value())
                                                                                                                               .bind("aggregate_impl_type", aggregateImplType.getName())
                                                                                                                               .bind("aggregate_id", serializedAggregateId)
                                                                                                                               .mapTo(EventOrder.class)
@@ -239,7 +246,8 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                                                                                                                       :created_ts
                                                                                                                                                WHERE NOT EXISTS (
                                                                                                                                                    SELECT 1 FROM {:tableName}
-                                                                                                                                                   WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                                   WHERE aggregate_type = :aggregate_type
+                                                                                                                                                     AND aggregate_impl_type = :aggregate_impl_type
                                                                                                                                                      AND aggregate_id = :aggregate_id
                                                                                                                                                      AND last_included_event_order > :last_included_event_order
                                                                                                                                                )
@@ -286,10 +294,12 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                  "older_than",
                                                  () -> rowsUpdated[0] = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createUpdate(bind("""
                                                                                                                                                    DELETE FROM {:tableName}
-                                                                                                                                                   WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                                   WHERE aggregate_type = :aggregate_type
+                                                                                                                                                     AND aggregate_impl_type = :aggregate_impl_type
                                                                                                                                                      AND aggregate_id = :aggregate_id
                                                                                                                                                      AND last_included_event_order < :older_than_event_order
                                                                                                                                                    """, arg("tableName", snapshotTableName)))
+                                                                                                                   .bind("aggregate_type", aggregateType.value())
                                                                                                                    .bind("aggregate_impl_type", withAggregateImplementationType.getName())
                                                                                                                    .bind("aggregate_id", serializedAggregateId)
                                                                                                                    .bind("older_than_event_order", olderThanEventOrder.longValue())
@@ -301,6 +311,11 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                   olderThanEventOrder);
     }
 
+    /**
+     * The one operation that deliberately spans {@link AggregateType}s: it is scoped to an aggregate implementation
+     * type, so if the same class is registered under several aggregate types this removes the snapshots of all of them.
+     * Every other operation here takes an {@link AggregateType} and is scoped to it.
+     */
     @Override
     public <AGGREGATE_IMPL_TYPE> void deleteAllSnapshots(Class<AGGREGATE_IMPL_TYPE> ofAggregateImplementationType) {
         requireNonNull(ofAggregateImplementationType, "No ofAggregateImplementationType supplied");
@@ -334,9 +349,11 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                  "all",
                                                  () -> rowsUpdated[0] = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createUpdate(bind("""
                                                                                                                                                    DELETE FROM {:tableName}
-                                                                                                                                                   WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                                   WHERE aggregate_type = :aggregate_type
+                                                                                                                                                     AND aggregate_impl_type = :aggregate_impl_type
                                                                                                                                                      AND aggregate_id = :aggregate_id
                                                                                                                                                    """, arg("tableName", snapshotTableName)))
+                                                                                                                   .bind("aggregate_type", aggregateType.value())
                                                                                                                    .bind("aggregate_impl_type", withAggregateImplementationType.getName())
                                                                                                                    .bind("aggregate_id", serializedAggregateId)
                                                                                                                    .execute()));
@@ -364,10 +381,12 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
                                                  "selected",
                                                  () -> rowsUpdated[0] = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createUpdate(bind("""
                                                                                                                                                    DELETE FROM {:tableName}
-                                                                                                                                                   WHERE aggregate_impl_type = :aggregate_impl_type
+                                                                                                                                                   WHERE aggregate_type = :aggregate_type
+                                                                                                                                                     AND aggregate_impl_type = :aggregate_impl_type
                                                                                                                                                      AND aggregate_id = :aggregate_id
                                                                                                                                                      AND last_included_event_order IN (<snapshotEventOrdersToDelete>)
                                                                                                                                                    """, arg("tableName", snapshotTableName)))
+                                                                                                                   .bind("aggregate_type", aggregateType.value())
                                                                                                                    .bind("aggregate_impl_type", withAggregateImplementationType.getName())
                                                                                                                    .bind("aggregate_id", serializedAggregateId)
                                                                                                                    .bindList("snapshotEventOrdersToDelete", snapshotEventOrdersToDelete.stream().map(NumberType::longValue).collect(Collectors.toList()))

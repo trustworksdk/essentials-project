@@ -88,7 +88,7 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
                                                                              "attempts INT NOT NULL,\n" +
                                                                              "status TEXT NOT NULL,\n" +
                                                                              "last_error TEXT,\n" +
-                                                                             "UNIQUE (aggregate_impl_type, aggregate_id, last_included_event_order)\n" +
+                                                                             "UNIQUE (aggregate_type, aggregate_impl_type, aggregate_id, last_included_event_order)\n" +
                                                                              ")"));
         unitOfWorkFactory.withUnitOfWork(uow -> {
             // Hot-path index for the PENDING/FAILED branch of `lockNextBatch`. The third column
@@ -107,7 +107,7 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
     @Override
     public void enqueue(AggregateSnapshotJob job) {
         requireNonNull(job, "No job provided");
-        // Insert. On a unique-key conflict (aggregate_impl_type, aggregate_id, last_included_event_order):
+        // Insert. On a unique-key conflict (aggregate_type, aggregate_impl_type, aggregate_id, last_included_event_order):
         //   - If the existing row is PARKED, replace its payload and reset its retry state — operators
         //     that produce a corrected payload after parking the previous attempt can re-enqueue safely.
         //   - For any other status (PENDING / PROCESSING / FAILED), keep the existing row to avoid
@@ -121,7 +121,7 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
                                                                                                                            ":job_id, :aggregate_type, :aggregate_id, :aggregate_impl_type, :last_included_event_order,\n" +
                                                                                                                            ":snapshot::jsonb, :delete_all_existing_snapshots, :snapshot_event_orders_to_delete,\n" +
                                                                                                                            ":created_ts, :next_attempt_ts, :attempts, :status, :last_error)\n" +
-                                                                                                                           "ON CONFLICT (aggregate_impl_type, aggregate_id, last_included_event_order)\n" +
+                                                                                                                           "ON CONFLICT (aggregate_type, aggregate_impl_type, aggregate_id, last_included_event_order)\n" +
                                                                                                                            "DO UPDATE SET\n" +
                                                                                                                            "    job_id = EXCLUDED.job_id,\n" +
                                                                                                                            "    snapshot = EXCLUDED.snapshot,\n" +
