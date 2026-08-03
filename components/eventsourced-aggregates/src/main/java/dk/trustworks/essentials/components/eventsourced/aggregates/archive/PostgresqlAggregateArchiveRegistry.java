@@ -59,31 +59,35 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
 
     private void initializeStorage() {
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().execute(bind("""
-                                                                          CREATE TABLE IF NOT EXISTS {:tableName} (
-                                                                              aggregate_type TEXT NOT NULL,
-                                                                              logical_aggregate_id TEXT NOT NULL,
-                                                                              generation BIGINT NOT NULL,
-                                                                              stream_aggregate_id TEXT NOT NULL,
-                                                                              archive_status TEXT NOT NULL,
-                                                                              archive_format TEXT,
-                                                                              archive_location TEXT,
-                                                                              event_count BIGINT,
-                                                                              checksum TEXT,
-                                                                              closed_ts TIMESTAMP WITH TIME ZONE,
-                                                                              archived_ts TIMESTAMP WITH TIME ZONE,
-                                                                              archive_error TEXT,
-                                                                              PRIMARY KEY (aggregate_type, logical_aggregate_id, generation)
-                                                                          )
-                                                                          """, arg("tableName", tableName))));
-        unitOfWorkFactory.withUnitOfWork(uow -> {
+        // One transaction, holding the framework's bootstrap lock: CREATE ... IF NOT EXISTS is not atomic against
+        // concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a duplicate
+        // catalog entry. See PostgresqlUtil#acquireBootstrapLock. Keeping the table and its index in the same
+        // transaction also means a table without its index is never left behind.
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
+            uow.handle().execute(bind("""
+                                      CREATE TABLE IF NOT EXISTS {:tableName} (
+                                          aggregate_type TEXT NOT NULL,
+                                          logical_aggregate_id TEXT NOT NULL,
+                                          generation BIGINT NOT NULL,
+                                          stream_aggregate_id TEXT NOT NULL,
+                                          archive_status TEXT NOT NULL,
+                                          archive_format TEXT,
+                                          archive_location TEXT,
+                                          event_count BIGINT,
+                                          checksum TEXT,
+                                          closed_ts TIMESTAMP WITH TIME ZONE,
+                                          archived_ts TIMESTAMP WITH TIME ZONE,
+                                          archive_error TEXT,
+                                          PRIMARY KEY (aggregate_type, logical_aggregate_id, generation)
+                                      )
+                                      """, arg("tableName", tableName)));
             uow.handle().execute(bind("""
                                       CREATE INDEX IF NOT EXISTS {:indexName}
                                       ON {:tableName} (aggregate_type, archived_ts DESC)
                                       """,
                                       arg("indexName", tableName + "_aggregate_type_archived_ts_idx"),
                                       arg("tableName", tableName)));
-            return null;
         });
         log.info("Ensured that aggregate archive table '{}' exists", tableName);
     }

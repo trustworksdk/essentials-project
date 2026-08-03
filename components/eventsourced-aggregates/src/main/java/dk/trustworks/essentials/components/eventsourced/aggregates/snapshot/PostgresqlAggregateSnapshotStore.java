@@ -104,20 +104,26 @@ public class PostgresqlAggregateSnapshotStore implements AggregateSnapshotStore 
 
     private void initializeStorage() {
         PostgresqlUtil.checkIsValidTableOrColumnName(snapshotTableName);
-        unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().execute(bind("""
-                                                                          CREATE TABLE IF NOT EXISTS {:tableName} (
-                                                                          aggregate_impl_type TEXT NOT NULL,
-                                                                          aggregate_id TEXT NOT NULL,
-                                                                          aggregate_type TEXT NOT NULL,
-                                                                          last_included_event_order bigint NOT NULL,
-                                                                          snapshot JSONB NOT NULL,
-                                                                          created_ts TIMESTAMP WITH TIME ZONE NOT NULL,
-                                                                          statistics JSONB,
-                                                                          PRIMARY KEY (aggregate_type,
-                                                                                       aggregate_impl_type,
-                                                                                       aggregate_id,
-                                                                                       last_included_event_order)
-                                                                          )""", arg("tableName", snapshotTableName))));
+        // Holds the framework's bootstrap lock: CREATE ... IF NOT EXISTS is not atomic against concurrent sessions, so
+        // two JVMs starting together can both see "doesn't exist" and one fails on a duplicate catalog entry. See
+        // PostgresqlUtil#acquireBootstrapLock.
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
+            uow.handle().execute(bind("""
+                                      CREATE TABLE IF NOT EXISTS {:tableName} (
+                                          aggregate_impl_type TEXT NOT NULL,
+                                          aggregate_id TEXT NOT NULL,
+                                          aggregate_type TEXT NOT NULL,
+                                          last_included_event_order bigint NOT NULL,
+                                          snapshot JSONB NOT NULL,
+                                          created_ts TIMESTAMP WITH TIME ZONE NOT NULL,
+                                          statistics JSONB,
+                                          PRIMARY KEY (aggregate_type,
+                                                       aggregate_impl_type,
+                                                       aggregate_id,
+                                                       last_included_event_order)
+                                      )""", arg("tableName", snapshotTableName)));
+        });
         log.info("Ensured that aggregate snapshot table '{}' exists", snapshotTableName);
     }
 

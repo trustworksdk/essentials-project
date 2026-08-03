@@ -453,4 +453,23 @@ class PostgresqlAggregateSnapshotJobRepositoryIT {
 
     private static final class TestAggregate {
     }
+
+    /**
+     * The table and both of its indexes are created in one bootstrap-locked transaction. Losing an index would not fail
+     * any functional test — both only affect the plan lockNextBatch gets — so assert they are actually there, and that
+     * constructing the repository again over an existing table stays idempotent, as a restart does.
+     */
+    @Test
+    void creates_the_table_and_its_indexes_and_is_idempotent_across_restarts() {
+        new PostgresqlAggregateSnapshotJobRepository(unitOfWorkFactory);
+
+        var indexNames = unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+                                                                    .createQuery("SELECT indexname FROM pg_indexes WHERE tablename = :table_name")
+                                                                    .bind("table_name", PostgresqlAggregateSnapshotJobRepository.DEFAULT_TABLE_NAME)
+                                                                    .mapTo(String.class)
+                                                                    .list());
+
+        assertThat(indexNames).contains(PostgresqlAggregateSnapshotJobRepository.DEFAULT_TABLE_NAME + "_pending_idx",
+                                        PostgresqlAggregateSnapshotJobRepository.DEFAULT_TABLE_NAME + "_processing_idx");
+    }
 }

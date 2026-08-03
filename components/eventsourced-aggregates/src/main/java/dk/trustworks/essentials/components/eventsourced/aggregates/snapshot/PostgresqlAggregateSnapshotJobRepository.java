@@ -73,7 +73,12 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
 
     private void initializeStorage() {
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().execute("CREATE TABLE IF NOT EXISTS " + tableName + " (\n" +
+        // One transaction, holding the framework's bootstrap lock: CREATE ... IF NOT EXISTS is not atomic against
+        // concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a duplicate
+        // catalog entry. See PostgresqlUtil#acquireBootstrapLock.
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
+            uow.handle().execute("CREATE TABLE IF NOT EXISTS " + tableName + " (\n" +
                                                                              "job_id UUID PRIMARY KEY,\n" +
                                                                              "aggregate_type TEXT NOT NULL,\n" +
                                                                              "aggregate_id TEXT NOT NULL,\n" +
@@ -89,8 +94,7 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
                                                                              "status TEXT NOT NULL,\n" +
                                                                              "last_error TEXT,\n" +
                                                                              "UNIQUE (aggregate_type, aggregate_impl_type, aggregate_id, last_included_event_order)\n" +
-                                                                             ")"));
-        unitOfWorkFactory.withUnitOfWork(uow -> {
+                                                                             ")");
             // Hot-path index for the PENDING/FAILED branch of `lockNextBatch`. The third column
             // (`created_ts`) covers the ORDER BY so Postgres can yield rows in queue order
             // without an external sort step.
@@ -99,7 +103,6 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
             // state (PROCESSING rows are short-lived) and supports `processing_started_ts <= ...`
             // ordered by `created_ts`.
             uow.handle().execute("CREATE INDEX IF NOT EXISTS " + tableName + "_processing_idx ON " + tableName + " (processing_started_ts, created_ts) WHERE status = 'PROCESSING'");
-            return null;
         });
         log.info("Ensured that aggregate snapshot job table '{}' exists", tableName);
     }

@@ -121,21 +121,26 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
 
     private void initializeStorage() {
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
-        unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().execute(bind("""
-                                                                          CREATE TABLE IF NOT EXISTS {:tableName} (
-                                                                              aggregate_type TEXT NOT NULL,
-                                                                              logical_aggregate_id TEXT NOT NULL,
-                                                                              generation BIGINT NOT NULL,
-                                                                              stream_aggregate_id TEXT NOT NULL,
-                                                                              state TEXT NOT NULL,
-                                                                              opened_ts TIMESTAMP WITH TIME ZONE NOT NULL,
-                                                                              closed_ts TIMESTAMP WITH TIME ZONE,
-                                                                              next_scan_ts TIMESTAMP WITH TIME ZONE,
-                                                                              PRIMARY KEY (aggregate_type, logical_aggregate_id, generation),
-                                                                              UNIQUE (aggregate_type, stream_aggregate_id)
-                                                                          )
-                                                                          """, arg("tableName", tableName))));
-        unitOfWorkFactory.withUnitOfWork(uow -> {
+        // One transaction, holding the framework's bootstrap lock: CREATE / ALTER ... IF NOT EXISTS is not atomic
+        // against concurrent sessions, so two JVMs starting together can both see "doesn't exist" and one fails on a
+        // duplicate catalog entry. See PostgresqlUtil#acquireBootstrapLock. Keeping the table, its column additions and
+        // its indexes in the same transaction also means a partially created table is never left behind.
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
+            uow.handle().execute(bind("""
+                                      CREATE TABLE IF NOT EXISTS {:tableName} (
+                                          aggregate_type TEXT NOT NULL,
+                                          logical_aggregate_id TEXT NOT NULL,
+                                          generation BIGINT NOT NULL,
+                                          stream_aggregate_id TEXT NOT NULL,
+                                          state TEXT NOT NULL,
+                                          opened_ts TIMESTAMP WITH TIME ZONE NOT NULL,
+                                          closed_ts TIMESTAMP WITH TIME ZONE,
+                                          next_scan_ts TIMESTAMP WITH TIME ZONE,
+                                          PRIMARY KEY (aggregate_type, logical_aggregate_id, generation),
+                                          UNIQUE (aggregate_type, stream_aggregate_id)
+                                      )
+                                      """, arg("tableName", tableName)));
             // Added after the table shipped without it, so existing installations get it here rather than only via
             // CREATE TABLE. NULL means "eligible for scanning now", which is what every pre-existing row should be.
             uow.handle().execute(bind("""
@@ -149,7 +154,6 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
                                       """,
                                       arg("indexName", oneOpenGenerationIndexName),
                                       arg("tableName", tableName)));
-            return null;
         });
         log.info("Ensured that closing books generation table '{}' exists", tableName);
     }
