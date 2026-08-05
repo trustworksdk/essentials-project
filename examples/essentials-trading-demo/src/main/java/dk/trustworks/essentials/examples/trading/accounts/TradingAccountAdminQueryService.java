@@ -31,6 +31,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Read-only query service used by the demo admin API to inspect trading account rollover state.
@@ -39,17 +40,39 @@ import java.util.List;
 public class TradingAccountAdminQueryService {
     private final TradingAccountService tradingAccountService;
     private final AggregateLifecycleApi aggregateLifecycleApi;
-    private final AggregateArchiveApi aggregateArchiveApi;
-    private final AggregateGenerationArchiver aggregateGenerationArchiver;
+    /**
+     * Archiving is optional: both of these beans only exist when {@code essentials.eventstore.archives.enabled} is
+     * true. Requiring them outright meant the whole application failed to start with archiving switched off, even
+     * though only the three archive endpoints below need them.
+     */
+    private final Optional<AggregateArchiveApi> aggregateArchiveApi;
+    private final Optional<AggregateGenerationArchiver> aggregateGenerationArchiver;
 
     public TradingAccountAdminQueryService(TradingAccountService tradingAccountService,
                                            AggregateLifecycleApi aggregateLifecycleApi,
-                                           AggregateArchiveApi aggregateArchiveApi,
-                                           AggregateGenerationArchiver aggregateGenerationArchiver) {
+                                           Optional<AggregateArchiveApi> aggregateArchiveApi,
+                                           Optional<AggregateGenerationArchiver> aggregateGenerationArchiver) {
         this.tradingAccountService = tradingAccountService;
         this.aggregateLifecycleApi = aggregateLifecycleApi;
         this.aggregateArchiveApi = aggregateArchiveApi;
         this.aggregateGenerationArchiver = aggregateGenerationArchiver;
+    }
+
+    /**
+     * Fails with the reason and the fix rather than reporting an empty archive, which would be indistinguishable from
+     * an aggregate that genuinely has nothing archived.
+     */
+    private AggregateArchiveApi archiveApi() {
+        return aggregateArchiveApi.orElseThrow(TradingAccountAdminQueryService::archivingDisabled);
+    }
+
+    private AggregateGenerationArchiver archiver() {
+        return aggregateGenerationArchiver.orElseThrow(TradingAccountAdminQueryService::archivingDisabled);
+    }
+
+    private static IllegalStateException archivingDisabled() {
+        return new IllegalStateException("Aggregate archiving is disabled in this instance. "
+                                                 + "Set 'essentials.eventstore.archives.enabled=true' to use the archive endpoints.");
     }
 
     @Transactional(readOnly = true)
@@ -92,14 +115,14 @@ public class TradingAccountAdminQueryService {
 
     @Transactional(readOnly = true)
     public List<ApiArchivedGeneration> getArchivedGenerations(TradingAccountId accountId) {
-        return aggregateArchiveApi.findArchivedGenerations("demo-admin",
+        return archiveApi().findArchivedGenerations("demo-admin",
                                                            TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
                                                            accountId.toString());
     }
 
     @Transactional(readOnly = true)
     public String getArchiveContent(TradingAccountId accountId, long generation) {
-        var archivedGeneration = aggregateArchiveApi.findArchivedGeneration("demo-admin",
+        var archivedGeneration = archiveApi().findArchivedGeneration("demo-admin",
                                                                             TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
                                                                             accountId.toString(),
                                                                             generation)
@@ -117,10 +140,10 @@ public class TradingAccountAdminQueryService {
 
     @Transactional
     public ApiArchivedGeneration archiveGeneration(TradingAccountId accountId, long generation) {
-        var archivedGeneration = aggregateGenerationArchiver.archiveGeneration(TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+        var archivedGeneration = archiver().archiveGeneration(TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
                                                                                accountId.toString(),
                                                                                generation);
-        return aggregateArchiveApi.findArchivedGeneration("demo-admin",
+        return archiveApi().findArchivedGeneration("demo-admin",
                                                           TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
                                                           accountId.toString(),
                                                           generation)

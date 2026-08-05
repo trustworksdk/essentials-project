@@ -17,9 +17,6 @@
 package dk.trustworks.essentials.examples.trading.settlements;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicy;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksDefaultPolicyType;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksTriggerMode;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
 
 import java.math.BigDecimal;
@@ -27,13 +24,17 @@ import java.math.BigDecimal;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Settlement aggregate used to demonstrate a lifecycle that benefits from closing books
- * without requiring snapshotting.
+ * Settlement aggregate, demonstrating a multi-step lifecycle — created, clearing requested, cleared, settled,
+ * reconciled, closed — without snapshotting or closing books.
+ * <p>
+ * This carried an {@code @AggregateClosingBooksPolicy} declaring EXPLICIT_COMMAND rollover, which never did anything.
+ * A closing-books aggregate is keyed on a per-generation id with a separate logical id spanning generations, the way
+ * {@code TradingAccount} is keyed on {@code TradingAccountGenerationId} alongside {@code TradingAccountId}; this one is
+ * keyed directly on {@code SettlementId}, so it has no generations to roll and none of the supporting wiring existed.
+ * The annotation was removed rather than left advertising a capability the demo does not have. Demonstrating
+ * EXPLICIT_COMMAND rollover here would mean introducing a settlement generation id and reworking the settlement
+ * service and projections around it.
  */
-@AggregateClosingBooksPolicy(aggregateType = "Settlements",
-                             enabled = true,
-                             triggerMode = ClosingBooksTriggerMode.EXPLICIT_COMMAND,
-                             defaultPolicy = ClosingBooksDefaultPolicyType.EXPLICIT_ONLY)
 public class Settlement extends AggregateRoot<SettlementId, SettlementEvent, Settlement> {
     public String tradeId;
     public String accountId;

@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.api.ApiArchiv
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccount;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountAdminView;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountClosingBooksConfigurationView;
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountClosingBooksPolicy;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountService;
@@ -136,11 +137,21 @@ class TradingDemoApplicationTest {
         assertThat(applicationContext).isNotNull();
         assertThat(simulationProperties.isEnabled()).isFalse();
         assertThat(applicationContext.getBean(TradingSimulationRunner.class)).isNotNull();
-        assertThat(TradingAccount.class.isAnnotationPresent(dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicy.class)).isTrue();
-        assertThat(TradingAccount.class.isAnnotationPresent(dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicy.class)).isTrue();
-        assertThat(Settlement.class.isAnnotationPresent(dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicy.class)).isTrue();
-        assertThat(Instrument.class.isAnnotationPresent(dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicy.class)).isFalse();
-        assertThat(Trade.class.isAnnotationPresent(dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicy.class)).isFalse();
+        /*
+         * Asserted through the lifecycle API rather than with isAnnotationPresent, which is what the previous version of
+         * this test did. An annotation reaches a policy registry only if something registers it, so asserting its
+         * presence on the class proved nothing — and let Settlement carry a closing-books policy that never did
+         * anything, for as long as this test claimed to cover it.
+         */
+        var lifecycleApi = applicationContext.getBean(AggregateLifecycleApi.class);
+
+        assertThat(lifecycleApi.findAllAggregateSnapshotPolicies("demo-admin"))
+                .describedAs("TradingAccount's snapshot policy must reach the registry, not merely annotate the class")
+                .extracting(policy -> policy.aggregateType().toString())
+                .containsExactly("TradingAccounts");
+        assertThat(lifecycleApi.findAllAggregateClosingBooksPolicies("demo-admin"))
+                .extracting(policy -> policy.aggregateType().toString())
+                .containsExactly("TradingAccounts");
     }
 
     @Test
