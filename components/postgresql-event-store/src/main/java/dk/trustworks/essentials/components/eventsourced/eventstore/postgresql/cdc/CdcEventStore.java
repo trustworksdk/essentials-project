@@ -566,6 +566,21 @@ public class CdcEventStore implements EventStore {
         return eventStore.getUnitOfWorkFactory();
     }
 
+    /**
+     * The {@link EventStore} this instance decorates.
+     * <p>
+     * {@link CdcEventStore} only implements {@link EventStore}, not the wider
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore}
+     * that the delegate normally implements, so callers needing the configuration side of the delegate
+     * (aggregate event stream configurations, in-memory projectors, interceptor registration) have to reach it
+     * through here rather than casting the decorator.
+     *
+     * @return the decorated {@link EventStore}
+     */
+    public EventStore getDelegate() {
+        return eventStore;
+    }
+
     @Override
     public EventBus localEventBus() {
         return eventStore.localEventBus();

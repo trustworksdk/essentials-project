@@ -44,7 +44,11 @@ class AdminApiContractConformanceTest {
             DurableQueuesController.class,
             EventStoreController.class,
             CdcController.class,
-            EventStoreStatisticsController.class);
+            EventStoreStatisticsController.class,
+            AggregateLifecycleController.class,
+            AggregateLifecycleStatisticsController.class,
+            AggregateArchiveController.class,
+            AggregateArchiveStatisticsController.class);
 
     private static final String CONTRACT_RESOURCE = "/openapi/essentials-admin-api.yaml";
 
@@ -65,8 +69,8 @@ class AdminApiContractConformanceTest {
     /** Keeps the comparisons below from passing vacuously if either side fails to be discovered. */
     @Test
     void both_sides_of_the_comparison_are_actually_discovered() {
-        assertThat(contractOperations()).hasSize(27);
-        assertThat(implementedOperations()).hasSize(27);
+        assertThat(contractOperations()).hasSize(38);
+        assertThat(implementedOperations()).hasSize(38);
     }
 
     @Test

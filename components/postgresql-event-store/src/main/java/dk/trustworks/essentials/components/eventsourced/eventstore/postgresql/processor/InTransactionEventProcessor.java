@@ -342,7 +342,7 @@ public abstract class InTransactionEventProcessor implements Lifecycle {
     }
 
     private AggregateIdSerializer resolveAggregateIdSerializer(AggregateType aggregateType) {
-        return ((ConfigurableEventStore<?>) eventStore).getAggregateEventStreamConfiguration(aggregateType).aggregateIdSerializer;
+        return ConfigurableEventStoreResolver.resolve(eventStore).getAggregateEventStreamConfiguration(aggregateType).aggregateIdSerializer;
     }
 
     /**

@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.adminapi.rest;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.foundation.fencedlock.LockName;
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
@@ -51,6 +53,8 @@ class AdminApiEndpointsTest {
 
     private final DBFencedLockApi  dbFencedLockApi  = mock(DBFencedLockApi.class);
     private final DurableQueuesApi durableQueuesApi = mock(DurableQueuesApi.class);
+    private final AggregateLifecycleApi aggregateLifecycleApi = mock(AggregateLifecycleApi.class);
+    private final AggregateArchiveApi   aggregateArchiveApi   = mock(AggregateArchiveApi.class);
 
     private final TestAuthenticatedUser authenticatedUser = new TestAuthenticatedUser();
 
@@ -62,7 +66,9 @@ class AdminApiEndpointsTest {
         var jsonMapper        = JsonMapper.builder().addModule(new AdminApiJacksonModule()).build();
 
         mockMvc = MockMvcBuilders.standaloneSetup(new FencedLocksController(dbFencedLockApi, principalResolver),
-                                                 new DurableQueuesController(durableQueuesApi, principalResolver))
+                                                 new DurableQueuesController(durableQueuesApi, principalResolver),
+                                                 new AggregateLifecycleController(aggregateLifecycleApi, principalResolver),
+                                                 new AggregateArchiveController(aggregateArchiveApi, principalResolver))
                                  .setControllerAdvice(new AdminApiExceptionHandler())
                                  .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
                                  .addPlaceholderValue(AdminApiPaths.BASE_PATH_PROPERTY, BASE)
@@ -230,6 +236,67 @@ class AdminApiEndpointsTest {
 
         @Override
         public void logout() {
+        }
+    }
+
+    /**
+     * The aggregate lifecycle and archive endpoints. Their contract-visible behaviour beyond plain delegation is the
+     * defaulted {@code includeSnapshotPayload} query parameter and the mapping of an empty {@link Optional} onto 404.
+     */
+    @Nested
+    class AggregateLifecycleAndArchiveEndpoints {
+
+        @Test
+        void include_snapshot_payload_defaults_to_false() throws Exception {
+            when(aggregateLifecycleApi.findSnapshots(any(), any(), any(), anyBoolean())).thenReturn(List.of());
+
+            mockMvc.perform(get(BASE + "/aggregate-lifecycle/aggregate-types/Orders/aggregates/order-1/snapshots"))
+                   .andExpect(status().isOk());
+
+            verify(aggregateLifecycleApi).findSnapshots(any(), eq(AggregateType.of("Orders")), eq("order-1"), eq(false));
+        }
+
+        @Test
+        void include_snapshot_payload_is_passed_through_when_requested() throws Exception {
+            when(aggregateLifecycleApi.findSnapshots(any(), any(), any(), anyBoolean())).thenReturn(List.of());
+
+            mockMvc.perform(get(BASE + "/aggregate-lifecycle/aggregate-types/Orders/aggregates/order-1/snapshots")
+                                    .param("includeSnapshotPayload", "true"))
+                   .andExpect(status().isOk());
+
+            verify(aggregateLifecycleApi).findSnapshots(any(), eq(AggregateType.of("Orders")), eq("order-1"), eq(true));
+        }
+
+        @Test
+        void no_open_generation_becomes_404_with_the_contract_error_body() throws Exception {
+            when(aggregateLifecycleApi.findCurrentClosingBooksGeneration(any(), any(), any())).thenReturn(Optional.empty());
+
+            mockMvc.perform(get(BASE + "/aggregate-lifecycle/aggregate-types/Orders/logical-aggregates/order-1/closing-books-generations/current"))
+                   .andExpect(status().isNotFound())
+                   .andExpect(jsonPath("$.status").value(404))
+                   .andExpect(jsonPath("$.error").value("Not Found"));
+        }
+
+        @Test
+        void no_generation_event_stream_becomes_404() throws Exception {
+            when(aggregateLifecycleApi.findClosingBooksGenerationEventStream(any(), any(), any(), anyLong())).thenReturn(Optional.empty());
+
+            mockMvc.perform(get(BASE + "/aggregate-lifecycle/aggregate-types/Orders/logical-aggregates/order-1/closing-books-generations/3/event-stream"))
+                   .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void no_archived_generation_becomes_404() throws Exception {
+            when(aggregateArchiveApi.findArchivedGeneration(any(), any(), any(), anyLong())).thenReturn(Optional.empty());
+
+            mockMvc.perform(get(BASE + "/aggregate-archive/aggregate-types/Orders/logical-aggregates/order-1/archived-generations/3"))
+                   .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void a_non_numeric_generation_becomes_400() throws Exception {
+            mockMvc.perform(get(BASE + "/aggregate-archive/aggregate-types/Orders/logical-aggregates/order-1/archived-generations/not-a-number"))
+                   .andExpect(status().isBadRequest());
         }
     }
 }

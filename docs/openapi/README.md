@@ -114,6 +114,33 @@ Error responses use the contract's `Error` schema. `5xx` bodies deliberately car
 detail — the cause is logged instead, so an internal failure cannot leak schema names, SQL, or
 hostnames to an HTTP caller.
 
+### A deployment serves a subset of the contract
+
+The contract describes the whole API. Any single deployment serves only the part it actually runs.
+
+Each contract area is served by one controller, and each controller is conditional on the SPI bean it
+delegates to. Those beans are themselves conditional: `eventsourced-aggregates` may not be on the
+classpath at all, archives only exist when `essentials.eventstore.archives.enabled` is true, and any
+subsystem can be switched off in configuration. Whatever is absent simply has no endpoints, and those
+paths answer `404`.
+
+This is normal, not a misconfiguration, and it can be extreme — an application that runs none of the
+subsystems still starts the admin API and serves nothing but errors. Adding the starter does not
+oblige you to enable anything.
+
+Because the effect is otherwise invisible, the starter states the surface once at startup:
+
+```
+Essentials admin API is serving 4 of 11 contract areas.
+  served:  fenced-locks, durable-queues, event-store, cdc
+  skipped: scheduler, postgresql-query-statistics, event-store-statistics, aggregate-lifecycle, ...
+           — no SPI bean for these, so their endpoints answer 404.
+```
+
+Read that line before treating a `404` as contract drift. A generated client is built from the
+contract, so it will offer methods for operations your deployment does not serve; the `404` is the
+contract's own answer for an operation that is not available here.
+
 ## Consuming the Java client
 
 The contract's server URL is relative, so the `native` client — which cannot send a relative URI —

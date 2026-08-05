@@ -25,15 +25,21 @@
         </encoder>
     </appender>
 
-    <logger name="dk.trustworks.essentials" level="DEBUG"/>
+    <!-- Test logging is quiet by default and raised on demand: run with
+         -Dessentials.test.log.level=DEBUG (or TRACE) to get the Essentials detail back.
+         These loggers are the ones worth turning up when diagnosing this module; the root
+         logger deliberately stays at INFO so raising them does not also pull in the noise
+         from Spring, the JDBC/Mongo drivers and Testcontainers. -->
+
+    <logger name="dk.trustworks.essentials" level="${essentials.test.log.level:-INFO}"/>
     <logger name="dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory" level="INFO"/>
     <logger name="dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory" level="INFO"/>
-    <logger name="dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain" level="DEBUG"/>
-    <logger name="dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues" level="TRACE"/>
-    <logger name="dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues$1" level="DEBUG"/> <!-- PatternMatchingMethodInvoker -->
-    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer" level="TRACE"/>
-    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer.MessageHandlingFailures" level="TRACE"/>
-    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedQueuePollingOptimizer" level="TRACE"/>
+    <logger name="dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain" level="${essentials.test.log.level:-INFO}"/>
+    <logger name="dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues" level="${essentials.test.log.level:-INFO}"/>
+    <logger name="dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues$1" level="${essentials.test.log.level:-INFO}"/> <!-- PatternMatchingMethodInvoker -->
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer" level="${essentials.test.log.level:-INFO}"/>
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer.MessageHandlingFailures" level="${essentials.test.log.level:-INFO}"/>
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedQueuePollingOptimizer" level="${essentials.test.log.level:-INFO}"/>
     <logger name="dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener" level="INFO"/>
 
     <root level="INFO">

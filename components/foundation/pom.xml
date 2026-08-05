@@ -102,6 +102,11 @@
             <scope>provided</scope>
         </dependency>
         <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aop</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
             <version>${spring-boot.version}</version>
@@ -211,10 +216,13 @@
                 <configuration>
                     <images>
                         <image>
-                            <name>essentials-postgres-with-pgcron:latest</name>
+                            <name>${essentials.postgres.image}</name>
                             <build>
-                                <dockerFile>Dockerfile</dockerFile>
-                                <contextDir>${project.basedir}/src/test/resources</contextDir>
+                                <dockerFile>${project.basedir}/../../docker/postgresql/Dockerfile</dockerFile>
+                                <contextDir>${project.basedir}/../../docker/postgresql</contextDir>
+                                <args>
+                                    <POSTGRES_IMAGE>${essentials.postgres.base-image}</POSTGRES_IMAGE>
+                                </args>
                             </build>
                         </image>
                     </images>
@@ -225,13 +233,6 @@
                         <phase>pre-integration-test</phase>
                         <goals>
                             <goal>build</goal>
-                        </goals>
-                    </execution>
-                    <execution>
-                        <id>remove-image</id>
-                        <phase>post-integration-test</phase>
-                        <goals>
-                            <goal>remove</goal>
                         </goals>
                     </execution>
                 </executions>

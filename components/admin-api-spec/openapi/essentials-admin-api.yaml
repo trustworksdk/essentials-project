@@ -29,6 +29,15 @@ tags:
   description: Inspect Change Data Capture runtime state and effective configuration.
 - name: event-store-statistics
   description: "Inspect event-store table size, activity, and cache-hit statistics."
+- name: aggregate-lifecycle
+  description: "Inspect aggregate snapshot and closing-books policies, generations,\
+    \ and snapshots."
+- name: aggregate-lifecycle-statistics
+  description: Inspect aggregate snapshot and closing-books runtime statistics.
+- name: aggregate-archive
+  description: Inspect archived closing-books generations.
+- name: aggregate-archive-statistics
+  description: Inspect aggregate archive runtime statistics.
 paths:
   /fenced-locks:
     get:
@@ -1324,8 +1333,741 @@ paths:
       x-required-roles:
       - essentials_postgresql_stats_reader
       - essentials_admin
+  /aggregate-lifecycle/snapshot-policies:
+    get:
+      tags:
+      - aggregate-lifecycle
+      summary: List the aggregate snapshot policies registered in this instance.
+      operationId: findAllAggregateSnapshotPolicies
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiAggregateSnapshotPolicy"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-lifecycle/closing-books-policies:
+    get:
+      tags:
+      - aggregate-lifecycle
+      summary: List the aggregate closing-books policies registered in this instance.
+      operationId: findAllAggregateClosingBooksPolicies
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiAggregateClosingBooksPolicy"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations:
+    get:
+      tags:
+      - aggregate-lifecycle
+      summary: "List all closing-books generations for a logical aggregate, oldest\
+        \ first."
+      operationId: findClosingBooksGenerations
+      parameters:
+      - name: aggregateType
+        in: path
+        description: The aggregate type.
+        required: true
+        schema:
+          type: string
+      - name: logicalAggregateId
+        in: path
+        description: "The logical aggregate id, i.e. the id spanning all generations."
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiClosingBooksGeneration"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations/current:
+    get:
+      tags:
+      - aggregate-lifecycle
+      summary: Return the currently open closing-books generation for a logical aggregate.
+      operationId: findCurrentClosingBooksGeneration
+      parameters:
+      - name: aggregateType
+        in: path
+        description: The aggregate type.
+        required: true
+        schema:
+          type: string
+      - name: logicalAggregateId
+        in: path
+        description: "The logical aggregate id, i.e. the id spanning all generations."
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The currently open generation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiClosingBooksGeneration"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  ? /aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations/{generation}/event-stream
+  : get:
+      tags:
+      - aggregate-lifecycle
+      summary: Return the persisted event stream of one closing-books generation.
+      operationId: findClosingBooksGenerationEventStream
+      parameters:
+      - name: aggregateType
+        in: path
+        description: The aggregate type.
+        required: true
+        schema:
+          type: string
+      - name: logicalAggregateId
+        in: path
+        description: "The logical aggregate id, i.e. the id spanning all generations."
+        required: true
+        schema:
+          type: string
+      - name: generation
+        in: path
+        description: The generation number.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: 200 — The event stream of the generation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiClosingBooksGenerationEventStream"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-lifecycle/aggregate-types/{aggregateType}/aggregates/{aggregateId}/snapshots:
+    get:
+      tags:
+      - aggregate-lifecycle
+      summary: "List the stored snapshots of an aggregate instance, oldest first."
+      operationId: findSnapshots
+      parameters:
+      - name: aggregateType
+        in: path
+        description: The aggregate type.
+        required: true
+        schema:
+          type: string
+      - name: aggregateId
+        in: path
+        description: The aggregate instance id.
+        required: true
+        schema:
+          type: string
+      - name: includeSnapshotPayload
+        in: query
+        description: "Include the serialized snapshot payload. Off by default, since\
+          \ payloads can be large."
+        required: false
+        schema:
+          type: boolean
+          default: false
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiAggregateSnapshot"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-lifecycle-statistics/snapshots:
+    get:
+      tags:
+      - aggregate-lifecycle-statistics
+      summary: Return aggregate snapshot statistics per aggregate type.
+      operationId: findAggregateSnapshotStatistics
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiAggregateSnapshotStatistics"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-lifecycle-statistics/closing-books:
+    get:
+      tags:
+      - aggregate-lifecycle-statistics
+      summary: Return aggregate closing-books statistics per aggregate type.
+      operationId: findAggregateClosingBooksStatistics
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiAggregateClosingBooksStatistics"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations:
+    get:
+      tags:
+      - aggregate-archive
+      summary: List the archived generations of a logical aggregate.
+      operationId: findArchivedGenerations
+      parameters:
+      - name: aggregateType
+        in: path
+        description: The aggregate type.
+        required: true
+        schema:
+          type: string
+      - name: logicalAggregateId
+        in: path
+        description: "The logical aggregate id, i.e. the id spanning all generations."
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiArchivedGeneration"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations/{generation}:
+    get:
+      tags:
+      - aggregate-archive
+      summary: Return the archive entry of one generation of a logical aggregate.
+      operationId: findArchivedGeneration
+      parameters:
+      - name: aggregateType
+        in: path
+        description: The aggregate type.
+        required: true
+        schema:
+          type: string
+      - name: logicalAggregateId
+        in: path
+        description: "The logical aggregate id, i.e. the id spanning all generations."
+        required: true
+        schema:
+          type: string
+      - name: generation
+        in: path
+        description: The generation number.
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: 200 — The archive entry of the generation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiArchivedGeneration"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /aggregate-archive-statistics:
+    get:
+      tags:
+      - aggregate-archive-statistics
+      summary: Return aggregate archive statistics per aggregate type.
+      operationId: findAggregateArchiveStatistics
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiAggregateArchiveStatistics"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
 components:
   schemas:
+    ApiAggregateArchiveStatistics:
+      required:
+      - archivedGenerationCount
+      - failedGenerationCount
+      - totalArchivedEventCount
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        archivedGenerationCount:
+          type: integer
+          format: int64
+        failedGenerationCount:
+          type: integer
+          format: int64
+        totalArchivedEventCount:
+          type: integer
+          format: int64
+        lastArchivedAt:
+          type: string
+          format: date-time
+    ApiAggregateClosingBooksPolicy:
+      required:
+      - enabled
+      - eventThreshold
+      - intervalDays
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        aggregateImplementationType:
+          type: string
+        enabled:
+          type: boolean
+        triggerMode:
+          type: string
+          enum:
+          - ON_ACCESS
+          - EXPLICIT_COMMAND
+          - SCHEDULED_SCAN
+        defaultPolicy:
+          type: string
+          enum:
+          - UNSPECIFIED
+          - MANUAL_ONLY
+          - EVENT_COUNT
+          - TIME_BOUNDARY
+          - EVENT_COUNT_OR_TIME_BOUNDARY
+          - EXPLICIT_ONLY
+        eventThreshold:
+          type: integer
+          format: int64
+        timeBoundary:
+          type: string
+          enum:
+          - NONE
+          - END_OF_DAY
+          - END_OF_WEEK
+          - END_OF_MONTH
+          - END_OF_YEAR
+          - EVERY_N_DAYS
+        zoneId:
+          type: string
+        intervalDays:
+          type: integer
+          format: int32
+    ApiAggregateClosingBooksStatistics:
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        aggregateImplementationType:
+          type: string
+        timedMetrics:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ApiTimedMetricStatistics"
+        counters:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        gauges:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+    ApiAggregateSnapshot:
+      required:
+      - lastIncludedEventOrder
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        aggregateId:
+          type: string
+        aggregateImplementationType:
+          type: string
+        lastIncludedEventOrder:
+          type: integer
+          format: int64
+        snapshotPayload:
+          type: string
+    ApiAggregateSnapshotPolicy:
+      required:
+      - enabled
+      - everyNEvents
+      - keepLastSnapshots
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        aggregateImplementationType:
+          type: string
+        enabled:
+          type: boolean
+        mode:
+          type: string
+          enum:
+          - SYNC
+          - ASYNC_IN_MEMORY
+          - ASYNC_DURABLE
+        everyNEvents:
+          type: integer
+          format: int32
+        deletionMode:
+          type: string
+          enum:
+          - DELETE_ALL_HISTORIC
+          - KEEP_LAST_N
+        keepLastSnapshots:
+          type: integer
+          format: int32
+    ApiAggregateSnapshotStatistics:
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        aggregateImplementationType:
+          type: string
+        timedMetrics:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ApiTimedMetricStatistics"
+        counters:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+        gauges:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+    ApiArchivedGeneration:
+      required:
+      - eventCount
+      - generation
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        logicalAggregateId:
+          type: string
+        generation:
+          type: integer
+          format: int64
+        streamAggregateId:
+          type: string
+        status:
+          type: string
+        format:
+          type: string
+        archiveLocation:
+          type: string
+        eventCount:
+          type: integer
+          format: int64
+        checksum:
+          type: string
+        closedAt:
+          type: string
+          format: date-time
+        archivedAt:
+          type: string
+          format: date-time
+        archiveError:
+          type: string
     ApiCdcAvailability:
       required:
       - fallbackCount
@@ -1554,6 +2296,63 @@ components:
         handlerFailures:
           type: integer
           format: int64
+    ApiClosingBooksGeneration:
+      required:
+      - generation
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        logicalAggregateId:
+          type: string
+        generation:
+          type: integer
+          format: int64
+        streamAggregateId:
+          type: string
+        state:
+          type: string
+        openedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+    ApiClosingBooksGenerationEventStream:
+      required:
+      - generation
+      - partialEventStream
+      type: object
+      properties:
+        aggregateType:
+          type: string
+        logicalAggregateId:
+          type: string
+        generation:
+          type: integer
+          format: int64
+        streamAggregateId:
+          type: string
+        state:
+          type: string
+        openedAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+        partialEventStream:
+          type: boolean
+        firstIncludedEventOrder:
+          type: integer
+          format: int64
+        lastIncludedEventOrder:
+          type: integer
+          format: int64
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiPersistedEvent"
     ApiDBFencedLock:
       required:
       - lockName
@@ -1599,6 +2398,37 @@ components:
         scheduledAt:
           type: string
           format: date-time
+    ApiPersistedEvent:
+      type: object
+      properties:
+        eventId:
+          type: string
+        aggregateType:
+          type: string
+        aggregateId:
+          type: string
+        eventOrder:
+          type: integer
+          format: int64
+        globalEventOrder:
+          type: integer
+          format: int64
+        eventRevision:
+          type: integer
+          format: int32
+        eventPayload:
+          type: string
+        metaDataPayload:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        causedByEventId:
+          type: string
+        correlationId:
+          type: string
+        tenant:
+          type: string
     ApiPgCronJob:
       required:
       - active
@@ -1798,6 +2628,18 @@ components:
           type: string
         indexSize:
           type: string
+    ApiTimedMetricStatistics:
+      type: object
+      properties:
+        count:
+          type: integer
+          format: int64
+        totalTimeMs:
+          type: number
+          format: double
+        maxTimeMs:
+          type: number
+          format: double
     CountResult:
       required:
       - total

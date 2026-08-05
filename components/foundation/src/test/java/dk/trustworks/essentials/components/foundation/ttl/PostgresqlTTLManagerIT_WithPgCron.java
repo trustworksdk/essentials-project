@@ -33,12 +33,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.waitAtMost;
 
 /**
- * When running it locally set env variable PGCRON_IMAGE=lcramontw/postgres-with-pg-cron:latest
+ * When running it locally set env variable ESSENTIALS_POSTGRES_IMAGE=essentials-postgres:17.5
  */
 @Testcontainers
 public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
 
-    private static final String          IMAGE_PROP  = System.getenv().getOrDefault("PGCRON_IMAGE", "essentials-postgres-with-pgcron:latest");
+    private static final String          IMAGE_PROP  = System.getenv().getOrDefault("ESSENTIALS_POSTGRES_IMAGE", "essentials-postgres:17.5");
     protected static     DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
 
     @Container
@@ -46,7 +46,8 @@ public class PostgresqlTTLManagerIT_WithPgCron extends AbstractTTLManagerTest {
             .withCommand("postgres", "-c", "shared_preload_libraries=pg_cron", "-c", "cron.database_name=test-db")
             .withDatabaseName("test-db")
             .withUsername("postgres")
-            .withPassword("postgres");
+            .withPassword("postgres")
+            .withImagePullPolicy((ignored) -> false);
 
     protected JdbiUnitOfWorkFactory      unitOfWorkFactory;
     protected FencedLockManager          fencedLockManager;

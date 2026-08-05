@@ -274,6 +274,16 @@ public abstract class AggregateRoot<ID, EVENT_TYPE, AGGREGATE_TYPE extends Aggre
         }
     }
 
+    public void restoreSnapshotRuntimeState(ID aggregateId, EventOrder eventOrderOfLastIncludedEvent) {
+        initialize();
+        this.aggregateId = aggregateId;
+        this.eventOrderOfLastAppliedEvent = eventOrderOfLastIncludedEvent;
+        this.eventOrderOfLastRehydratedEvent = eventOrderOfLastIncludedEvent;
+        this.hasBeenRehydrated = true;
+        this.isRehydrating = false;
+        this.uncommittedEvents = new ArrayList<>();
+    }
+
     /**
      * Override this method to provide a non reflection based look up of the Type Argument
      * provided to the {@link AggregateRoot} class

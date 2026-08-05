@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: essentials-trading-demo
+
+logging:
+  level:
+    root: INFO
+    org.springframework: INFO
+    dk.trustworks.essentials: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+trading-demo:
+  accounts:
+    closing-books:
+      mode: event-count-or-time-boundary
+      event-threshold: 100
+      time-boundary: end-of-month
+      zone-id: Europe/Copenhagen
+  simulation:
+    enabled: true
+    account-count: 3
+    deposits-per-account: 2
+    settlements-per-account: 1
+    instrument-count: 2
+    rollover-accounts: true
+    initial-statement-period: 2026-03
+    next-statement-period: 2026-04
+  load:
+    enabled: false
+    trade-interval: 2s
+    price-update-interval: 1s
+    max-generated-trades: 500
+    price-jitter:
+      min: 3
+      max: 9

@@ -20,6 +20,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.CronExpression;
 import org.slf4j.*;
+import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.config.*;
@@ -52,7 +53,8 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
-        var ttlJob = AnnotationUtils.findAnnotation(bean.getClass(), TTLJob.class);
+        var targetClass = AopProxyUtils.ultimateTargetClass(bean);
+        var ttlJob = AnnotationUtils.findAnnotation(targetClass, TTLJob.class);
         if (ttlJob == null || shouldSkipPostProcessing(bean, beanName)) {
             return bean;
         }
@@ -118,7 +120,8 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
         if (this.beanFactory != null) {
             try {
                 var beanDefinition = this.beanFactory.getBeanDefinition(beanName);
-                if (beanDefinition.getRole() == BeanDefinition.ROLE_INFRASTRUCTURE || bean.getClass().isAnnotationPresent(AutoConfiguration.class)) {
+                var targetClass = AopProxyUtils.ultimateTargetClass(bean);
+                if (beanDefinition.getRole() == BeanDefinition.ROLE_INFRASTRUCTURE || targetClass.isAnnotationPresent(AutoConfiguration.class)) {
                     return true;
                 }
             } catch (NoSuchBeanDefinitionException e) {

@@ -37,6 +37,26 @@
 
     <dependencies>
         <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-beans</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aop</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
             <version>${slf4j.version}</version>
@@ -62,13 +82,15 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- Jackson 3, needed when the flavour above is the Jackson 3 one: it is declared optional upstream and so is
-             not transitive. -->
+        <!-- Both Jackson majors are compiled against, as in foundation: DefaultAggregateSnapshotStateAdapter converts
+             snapshot field values through whichever mapper the active JSONEventSerializer wraps. Optional, so a
+             consumer only pulls the flavour it actually uses. It is also what the flavour selected above needs at test
+             time, since it is declared optional upstream and therefore not transitive. -->
         <dependency>
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <version>${jackson3-bom.version}</version>
-            <scope>test</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.jdbi</groupId>

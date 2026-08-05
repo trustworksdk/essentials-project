@@ -76,6 +76,16 @@
                 th:title="${canReadStatistics} ? null : 'Requires essentials_postgresql_stats_reader'">
             <span class="ic">▤</span> PostgreSQL stats
         </button>
+
+        <div class="nav-group" style="margin-top:12px">Aggregates</div>
+        <button class="nav-item" data-view="aggregates" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">◱</span> Aggregates
+        </button>
+        <button class="nav-item" data-view="aggregateLookup" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">⌕</span> Aggregate lookup
+        </button>
     </nav>
 
     <div class="sidebar-footer">
@@ -104,6 +114,8 @@
     <section class="section" data-section="subscriptions"></section>
     <section class="section" data-section="cdc"></section>
     <section class="section" data-section="postgresql"></section>
+    <section class="section" data-section="aggregates"></section>
+    <section class="section" data-section="aggregateLookup"></section>
 </main>
 
 <div class="scrim" id="scrim"></div>

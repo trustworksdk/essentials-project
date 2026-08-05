@@ -40,6 +40,8 @@ import org.mockito.Mockito;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
+import java.util.Optional;
+
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -59,6 +61,7 @@ class StatefulAggregateRepositoryIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private PostgresqlAggregateSnapshotRepository                                   snapshotRepository;
+    private PostgresqlAggregateSnapshotStore                                        snapshotStore;
     private StatefulAggregateRepository<OrderId, OrderEvent, Order>                 ordersRepository;
     private PostgresqlAggregateSnapshotRepository                                   snapshotRepositorySpy;
 
@@ -86,6 +89,10 @@ class StatefulAggregateRepositoryIT {
                                                                        aggregateEventStreamConfigurationFactory.jsonSerializer,
                                                                        AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(2),
                                                                        AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3));
+        snapshotStore = new PostgresqlAggregateSnapshotStore(eventStore,
+                                                             unitOfWorkFactory,
+                                                             Optional.empty(),
+                                                             aggregateEventStreamConfigurationFactory.jsonSerializer);
         snapshotRepositorySpy = Mockito.spy(snapshotRepository);
         ordersRepository = StatefulAggregateRepository.from(eventStore,
                                                             ORDERS,
@@ -143,8 +150,11 @@ class StatefulAggregateRepositoryIT {
         assertThat(snapshotOptional.get().eventOrderOfLastIncludedEvent).isEqualTo(EventOrder.of(1));
         assertThat(snapshotOptional.get().aggregateImplType).isEqualTo(Order.class);
         assertThat((CharSequence) snapshotOptional.get().aggregateType).isEqualTo(ORDERS);
+        assertThat(snapshotOptional.get().aggregateSnapshot.hasBeenRehydrated()).isTrue();
         assertThat(snapshotOptional.get().aggregateSnapshot).usingRecursiveComparison()
-                                                            .ignoringFieldsMatchingRegexes("invoker")
+                                                            .ignoringFieldsMatchingRegexes("invoker",
+                                                                                           "eventOrderOfLastRehydratedEvent",
+                                                                                           "hasBeenRehydrated")
                                                             .isEqualTo(order);
 
 
@@ -157,6 +167,31 @@ class StatefulAggregateRepositoryIT {
                                                               "hasBeenRehydrated")
                                .isEqualTo(order);
         Mockito.verify(snapshotRepositorySpy).loadSnapshot(eq(ORDERS), eq(orderId), eq(Order.class));
+    }
+
+    @Test
+    void broken_snapshot_is_deleted_and_ignored_during_load() {
+        var orderId = OrderId.random();
+        var order = new Order(orderId, CustomerId.random(), 1234);
+        order.addProduct(ProductId.random(), 10);
+
+        unitOfWorkFactory.usingUnitOfWork(() -> ordersRepository.save(order));
+
+        snapshotStore.deleteSnapshots(ORDERS, orderId, Order.class);
+        snapshotStore.saveSnapshot(ORDERS,
+                                   orderId,
+                                   Order.class,
+                                   EventOrder.of(1),
+                                   "9");
+
+        var loadedOrder = unitOfWorkFactory.withUnitOfWork(() -> ordersRepository.load(orderId));
+
+        assertThat(loadedOrder).usingRecursiveComparison()
+                               .ignoringFieldsMatchingRegexes("invoker",
+                                                              "eventOrderOfLastRehydratedEvent",
+                                                              "hasBeenRehydrated")
+                               .isEqualTo(order);
+        assertThat(snapshotStore.loadAllSnapshots(ORDERS, orderId, Order.class, true)).isEmpty();
     }
 
     static ObjectMapper createObjectMapper() {

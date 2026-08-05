@@ -207,6 +207,22 @@ public abstract class AggregateState<ID, EVENT_TYPE extends Event<ID>> {
         eventOrderOfLastRehydratedEvent = eventOrderOfLastAppliedEvent;
     }
 
+    public void restoreSnapshotRuntimeState(ID aggregateId, EventOrder eventOrderOfLastIncludedEvent) {
+        if (invoker == null) {
+            invoker = new PatternMatchingMethodInvoker<>(this,
+                                                         new SingleArgumentAnnotatedMethodPatternMatcher<>(EventHandler.class,
+                                                                                                           new GenericType<>() {
+                                                                                                           }),
+                                                         InvocationStrategy.InvokeMostSpecificTypeMatched);
+        }
+        this.aggregateId = aggregateId;
+        this.eventOrderOfLastAppliedEvent = eventOrderOfLastIncludedEvent;
+        this.eventOrderOfLastRehydratedEvent = eventOrderOfLastIncludedEvent;
+        this.hasBeenRehydrated = true;
+        this.isRehydrating = false;
+        this.uncommittedChanges = new ArrayList<>();
+    }
+
     /**
      * Since the aggregate instance MAY have been created using Objenesis (which doesn't
      * initialize fields nor call a constructor) we have to be defensive and lazy way to initialize the list
