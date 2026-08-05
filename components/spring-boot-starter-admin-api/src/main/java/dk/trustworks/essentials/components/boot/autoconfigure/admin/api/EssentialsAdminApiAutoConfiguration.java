@@ -46,7 +46,17 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * @see EssentialsAdminApiProperties
  */
-@AutoConfiguration
+/*
+ * Ordered after the auto-configurations that define the aggregate SPI beans. @ConditionalOnBean is evaluated against
+ * the beans registered so far, so without this the aggregate controllers below are silently skipped whenever this
+ * auto-configuration happens to be processed first — the endpoints then answer 404 with nothing in the logs to say why.
+ * Named as strings because eventsourced-aggregates is an optional dependency here and the classes may be absent.
+ */
+@AutoConfiguration(afterName = {
+        "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.AggregateLifecycleApiConfiguration",
+        "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.AggregateArchiveApiConfiguration",
+        "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.SnapshotConfiguration",
+        "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.ClosingBooksConfiguration"})
 @ConditionalOnClass(RestController.class)
 @ConditionalOnWebApplication
 @ConditionalOnProperty(prefix = "essentials.admin-api", name = "enabled", matchIfMissing = true)

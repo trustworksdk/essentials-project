@@ -14,6 +14,13 @@ management:
       exposure:
         include: health,info,metrics
 
+# The admin API declares its seven original controllers unconditionally, so every one of their SPI beans has to exist
+# for the context to start. The scheduler is the only one this demo would otherwise leave off.
+essentials:
+  scheduler:
+    enabled: true
+    number-of-threads: 2
+
 trading-demo:
   accounts:
     closing-books:

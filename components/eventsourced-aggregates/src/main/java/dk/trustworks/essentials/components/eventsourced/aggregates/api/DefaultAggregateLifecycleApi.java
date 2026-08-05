@@ -168,8 +168,13 @@ public class DefaultAggregateLifecycleApi implements AggregateLifecycleApi {
                                                                                       AggregateGeneration<String> generation) {
         var aggregateConfiguration = eventStore.getAggregateEventStreamConfiguration(aggregateType);
         var deserializedStreamAggregateId = aggregateConfiguration.aggregateIdSerializer.deserialize(generation.streamAggregateId());
-        return eventStore.fetchStream(aggregateType, deserializedStreamAggregateId, LongRange.from(0L))
-                         .map(eventStream -> toApiClosingBooksGenerationEventStream(logicalAggregateId, generation, eventStream));
+        /* Reading the event store requires an active UnitOfWork, and the returned stream is materialised by the mapping
+           below, so both have to happen inside it. Without this the operation failed with NoActiveUnitOfWorkException:
+           every other read on this API goes through a repository or store that opens its own UnitOfWork, and this is
+           the only one that touches the event store directly. */
+        return eventStore.getUnitOfWorkFactory()
+                         .withUnitOfWork(uow -> eventStore.fetchStream(aggregateType, deserializedStreamAggregateId, LongRange.from(0L))
+                                                          .map(eventStream -> toApiClosingBooksGenerationEventStream(logicalAggregateId, generation, eventStream)));
     }
 
     private ApiClosingBooksGenerationEventStream toApiClosingBooksGenerationEventStream(String logicalAggregateId,

@@ -52,6 +52,26 @@
             <artifactId>postgresql-queue</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- The admin console: the HTTP contract adapter plus the default UI that consumes it. Together they surface
+             the snapshot, closing-books and archive state this demo produces, without the demo writing any of it. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-admin-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-admin-ui</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- The admin UI renders one Thymeleaf page. The starter declares Thymeleaf as provided, per the framework's
+             rule that third-party integrations are never transitive, so the consuming application supplies it. Without
+             it the UI auto-configuration is skipped on @ConditionalOnClass and the console answers 404. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-thymeleaf</artifactId>
+            <version>${spring-boot.version}</version>
+        </dependency>
         <dependency>
             <groupId>dk.trustworks.essentials</groupId>
             <artifactId>${essentials.types-jackson.artifactId}</artifactId>

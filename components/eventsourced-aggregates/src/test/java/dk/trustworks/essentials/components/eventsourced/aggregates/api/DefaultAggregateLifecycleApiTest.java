@@ -19,6 +19,9 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.api;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
+import dk.trustworks.essentials.shared.functional.CheckedFunction;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateEventStream;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.IdentifierColumnType;
@@ -88,6 +91,14 @@ class DefaultAggregateLifecycleApiTest {
         when(persistedEvent.causedByEventId()).thenReturn(Optional.empty());
         when(persistedEvent.correlationId()).thenReturn(Optional.empty());
         when(persistedEvent.tenant()).thenReturn(Optional.empty());
+        /* fetchGenerationEventStream reads the event store inside a UnitOfWork, since the stream is materialised while
+           mapping it. Run the action inline so the mocked event store answers without a database. */
+        var eventStoreUnitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
+        when(eventStoreUnitOfWorkFactory.withUnitOfWork(any(CheckedFunction.class))).thenAnswer(invocation -> {
+            CheckedFunction<EventStoreUnitOfWork, ?> action = invocation.getArgument(0);
+            return action.apply(mock(EventStoreUnitOfWork.class));
+        });
+        when(eventStore.getUnitOfWorkFactory()).thenReturn(eventStoreUnitOfWorkFactory);
         when(eventStore.fetchStream(eq(AggregateType.of("Orders")), eq("order-1#1"), any(LongRange.class)))
                 .thenReturn(Optional.of(AggregateEventStream.of(eventStreamConfiguration,
                                                                 "order-1#1",

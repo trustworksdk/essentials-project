@@ -32,6 +32,7 @@ import dk.trustworks.essentials.examples.trading.simulation.TradingDemoSimulatio
 import dk.trustworks.essentials.examples.trading.simulation.TradingSimulationRunner;
 import dk.trustworks.essentials.examples.trading.trades.TradeService;
 import io.micrometer.core.instrument.MeterRegistry;
+import dk.trustworks.essentials.shared.security.EssentialsAuthenticatedUser;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
 import java.time.Clock;
@@ -52,6 +53,18 @@ import org.springframework.context.annotation.Bean;
 public class TradingDemoApplication {
     public static void main(String[] args) {
         SpringApplication.run(TradingDemoApplication.class, args);
+    }
+
+    /**
+     * Demo-only security: every caller is authenticated as the same principal and authorized for everything, which is
+     * what makes the admin console usable without wiring an identity provider into a sample application. The admin API
+     * authenticates nobody itself — it asks these two beans — so without them every request answers 401.
+     * <p>
+     * Never do this in a real application: it authorizes destructive admin operations for anonymous callers.
+     */
+    @Bean
+    public EssentialsAuthenticatedUser essentialsAuthenticatedUser() {
+        return new EssentialsAuthenticatedUser.AllAccessAuthenticatedUser();
     }
 
     @Bean
