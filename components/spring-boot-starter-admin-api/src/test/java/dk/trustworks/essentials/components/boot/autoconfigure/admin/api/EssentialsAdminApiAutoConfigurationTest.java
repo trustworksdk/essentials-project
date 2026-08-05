@@ -130,4 +130,55 @@ class EssentialsAdminApiAutoConfigurationTest {
                                                         .doesNotHaveBean(AggregateArchiveController.class)
                                                         .doesNotHaveBean(AggregateArchiveStatisticsController.class));
     }
+
+    /**
+     * Every controller is conditional on its own SPI bean, so an application that runs none of the subsystems still
+     * starts — it just serves no contract endpoints. This is the extreme of the intended behaviour: subsystems are
+     * routinely switched off in configuration, and the console then serves only what remains.
+     */
+    @Test
+    void the_api_starts_and_serves_nothing_when_no_spi_beans_are_present() {
+        new WebApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(EssentialsAdminApiAutoConfiguration.class))
+                .withBean(EssentialsAuthenticatedUser.class, EssentialsAuthenticatedUser.NoAccessAuthenticatedUser::new)
+                .withBean(EssentialsSecurityProvider.class, EssentialsSecurityProvider.NoAccessSecurityProvider::new)
+                .run(context -> assertThat(context).hasNotFailed()
+                                                   .hasSingleBean(AdminApiPrincipalResolver.class)
+                                                   .doesNotHaveBean(FencedLocksController.class)
+                                                   .doesNotHaveBean(SchedulerController.class)
+                                                   .doesNotHaveBean(PostgresqlQueryStatisticsController.class)
+                                                   .doesNotHaveBean(DurableQueuesController.class)
+                                                   .doesNotHaveBean(EventStoreController.class)
+                                                   .doesNotHaveBean(CdcController.class)
+                                                   .doesNotHaveBean(EventStoreStatisticsController.class));
+    }
+
+    /**
+     * The case that prompted this: enabling the admin API used to require every one of the original seven SPI beans, so
+     * an application with the scheduler switched off failed to start rather than simply serving no scheduler endpoints.
+     */
+    @Test
+    void a_missing_single_spi_bean_removes_only_its_own_controller() {
+        new WebApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(EssentialsAdminApiAutoConfiguration.class))
+                .withBean(DBFencedLockApi.class, () -> mock(DBFencedLockApi.class))
+                .withBean(DurableQueuesApi.class, () -> mock(DurableQueuesApi.class))
+                .withBean(EssentialsAuthenticatedUser.class, EssentialsAuthenticatedUser.NoAccessAuthenticatedUser::new)
+                .withBean(EssentialsSecurityProvider.class, EssentialsSecurityProvider.NoAccessSecurityProvider::new)
+                .run(context -> assertThat(context).hasNotFailed()
+                                                   .hasSingleBean(FencedLocksController.class)
+                                                   .hasSingleBean(DurableQueuesController.class)
+                                                   .doesNotHaveBean(SchedulerController.class)
+                                                   .doesNotHaveBean(EventStoreController.class));
+    }
+
+    /** The summary bean must exist regardless, since its whole job is reporting an incomplete surface. */
+    @Test
+    void the_surface_summary_is_present_even_when_nothing_is_served() {
+        new WebApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(EssentialsAdminApiAutoConfiguration.class))
+                .withBean(EssentialsAuthenticatedUser.class, EssentialsAuthenticatedUser.NoAccessAuthenticatedUser::new)
+                .withBean(EssentialsSecurityProvider.class, EssentialsSecurityProvider.NoAccessSecurityProvider::new)
+                .run(context -> assertThat(context).hasBean("essentialsAdminApiSurfaceSummary"));
+    }
 }

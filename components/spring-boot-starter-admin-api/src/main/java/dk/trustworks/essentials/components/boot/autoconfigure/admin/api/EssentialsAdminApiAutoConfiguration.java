@@ -25,9 +25,15 @@ import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQ
 import dk.trustworks.essentials.components.foundation.scheduler.api.SchedulerApi;
 import dk.trustworks.essentials.shared.security.*;
 import org.slf4j.*;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.bind.annotation.RestController;
@@ -53,6 +59,8 @@ import org.springframework.web.bind.annotation.RestController;
  * Named as strings because eventsourced-aggregates is an optional dependency here and the classes may be absent.
  */
 @AutoConfiguration(afterName = {
+        "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration",
+        "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.EventStoreConfiguration",
         "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.AggregateLifecycleApiConfiguration",
         "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.AggregateArchiveApiConfiguration",
         "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore.SnapshotConfiguration",
@@ -70,6 +78,56 @@ public class EssentialsAdminApiAutoConfiguration {
      * {@code QueueName} would serialize as a nested object. Spring Boot registers every {@code JacksonModule} bean
      * into the mapper used for HTTP message conversion.
      */
+
+    /**
+     * Logs which parts of the contract this deployment actually serves.
+     * <p>
+     * Every controller is conditional on its own SPI bean, so an application that does not run a subsystem — or has
+     * turned it off in configuration — simply does not get those endpoints, and they answer 404. That is the intended
+     * behaviour, but silence about it is not: a 404 is indistinguishable from a wiring mistake, and the ordering these
+     * conditions depend on is easy to get wrong. So the surface is stated once, at startup.
+     * <p>
+     * The contract is unaffected: it describes the whole API, not one deployment. Expect a healthy deployment to serve a
+     * subset, sometimes a small one.
+     */
+    @Bean
+    public InitializingBean essentialsAdminApiSurfaceSummary(ApplicationContext applicationContext) {
+        return () -> {
+            var served  = new ArrayList<String>();
+            var skipped = new ArrayList<String>();
+            CONTRACT_TAGS_BY_CONTROLLER.forEach((controller, tag) ->
+                    (applicationContext.getBeanNamesForType(controller).length > 0 ? served : skipped).add(tag));
+
+            if (skipped.isEmpty()) {
+                log.info("Essentials admin API is serving the whole contract: {}", String.join(", ", served));
+            } else {
+                log.info("""
+                         Essentials admin API is serving {} of {} contract areas.
+                           served:  {}
+                           skipped: {} — no SPI bean for these, so their endpoints answer 404.                          Expected when the subsystem is not run or is disabled in configuration.""",
+                         served.size(),
+                         served.size() + skipped.size(),
+                         served.isEmpty() ? "none" : String.join(", ", served),
+                         String.join(", ", skipped));
+            }
+        };
+    }
+
+    /** Controller to contract tag, for the startup summary. Ordered as the contract lists its tags. */
+    private static final Map<Class<?>, String> CONTRACT_TAGS_BY_CONTROLLER = new LinkedHashMap<>() {{
+        put(FencedLocksController.class, "fenced-locks");
+        put(SchedulerController.class, "scheduler");
+        put(PostgresqlQueryStatisticsController.class, "postgresql-query-statistics");
+        put(DurableQueuesController.class, "durable-queues");
+        put(EventStoreController.class, "event-store");
+        put(CdcController.class, "cdc");
+        put(EventStoreStatisticsController.class, "event-store-statistics");
+        put(AggregateLifecycleController.class, "aggregate-lifecycle");
+        put(AggregateLifecycleStatisticsController.class, "aggregate-lifecycle-statistics");
+        put(AggregateArchiveController.class, "aggregate-archive");
+        put(AggregateArchiveStatisticsController.class, "aggregate-archive-statistics");
+    }};
+
     @Bean
     @ConditionalOnMissingBean
     public AdminApiJacksonModule essentialsAdminApiJacksonModule() {
@@ -91,6 +149,7 @@ public class EssentialsAdminApiAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(DBFencedLockApi.class)
     @ConditionalOnMissingBean
     public FencedLocksController essentialsFencedLocksController(DBFencedLockApi dbFencedLockApi,
                                                                  AdminApiPrincipalResolver principalResolver) {
@@ -98,6 +157,7 @@ public class EssentialsAdminApiAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(SchedulerApi.class)
     @ConditionalOnMissingBean
     public SchedulerController essentialsSchedulerController(SchedulerApi schedulerApi,
                                                              AdminApiPrincipalResolver principalResolver) {
@@ -105,6 +165,7 @@ public class EssentialsAdminApiAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(PostgresqlQueryStatisticsApi.class)
     @ConditionalOnMissingBean
     public PostgresqlQueryStatisticsController essentialsPostgresqlQueryStatisticsController(PostgresqlQueryStatisticsApi postgresqlQueryStatisticsApi,
                                                                                             AdminApiPrincipalResolver principalResolver) {
@@ -112,6 +173,7 @@ public class EssentialsAdminApiAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(DurableQueuesApi.class)
     @ConditionalOnMissingBean
     public DurableQueuesController essentialsDurableQueuesController(DurableQueuesApi durableQueuesApi,
                                                                      AdminApiPrincipalResolver principalResolver) {
@@ -119,6 +181,7 @@ public class EssentialsAdminApiAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(EventStoreApi.class)
     @ConditionalOnMissingBean
     public EventStoreController essentialsEventStoreController(EventStoreApi eventStoreApi,
                                                                AdminApiPrincipalResolver principalResolver) {
@@ -126,6 +189,7 @@ public class EssentialsAdminApiAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(CdcApi.class)
     @ConditionalOnMissingBean
     public CdcController essentialsCdcController(CdcApi cdcApi,
                                                  AdminApiPrincipalResolver principalResolver) {
@@ -133,6 +197,7 @@ public class EssentialsAdminApiAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(PostgresqlEventStoreStatisticsApi.class)
     @ConditionalOnMissingBean
     public EventStoreStatisticsController essentialsEventStoreStatisticsController(PostgresqlEventStoreStatisticsApi statisticsApi,
                                                                                   AdminApiPrincipalResolver principalResolver) {
