@@ -46,30 +46,6 @@ class AdminUiContractParityTest {
     /** Matches a quoted path passed to api(...), template expressions included. */
     private static final Pattern API_CALL = Pattern.compile("api\\(`([^`]+)`|api\\('([^']+)'");
 
-    /**
-     * Contract paths the default console deliberately does not surface.
-     * <p>
-     * The aggregate lifecycle and archive operations were added to the contract and the HTTP adapter without a
-     * console view. They are read-only inspection endpoints for the snapshot, closing-books and archive subsystems,
-     * and building views for them is tracked as separate work — recorded here rather than left to fail the gate,
-     * which is the escape hatch {@link #every_contract_path_is_surfaced_by_the_ui} documents.
-     * <p>
-     * Deliberately enumerated rather than matched by prefix, so a *further* addition under the same prefixes still
-     * fails the gate.
-     */
-    private static final Set<String> NOT_SURFACED_BY_THE_UI = Set.of(
-            "/aggregate-lifecycle/snapshot-policies",
-            "/aggregate-lifecycle/closing-books-policies",
-            "/aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations",
-            "/aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations/current",
-            "/aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations/{generation}/event-stream",
-            "/aggregate-lifecycle/aggregate-types/{aggregateType}/aggregates/{aggregateId}/snapshots",
-            "/aggregate-lifecycle-statistics/snapshots",
-            "/aggregate-lifecycle-statistics/closing-books",
-            "/aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations",
-            "/aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations/{generation}",
-            "/aggregate-archive-statistics");
-
     private static Set<String> contractPaths;
     private static String      adminJs;
 
@@ -94,15 +70,6 @@ class AdminUiContractParityTest {
         assertThat(calledPaths()).isNotEmpty();
     }
 
-    /**
-     * An exclusion that no longer names a real contract path is a stale exclusion, and would silently widen the
-     * gate's blind spot as paths are renamed.
-     */
-    @Test
-    void every_recorded_exclusion_still_names_a_contract_path() {
-        assertThat(contractPaths).containsAll(NOT_SURFACED_BY_THE_UI);
-    }
-
     @Test
     void every_path_the_ui_calls_is_declared_by_the_contract() {
         assertThat(contractPaths)
@@ -116,7 +83,6 @@ class AdminUiContractParityTest {
     void every_contract_path_is_surfaced_by_the_ui() {
         var uncovered = new TreeSet<>(contractPaths);
         uncovered.removeAll(calledPaths());
-        uncovered.removeAll(NOT_SURFACED_BY_THE_UI);
 
         assertThat(uncovered)
                 .as("""

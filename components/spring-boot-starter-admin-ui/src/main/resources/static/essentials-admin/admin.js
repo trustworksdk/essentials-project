@@ -206,6 +206,11 @@ views.locks = async () => {
 
 let queueState = { queue: null, tab: 'queued', sortOrder: 'ASC' };
 
+/* The parameterised aggregate endpoints need an aggregate type and a logical aggregate id. The type comes from the
+   statistics endpoints, which report per aggregate type; there is no endpoint listing logical aggregate ids, so that
+   one is typed in. generation is set by picking a row. */
+let aggregateState = { type: null, logicalId: '', generation: null, archivedGeneration: null, includePayload: false };
+
 views.queues = async () => {
     let names;
     try {
@@ -683,6 +688,301 @@ const actions = {
 };
 
 /* ── Wiring ──────────────────────────────────────────────────────────────────────────────── */
+
+views.aggregates = async () => {
+    const settled = await Promise.allSettled([
+        api('/aggregate-lifecycle/snapshot-policies'),
+        api('/aggregate-lifecycle/closing-books-policies'),
+        api('/aggregate-lifecycle-statistics/snapshots'),
+        api('/aggregate-lifecycle-statistics/closing-books'),
+        api('/aggregate-archive-statistics')
+    ]);
+    const [snapshotPolicies, closingBooksPolicies, snapshotStats, closingBooksStats, archiveStats] =
+        settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const failure = (i) => errorState(settled[i].reason, 'essentials_subscription_reader');
+
+    const snapshotPolicyRow = (p) => `<tr>
+      <td class="mono">${esc(p.aggregateType)}</td>
+      <td class="mono truncate">${esc(p.aggregateImplementationType ?? '')}</td>
+      <td>${p.enabled ? badge('good', 'Enabled') : badge('neutral', 'Disabled')}</td>
+      <td>${esc(p.mode ?? '')}</td>
+      <td class="num">${num(p.everyNEvents)}</td>
+      <td>${esc(p.deletionMode ?? '')}</td>
+      <td class="num">${num(p.keepLastSnapshots)}</td>
+    </tr>`;
+
+    const closingBooksPolicyRow = (p) => `<tr>
+      <td class="mono">${esc(p.aggregateType)}</td>
+      <td class="mono truncate">${esc(p.aggregateImplementationType ?? '')}</td>
+      <td>${p.enabled ? badge('good', 'Enabled') : badge('neutral', 'Disabled')}</td>
+      <td>${esc(p.triggerMode ?? '')}</td>
+      <td>${esc(p.defaultPolicy ?? '')}</td>
+      <td class="num">${num(p.eventThreshold)}</td>
+      <td>${esc(p.timeBoundary ?? '')}${p.intervalDays ? esc(` / ${p.intervalDays}d`) : ''}</td>
+      <td>${p.zoneId ? esc(p.zoneId) : nil()}</td>
+    </tr>`;
+
+    /* timedMetrics, counters and gauges are open maps keyed by metric name, so they are rendered as they arrive
+       rather than projected onto fixed columns a future metric would fall outside of. */
+    const metrics = (st) => {
+        const timed = Object.entries(st.timedMetrics ?? {}).map(([name, m]) =>
+            `${esc(name)} ${num(m.count)}<span class="tile-sub" style="font-size:12px"> · avg ${
+                m.count > 0 ? num(Math.round(m.totalTimeMs / m.count)) : 0} ms · max ${num(Math.round(m.maxTimeMs))} ms</span>`);
+        const counters = Object.entries(st.counters ?? {}).map(([name, v]) => `${esc(name)} ${num(v)}`);
+        const gauges   = Object.entries(st.gauges ?? {}).map(([name, v]) => `${esc(name)} ${num(v)}`);
+        const all      = [...timed, ...counters, ...gauges];
+        return all.length ? all.join('<br>') : nil('no metrics recorded');
+    };
+
+    const statsRow = (st) => `<tr>
+      <td class="mono">${esc(st.aggregateType)}</td>
+      <td class="mono truncate">${esc(st.aggregateImplementationType ?? '')}</td>
+      <td>${metrics(st)}</td>
+    </tr>`;
+
+    const archiveStatRow = (st) => `<tr>
+      <td class="mono">${esc(st.aggregateType)}</td>
+      <td class="num">${num(st.archivedGenerationCount)}</td>
+      <td class="num">${st.failedGenerationCount > 0
+            ? badge('serious', String(st.failedGenerationCount))
+            : num(st.failedGenerationCount)}</td>
+      <td class="num">${num(st.totalArchivedEventCount)}</td>
+      <td>${ts(st.lastArchivedAt)}</td>
+    </tr>`;
+
+    return `
+    <div class="kpi-row">
+      ${tile('Snapshot policies', snapshotPolicies ? num(snapshotPolicies.length) : nil())}
+      ${tile('Closing-books policies', closingBooksPolicies ? num(closingBooksPolicies.length) : nil())}
+      ${tile('Types with snapshot metrics', snapshotStats ? num(snapshotStats.length) : nil())}
+      ${tile('Types with archives', archiveStats ? num(archiveStats.length) : nil())}
+    </div>
+
+    ${card('Snapshot policies',
+        snapshotPolicies
+            ? table([{ label: 'Aggregate type' }, { label: 'Implementation' }, { label: 'State' }, { label: 'Mode' },
+                     { label: 'Every N events', num: true }, { label: 'Deletion' }, { label: 'Keep last', num: true }],
+                    snapshotPolicies.map(snapshotPolicyRow), { empty: 'No snapshot policies are registered' })
+            : failure(0),
+        'GET /aggregate-lifecycle/snapshot-policies', true)}
+
+    ${card('Closing-books policies',
+        closingBooksPolicies
+            ? table([{ label: 'Aggregate type' }, { label: 'Implementation' }, { label: 'State' }, { label: 'Trigger' },
+                     { label: 'Default policy' }, { label: 'Event threshold', num: true }, { label: 'Time boundary' },
+                     { label: 'Zone' }],
+                    closingBooksPolicies.map(closingBooksPolicyRow), { empty: 'No closing-books policies are registered' })
+            : failure(1),
+        'GET /aggregate-lifecycle/closing-books-policies', true)}
+
+    ${card('Snapshot statistics',
+        snapshotStats
+            ? table([{ label: 'Aggregate type' }, { label: 'Implementation' }, { label: 'Metrics' }],
+                    snapshotStats.map(statsRow), { empty: 'No snapshot metrics have been recorded' })
+            : failure(2),
+        'GET /aggregate-lifecycle-statistics/snapshots', true)}
+
+    ${card('Closing-books statistics',
+        closingBooksStats
+            ? table([{ label: 'Aggregate type' }, { label: 'Implementation' }, { label: 'Metrics' }],
+                    closingBooksStats.map(statsRow), { empty: 'No closing-books metrics have been recorded' })
+            : failure(3),
+        'GET /aggregate-lifecycle-statistics/closing-books', true)}
+
+    ${card('Archive statistics',
+        archiveStats
+            ? table([{ label: 'Aggregate type' }, { label: 'Archived', num: true }, { label: 'Failed', num: true },
+                     { label: 'Events', num: true }, { label: 'Last archived' }],
+                    archiveStats.map(archiveStatRow), { empty: 'Nothing has been archived' })
+            : failure(4),
+        'GET /aggregate-archive-statistics', true)}`;
+};
+
+/*
+ * The per-instance half of the aggregate surface. Aggregate types are offered from the statistics endpoints; the
+ * logical aggregate id has to be typed, because the contract exposes no way to enumerate them.
+ */
+views.aggregateLookup = async () => {
+    let types = [];
+    try {
+        const [snapshotStats, closingBooksStats] = await Promise.all([
+            api('/aggregate-lifecycle-statistics/snapshots'),
+            api('/aggregate-lifecycle-statistics/closing-books')
+        ]);
+        types = [...new Set([...snapshotStats, ...closingBooksStats].map((st) => st.aggregateType))].sort();
+    } catch (e) {
+        return card('Aggregate lookup', errorState(e, 'essentials_subscription_reader'),
+                    'GET /aggregate-lifecycle-statistics/snapshots', true);
+    }
+
+    if (aggregateState.type && !types.includes(aggregateState.type)) aggregateState.type = null;
+    if (!aggregateState.type) aggregateState.type = types[0] ?? null;
+    const type      = aggregateState.type;
+    const logicalId = aggregateState.logicalId.trim();
+
+    const toolbar = `
+    <div class="toolbar">
+      <label>Aggregate type
+        <select id="aggregateTypeSelect" ${types.length ? '' : 'disabled'}>
+          ${types.map((t) => `<option ${t === type ? 'selected' : ''}>${esc(t)}</option>`).join('')}
+        </select>
+      </label>
+      <label><input type="text" id="aggregateIdInput" placeholder="Logical aggregate id" size="30"
+                    value="${esc(aggregateState.logicalId)}"></label>
+      <label><input type="checkbox" id="includePayloadToggle" ${aggregateState.includePayload ? 'checked' : ''}>
+             Include snapshot payload</label>
+      <div class="spacer"></div>
+      ${aggregateState.generation != null ? `<span class="chip">generation ${esc(String(aggregateState.generation))}</span>` : ''}
+    </div>`;
+
+    if (!type) {
+        return toolbar + card('Aggregate lookup',
+            '<div class="empty">No aggregate type reports snapshot or closing-books activity yet</div>', null, true);
+    }
+    if (!logicalId) {
+        return toolbar + card('Aggregate lookup',
+            `<div class="empty"><div class="empty-icon" aria-hidden="true">◌</div>
+             <div>Enter a logical aggregate id to inspect its generations, snapshots and archives</div></div>`, null, true);
+    }
+
+    const settled = await Promise.allSettled([
+        api(`/aggregate-lifecycle/aggregate-types/${encodeURIComponent(type)}/logical-aggregates/${encodeURIComponent(logicalId)}/closing-books-generations`),
+        api(`/aggregate-lifecycle/aggregate-types/${encodeURIComponent(type)}/logical-aggregates/${encodeURIComponent(logicalId)}/closing-books-generations/current`),
+        api(`/aggregate-lifecycle/aggregate-types/${encodeURIComponent(type)}/aggregates/${encodeURIComponent(logicalId)}/snapshots?includeSnapshotPayload=${aggregateState.includePayload}`),
+        api(`/aggregate-archive/aggregate-types/${encodeURIComponent(type)}/logical-aggregates/${encodeURIComponent(logicalId)}/archived-generations`)
+    ]);
+    const [generations, current, snapshots, archived] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    /* 404 is the contract's answer for "no such generation", which is an outcome here rather than a failure. */
+    const notFound = (i) => settled[i].status === 'rejected' && settled[i].reason.status === 404;
+    const failure  = (i) => errorState(settled[i].reason, 'essentials_subscription_reader');
+
+    const currentGeneration = current?.generation ?? null;
+    const generationRow = (g) => `<tr>
+      <td class="num"><button class="link" data-generation="${esc(String(g.generation))}">${esc(String(g.generation))}</button></td>
+      <td class="mono truncate">${esc(g.streamAggregateId)}</td>
+      <td>${g.state === 'OPEN' || g.generation === currentGeneration ? badge('good', 'Open') : badge('neutral', 'Closed')}</td>
+      <td>${ts(g.openedAt)}</td>
+      <td>${ts(g.closedAt)}</td>
+    </tr>`;
+
+    const snapshotRow = (sn) => `<tr>
+      <td class="num">${num(sn.lastIncludedEventOrder)}</td>
+      <td class="mono truncate">${esc(sn.aggregateImplementationType ?? '')}</td>
+      <td class="truncate mono">${sn.snapshotPayload == null
+            ? `<span class="nil" title="Enable 'Include snapshot payload' to load it">not loaded</span>`
+            : esc(sn.snapshotPayload)}</td>
+    </tr>`;
+
+    const archivedRow = (a) => `<tr>
+      <td class="num"><button class="link" data-archived-generation="${esc(String(a.generation))}">${esc(String(a.generation))}</button></td>
+      <td>${a.archiveError ? badge('serious', a.status) : badge('good', a.status)}</td>
+      <td>${a.format ? esc(a.format) : nil()}</td>
+      <td class="num">${num(a.eventCount)}</td>
+      <td class="truncate mono">${a.archiveLocation ? esc(a.archiveLocation) : nil()}</td>
+      <td>${ts(a.archivedAt)}</td>
+    </tr>`;
+
+    let eventStreamCard = '';
+    if (aggregateState.generation != null) {
+        let stream = null;
+        let streamError = null;
+        try {
+            stream = await api(`/aggregate-lifecycle/aggregate-types/${encodeURIComponent(type)}/logical-aggregates/${encodeURIComponent(logicalId)}/closing-books-generations/${encodeURIComponent(aggregateState.generation)}/event-stream`);
+        } catch (e) {
+            streamError = e;
+        }
+        const eventRow = (ev) => `<tr>
+          <td class="num">${num(ev.eventOrder)}</td>
+          <td class="num">${num(ev.globalEventOrder)}</td>
+          <td class="num">${num(ev.eventRevision)}</td>
+          <td>${ts(ev.timestamp)}</td>
+          <td class="truncate mono">${ev.eventPayload ? esc(ev.eventPayload) : nil()}</td>
+        </tr>`;
+        eventStreamCard = card(`Event stream · generation ${aggregateState.generation}`
+                + (stream?.partialEventStream ? ' · truncated' : ''),
+            stream
+                ? table([{ label: 'Event order', num: true }, { label: 'Global order', num: true },
+                         { label: 'Revision', num: true }, { label: 'Timestamp' }, { label: 'Payload' }],
+                        (stream.events ?? []).map(eventRow), { empty: 'The generation holds no events' })
+                : streamError?.status === 404
+                    ? '<div class="empty">No such generation</div>'
+                    : errorState(streamError, 'essentials_subscription_reader'),
+            'GET /aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations/{generation}/event-stream',
+            true);
+    }
+
+    let archivedDetailCard = '';
+    if (aggregateState.archivedGeneration != null) {
+        let entry = null;
+        let entryError = null;
+        try {
+            entry = await api(`/aggregate-archive/aggregate-types/${encodeURIComponent(type)}/logical-aggregates/${encodeURIComponent(logicalId)}/archived-generations/${encodeURIComponent(aggregateState.archivedGeneration)}`);
+        } catch (e) {
+            entryError = e;
+        }
+        /* Worth its own request rather than reusing the list row: the checksum, the stream aggregate id and above all
+           archiveError are what an operator needs when an archive did not complete, and they do not belong in a table. */
+        archivedDetailCard = card(`Archive entry · generation ${aggregateState.archivedGeneration}`,
+            entry
+                ? `<div class="kpi-row">
+                     ${tile('Status', entry.archiveError ? badge('serious', entry.status) : badge('good', entry.status))}
+                     ${tile('Events', num(entry.eventCount))}
+                     ${tile('Format', entry.format ? esc(entry.format) : nil())}
+                     ${tile('Archived', ts(entry.archivedAt), entry.closedAt ? `closed ${ts(entry.closedAt)}` : null)}
+                   </div>
+                   ${table([{ label: 'Field' }, { label: 'Value' }], [
+                       `<tr><td>Stream aggregate id</td><td class="mono">${esc(entry.streamAggregateId)}</td></tr>`,
+                       `<tr><td>Location</td><td class="mono truncate">${entry.archiveLocation ? esc(entry.archiveLocation) : nil()}</td></tr>`,
+                       `<tr><td>Checksum</td><td class="mono truncate">${entry.checksum ? esc(entry.checksum) : nil()}</td></tr>`,
+                       `<tr><td>Error</td><td class="mono truncate">${entry.archiveError ? esc(entry.archiveError) : nil('none')}</td></tr>`
+                   ])}`
+                : entryError?.status === 404
+                    ? '<div class="empty">That generation has no archive entry</div>'
+                    : errorState(entryError, 'essentials_subscription_reader'),
+            'GET /aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations/{generation}',
+            true);
+    }
+
+    return `
+    ${toolbar}
+
+    <div class="kpi-row">
+      ${tile('Generations', generations ? num(generations.length) : nil())}
+      ${tile('Current generation', currentGeneration != null ? num(currentGeneration) : nil(),
+             notFound(1) ? 'none open' : null)}
+      ${tile('Snapshots', snapshots ? num(snapshots.length) : nil())}
+      ${tile('Archived generations', archived ? num(archived.length) : nil())}
+    </div>
+
+    ${card('Closing-books generations',
+        generations
+            ? table([{ label: 'Generation', num: true }, { label: 'Stream aggregate id' }, { label: 'State' },
+                     { label: 'Opened' }, { label: 'Closed' }],
+                    generations.map(generationRow), { empty: 'No generations exist for this logical aggregate' })
+            : failure(0),
+        'GET /aggregate-lifecycle/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/closing-books-generations', true)}
+
+    ${eventStreamCard}
+
+    ${card('Snapshots',
+        snapshots
+            ? table([{ label: 'Last included event order', num: true }, { label: 'Implementation' },
+                     { label: 'Payload' }],
+                    snapshots.map(snapshotRow), { empty: 'No snapshots are stored for this aggregate' })
+            : failure(2),
+        'GET /aggregate-lifecycle/aggregate-types/{aggregateType}/aggregates/{aggregateId}/snapshots', true)}
+
+    ${card('Archived generations',
+        archived
+            ? table([{ label: 'Generation', num: true }, { label: 'Status' }, { label: 'Format' },
+                     { label: 'Events', num: true }, { label: 'Location' }, { label: 'Archived' }],
+                    archived.map(archivedRow), { empty: 'Nothing has been archived for this logical aggregate' })
+            : failure(3),
+        'GET /aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations', true)}
+
+    ${archivedDetailCard}`;
+};
+
 const titles = {
     overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
     locks: ['Fenced locks', 'Distributed locks held across service instances'],
@@ -690,7 +990,9 @@ const titles = {
     scheduler: ['Scheduler', 'pg_cron jobs, run history and executor jobs'],
     subscriptions: ['Subscriptions', 'Event-store subscription resume points'],
     cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],
-    postgresql: ['PostgreSQL statistics', 'Query, size, activity and cache statistics']
+    postgresql: ['PostgreSQL statistics', 'Query, size, activity and cache statistics'],
+    aggregates: ['Aggregates', 'Snapshot and closing-books policies and statistics'],
+    aggregateLookup: ['Aggregate lookup', 'Generations, snapshots and archives of one logical aggregate']
 };
 
 let currentView = 'overview';
@@ -742,6 +1044,21 @@ document.addEventListener('click', async (e) => {
         btn.textContent = 'Copied';
         setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
         return;
+    }
+
+    const archivedButton = e.target.closest('[data-archived-generation]');
+    if (archivedButton) {
+        const picked = Number(archivedButton.dataset.archivedGeneration);
+        aggregateState.archivedGeneration = aggregateState.archivedGeneration === picked ? null : picked;
+        return render('aggregateLookup');
+    }
+
+    const generationButton = e.target.closest('[data-generation]');
+    if (generationButton) {
+        /* Toggle: clicking the shown generation again collapses the event-stream card. */
+        const picked = Number(generationButton.dataset.generation);
+        aggregateState.generation = aggregateState.generation === picked ? null : picked;
+        return render('aggregateLookup');
     }
 
     if (e.target.closest('[data-retry]')) return render(currentView);
@@ -812,6 +1129,16 @@ document.addEventListener('click', async (e) => {
 });
 
 document.addEventListener('change', (e) => {
+    if (e.target.id === 'aggregateTypeSelect') {
+        aggregateState.type = e.target.value;
+        aggregateState.generation = null;
+        aggregateState.archivedGeneration = null;
+        return render('aggregateLookup');
+    }
+    if (e.target.id === 'includePayloadToggle') {
+        aggregateState.includePayload = e.target.checked;
+        return render('aggregateLookup');
+    }
     if (e.target.id === 'queueSelect') { queueState.queue = e.target.value; render('queues'); }
     if (e.target.id === 'sortSelect') { queueState.sortOrder = e.target.value; render('queues'); }
 });
@@ -821,6 +1148,14 @@ document.addEventListener('change', (e) => {
  * GET /durable-queues/messages/{queueEntryId}/queue-name exists. Resolve the owning queue, switch to
  * it, then open the message detail.
  */
+document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.target.id !== 'aggregateIdInput') return;
+    aggregateState.logicalId = e.target.value;
+    aggregateState.generation = null;
+    aggregateState.archivedGeneration = null;
+    render('aggregateLookup');
+});
+
 document.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter' || e.target.id !== 'entryLookup') return;
     const id = e.target.value.trim();
