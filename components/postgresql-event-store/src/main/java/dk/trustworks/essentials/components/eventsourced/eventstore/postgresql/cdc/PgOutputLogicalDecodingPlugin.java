@@ -67,6 +67,7 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
         requireTrue(properties.getProtoVersion() > 0, "protoVersion must be > 0");
         this.messageDecoder = new PgOutputMessageDecoder(properties.getProtoVersion());
         this.rowChangeDecoder = new PgOutputRowChangeDecoder();
+        log.info("PgOutputLogicalDecodingPlugin created");
     }
 
     @Override
