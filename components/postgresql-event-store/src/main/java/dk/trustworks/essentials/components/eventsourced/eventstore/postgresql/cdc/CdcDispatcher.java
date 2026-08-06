@@ -90,6 +90,19 @@ public final class CdcDispatcher implements Lifecycle {
     private final AtomicLong    inboxRowsWithEmptyDecodeCount = new AtomicLong(0);
     private final AtomicLong    lastBatchSize = new AtomicLong(0);
     private final AtomicLong    lastTickEpochMs = new AtomicLong(0);
+    /**
+     * How many times the decoder's schema cache had to be rebuilt from the inbox mid-tick because a
+     * row referenced a relation it didn't know. Expected to be {@code 0} in steady state and at most
+     * a handful right after a restart; a climbing value means schema rows are being lost or pruned.
+     */
+    private final AtomicLong    schemaRePrimeCount = new AtomicLong(0);
+
+    /**
+     * Guards against re-priming once per row when a whole batch references an unknown relation:
+     * priming is a DB round-trip, and if the first attempt in a tick didn't help, the rest won't
+     * either. Only ever touched from the single dispatcher thread.
+     */
+    private boolean schemaRePrimedThisTick;
 
     private ScheduledExecutorService executor;
     private Future<?>                tickFuture;
@@ -259,6 +272,12 @@ public final class CdcDispatcher implements Lifecycle {
         log.info("[{}] CDC dispatcher dispatched-row policy: {}", slotName, dispatchedRowPolicy);
 
         stopping.set(false);
+
+        // Rebuild the decoder's schema cache before the first tick. The cache is in-memory, but the
+        // messages that fill it are streamed once per replication session — so on restart it is empty
+        // while inbox rows that depend on it may already be waiting.
+        primeDecoderSchema();
+
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             var t = new Thread(r, "cdc-dispatcher-" + slotName);
             t.setDaemon(true);
@@ -310,13 +329,15 @@ public final class CdcDispatcher implements Lifecycle {
         }
         if (batch.isEmpty()) return;
 
+        schemaRePrimedThisTick = false;
+
         for (var row : batch) {
             if (stopping.get()) return;
             var payloadBytes = row.payloadJsonBytes();
 
             try {
                 long convertStartNs = System.nanoTime();
-                var events = logicalDecodingPlugin.decode(payloadBytes);
+                var events = decodeWithSchemaRecovery(payloadBytes);
                 if (convertTimer != null) convertTimer.record(System.nanoTime() - convertStartNs, TimeUnit.NANOSECONDS);
                 if (!events.isEmpty()) {
                     long publishStartNs = System.nanoTime();
@@ -330,7 +351,7 @@ public final class CdcDispatcher implements Lifecycle {
                     // plugin's diagnostic summary to distinguish benign from buggy.
                     inboxRowsWithEmptyDecodeCount.incrementAndGet();
                 }
-                acknowledgeDispatchedRow(row.inboxId());
+                acknowledgeDispatchedRow(row);
             } catch (CdcTransientEmitException transientEmit) {
                 // Transient emit failure — NOT a conversion failure. The event decoded fine; the CDC
                 // bus couldn't accept it right now, either because subscribers are behind producers
@@ -401,6 +422,74 @@ public final class CdcDispatcher implements Lifecycle {
         }
     }
 
+    /**
+     * Decode a row, treating "the decoder doesn't know this relation" as recoverable rather than
+     * poison.
+     * <p>
+     * The schema for a relation arrives in its own WAL message which the inbox retains, so a cache
+     * miss usually means the in-memory cache is stale rather than the payload being bad — the
+     * canonical case being a restart that emptied the cache while rows were still pending. Rebuilding
+     * from the inbox and retrying once recovers those without dropping events. If the retry still
+     * fails the payload is genuinely undecodable and the caller's {@link PoisonPolicy} takes over.
+     */
+    private List<PersistedEvent> decodeWithSchemaRecovery(byte[] payloadBytes) {
+        try {
+            return logicalDecodingPlugin.decode(payloadBytes);
+        } catch (MissingRelationMetadataException missingSchema) {
+            if (schemaRePrimedThisTick) {
+                // Already rebuilt this tick and it didn't supply this relation — don't hammer the DB
+                // once per row for the rest of the batch.
+                throw missingSchema;
+            }
+            schemaRePrimedThisTick = true;
+            schemaRePrimeCount.incrementAndGet();
+            log.info("[{}] Decoder has no schema cached for relationId={} — rebuilding schema cache from the inbox and retrying",
+                     slotName, missingSchema.getRelationId());
+            primeDecoderSchema();
+            return logicalDecodingPlugin.decode(payloadBytes);
+        }
+    }
+
+    /**
+     * Replay the slot's retained schema rows through the plugin's decoder so its schema cache is
+     * populated. Decoding a schema message yields no events — the point is the caching side effect.
+     * <p>
+     * Best-effort: a failure here must not stop the dispatcher from starting or ticking, since the
+     * live stream re-sends schema messages on every new replication session anyway.
+     *
+     * @return the number of schema rows successfully replayed
+     */
+    private int primeDecoderSchema() {
+        var leadingBytes = logicalDecodingPlugin.schemaPayloadLeadingBytes();
+        if (leadingBytes.isEmpty()) {
+            return 0;
+        }
+        try {
+            var schemaRows = inbox.fetchSchemaRows(slotName, leadingBytes);
+            int primed = 0;
+            for (var row : schemaRows) {
+                try {
+                    logicalDecodingPlugin.decode(row.payloadJsonBytes());
+                    primed++;
+                } catch (Exception e) {
+                    log.warn("[{}] Could not replay schema row inboxId={} while priming the decoder — skipping it",
+                             slotName, row.inboxId(), e);
+                }
+            }
+            if (primed > 0) {
+                log.info("[{}] Primed decoder with '{}' retained schema row(s) from the inbox", slotName, primed);
+            } else {
+                log.debug("[{}] No retained schema rows to prime the decoder with", slotName);
+            }
+            return primed;
+        } catch (Exception e) {
+            log.warn("[{}] Failed to prime the decoder's schema cache from the inbox — continuing; " +
+                             "the replication stream re-sends schema messages on each new session",
+                     slotName, e);
+            return 0;
+        }
+    }
+
     private static String abbreviateExceptionMessage(Exception e) {
         var msg = e.getMessage();
         if (msg == null) {
@@ -409,12 +498,23 @@ public final class CdcDispatcher implements Lifecycle {
         return msg.length() > 2000 ? msg.substring(0, 2000) : msg;
     }
 
-    private void acknowledgeDispatchedRow(long inboxId) {
-        if (dispatchedRowPolicy == DispatchedRowPolicy.DELETE) {
-            inbox.deleteDispatched(inboxId);
+    private void acknowledgeDispatchedRow(CdcInboxRepository.InboxRow row) {
+        // Schema rows are exempt from DELETE: they are the only record of a relation's layout between
+        // replication sessions, and deleting them leaves nothing to prime the decoder from after a
+        // restart. There is at most one per relation, so retaining them costs nothing.
+        if (dispatchedRowPolicy == DispatchedRowPolicy.DELETE && !isSchemaRow(row)) {
+            inbox.deleteDispatched(row.inboxId());
         } else {
-            inbox.markDispatched(inboxId);
+            inbox.markDispatched(row.inboxId());
         }
+    }
+
+    private boolean isSchemaRow(CdcInboxRepository.InboxRow row) {
+        var payload = row.payloadJsonBytes();
+        if (payload == null || payload.length == 0) {
+            return false;
+        }
+        return logicalDecodingPlugin.schemaPayloadLeadingBytes().contains((int) (payload[0] & 0xFF));
     }
 
     @Override
@@ -464,6 +564,19 @@ public final class CdcDispatcher implements Lifecycle {
                 lastTickEpochMs.get(),
                 logicalDecodingPlugin.diagnosticSummary()
         );
+    }
+
+    /**
+     * How many times the decoder's schema cache had to be rebuilt from the inbox because a row
+     * referenced a relation it didn't know about.
+     * <p>
+     * Exposed as a getter rather than a {@link CdcDispatcherStatus} component to keep that public
+     * record's shape stable. Expect {@code 0} in steady state; a small count after a restart is
+     * normal recovery, while a climbing count means schema rows are being lost or pruned and events
+     * are at risk of being quarantined.
+     */
+    public long getSchemaRePrimeCount() {
+        return schemaRePrimeCount.get();
     }
 
     public record CdcDispatcherStatus(

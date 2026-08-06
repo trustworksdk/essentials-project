@@ -24,7 +24,9 @@ import io.micrometer.core.instrument.Timer;
 import org.slf4j.*;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
+import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
@@ -136,20 +138,29 @@ public class CdcInboxRepository {
      * Idempotent insert keyed by {@code (slot_name, lsn)}; returns {@code true} if a row was inserted,
      * {@code false} if one already existed.
      * <p>
-     * <b>Invariant: each persisted WAL message must carry a distinct {@code lsn} for a given slot.</b>
-     * The {@code unique(slot_name, lsn)} dedup key (see {@link CdcSql#buildCreateCdcTableSql()}) exists
-     * so that a WAL message re-streamed after a reconnect — before its LSN was acked — is recognised as
-     * already-received and acked again rather than re-dispatched. It relies on the {@code lsn} (the
-     * tailer's {@code PGReplicationStream#getLastReceiveLSN()}) being unique per persisted message: if
-     * two <em>distinct</em> messages ever reported the same LSN, the second would be treated as a
-     * duplicate and silently dropped. The risk area is pgoutput, whose pre-filter persists both
-     * {@code 'R'} (RELATION) and {@code 'I'} (INSERT) messages (a RELATION is emitted before the first
-     * INSERT for a relation so the dispatcher can cache its schema), so the invariant must hold across
-     * the RELATION→INSERT boundary, not just between INSERTs. It does: every message — RELATION and
-     * row-change alike — sits at its own WAL position. Only BEGIN/COMMIT framing is dropped, and those
-     * are never persisted, so they cannot collide with a kept row. Verified by
-     * {@code WalReplicationWithEssentialsAggregatePgOutputIT} (distinct LSNs across a multi-statement
-     * transaction, including the RELATION-message boundary).
+     * <b>Invariant: each persisted WAL message must carry a distinct {@code lsn} value for a given
+     * slot.</b> The {@code unique(slot_name, lsn)} dedup key (see {@link CdcSql#buildCreateCdcTableSql()})
+     * exists so that a WAL message re-streamed after a reconnect — before its LSN was acked — is
+     * recognised as already-received and acked again rather than re-dispatched. If two <em>distinct</em>
+     * messages ever share a key, the second is treated as a duplicate and silently dropped.
+     * <p>
+     * The {@code lsn} argument is therefore a <b>dedup key, not a WAL coordinate</b>. It is supplied by
+     * {@link LogicalDecodingPlugin#inboxDedupKey(byte[], String)}, which defaults to the raw
+     * {@code PGReplicationStream#getLastReceiveLSN()} but lets a plugin qualify it where that value is
+     * not unique per message.
+     * <p>
+     * pgoutput is exactly such a case, and the reason this contract is spelled out: its pre-filter
+     * persists both {@code 'R'} (RELATION) and {@code 'I'} (INSERT) messages, because a RELATION carries
+     * the schema the dispatcher's decoder must cache before it can decode any INSERT for that relation.
+     * RELATION messages are synthesized by the walsender rather than read from a WAL record, so the
+     * streaming protocol reports <b>every one of them at {@code 0/0}</b>. Under a raw-LSN key the first
+     * RELATION claims {@code 0/0} and the schema for every other event-stream table is dropped on
+     * conflict, leaving those tables permanently undecodable. {@code PgOutputLogicalDecodingPlugin}
+     * qualifies the key with the relation OID to keep them distinct while staying replay-deterministic.
+     * BEGIN/COMMIT framing is never persisted and so cannot collide with a kept row.
+     * <p>
+     * Verified by {@code WalReplicationWithEssentialsAggregatePgOutputIT} — both the single-table
+     * multi-statement case and the multi-table case that this collision breaks.
      */
     public boolean insertIfAbsent(String slotName, String lsn, byte[] payloadBytes) {
         long startNs = System.nanoTime();
@@ -320,6 +331,55 @@ public class CdcInboxRepository {
             fetchNextBatchSizeSummary.record(rows.size());
         }
         return rows;
+    }
+
+    /**
+     * Fetch every retained schema-carrying row for a slot, oldest first, <em>regardless of status</em>.
+     * <p>
+     * Used by the dispatcher to prime its decoder's schema cache at start-up. That cache is in-memory
+     * only, while the messages that populate it (pgoutput {@code 'R'} RELATION messages) are streamed
+     * once per replication session — so after an application restart the cache is empty while row
+     * payloads referencing it may still be sitting in the inbox. Replaying the retained schema rows
+     * closes that window. Already-{@code DISPATCHED} rows are deliberately included: a schema row is
+     * dispatched exactly once but stays relevant for the lifetime of the table.
+     * <p>
+     * Bounded by construction — one row per relation per slot — so this is a small read even on a
+     * large inbox.
+     *
+     * @param slotName     the replication slot
+     * @param leadingBytes first-payload-byte markers identifying schema messages, from
+     *                     {@link LogicalDecodingPlugin#schemaPayloadLeadingBytes()}. An empty
+     *                     collection yields an empty result without querying.
+     */
+    public List<InboxRow> fetchSchemaRows(String slotName, Collection<Integer> leadingBytes) {
+        requireNonNull(slotName, "slotName cannot be null");
+        requireNonNull(leadingBytes, "leadingBytes cannot be null");
+        if (leadingBytes.isEmpty()) {
+            return List.of();
+        }
+        // Rendered into the SQL rather than bound, since JDBI has no portable positional-array
+        // binding here. Each value is range-checked to a single unsigned byte first, so the
+        // rendered fragment can only ever be a comma-separated list of integers 0..255.
+        var markers = leadingBytes.stream()
+                                  .peek(b -> requireTrue(b != null && b >= 0 && b <= 255,
+                                                         "schema payload leading byte must be in the range 0..255, was: " + b))
+                                  .map(String::valueOf)
+                                  .collect(Collectors.joining(","));
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql("""
+                                                                               SELECT inbox_id, lsn, payload_bytes
+                                                                               FROM {:table}
+                                                                               WHERE slot_name = :slot
+                                                                                 AND octet_length(payload_bytes) > 0
+                                                                                 AND get_byte(payload_bytes, 0) IN (""" + markers + """
+                                                                               )
+                                                                               ORDER BY inbox_id
+                                                                               """))
+                                                          .bind("slot", slotName)
+                                                          .map((rs, ctx) -> new InboxRow(
+                                                                  rs.getLong("inbox_id"),
+                                                                  rs.getString("lsn"),
+                                                                  rs.getBytes("payload_bytes")))
+                                                          .list());
     }
 
     /**

@@ -51,7 +51,13 @@ public class AdminUiController {
         this.authenticatedUser = requireNonNull(authenticatedUser, "No authenticatedUser provided");
     }
 
-    @GetMapping("${essentials.admin-ui.base-path:/essentials/admin}")
+    /**
+     * Both the bare base path and its trailing-slash form are mapped. Spring Boot 3 dropped implicit
+     * trailing-slash matching, so {@code /essentials/admin/} — what a browser produces if the user
+     * treats the UI as a directory — would otherwise 404 while {@code /essentials/admin} works.
+     */
+    @GetMapping({"${essentials.admin-ui.base-path:/essentials/admin}",
+                 "${essentials.admin-ui.base-path:/essentials/admin}/"})
     public String index(Model model) {
         var admin = authenticatedUser.hasAdminRole();
 

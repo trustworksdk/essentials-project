@@ -100,7 +100,11 @@ public final class PgOutputRowChangeDecoder {
     private PgOutputRowChange toRowChange(PgOutputMessageDecoder.PgOutputMessage.InsertMessage insert) {
         var relation = relationCache.get(insert.relationId());
         if (relation == null) {
-            throw new IllegalStateException("Missing cached pgoutput relation metadata for relationId=" + insert.relationId());
+            // Recoverable: the schema arrives in a separate 'R' message which the inbox retains,
+            // so the dispatcher can re-prime this cache and retry before poisoning the row.
+            throw new MissingRelationMetadataException(
+                    "Missing cached pgoutput relation metadata for relationId=" + insert.relationId(),
+                    insert.relationId());
         }
 
         if (relation.columns().size() != insert.tupleData().values().size()) {

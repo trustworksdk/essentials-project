@@ -39,6 +39,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.CustomerId;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.OrderId;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.ProductEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.ProductId;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import org.junit.jupiter.api.AfterEach;
@@ -60,6 +61,13 @@ import static org.awaitility.Awaitility.await;
 
 @Testcontainers
 class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalReplicationPostgresIT {
+
+    /**
+     * A second aggregate type — and therefore a second event-stream table — so the pgoutput
+     * RELATION-message handling is exercised with more than one relation in play. Single-table
+     * coverage cannot see a collision between two relations' schema messages.
+     */
+    private static final AggregateType PRODUCTS = AggregateType.of("Products");
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
     private JSONEventSerializer                                                    jacksonJSONSerializer;
@@ -87,6 +95,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 );
 
         persistenceStrategy.addAggregateEventStreamConfiguration(ORDERS, OrderId.class);
+        persistenceStrategy.addAggregateEventStreamConfiguration(PRODUCTS, ProductId.class);
 
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
         inboxRepository = new CdcInboxRepository(unitOfWorkFactory);
@@ -326,6 +335,221 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
                 .hasSize(lsns.size());
 
         tailer.stop();
+    }
+
+    /**
+     * Regression test for the RELATION-message dedup collision.
+     * <p>
+     * pgoutput reports <b>every</b> RELATION message at LSN {@code 0/0}, because the walsender
+     * synthesizes them rather than reading them from a WAL record. When the inbox keyed its
+     * {@code unique(slot_name, lsn)} dedup constraint on the raw LSN, the first RELATION to arrive
+     * claimed {@code 0/0} and the schema for every other event-stream table was silently discarded by
+     * {@code on conflict do nothing}. The dispatcher's decoder then knew exactly one relation and
+     * quarantined every INSERT on the rest — one working table and the others permanently dead.
+     * <p>
+     * Single-table coverage is blind to this: with one relation there is nothing to collide with.
+     * This test therefore drives two tables and asserts both keep their schema and deliver events.
+     */
+    @Test
+    void pgoutput_retains_the_relation_schema_of_every_event_stream_table() {
+        String slotName = slotName();
+        String publicationName = publicationName();
+        createPublicationForOrdersAndProducts(publicationName);
+
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver());
+        List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
+
+        var availability          = new CdcAvailability();
+        var logicalDecodingPlugin = pgOutputPlugin(publicationName, pgOutputConverter);
+        var tailer                = inboxPgOutputTailer(slotName, logicalDecodingPlugin, ordersAndProductsTablesSupplier(), availability);
+        var dispatcher            = inboxDispatcher(slotName, logicalDecodingPlugin, availability, cdcPersistedEvents);
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+        dispatcher.start();
+
+        appendOrderEvents();   // 4 events on orders_events   → 1 RELATION + 4 INSERTs
+        appendProductEvents(); // 2 events on products_events → 1 RELATION + 2 INSERTs
+
+        await()
+                .atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> {
+                    assertThat(cdcPersistedEvents).hasSizeGreaterThanOrEqualTo(6);
+                    assertThat(inboxRepository.countByStatus(slotName, "RECEIVED")).isZero();
+                });
+
+        assertThat(inboxRepository.countByStatus(slotName, "POISON"))
+                .as("no row may be quarantined — a missing RELATION schema is what poisons them")
+                .isZero();
+
+        assertThat(persistedRelationIds(slotName))
+                .as("each event-stream table must keep its own RELATION row; a raw-LSN dedup key collapses them all onto one")
+                .hasSize(2);
+
+        assertThat(aggregateTypesOf(cdcPersistedEvents))
+                .as("both aggregate types must be delivered, not just whichever table's RELATION won the dedup race")
+                .containsExactlyInAnyOrder(ORDERS, PRODUCTS);
+
+        dispatcher.stop();
+        tailer.stop();
+    }
+
+    /**
+     * A dispatcher's relation cache is in-memory, while the RELATION messages that fill it are
+     * streamed once per replication session — so a restarted dispatcher starts blind, and the
+     * re-sent RELATION dedups against the row it already wrote rather than repopulating anything.
+     * Without priming from the retained inbox rows, every subsequent INSERT is quarantined.
+     * <p>
+     * Simulated here by handing a second dispatcher a <b>fresh plugin instance</b> (empty cache)
+     * while the original tailer keeps streaming.
+     */
+    @Test
+    void a_restarted_dispatcher_rebuilds_its_relation_schema_cache_from_the_inbox() {
+        String slotName = slotName();
+        String publicationName = publicationName();
+        createPublicationForOrdersAndProducts(publicationName);
+
+        var availability = new CdcAvailability();
+        List<PersistedEvent> firstRunEvents = new CopyOnWriteArrayList<>();
+
+        var tailerPlugin = pgOutputPlugin(publicationName,
+                                          new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver()));
+        var tailer       = inboxPgOutputTailer(slotName, tailerPlugin, ordersAndProductsTablesSupplier(), availability);
+
+        var firstDispatcher = inboxDispatcher(slotName, tailerPlugin, availability, firstRunEvents);
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+        firstDispatcher.start();
+        appendOrderEvents();
+        appendProductEvents();
+
+        await()
+                .atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> assertThat(firstRunEvents).hasSizeGreaterThanOrEqualTo(6));
+        firstDispatcher.stop();
+
+        // Restart: a brand-new plugin means a brand-new (empty) relation cache, exactly as after a
+        // JVM restart. The RELATION rows are still in the inbox, already DISPATCHED.
+        List<PersistedEvent> afterRestartEvents = new CopyOnWriteArrayList<>();
+        var restartedPlugin     = pgOutputPlugin(publicationName,
+                                                 new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver()));
+        var restartedDispatcher = inboxDispatcher(slotName, restartedPlugin, availability, afterRestartEvents);
+        restartedDispatcher.start();
+
+        appendOneMoreOrderEvent();
+        appendProductEvents();
+
+        await()
+                .atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> {
+                    assertThat(afterRestartEvents).hasSizeGreaterThanOrEqualTo(3);
+                    assertThat(inboxRepository.countByStatus(slotName, "RECEIVED")).isZero();
+                });
+
+        assertThat(inboxRepository.countByStatus(slotName, "POISON"))
+                .as("a restarted dispatcher must recover the schema from the inbox rather than quarantine the rows")
+                .isZero();
+        assertThat(aggregateTypesOf(afterRestartEvents))
+                .containsExactlyInAnyOrder(ORDERS, PRODUCTS);
+
+        restartedDispatcher.stop();
+        tailer.stop();
+    }
+
+    private Set<AggregateType> aggregateTypesOf(List<PersistedEvent> events) {
+        return events.stream().map(PersistedEvent::aggregateType).collect(java.util.stream.Collectors.toSet());
+    }
+
+    /**
+     * The distinct relation OIDs for which a {@code 'R'} (RELATION) row survived in the inbox. The
+     * relation OID is the 4-byte big-endian int directly after the {@code 'R'} type marker.
+     */
+    private List<Integer> persistedRelationIds(String slotName) {
+        return jdbi.withHandle(handle -> handle.createQuery(
+                                               "select distinct (get_byte(payload_bytes,1)::bigint<<24)"
+                                                       + " | (get_byte(payload_bytes,2)<<16)"
+                                                       + " | (get_byte(payload_bytes,3)<<8)"
+                                                       + " | get_byte(payload_bytes,4) as relation_id"
+                                                       + " from " + CdcSql.DEFAULT_CDC_TABLE_NAME
+                                                       + " where slot_name = :slot and get_byte(payload_bytes,0) = 82")
+                                               .bind("slot", slotName)
+                                               .mapTo(Integer.class)
+                                               .list());
+    }
+
+    private AggregateTypeResolver ordersAndProductsResolver() {
+        return table -> {
+            if ("orders_events".equalsIgnoreCase(table)) return ORDERS;
+            if ("products_events".equalsIgnoreCase(table)) return PRODUCTS;
+            return null;
+        };
+    }
+
+    private static Supplier<Set<String>> ordersAndProductsTablesSupplier() {
+        return () -> Set.of("orders_events", "products_events");
+    }
+
+    private void createPublicationForOrdersAndProducts(String publicationName) {
+        jdbi.useHandle(handle -> {
+            handle.execute("drop publication if exists " + publicationName);
+            handle.execute("create publication " + publicationName + " for table orders_events, products_events");
+        });
+    }
+
+    private void appendProductEvents() {
+        var productId = ProductId.of("ProductId-" + UUID.randomUUID());
+        var uow       = unitOfWorkFactory.getOrCreateNewUnitOfWork();
+        eventStore.appendToStream(PRODUCTS, productId, List.of(
+                new ProductEvent.ProductAdded(productId),
+                new ProductEvent.ProductDiscontinued(productId)
+        ));
+        uow.commit();
+    }
+
+    private WalReplicationTailer inboxPgOutputTailer(String slotName,
+                                                     PgOutputLogicalDecodingPlugin plugin,
+                                                     Supplier<Set<String>> eventStreamTables,
+                                                     CdcAvailability availability) {
+        return new WalReplicationTailer(
+                replicationDataSource,
+                jdbi,
+                unitOfWorkFactory,
+                slotName,
+                inboxRepository,
+                tailerProperties(),
+                PgSlotMode.CREATE_IF_MISSING,
+                CdcMode.AUTO,
+                CdcDeliveryMode.INBOX,
+                plugin,
+                Optional.empty(),
+                Optional.empty(),
+                availability,
+                Optional.empty(),
+                Optional.empty(),
+                Optional.of(eventStreamTables),
+                false
+        );
+    }
+
+    private CdcDispatcher inboxDispatcher(String slotName,
+                                          LogicalDecodingPlugin plugin,
+                                          CdcAvailability availability,
+                                          List<PersistedEvent> sink) {
+        return new CdcDispatcher(
+                inboxRepository,
+                unitOfWorkFactory,
+                gapHandler,
+                plugin,
+                Optional.empty(),
+                sink::addAll,
+                slotName,
+                CdcDispatcherProperties.defaults(),
+                CdcDeliveryMode.INBOX,
+                availability,
+                Optional.empty()
+        );
     }
 
     private WalReplicationTailer directPgOutputTailer(String slotName,

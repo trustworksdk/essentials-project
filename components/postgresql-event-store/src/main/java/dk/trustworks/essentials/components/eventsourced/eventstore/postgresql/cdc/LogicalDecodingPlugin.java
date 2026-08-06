@@ -85,6 +85,45 @@ public interface LogicalDecodingPlugin {
     }
 
     /**
+     * The value the tailer stores in the CDC inbox's {@code lsn} column, which doubles as the
+     * {@code unique(slot_name, lsn)} dedup key.
+     * <p>
+     * The default is the raw LSN reported by {@code PGReplicationStream#getLastReceiveLSN()},
+     * which is correct for any plugin whose messages each sit at their own WAL position. It is
+     * <b>not</b> correct for pgoutput: over the streaming protocol every RELATION message is
+     * reported at {@code 0/0}, so a raw-LSN key collapses the schema announcements for <em>all</em>
+     * tables onto one row and every table but the first loses its schema — see
+     * {@code PgOutputLogicalDecodingPlugin#inboxDedupKey}.
+     * <p>
+     * Implementations must return a <b>deterministic</b> key: the same WAL message re-streamed
+     * after a reconnect has to produce the same key, or the inbox's replay-idempotency guarantee
+     * is lost and the message is dispatched twice.
+     *
+     * @param payloadBytes the raw WAL payload about to be persisted
+     * @param lsn          the LSN the replication stream reported for this message
+     * @return the dedup key to store; never {@code null}
+     */
+    default String inboxDedupKey(byte[] payloadBytes, String lsn) {
+        return lsn;
+    }
+
+    /**
+     * Leading payload bytes that mark a message as carrying <em>schema</em> rather than row data —
+     * metadata the decoder must have cached before any row payload referencing it can be decoded.
+     * <p>
+     * The dispatcher uses this for two things: priming its decoder from the inbox at start-up (so a
+     * restart doesn't leave the in-memory schema cache empty while row payloads are still pending),
+     * and exempting schema rows from {@link CdcProperties.DispatchedRowPolicy#DELETE} so the priming
+     * source survives.
+     * <p>
+     * Returning an empty set (the default) opts out of both — correct for text formats such as
+     * {@code wal2json}, whose payloads are self-describing.
+     */
+    default Set<Integer> schemaPayloadLeadingBytes() {
+        return Set.of();
+    }
+
+    /**
      * Whether the tailer should apply the configured {@code WalMessageFilter} to raw payload
      * bytes before persisting to the inbox.
      * <p>

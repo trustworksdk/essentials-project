@@ -1071,10 +1071,15 @@ public class WalReplicationTailer implements Lifecycle {
                 throw new IllegalStateException("PGReplicationStream returned null LSN for received message");
             }
 
+            // The inbox's unique(slot_name, lsn) column is a dedup key, not a WAL coordinate, so the
+            // plugin decides what identity to store. pgoutput qualifies its RELATION messages —
+            // they are all reported at 0/0 and would otherwise collapse onto a single row.
+            var dedupKey = logicalDecodingPlugin.inboxDedupKey(payload.bytes(), lsnStr);
+
             boolean inserted = deliveryMode == CdcDeliveryMode.DIRECT
                                ? dispatchDirectly(payload)
-                               : inboxRepository.insertIfAbsent(slotName, lsnStr, payload.bytes());
-            recordPersistenceOutcome(inserted, lsnStr);
+                               : inboxRepository.insertIfAbsent(slotName, dedupKey, payload.bytes());
+            recordPersistenceOutcome(inserted, dedupKey);
         } catch (Exception inboxEx) {
             handlePersistenceFailure(payload, inboxEx);
         }
