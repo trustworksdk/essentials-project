@@ -23,7 +23,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesLoadIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
-import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.components.queue.postgresql.*;
 import dk.trustworks.essentials.components.queue.postgresql.test_data.TestMessageFactory;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import dk.trustworks.essentials.shared.time.StopWatch;
