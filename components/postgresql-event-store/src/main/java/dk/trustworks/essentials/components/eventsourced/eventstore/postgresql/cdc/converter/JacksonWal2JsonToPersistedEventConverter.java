@@ -68,11 +68,31 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
 
     private final JSONEventSerializer   jsonSerializer;
     private final AggregateTypeResolver aggregateTypeResolver;
+    /**
+     * Turns the WAL's text {@code aggregate_id} back into the typed id, matching what
+     * {@code PersistedEventRowMapper} produces on the polling path.
+     */
+    private final AggregateIdSerializerResolver aggregateIdSerializerResolver;
 
     public JacksonWal2JsonToPersistedEventConverter(JSONEventSerializer jsonSerializer,
-                                                    AggregateTypeResolver aggregateTypeResolver) {
+                                                    AggregateTypeResolver aggregateTypeResolver,
+                                                    AggregateIdSerializerResolver aggregateIdSerializerResolver) {
         this.jsonSerializer = jsonSerializer;
         this.aggregateTypeResolver = aggregateTypeResolver;
+        this.aggregateIdSerializerResolver = dk.trustworks.essentials.shared.FailFast.requireNonNull(
+                aggregateIdSerializerResolver, "aggregateIdSerializerResolver cannot be null");
+    }
+
+    /**
+     * @deprecated Leaves {@link PersistedEvent#aggregateId()} as the raw WAL text instead of the typed
+     * aggregate id the polling path produces, so CDC-delivered events disagree with polled ones. Use
+     * {@link #JacksonWal2JsonToPersistedEventConverter(JSONEventSerializer, AggregateTypeResolver, AggregateIdSerializerResolver)}
+     * with {@link AggregateIdSerializerResolver#forEventStore} instead.
+     */
+    @Deprecated(forRemoval = true)
+    public JacksonWal2JsonToPersistedEventConverter(JSONEventSerializer jsonSerializer,
+                                                    AggregateTypeResolver aggregateTypeResolver) {
+        this(jsonSerializer, aggregateTypeResolver, AggregateIdSerializerResolver.rawText());
     }
 
     /**
@@ -182,7 +202,10 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
                                             Map<String, Object> r) {
         try {
             var eventId     = EventId.of(toString(r, "event_id"));
-            var aggregateId = toObject(r, "aggregate_id");
+            // The WAL only ever carries the id as text. Deserialize it so PersistedEvent#aggregateId() holds
+            // the same typed id the polling path yields via PersistedEventRowMapper — consumers must not be
+            // able to tell which delivery path an event arrived on.
+            var aggregateId = aggregateIdSerializerResolver.deserializeOrRaw(aggregateType, toObject(r, "aggregate_id"));
 
             var eventOrder = EventOrder.of(toLong(r, "event_order"));
 

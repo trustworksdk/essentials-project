@@ -19,11 +19,14 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.c
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.PgOutputRowChange;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventType;
+import dk.trustworks.essentials.types.CharSequenceType;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -79,6 +82,76 @@ class PgOutputToPersistedEventConverterTest {
         assertThat(event.causedByEventId()).isPresent();
         assertThat(event.correlationId()).isPresent();
         assertThat(event.tenant()).isPresent();
+    }
+
+    /**
+     * The WAL carries {@code aggregate_id} as text, but {@code PersistedEvent#aggregateId()} is contracted to
+     * hold the typed id — that is what {@code PersistedEventRowMapper} produces on the polling path. When the
+     * converter skipped the deserialization, CDC handed subscribers a raw {@code String} and anything relying
+     * on the declared type broke under CDC only: {@code EventProcessor.forwardEventToInbox} threw
+     * {@code Expected java.lang.String to be an instance of …Id} for every event it forwarded.
+     */
+    @Test
+    void deserializes_the_aggregate_id_to_its_configured_type() {
+        var typedConverter = new PgOutputToPersistedEventConverter(
+                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                tableName -> "orders_events".equals(tableName) ? orders : null,
+                aggregateType -> Optional.of(AggregateIdSerializer.serializerFor(TestOrderId.class))
+        );
+
+        var persistedEvent = typedConverter.convertIfRelevant(insertRowChangeWithAggregateId("order-1")).orElseThrow();
+
+        assertThat(persistedEvent.aggregateId())
+                .as("CDC must yield the same typed aggregate id the polling path does")
+                .isInstanceOf(TestOrderId.class)
+                .hasToString("order-1");
+    }
+
+    @Test
+    void leaves_the_aggregate_id_as_raw_text_when_the_aggregate_type_is_unregistered() {
+        var unresolvableConverter = new PgOutputToPersistedEventConverter(
+                EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
+                tableName -> "orders_events".equals(tableName) ? orders : null,
+                aggregateType -> Optional.empty()
+        );
+
+        var persistedEvent = unresolvableConverter.convertIfRelevant(insertRowChangeWithAggregateId("order-1")).orElseThrow();
+
+        assertThat(persistedEvent.aggregateId())
+                .as("an unknown aggregate type must not fail conversion — that would quarantine a valid event")
+                .isEqualTo("order-1");
+    }
+
+    private PgOutputRowChange insertRowChangeWithAggregateId(String aggregateId) {
+        return new PgOutputRowChange(
+                "insert", 7, "public", "orders_events", 42, 123456L,
+                Map.ofEntries(
+                        entry("event_id", text("evt-1")),
+                        entry("aggregate_id", text(aggregateId)),
+                        entry("event_order", text("3")),
+                        entry("event_revision", text("1")),
+                        entry("global_order", text("17")),
+                        entry("timestamp", text("2026-04-17 10:15:30+00")),
+                        entry("event_type", text("OrderCreated")),
+                        entry("event_payload", text("{\"amount\": 42}")),
+                        entry("event_metadata", text("{}"))
+                ),
+                Map.of(),
+                List.of());
+    }
+
+    /**
+     * A {@link CharSequenceType} aggregate id, matching the shape real aggregate ids use — the shape whose
+     * {@code CharSequenceTypeIdSerializer} threw when handed the raw WAL text.
+     */
+    public static class TestOrderId extends CharSequenceType<TestOrderId> {
+        public TestOrderId(CharSequence value) {
+            super(value);
+        }
+
+        public static TestOrderId of(CharSequence value) {
+            return new TestOrderId(value);
+        }
     }
 
     @Test

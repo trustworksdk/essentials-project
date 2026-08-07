@@ -745,16 +745,23 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public LogicalReplicationToPersistedEventConverter logicalReplicationToPersistedEventConverter(JSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
-        return new JacksonWal2JsonToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
+    public LogicalReplicationToPersistedEventConverter logicalReplicationToPersistedEventConverter(JSONEventSerializer jsonSerializer,
+                                                                                                   AggregateTypeResolver aggregateTypeResolver,
+                                                                                                   @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        return new JacksonWal2JsonToPersistedEventConverter(jsonSerializer,
+                                                            aggregateTypeResolver,
+                                                            AggregateIdSerializerResolver.forEventStore(eventStore));
     }
 
     @Bean
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
     public PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter(JSONEventSerializer jsonSerializer,
-                                                                               AggregateTypeResolver aggregateTypeResolver) {
-        return new PgOutputToPersistedEventConverter(jsonSerializer, aggregateTypeResolver);
+                                                                               AggregateTypeResolver aggregateTypeResolver,
+                                                                               @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        return new PgOutputToPersistedEventConverter(jsonSerializer,
+                                                     aggregateTypeResolver,
+                                                     AggregateIdSerializerResolver.forEventStore(eventStore));
     }
 
     @Bean
