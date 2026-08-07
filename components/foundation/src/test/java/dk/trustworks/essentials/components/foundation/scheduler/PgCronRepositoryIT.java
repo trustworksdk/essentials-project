@@ -34,12 +34,12 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * When running it locally set env variable PGCRON_IMAGE=lcramontw/postgres-with-pg-cron:latest
+ * When running it locally set env variable ESSENTIALS_POSTGRES_IMAGE=essentials-postgres:17.5
  */
 @Testcontainers
 public class PgCronRepositoryIT {
 
-    private static final String          IMAGE_PROP  = System.getenv().getOrDefault("PGCRON_IMAGE", "essentials-postgres-with-pgcron:latest");
+    private static final String          IMAGE_PROP  = System.getenv().getOrDefault("ESSENTIALS_POSTGRES_IMAGE", "essentials-postgres:17.5");
     protected static     DockerImageName pgCronImage = DockerImageName.parse(IMAGE_PROP).asCompatibleSubstituteFor("postgres");
 
     @Container

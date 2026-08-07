@@ -42,6 +42,14 @@ public final class EventOrder extends LongType<EventOrder> {
      */
     public static final EventOrder MAX_EVENT_ORDER     = EventOrder.of(Long.MAX_VALUE);
 
+    public EventOrder(long value) {
+        this(Long.valueOf(value));
+    }
+
+    public EventOrder(int value) {
+        this((long) value);
+    }
+
     public EventOrder(Long value) {
         super(value);
     }

@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.eventsourced.aggregates.decider;
 
-import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotRepository;
+import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.AggregateEventStreamConfiguration;
@@ -79,6 +79,27 @@ public interface CommandHandler<COMMAND, EVENT, ERROR> {
      * and coordinate persisting any changes to the Aggregate, in the form of <code>EVENT</code>'s, to the {@link EventStore} as part of an active {@link UnitOfWork} (if one exists)<br>
      * The actual logic is delegated to an instance of a {@link Decider}
      */
+    static <CONFIG extends AggregateEventStreamConfiguration,
+            ID,
+            COMMAND, EVENT, ERROR, STATE> CommandHandler<COMMAND, EVENT, ERROR> deciderBasedCommandHandlerUsingSnapshotRepositoryProvider(ConfigurableEventStore<CONFIG> eventStore,
+                                                                                                                                         AggregateType aggregateType,
+                                                                                                                                         Class<ID> aggregateIdType,
+                                                                                                                                         AggregateIdResolver<COMMAND, ID> aggregateIdFromCommandResolver,
+                                                                                                                                         AggregateIdResolver<EVENT, ID> aggregateIdFromEventResolver,
+                                                                                                                                         AggregateSnapshotRepositoryProvider aggregateSnapshotRepository,
+                                                                                                                                         Class<STATE> stateType,
+                                                                                                                                         Decider<COMMAND, EVENT, ERROR, STATE> decider) {
+        requireNonNull(aggregateSnapshotRepository, "No aggregateSnapshotRepositoryProvider provided");
+        return deciderBasedCommandHandler(eventStore,
+                                          aggregateType,
+                                          aggregateIdType,
+                                          aggregateIdFromCommandResolver,
+                                          aggregateIdFromEventResolver,
+                                          aggregateSnapshotRepository.resolve(aggregateType, stateType).orElse(null),
+                                          stateType,
+                                          decider);
+    }
+
     static <CONFIG extends AggregateEventStreamConfiguration,
             ID,
             COMMAND, EVENT, ERROR, STATE> CommandHandler<COMMAND, EVENT, ERROR> deciderBasedCommandHandler(ConfigurableEventStore<CONFIG> eventStore,

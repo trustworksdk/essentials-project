@@ -205,7 +205,9 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
                             );
                         }))
                 .doFinally(signalType -> {
-                    eventStoreSubscription.currentResumePoint().get().setResumeFromAndIncluding(e.globalEventOrder().increment());
+                    // advance (not set): gap-filled events are delivered out of order, so an older
+                    // event can complete last and must not rewind the resume point
+                    eventStoreSubscription.currentResumePoint().get().advanceResumeFromAndIncluding(e.globalEventOrder().increment());
                 })
                 .subscribe(requestSize -> {
                             if (requestSize < 0) {

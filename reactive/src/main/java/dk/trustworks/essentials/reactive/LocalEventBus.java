@@ -440,7 +440,15 @@ public final class LocalEventBus implements EventBus {
         if (started) {
             log.info("Stopping event bus");
             eventSink.emitComplete((signalType, emitResult) -> {
-                log.error(msg("Failed to complete eventSink: {}", emitResult));
+                if (emitResult == Sinks.EmitResult.FAIL_NON_SERIALIZED) {
+                    Thread.onSpinWait();
+                    return true;
+                }
+                if (emitResult == Sinks.EmitResult.FAIL_TERMINATED || emitResult == Sinks.EmitResult.FAIL_CANCELLED) {
+                    log.debug("eventSink completion skipped due to {} (signalType={})", emitResult, signalType);
+                    return false;
+                }
+                log.warn(msg("Failed to complete eventSink: {} (signalType={})", emitResult, signalType));
                 return false;
             });
             listenerScheduler.dispose();

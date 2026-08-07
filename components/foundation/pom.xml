@@ -41,13 +41,11 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
-            <version>${micrometer.version}</version>
             <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing</artifactId>
-            <version>${micrometer-tracing.version}</version>
             <optional>true</optional>
         </dependency>
         <dependency>
@@ -85,7 +83,6 @@
         <dependency>
             <groupId>org.springframework.data</groupId>
             <artifactId>spring-data-mongodb</artifactId>
-            <version>${spring-data-mongodb.version}</version>
             <optional>true</optional>
             <exclusions>
                 <exclusion>
@@ -97,12 +94,16 @@
         <dependency>
             <groupId>org.mongodb</groupId>
             <artifactId>mongodb-driver-sync</artifactId>
-            <version>${mongodb-driver-sync.version}</version>
             <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-tx</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-aop</artifactId>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -114,6 +115,24 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3-bom.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <!-- Needed by the canonical Jackson 2 mapper in EssentialsObjectMappers. Jackson 3 has both built in, so
+             these are Jackson-2-only. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jdk8</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
             <optional>true</optional>
         </dependency>
         <dependency>
@@ -151,16 +170,59 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>enforce-module-dependency-direction</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <!--
+                                      Artifact-level guard for the core dependency chain:
+                                      shared -> types/reactive -> foundation-types -> foundation
+                                      -> postgresql-event-store -> eventsourced-aggregates.
+                                      foundation may depend only on its upstream neighbours
+                                      (types, reactive, foundation-types, and shared transitively).
+                                      This bans a POM dependency on postgresql-event-store or
+                                      eventsourced-aggregates - the boundary that
+                                      EssentialsArchitectureTest defers to artifact-level tooling
+                                      because foundation-types shares the event-store package
+                                      namespace.
+                                    -->
+                                    <excludes>
+                                        <exclude>dk.trustworks.essentials*:*</exclude>
+                                    </excludes>
+                                    <includes>
+                                        <include>dk.trustworks.essentials:shared</include>
+                                        <include>dk.trustworks.essentials:types</include>
+                                        <include>dk.trustworks.essentials:reactive</include>
+                                        <include>dk.trustworks.essentials.components:foundation-types</include>
+                                    </includes>
+                                    <message>foundation may depend only on types/, reactive/, foundation-types (and shared/ transitively) - never on postgresql-event-store or any downstream module.</message>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>io.fabric8</groupId>
                 <artifactId>docker-maven-plugin</artifactId>
                 <version>${maven.docker.plugin.version}</version>
                 <configuration>
                     <images>
                         <image>
-                            <name>essentials-postgres-with-pgcron:latest</name>
+                            <name>${essentials.postgres.image}</name>
                             <build>
-                                <dockerFile>Dockerfile</dockerFile>
-                                <contextDir>${project.basedir}/src/test/resources</contextDir>
+                                <dockerFile>${project.basedir}/../../docker/postgresql/Dockerfile</dockerFile>
+                                <contextDir>${project.basedir}/../../docker/postgresql</contextDir>
+                                <args>
+                                    <POSTGRES_IMAGE>${essentials.postgres.base-image}</POSTGRES_IMAGE>
+                                </args>
                             </build>
                         </image>
                     </images>
@@ -171,13 +233,6 @@
                         <phase>pre-integration-test</phase>
                         <goals>
                             <goal>build</goal>
-                        </goals>
-                    </execution>
-                    <execution>
-                        <id>remove-image</id>
-                        <phase>post-integration-test</phase>
-                        <goals>
-                            <goal>remove</goal>
                         </goals>
                     </execution>
                 </executions>

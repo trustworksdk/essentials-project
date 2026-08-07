@@ -31,6 +31,7 @@ import org.slf4j.*;
 import java.sql.*;
 import java.time.*;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -122,6 +123,7 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
         jdbi.registerArgument(new SubscriberIdArgumentFactory());
         jdbi.registerColumnMapper(new SubscriberIdColumnMapper());
         unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
             uow.handle().execute("CREATE TABLE IF NOT EXISTS " + this.durableSubscriptionsTableName + " (\n" +
                                          "subscriber_id TEXT NOT NULL,\n" +
                                          "aggregate_type TEXT NOT NULL,\n" +
@@ -226,24 +228,43 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
             log.trace("Received {} ResumePoints to save: {}", resumePoints.size(), resumePoints);
         }
 
+        // Filter to the changed resume points BEFORE opening a UnitOfWork — isChanged() is a pure
+        // in-memory flag, so there is no reason to hold a DB transaction open for it, and when nothing
+        // changed we can skip the transaction (and the empty batch execute) entirely. Snapshotting the
+        // changed set here also makes the post-execute setLastUpdated() loop below operate on exactly the
+        // rows we wrote: the previous in-trx approach re-tested isChanged() afterwards, so a resume point
+        // that advanced concurrently mid-transaction could be marked clean (changed=false) without ever
+        // having been persisted.
+        var changedResumePoints = resumePoints.stream()
+                                              .filter(SubscriptionResumePoint::isChanged)
+                                              .toList();
+        if (changedResumePoints.isEmpty()) {
+            log.debug("No changed ResumePoints to save (out of {})", resumePoints.size());
+            return;
+        }
+
+        var now = OffsetDateTime.now(Clock.systemUTC());
+        // Snapshot the exact value bound for each resume point. A resume point can advance concurrently
+        // while this save is in-flight, so marking it persisted at its *current* value afterwards would
+        // claim a value we never wrote - and nothing re-dirties a resume point that has stopped
+        // advancing, so that progress would never be persisted by any later save.
+        var boundValues = changedResumePoints.stream()
+                                             .collect(Collectors.toMap(resumePoint -> resumePoint,
+                                                                       SubscriptionResumePoint::getResumeFromAndIncluding,
+                                                                       (first, second) -> first,
+                                                                       IdentityHashMap::new));
         try {
             unitOfWorkFactory.usingUnitOfWork(uow -> {
-                var now = OffsetDateTime.now(Clock.systemUTC());
                 var preparedBatch = uow.handle().prepareBatch("UPDATE " + this.durableSubscriptionsTableName +
                                                                       " SET resume_from_and_including_global_eventorder = :resume_from_and_including_global_eventorder, last_updated = :last_updated " +
                                                                       " WHERE aggregate_type = :aggregate_type AND subscriber_id = :subscriber_id");
 
-                // TODO: Optimize filtering to happen outside db trx
-                resumePoints.forEach(subscriptionResumePoint -> {
-                    if (!subscriptionResumePoint.isChanged()) {
-                        log.debug("Wont save Unchanged {}", subscriptionResumePoint);
-                        return;
-                    }
+                changedResumePoints.forEach(subscriptionResumePoint -> {
                     log.debug("Saving {}", subscriptionResumePoint);
                     preparedBatch
                             .bind("aggregate_type", subscriptionResumePoint.getAggregateType())
                             .bind("subscriber_id", subscriptionResumePoint.getSubscriberId())
-                            .bind("resume_from_and_including_global_eventorder", subscriptionResumePoint.getResumeFromAndIncluding())
+                            .bind("resume_from_and_including_global_eventorder", boundValues.get(subscriptionResumePoint))
                             .bind("last_updated", now)
                             .add();
                 });
@@ -251,11 +272,6 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                 var batchSize = preparedBatch.size();
                 var rowsUpdated = Arrays.stream(preparedBatch.execute())
                                         .reduce(Integer::sum).orElse(0);
-                resumePoints.forEach(subscriptionResumePoint -> {
-                    if (subscriptionResumePoint.isChanged()) {
-                        subscriptionResumePoint.setLastUpdated(now);
-                    }
-                });
                 if (log.isTraceEnabled()) {
                     log.trace("Saved {} resumePoints out of {} resulting in {} updated rows: {}",
                               batchSize,
@@ -269,6 +285,13 @@ public final class PostgresqlDurableSubscriptionRepository implements DurableSub
                               rowsUpdated);
                 }
             });
+            // Mark the resume points persisted ONLY once the transaction has actually committed, and only
+            // at the value that was actually bound. Doing this inside the UnitOfWork would mark them clean
+            // even when the commit subsequently fails (e.g. the database became unreachable mid-save) - and
+            // since nothing re-dirties a resume point that has stopped advancing, that progress would then
+            // never be persisted by any later save.
+            changedResumePoints.forEach(subscriptionResumePoint ->
+                                                subscriptionResumePoint.markAsPersisted(boundValues.get(subscriptionResumePoint), now));
         } catch (Exception e) {
             if (IOExceptionUtil.isIOException(e)) {
                 log.debug("Failed to save the {} ResumePoints", resumePoints.size(), e);

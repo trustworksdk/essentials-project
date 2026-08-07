@@ -49,15 +49,25 @@ public class DefaultPostgresqlQueryStatisticsApi implements PostgresqlQueryStati
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory must not be null");
 
-        unitOfWorkFactory.usingUnitOfWork(uow -> {
-            this.pgStatementsAvailable = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_stat_statements");
-            if (pgStatementsAvailable) {
-                log.info("pg_statements extension is available");
-                uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;");
-            } else {
-                log.info("pg_statements extension is not available");
-            }
-        });
+        initializePgStatStatementsAvailability();
+    }
+
+    private void initializePgStatStatementsAvailability() {
+        try {
+            unitOfWorkFactory.usingUnitOfWork(uow -> {
+                this.pgStatementsAvailable = PostgresqlUtil.isPGExtensionAvailable(uow.handle(), "pg_stat_statements");
+                if (pgStatementsAvailable) {
+                    log.info("pg_stat_statements extension is available");
+                    uow.handle().execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;");
+                } else {
+                    log.info("pg_stat_statements extension is not available");
+                }
+            });
+        } catch (Exception e) {
+            this.pgStatementsAvailable = false;
+            log.warn("Unable to initialize pg_stat_statements support. Query statistics API will return empty results: {}", e.getMessage());
+            log.debug("Failed to initialize pg_stat_statements support", e);
+        }
     }
 
     private void validateRoles(Object principal) {

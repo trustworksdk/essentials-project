@@ -14,6 +14,7 @@ Spring Boot auto-configuration for the PostgreSQL Event Store and all PostgreSQL
 - [Auto-Configured Beans](#auto-configured-beans)
 - [Configuration Properties](#configuration-properties)
   - [Event Store Configuration](#event-store-configuration)
+  - [CDC Configuration (Hybrid wal2json)](#cdc-configuration-hybrid-wal2json)
   - [Subscription Manager Configuration](#subscription-manager-configuration)
   - [Subscription Monitor Configuration](#subscription-monitor-configuration)
   - [Event Store Metrics Configuration](#event-store-metrics-configuration)
@@ -182,6 +183,75 @@ Controls *when* in-transaction subscribers receive events. See [postgresql-event
 | `false` (default) | Events published at `BeforeCommit` and `AfterCommit`. Subscribers receive all events from a transaction together, just before it commits |
 | `true` | Events *also* published immediately after each `appendToStream()` call. Use this when subscribers need to react to each event individually within the same transaction (e.g., saga coordination) |
 
+### CDC Configuration (Hybrid Logical Replication)
+
+> **Which delivery mechanism should I use?** Subscribers are always correct regardless —
+> the choice is only *how fast the fast path is* and *what operational footprint you accept*.
+> See **[cdc.md §12.6 "Choosing a delivery mechanism"](../../docs/cdc.md)**
+> for the full comparison (plain/jittered/notify polling vs CDC INBOX/DIRECT, with indicative
+> latency and DB-load numbers). Quick guide:
+> - **Simplest, any Postgres, new project** → leave defaults (CDC `AUTO`, falls back to
+>   jittered polling automatically if logical replication is unavailable).
+> - **Latency-sensitive read models / high fan-out / want audit trail or replica-offload** →
+>   CDC `INBOX` (the default).
+> - **Don't control the DB / no `wal_level=logical` / want minimal moving parts** → disable
+>   CDC and run polling (see the upgrade note below).
+
+> **⚠️ Upgrade note (existing users).** CDC is **enabled by default**
+> (`essentials.eventstore.cdc.enabled` defaults to `true` — it starts unless you explicitly set
+> it `false`). Before this version the default delivery was **polling with jitter**. On upgrade:
+> - If your database does **not** have `wal_level=logical` (or you can't create slots), `mode=auto`
+>   transparently falls back to the previous polling-with-jitter behaviour — no action needed, no
+>   events lost.
+> - If your database **does** support logical replication, the app will now create a **replication
+>   slot** and stream WAL — a real operational change (slot/publication management and WAL-retention
+>   risk; see [cdc.md §5](../../docs/cdc.md)).
+>
+> **To keep the pre-upgrade behaviour (polling with jitter), set:**
+> ```properties
+> essentials.eventstore.cdc.enabled=false
+> ```
+> CDC's operational surface (replication slot, publication, WAL retention) is heavier than polling,
+> so adopt it deliberately rather than inheriting it on upgrade.
+
+Hybrid CDC can run in durable inbox mode (`INBOX`) or direct publish mode (`DIRECT`):
+
+```properties
+essentials.eventstore.cdc.enabled=true
+essentials.eventstore.cdc.mode=auto
+essentials.eventstore.cdc.delivery-mode=inbox
+essentials.eventstore.cdc.wal-parser-mode=bytes
+```
+
+CDC filtering defaults to EventStore inserts only:
+
+- `wal2json`: only `kind=insert` changes where `table` is one of the configured aggregate event stream tables
+- `pgoutput`: relation metadata is cached, only insert changes for configured aggregate event stream tables are converted, and non-insert messages are ignored
+
+Tuning baseline (good starting point from perf-lab runs):
+
+```properties
+essentials.eventstore.cdc.cdc-event-store-backfill-batch-size=1000
+essentials.eventstore.cdc.cdc-dispatcher.batch-size=200
+essentials.eventstore.cdc.cdc-dispatcher.poll-interval=PT0.05S
+essentials.eventstore.cdc.wal2-json-tailer.poll-interval=PT0.025S
+```
+
+| Property | Default | What It Controls |
+|----------|---------|------------------|
+| `essentials.eventstore.cdc.enabled` | `true` | Enables CDC beans (`WalReplicationTailer`, `CdcDispatcher`, `CdcEventStore`) |
+| `essentials.eventstore.cdc.mode` | `auto` | `auto`: fallback to polling if CDC cannot start. `require`: fail startup if CDC cannot start |
+| `essentials.eventstore.cdc.delivery-mode` | `inbox` | `inbox`: durable inbox + dispatcher. `direct`: tailer converts and publishes directly (no inbox persistence, dispatcher idle) |
+| `essentials.eventstore.cdc.plugin` | `pgoutput` | Logical decoding plugin. `pgoutput` is the default; `wal2json` remains available for explicit use |
+| `essentials.eventstore.cdc.pg-output.publication-name` | `essentials_cdc_publication` | Publication used when `plugin=pgoutput` |
+| `essentials.eventstore.cdc.wal-parser-mode` | `string` | `string` or `bytes` parser path for wal2json payloads (recommend `bytes`) |
+| `essentials.eventstore.cdc.cdc-dispatcher.dispatched-row-policy` | `mark-dispatched` | `mark-dispatched`: keep row for TTL cleanup. `delete`: remove row immediately after successful dispatch |
+| `essentials.eventstore.cdc.event-bus.backpressure-buffer-size` | `8192` | DIRECT-mode CDC bus buffer size |
+| `essentials.eventstore.cdc.event-bus.non-serialized-max-retries` | `16` | Retries for `FAIL_NON_SERIALIZED` emit races |
+| `essentials.eventstore.cdc.event-bus.overflow-max-retries` | `20` | Retries for `FAIL_OVERFLOW` before applying overflow policy |
+| `essentials.eventstore.cdc.event-bus.overflow-policy` | `fail-fast` | `fail-fast` throws on irrecoverable emit failures, `log-and-drop` logs and drops |
+| `essentials.eventstore.cdc.event-bus.queued-task-cap-factor` | `1.5` | Reserved for parity with `LocalEventBus`; currently informational for `CdcEventBus` |
+
 ### Subscription Manager Configuration
 
 Controls how the subscription manager polls for and processes events:
@@ -199,6 +269,18 @@ essentials.eventstore.subscription-manager.snapshot-resume-points-every=10s
 | `event-store-polling-interval` | `100ms` | How often to check for new events when events are being processed |
 | `max-event-store-polling-interval` | `2000ms` | Maximum wait between polls when no events are found (uses jittered backoff) |
 | `snapshot-resume-points-every` | `10s` | How often to save each subscriber's position. Lower = less re-processing after crash, but more database writes |
+
+### CDC Operational API
+
+When CDC is enabled, the starter also exposes a `CdcApi` bean alongside `EventStoreApi`.
+
+`CdcApi#getStatus(principal)` returns:
+
+- CDC availability state (`ACTIVE` / `INACTIVE` / `FAILED`)
+- effective CDC configuration values
+- replication slot snapshot from `pg_replication_slots`
+- tailer runtime diagnostics and counters
+- dispatcher runtime diagnostics and counters
 
 ### Subscription Monitor Configuration
 

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<!--
+  The whole server-rendered surface of the admin UI: a layout and a role-gated navigation.
+
+  Data is not rendered here. The browser calls the published admin API, so this UI consumes exactly the
+  contract any other client would — there is no second, server-side path to the SPIs that could drift
+  away from it.
+
+  Role gating below is presentation only: it stops the UI offering an operation that would come back 403.
+  The authorization decision itself stays with EssentialsSecurityProvider inside the SPI beans, where a
+  hand-crafted request meets it too.
+-->
+<html lang="en" xmlns:th="http://www.thymeleaf.org" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Essentials Admin</title>
+    <link rel="stylesheet" th:href="@{/essentials-admin/admin.css}">
+</head>
+<body th:attr="data-api=${apiBasePath},
+               data-can-write-locks=${canWriteLocks},
+               data-can-write-queues=${canWriteQueues},
+               data-can-read-payloads=${canReadPayloads}">
+
+<aside class="sidebar">
+    <div class="brand">
+        <div class="brand-name">Essentials Admin</div>
+        <div class="brand-sub" th:text="${apiBasePath}">/api/essentials/admin/v1</div>
+    </div>
+
+    <nav class="nav" id="nav">
+        <div class="nav-group">Overview</div>
+        <button class="nav-item" data-view="overview" aria-current="page"><span class="ic">◫</span> Dashboard</button>
+
+        <div class="nav-group" style="margin-top:12px">Infrastructure</div>
+        <!--/* A view the caller cannot read stays visible but inert, so the UI explains the gap
+               instead of silently hiding capability. */-->
+        <button class="nav-item" data-view="locks" th:disabled="${!canReadLocks}"
+                th:title="${canReadLocks} ? null : 'Requires essentials_lock_reader'">
+            <span class="ic">▣</span> Fenced locks
+        </button>
+        <button class="nav-item" data-view="queues" th:disabled="${!canReadQueues}"
+                th:title="${canReadQueues} ? null : 'Requires essentials_queue_reader'">
+            <span class="ic">≡</span> Durable queues
+        </button>
+        <button class="nav-item" data-view="scheduler" th:disabled="${!canReadScheduler}"
+                th:title="${canReadScheduler} ? null : 'Requires essentials_scheduler_reader'">
+            <span class="ic">◷</span> Scheduler
+        </button>
+
+        <div class="nav-group" style="margin-top:12px">Event store</div>
+        <button class="nav-item" data-view="subscriptions" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">↻</span> Subscriptions
+        </button>
+        <button class="nav-item" data-view="cdc" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">⇄</span> CDC
+        </button>
+        <button class="nav-item" data-view="postgresql" th:disabled="${!canReadStatistics}"
+                th:title="${canReadStatistics} ? null : 'Requires essentials_postgresql_stats_reader'">
+            <span class="ic">▤</span> PostgreSQL stats
+        </button>
+
+        <div class="nav-group" style="margin-top:12px">Aggregates</div>
+        <button class="nav-item" data-view="aggregates" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">◱</span> Aggregates
+        </button>
+        <button class="nav-item" data-view="aggregateLookup" th:disabled="${!canReadSubscriptions}"
+                th:title="${canReadSubscriptions} ? null : 'Requires essentials_subscription_reader'">
+            <span class="ic">⌕</span> Aggregate lookup
+        </button>
+    </nav>
+
+    <div class="sidebar-footer">
+        <span th:if="${authenticated}">Signed in as<br><strong th:text="${principalName}">principal</strong></span>
+        <span th:unless="${authenticated}" class="nil">Not signed in — every request will be rejected</span>
+    </div>
+</aside>
+
+<main class="main">
+    <div class="topbar">
+        <div>
+            <h1 class="page-title" id="pageTitle">Dashboard</h1>
+            <p class="page-sub" id="pageSub">Current state of the Essentials infrastructure</p>
+        </div>
+        <div class="topbar-right">
+            <span class="chip" id="stamp">not loaded</span>
+            <button class="btn btn-sm" id="refreshBtn">Refresh</button>
+            <button class="btn btn-sm" id="themeBtn">Dark</button>
+        </div>
+    </div>
+
+    <section class="section is-active" data-section="overview"></section>
+    <section class="section" data-section="locks"></section>
+    <section class="section" data-section="queues"></section>
+    <section class="section" data-section="scheduler"></section>
+    <section class="section" data-section="subscriptions"></section>
+    <section class="section" data-section="cdc"></section>
+    <section class="section" data-section="postgresql"></section>
+    <section class="section" data-section="aggregates"></section>
+    <section class="section" data-section="aggregateLookup"></section>
+</main>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="false" aria-labelledby="drawerTitle"></aside>
+<div class="modal-scrim" id="modalScrim"></div>
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"></div>
+
+<script th:src="@{/essentials-admin/admin.js}"></script>
+</body>
+</html>

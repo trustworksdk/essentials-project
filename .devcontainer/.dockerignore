@@ -1,0 +1,2 @@
+# Exclude git metadata from cloned plugin marketplaces (content needed, history is not)
+.plugin-marketplace/**/.git

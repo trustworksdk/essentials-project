@@ -1,0 +1,90 @@
+spring:
+  docker:
+    compose:
+      enabled: true
+      file: classpath:compose.yml
+  datasource:
+    url: jdbc:postgresql://localhost:5432/essentials-trading-demo
+    username: essentials
+    password: password
+    driver-class-name: org.postgresql.Driver
+
+essentials:
+  immutable-jackson-module-enabled: true
+  scheduler:
+    enabled: true
+    number-of-threads: 2
+  reactive:
+    event-bus-backpressure-buffer-size: 1024
+    overflow-max-retries: 20
+    queued-task-cap-factor: 1.5
+  multi-table-change-listener:
+    filter-duplicate-notifications: true
+    polling-interval: 100ms
+  durable-queues:
+    shared-queue-table-name: durable_queues
+    polling-delay-interval-increment-factor: 0.5
+    max-polling-interval: 2s
+    transactional-mode: singleoperationtransaction
+    verbose-tracing: false
+    enable-queue-statistics: true
+    shared-queue-statistics-table-name: durable_queues_statistics
+    enable-queue-statistics-ttl: true
+    queue-statistics-ttl-duration: 90
+  fenced-lock-manager:
+    fenced-locks-table-name: fenced_locks
+    lock-confirmation-interval: 5s
+    lock-time-out: 12s
+    release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation: false
+  event-store:
+    identifier-column-type: text
+    json-column-type: jsonb
+    use-event-stream-gap-handler: true
+    archives:
+      enabled: true
+    subscription-manager:
+      event-store-polling-batch-size: 5
+      snapshot-resume-points-every: 2s
+      event-store-polling-interval: 200
+    snapshots:
+      enabled: true
+    closing-books:
+      enabled: true
+    cdc:
+      # CDC is OFF by default (CdcProperties#enabled = false) — it needs database-side setup the
+      # framework won't assume. The demo opts in, and the compose Postgres is started with
+      # `wal_level=logical`, `max_replication_slots=10` and `max_wal_senders=10` (see compose.yml)
+      # with a superuser role, which covers the server-side prerequisites.
+      enabled: true
+      #
+      # The pgoutput publication is still NOT created by the framework unless auto-manage is
+      # switched on. Without a pre-created publication the tailer logs
+      #   "pgoutput publication 'essentials_cdc_publication' does not exist"
+      # and mode=AUTO silently falls back to polling. The demo lets the framework own the
+      # publication so a plain `docker compose up` gives a working CDC path with no DBA step.
+      #
+      # FOR_TABLE_LIST creates the publication with an explicit list of the registered event-stream
+      # tables, so pgoutput filters transactions that only touch non-event tables (durable_queues,
+      # fenced_locks, TTL, …) server-side. It requires only table ownership; the compose Postgres
+      # user is the image superuser, so either mode would work here.
+      #
+      # Note: auto-manage runs once at tailer startup. The demo's aggregate repositories are beans,
+      # so their event-stream tables are registered before the tailer starts — but aggregates
+      # registered after startup are not added to the publication without a restart.
+      pg-output:
+        publication:
+          auto-manage: true
+          mode: FOR_TABLE_LIST
+
+trading-demo:
+  accounts:
+    closing-books:
+      mode: event-count-or-time-boundary
+      event-threshold: 100
+      time-boundary: end-of-month
+      zone-id: Europe/Copenhagen
+  load:
+    enabled: true
+    trade-interval: 2s
+    price-update-interval: 1s
+    max-generated-trades: 500

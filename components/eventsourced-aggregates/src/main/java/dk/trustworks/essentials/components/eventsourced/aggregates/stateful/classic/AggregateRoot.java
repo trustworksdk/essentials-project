@@ -94,6 +94,16 @@ public abstract class AggregateRoot<ID, EVENT_TYPE extends Event<ID>, AGGREGATE_
                                                      InvocationStrategy.InvokeMostSpecificTypeMatched);
     }
 
+    public void restoreSnapshotRuntimeState(ID aggregateId, EventOrder eventOrderOfLastIncludedEvent) {
+        initialize();
+        this.aggregateId = aggregateId;
+        this.eventOrderOfLastAppliedEvent = eventOrderOfLastIncludedEvent;
+        this.eventOrderOfLastRehydratedEvent = eventOrderOfLastIncludedEvent;
+        this.hasBeenRehydrated = true;
+        this.isRehydrating = false;
+        this.uncommittedChanges = new ArrayList<>();
+    }
+
     /**
      * Effectively performs a leftFold over all the previously persisted events related to this aggregate instance
      *

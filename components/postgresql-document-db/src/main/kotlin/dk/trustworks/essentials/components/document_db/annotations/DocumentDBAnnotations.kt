@@ -141,7 +141,7 @@ annotation class DocumentEntity(val tableName: String)
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the [DocumentEntity.tableName] value or the indexed property name.
  */
 @Retention(AnnotationRetention.RUNTIME)
-@Target(AnnotationTarget.PROPERTY)
+@Target(AnnotationTarget.PROPERTY, AnnotationTarget.FIELD, AnnotationTarget.PROPERTY_GETTER)
 annotation class Indexed
 
 /**
@@ -159,5 +159,5 @@ annotation class Indexed
  * ```
  */
 @Retention(AnnotationRetention.RUNTIME)
-@Target(AnnotationTarget.PROPERTY)
+@Target(AnnotationTarget.PROPERTY, AnnotationTarget.FIELD, AnnotationTarget.PROPERTY_GETTER)
 annotation class Id

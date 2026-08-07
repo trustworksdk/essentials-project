@@ -36,7 +36,6 @@ import org.testcontainers.junit.jupiter.*;
 import java.time.Duration;
 import java.util.*;
 
-import static dk.trustworks.essentials.components.queue.postgresql.DurableQueuesSerialization.createDefaultObjectMapper;
 import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
 
 /**
@@ -61,7 +60,7 @@ abstract class PostgresqlDurableQueuesIT extends DurableQueuesIT<PostgresqlDurab
 
     @Override
     protected JSONSerializer createJSONSerializer() {
-        return new JacksonJSONSerializer(createDefaultObjectMapper());
+        return EssentialsObjectMappers.createJSONSerializer();
     }
 
     @Override

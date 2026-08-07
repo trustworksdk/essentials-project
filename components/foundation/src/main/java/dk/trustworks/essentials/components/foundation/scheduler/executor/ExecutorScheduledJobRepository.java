@@ -124,6 +124,7 @@ public class ExecutorScheduledJobRepository {
                        )
                        """, arg("tableName", sharedTableName));
         unitOfWorkFactory.usingUnitOfWork(uow -> {
+            PostgresqlUtil.acquireBootstrapLock(uow.handle());
             uow.handle().execute(sql);
         });
     }

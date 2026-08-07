@@ -1,0 +1,1 @@
+{"queueName":"orders","id":"entry-1","payload":"the-payload","addedAt":"2026-01-15T10:30:00Z","redeliveryDelay":30.000000000,"deliveryCounts":{"orders":7}}

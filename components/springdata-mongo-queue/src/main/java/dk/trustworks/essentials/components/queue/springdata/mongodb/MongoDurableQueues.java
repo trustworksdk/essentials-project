@@ -24,6 +24,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.mongodb.*;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
+import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.json.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.Message;
@@ -31,8 +32,6 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.mongo.MongoUtil;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.functional.QuadFunction;
 import org.slf4j.*;
@@ -146,7 +145,7 @@ public final class MongoDurableQueues implements DurableQueues {
              mongoTemplate,
              null,
              messageHandlingTimeout,
-             new JacksonJSONSerializer(createDefaultObjectMapper()),
+             createDefaultJSONSerializer(),
              DEFAULT_DURABLE_QUEUES_COLLECTION_NAME,
              queuePollingOptimizerFactory);
     }
@@ -222,7 +221,7 @@ public final class MongoDurableQueues implements DurableQueues {
              mongoTemplate,
              unitOfWorkFactory,
              null,
-             new JacksonJSONSerializer(createDefaultObjectMapper()),
+             createDefaultJSONSerializer(),
              DEFAULT_DURABLE_QUEUES_COLLECTION_NAME,
              queuePollingOptimizerFactory);
     }
@@ -1569,31 +1568,19 @@ public final class MongoDurableQueues implements DurableQueues {
         }
     }
 
-    public static ObjectMapper createDefaultObjectMapper() {
-        var objectMapper = JsonMapper.builder()
-                                     .disable(MapperFeature.AUTO_DETECT_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_IS_GETTERS)
-                                     .disable(MapperFeature.AUTO_DETECT_SETTERS)
-                                     .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-                                     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-                                     .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                                     .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
-                                     .enable(MapperFeature.AUTO_DETECT_CREATORS)
-                                     .enable(MapperFeature.AUTO_DETECT_FIELDS)
-                                     .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
-                                     .addModule(new Jdk8Module())
-                                     .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
-                                     .build();
-
-        objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
-                                               .withGetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withSetterVisibility(JsonAutoDetect.Visibility.NONE)
-                                               .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
-                                               .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
-        return objectMapper;
+    /**
+     * Create default {@link JSONSerializer}. Uses Jackson 3 when the Jackson 3 Essentials modules are present,
+     * otherwise falls back to Jackson 2.
+     */
+    public static JSONSerializer createDefaultJSONSerializer() {
+        return EssentialsObjectMappers.createJSONSerializer();
     }
+
+    public static ObjectMapper createDefaultObjectMapper() {
+        return EssentialsObjectMappers.createJackson2ObjectMapper();
+    }
+
+
 
     @Document
     public static class DurableQueuedMessage implements QueuedMessage {

@@ -19,8 +19,8 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.modern.bitem
 import dk.trustworks.essentials.types.TimeWindow;
 
 public class PriceValidityAdjusted extends ProductPriceEvent {
-    public PriceValidityAdjusted(ProductId productId, PriceId priceId, TimeWindow priceValidity) {
-        super(productId, priceId, priceValidity);
+    public PriceValidityAdjusted(ProductId forProduct, PriceId priceId, TimeWindow priceValidityPeriod) {
+        super(forProduct, priceId, priceValidityPeriod);
     }
 
     @Override

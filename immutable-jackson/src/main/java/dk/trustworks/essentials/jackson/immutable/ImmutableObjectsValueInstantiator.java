@@ -21,7 +21,6 @@ import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.deser.*;
 import com.fasterxml.jackson.databind.deser.impl.PropertyValueBuffer;
 import com.fasterxml.jackson.databind.introspect.AnnotatedWithParams;
-import dk.trustworks.essentials.shared.reflection.Reflector;
 import org.objenesis.*;
 import org.objenesis.instantiator.ObjectInstantiator;
 
@@ -208,10 +207,5 @@ public final class ImmutableObjectsValueInstantiator extends ValueInstantiator {
     @Override
     public AnnotatedWithParams getWithArgsCreator() {
         return standardJacksonValueInstantiator.getWithArgsCreator();
-    }
-
-    @Override
-    protected Object _createFromStringFallbacks(DeserializationContext ctxt, String value) throws IOException {
-        return Reflector.reflectOn(standardJacksonValueInstantiator.getClass()).invoke("_createFromStringFallbacks", standardJacksonValueInstantiator, ctxt, value);
     }
 }

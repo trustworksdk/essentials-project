@@ -11,10 +11,10 @@ jobs:
     steps:
       - run: echo "Will release version ${{ github.event.release.tag_name }} to Maven Central"
       - uses: actions/checkout@v4
-      - name: Set up JDK 17 with Maven Central Release settings
+      - name: Set up JDK 25 with Maven Central Release settings
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '25'
           distribution: 'temurin'
           cache: maven
           server-id: central

@@ -23,10 +23,9 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.json.JSONDeserializationException;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.junit.jupiter.api.*;
 
+import java.lang.reflect.Field;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.*;
@@ -92,7 +91,7 @@ public class EventJSONTest {
     @Test
     void testDeserialize_ThrowsExceptionWhenNoSerializerProvided() {
         var eventJSON = new EventJSON(jsonSerializer, eventType, jsonPayload);
-        eventJSON = jsonSerializer.deserialize(jsonSerializer.serialize(eventJSON), EventJSON.class);
+        clearSerializer(eventJSON);
         assertThatThrownBy(eventJSON::deserialize)
                 .isInstanceOf(JSONDeserializationException.class)
                 .hasMessageContaining("No JSONSerializer specified");
@@ -153,6 +152,9 @@ public class EventJSONTest {
     public static class TestEvent {
         private String testField;
 
+        public TestEvent() {
+        }
+
         public TestEvent(String testField) {
             this.testField = testField;
         }
@@ -198,8 +200,7 @@ public class EventJSONTest {
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
+                                     .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
                                      .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
@@ -208,5 +209,15 @@ public class EventJSONTest {
                                                .withFieldVisibility(JsonAutoDetect.Visibility.ANY)
                                                .withCreatorVisibility(JsonAutoDetect.Visibility.ANY));
         return new JacksonJSONEventSerializer(objectMapper);
+    }
+
+    private static void clearSerializer(EventJSON eventJSON) {
+        try {
+            Field field = EventJSON.class.getDeclaredField("jsonSerializer");
+            field.setAccessible(true);
+            field.set(eventJSON, null);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Failed to clear EventJSON serializer", e);
+        }
     }
 }

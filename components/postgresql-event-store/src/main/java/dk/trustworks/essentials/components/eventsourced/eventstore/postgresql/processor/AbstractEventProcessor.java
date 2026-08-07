@@ -327,7 +327,7 @@ public abstract class AbstractEventProcessor implements Lifecycle {
      * @return The {@link AggregateIdSerializer} associated with the specified {@link AggregateType}.
      */
     protected AggregateIdSerializer resolveAggregateIdSerializer(AggregateType aggregateType) {
-        return ((ConfigurableEventStore<?>) eventStore).getAggregateEventStreamConfiguration(aggregateType).aggregateIdSerializer;
+        return ConfigurableEventStoreResolver.resolve(eventStore).getAggregateEventStreamConfiguration(aggregateType).aggregateIdSerializer;
     }
 
     /**

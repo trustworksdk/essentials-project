@@ -257,7 +257,7 @@ public final class PostgresqlDurableQueuesBuilder {
 
     public PostgresqlDurableQueues build() {
         return new PostgresqlDurableQueues(unitOfWorkFactory,
-                                           jsonSerializer != null ? jsonSerializer : new JacksonJSONSerializer(DurableQueuesSerialization.createDefaultObjectMapper()),
+                                           jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
                                            sharedQueueTableName,
                                            multiTableChangeListener,
                                            queuePollingOptimizerFactory,

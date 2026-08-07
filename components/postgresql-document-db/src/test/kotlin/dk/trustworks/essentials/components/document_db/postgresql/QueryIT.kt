@@ -16,15 +16,10 @@
 
 package dk.trustworks.essentials.components.document_db.postgresql
 
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import dk.trustworks.essentials.components.document_db.DocumentDbRepository
 import dk.trustworks.essentials.components.document_db.DocumentDbRepositoryFactory
 import dk.trustworks.essentials.components.document_db.Index
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule
 import dk.trustworks.essentials.kotlin.types.Amount
 import dk.trustworks.essentials.kotlin.types.jdbi.AmountArgumentFactory
 import dk.trustworks.essentials.kotlin.types.jdbi.AmountColumnMapper
@@ -76,12 +71,7 @@ class QueryIT {
         val repositoryFactory = DocumentDbRepositoryFactory(
             jdbi,
             JdbiUnitOfWorkFactory(jdbi),
-            JacksonJSONSerializer(
-                EssentialsImmutableJacksonModule.createObjectMapper(
-                    Jdk8Module(),
-                    JavaTimeModule()
-                ).registerKotlinModule()
-            )
+            TestObjectMappers.createJSONSerializer()
         )
 
         orderRepository =  OrderRepository(repositoryFactory.create(Order::class))

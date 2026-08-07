@@ -17,9 +17,12 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
+import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
+import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.bus.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcProperties;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream;
@@ -29,6 +32,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
+import java.util.*;
 
 /**
  * Properties for the Postgresql EventStore<br>
@@ -53,17 +57,22 @@ import java.time.Duration;
 @Configuration
 @ConfigurationProperties(prefix = "essentials.eventstore")
 public class EssentialsEventStoreProperties {
-    private IdentifierColumnType                             identifierColumnType                  = IdentifierColumnType.TEXT;
-    private JSONColumnType                                   jsonColumnType                        = JSONColumnType.JSONB;
-    private boolean                                          useEventStreamGapHandler              = true;
-    private boolean                                          verboseTracing                        = false;
-    private boolean                                          addAnnotationBasedInMemoryProjector   = true;
-    private boolean                                          autoFlushAndPublishAfterAppendToStream = false;
-    private EssentialsComponentsProperties.MetricsProperties metrics                               = new EssentialsComponentsProperties.MetricsProperties();
+    private       IdentifierColumnType                             identifierColumnType                   = IdentifierColumnType.TEXT;
+    private       JSONColumnType                                   jsonColumnType                         = JSONColumnType.JSONB;
+    private       boolean                                          useEventStreamGapHandler               = true;
+    private       boolean                                          verboseTracing                         = false;
+    private       boolean                                          addAnnotationBasedInMemoryProjector    = true;
+    private       boolean                                          autoFlushAndPublishAfterAppendToStream = false;
+    private       EssentialsComponentsProperties.MetricsProperties metrics                                = new EssentialsComponentsProperties.MetricsProperties();
+    private final AggregateSnapshotProperties                      snapshots                              = new AggregateSnapshotProperties();
+    private final AggregateClosingBooksProperties                  closingBooks                           = new AggregateClosingBooksProperties();
+    private final AggregateArchiveProperties                       archives                               = new AggregateArchiveProperties();
 
     private final EventStoreSubscriptionManagerProperties subscriptionManager = new EventStoreSubscriptionManagerProperties();
 
     private final EventStoreSubscriptionMonitorProperties subscriptionMonitor = new EventStoreSubscriptionMonitorProperties();
+
+    private final CdcProperties cdc = new CdcProperties();
 
     /**
      * Should the Tracing produces only include all operations or only top level operations (default false)
@@ -254,6 +263,15 @@ public class EssentialsEventStoreProperties {
     }
 
     /**
+     * Retrieves the change data capture (CDC) properties associated with the event store.
+     *
+     * @return the {@link CdcProperties} that contains the CDC configuration.
+     */
+    public CdcProperties getCdc() {
+        return cdc;
+    }
+
+    /**
      * Configuration properties for essentials metrics collection and logging.
      * <p>
      * This configuration is used to enable and fine-tune metrics gathering and logging for the event store.
@@ -298,6 +316,18 @@ public class EssentialsEventStoreProperties {
         return metrics;
     }
 
+    public AggregateSnapshotProperties getSnapshots() {
+        return snapshots;
+    }
+
+    public AggregateClosingBooksProperties getClosingBooks() {
+        return closingBooks;
+    }
+
+    public AggregateArchiveProperties getArchives() {
+        return archives;
+    }
+
     /**
      * {@link EventStoreSubscriptionManager} properties
      */
@@ -307,6 +337,7 @@ public class EssentialsEventStoreProperties {
         private Duration                                         maxEventStorePollingInterval = Duration.ofMillis(2000);
         private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(10);
         private EssentialsComponentsProperties.MetricsProperties metrics                      = new EssentialsComponentsProperties.MetricsProperties();
+        private final NotifyPollingProperties                    notifyPolling                = new NotifyPollingProperties();
 
         /**
          * How many events should The {@link EventStore} maximum return when polling for events
@@ -413,6 +444,90 @@ public class EssentialsEventStoreProperties {
         public EssentialsComponentsProperties.MetricsProperties getMetrics() {
             return metrics;
         }
+
+        /**
+         * Configuration for the S1 NOTIFY-driven polling wake-up feature — adds an
+         * {@code AFTER INSERT} trigger on every event-stream table that fires
+         * {@code pg_notify}, registers the table with the framework's
+         * {@code MultiTableChangeListener}, and installs a NOTIFY-aware
+         * {@code EventStorePollingOptimizer} so subscribers ramp their poll cadence to
+         * the configured cap on quiet systems but wake immediately on writes.
+         * <p>
+         * See {@code subscription-improvements.md} (S1) for the full design including
+         * trade-offs vs CDC INBOX, the operator decision tree, and the phase-2 path to
+         * sub-10 ms reactive wake-up.
+         */
+        public NotifyPollingProperties getNotifyPolling() {
+            return notifyPolling;
+        }
+    }
+
+    /**
+     * Properties for the S1 NOTIFY-driven polling wake-up feature. Disabled by default
+     * — the master switch makes the whole feature opt-in and the change non-breaking.
+     */
+    public static class NotifyPollingProperties {
+        /**
+         * Master switch. {@code false} (default) = framework behaves exactly as before:
+         * no triggers installed, no notification listener registered for event-stream
+         * tables, no NOTIFY-aware optimizer wired. Set {@code true} to enable.
+         */
+        private boolean  enabled            = false;
+
+        /**
+         * Backoff floor after a no-events poll. Also the value the optimizer resets to
+         * on a NOTIFY-driven wake-up. Default 50 ms — short enough to keep follow-up
+         * polls responsive when activity continues, long enough to avoid busy-spinning
+         * a polling loop on a freshly-emptied inbox.
+         */
+        private Duration initialDelay       = Duration.ofMillis(50);
+
+        /**
+         * Backoff cap — the longest the optimizer will let the per-subscription delay
+         * grow to on a sustained quiet period. Equals the worst-case live latency on a
+         * fully-idle system (a NOTIFY arriving mid-sleep cannot interrupt the in-flight
+         * sleep in Phase 1 — that's Phase 2). Default 1 s — balances DB-load savings
+         * (higher cap = fewer queries) against worst-case latency on quiet systems.
+         */
+        private Duration maxDelay           = Duration.ofSeconds(1);
+
+        /**
+         * Exponential ramp factor between consecutive no-events polls. Default 2.0 →
+         * 50 ms → 100 → 200 → … → 1 s in ~5 ramps. Must be {@code > 1.0}.
+         */
+        private double   backoffMultiplier  = 2.0d;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public Duration getInitialDelay() {
+            return initialDelay;
+        }
+
+        public void setInitialDelay(Duration initialDelay) {
+            this.initialDelay = initialDelay;
+        }
+
+        public Duration getMaxDelay() {
+            return maxDelay;
+        }
+
+        public void setMaxDelay(Duration maxDelay) {
+            this.maxDelay = maxDelay;
+        }
+
+        public double getBackoffMultiplier() {
+            return backoffMultiplier;
+        }
+
+        public void setBackoffMultiplier(double backoffMultiplier) {
+            this.backoffMultiplier = backoffMultiplier;
+        }
     }
 
     public static class EventStoreSubscriptionMonitorProperties {
@@ -454,6 +569,372 @@ public class EssentialsEventStoreProperties {
          */
         public Duration getInterval() {
             return this.interval;
+        }
+    }
+
+    public static class AggregateSnapshotProperties {
+        private       boolean                                        enabled                  = false;
+        private       String                                         snapshotTableName        = PostgresqlAggregateSnapshotRepository.DEFAULT_AGGREGATE_SNAPSHOTS_TABLE_NAME;
+        private       SnapshotExecutionMode                          defaultMode              = SnapshotExecutionMode.SYNC;
+        private       int                                            defaultEveryNEvents      = 10;
+        private       SnapshotDeletionMode                           defaultDeletionMode      = SnapshotDeletionMode.DELETE_ALL_HISTORIC;
+        private       int                                            defaultKeepLastSnapshots = 1;
+        private       int                                            workerThreads            = 1;
+        private final DurableSnapshotProperties                      durable                  = new DurableSnapshotProperties();
+        private       Map<String, AggregateSnapshotPolicyProperties> aggregates               = new LinkedHashMap<>();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getSnapshotTableName() {
+            return snapshotTableName;
+        }
+
+        public void setSnapshotTableName(String snapshotTableName) {
+            this.snapshotTableName = snapshotTableName;
+        }
+
+        public SnapshotExecutionMode getDefaultMode() {
+            return defaultMode;
+        }
+
+        public void setDefaultMode(SnapshotExecutionMode defaultMode) {
+            this.defaultMode = defaultMode;
+        }
+
+        public int getDefaultEveryNEvents() {
+            return defaultEveryNEvents;
+        }
+
+        public void setDefaultEveryNEvents(int defaultEveryNEvents) {
+            this.defaultEveryNEvents = defaultEveryNEvents;
+        }
+
+        public SnapshotDeletionMode getDefaultDeletionMode() {
+            return defaultDeletionMode;
+        }
+
+        public void setDefaultDeletionMode(SnapshotDeletionMode defaultDeletionMode) {
+            this.defaultDeletionMode = defaultDeletionMode;
+        }
+
+        public int getDefaultKeepLastSnapshots() {
+            return defaultKeepLastSnapshots;
+        }
+
+        public void setDefaultKeepLastSnapshots(int defaultKeepLastSnapshots) {
+            this.defaultKeepLastSnapshots = defaultKeepLastSnapshots;
+        }
+
+        /** Number of worker threads in the {@link SnapshotExecutionMode#ASYNC_IN_MEMORY} executor pool. */
+        public int getWorkerThreads() {
+            return workerThreads;
+        }
+
+        public void setWorkerThreads(int workerThreads) {
+            this.workerThreads = workerThreads;
+        }
+
+        public DurableSnapshotProperties getDurable() {
+            return durable;
+        }
+
+        public Map<String, AggregateSnapshotPolicyProperties> getAggregates() {
+            return aggregates;
+        }
+
+        public void setAggregates(Map<String, AggregateSnapshotPolicyProperties> aggregates) {
+            this.aggregates = aggregates;
+        }
+    }
+
+    public static class DurableSnapshotProperties {
+        private boolean  enabled       = true;
+        private String   jobTableName  = PostgresqlAggregateSnapshotJobRepository.DEFAULT_TABLE_NAME;
+        private Duration pollInterval      = Duration.ofSeconds(1);
+        private int      batchSize         = 25;
+        private int      workerThreads     = 2;
+        private int      maxRetries        = 3;
+        private Duration retryDelay        = Duration.ofSeconds(5);
+        private Duration processingTimeout = Duration.ofMinutes(5);
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getJobTableName() {
+            return jobTableName;
+        }
+
+        public void setJobTableName(String jobTableName) {
+            this.jobTableName = jobTableName;
+        }
+
+        public Duration getPollInterval() {
+            return pollInterval;
+        }
+
+        public void setPollInterval(Duration pollInterval) {
+            this.pollInterval = pollInterval;
+        }
+
+        public int getBatchSize() {
+            return batchSize;
+        }
+
+        public void setBatchSize(int batchSize) {
+            this.batchSize = batchSize;
+        }
+
+        public int getWorkerThreads() {
+            return workerThreads;
+        }
+
+        public void setWorkerThreads(int workerThreads) {
+            this.workerThreads = workerThreads;
+        }
+
+        public int getMaxRetries() {
+            return maxRetries;
+        }
+
+        public void setMaxRetries(int maxRetries) {
+            this.maxRetries = maxRetries;
+        }
+
+        public Duration getRetryDelay() {
+            return retryDelay;
+        }
+
+        public void setRetryDelay(Duration retryDelay) {
+            this.retryDelay = retryDelay;
+        }
+
+        public Duration getProcessingTimeout() {
+            return processingTimeout;
+        }
+
+        public void setProcessingTimeout(Duration processingTimeout) {
+            this.processingTimeout = processingTimeout;
+        }
+    }
+
+    public static class AggregateSnapshotPolicyProperties {
+        private Boolean               enabled;
+        private SnapshotExecutionMode mode;
+        private Integer               everyNEvents;
+        private SnapshotDeletionMode  deletionMode;
+        private Integer               keepLastSnapshots;
+
+        public Boolean getEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(Boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public SnapshotExecutionMode getMode() {
+            return mode;
+        }
+
+        public void setMode(SnapshotExecutionMode mode) {
+            this.mode = mode;
+        }
+
+        public Integer getEveryNEvents() {
+            return everyNEvents;
+        }
+
+        public void setEveryNEvents(Integer everyNEvents) {
+            this.everyNEvents = everyNEvents;
+        }
+
+        public SnapshotDeletionMode getDeletionMode() {
+            return deletionMode;
+        }
+
+        public void setDeletionMode(SnapshotDeletionMode deletionMode) {
+            this.deletionMode = deletionMode;
+        }
+
+        public Integer getKeepLastSnapshots() {
+            return keepLastSnapshots;
+        }
+
+        public void setKeepLastSnapshots(Integer keepLastSnapshots) {
+            this.keepLastSnapshots = keepLastSnapshots;
+        }
+    }
+
+    public static class AggregateClosingBooksProperties {
+        private boolean                                            enabled            = false;
+        private ClosingBooksTriggerMode                            defaultTriggerMode = ClosingBooksTriggerMode.ON_ACCESS;
+        private ClosingBooksDefaultPolicyType                      defaultPolicy      = ClosingBooksDefaultPolicyType.UNSPECIFIED;
+        private Long                                               eventThreshold;
+        private ClosingBooksTimeBoundary                           timeBoundary       = ClosingBooksTimeBoundary.NONE;
+        private String                                             zoneId             = "UTC";
+        private Integer                                            intervalDays;
+        private Map<String, AggregateClosingBooksPolicyProperties> aggregates         = new LinkedHashMap<>();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public ClosingBooksTriggerMode getDefaultTriggerMode() {
+            return defaultTriggerMode;
+        }
+
+        public void setDefaultTriggerMode(ClosingBooksTriggerMode defaultTriggerMode) {
+            this.defaultTriggerMode = defaultTriggerMode;
+        }
+
+        public ClosingBooksDefaultPolicyType getDefaultPolicy() {
+            return defaultPolicy;
+        }
+
+        public void setDefaultPolicy(ClosingBooksDefaultPolicyType defaultPolicy) {
+            this.defaultPolicy = defaultPolicy;
+        }
+
+        public Long getEventThreshold() {
+            return eventThreshold;
+        }
+
+        public void setEventThreshold(Long eventThreshold) {
+            this.eventThreshold = eventThreshold;
+        }
+
+        public ClosingBooksTimeBoundary getTimeBoundary() {
+            return timeBoundary;
+        }
+
+        public void setTimeBoundary(ClosingBooksTimeBoundary timeBoundary) {
+            this.timeBoundary = timeBoundary;
+        }
+
+        public String getZoneId() {
+            return zoneId;
+        }
+
+        public void setZoneId(String zoneId) {
+            this.zoneId = zoneId;
+        }
+
+        public Integer getIntervalDays() {
+            return intervalDays;
+        }
+
+        public void setIntervalDays(Integer intervalDays) {
+            this.intervalDays = intervalDays;
+        }
+
+        public Map<String, AggregateClosingBooksPolicyProperties> getAggregates() {
+            return aggregates;
+        }
+
+        public void setAggregates(Map<String, AggregateClosingBooksPolicyProperties> aggregates) {
+            this.aggregates = aggregates;
+        }
+    }
+
+    public static class AggregateClosingBooksPolicyProperties {
+        private Boolean                       enabled;
+        private ClosingBooksTriggerMode       triggerMode;
+        private ClosingBooksDefaultPolicyType defaultPolicy;
+        private Long                          eventThreshold;
+        private ClosingBooksTimeBoundary      timeBoundary;
+        private String                        zoneId;
+        private Integer                       intervalDays;
+
+        public Boolean getEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(Boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public ClosingBooksTriggerMode getTriggerMode() {
+            return triggerMode;
+        }
+
+        public void setTriggerMode(ClosingBooksTriggerMode triggerMode) {
+            this.triggerMode = triggerMode;
+        }
+
+        public ClosingBooksDefaultPolicyType getDefaultPolicy() {
+            return defaultPolicy;
+        }
+
+        public void setDefaultPolicy(ClosingBooksDefaultPolicyType defaultPolicy) {
+            this.defaultPolicy = defaultPolicy;
+        }
+
+        public Long getEventThreshold() {
+            return eventThreshold;
+        }
+
+        public void setEventThreshold(Long eventThreshold) {
+            this.eventThreshold = eventThreshold;
+        }
+
+        public ClosingBooksTimeBoundary getTimeBoundary() {
+            return timeBoundary;
+        }
+
+        public void setTimeBoundary(ClosingBooksTimeBoundary timeBoundary) {
+            this.timeBoundary = timeBoundary;
+        }
+
+        public String getZoneId() {
+            return zoneId;
+        }
+
+        public void setZoneId(String zoneId) {
+            this.zoneId = zoneId;
+        }
+
+        public Integer getIntervalDays() {
+            return intervalDays;
+        }
+
+        public void setIntervalDays(Integer intervalDays) {
+            this.intervalDays = intervalDays;
+        }
+    }
+
+    public static class AggregateArchiveProperties {
+        private boolean enabled = false;
+        private String filesystemRootDirectory = System.getProperty("java.io.tmpdir") + "/essentials-aggregate-archives";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getFilesystemRootDirectory() {
+            return filesystemRootDirectory;
+        }
+
+        public void setFilesystemRootDirectory(String filesystemRootDirectory) {
+            this.filesystemRootDirectory = filesystemRootDirectory;
         }
     }
 }

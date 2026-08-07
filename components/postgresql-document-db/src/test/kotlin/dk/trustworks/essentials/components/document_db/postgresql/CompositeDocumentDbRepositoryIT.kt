@@ -16,16 +16,11 @@
 
 package dk.trustworks.essentials.components.document_db.postgresql
 
-import com.fasterxml.jackson.datatype.jdk8.Jdk8Module
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import dk.trustworks.essentials.components.document_db.*
 import dk.trustworks.essentials.components.document_db.annotations.DocumentEntity
 import dk.trustworks.essentials.components.document_db.annotations.Id
 import dk.trustworks.essentials.components.document_db.annotations.Indexed
-import dk.trustworks.essentials.components.foundation.json.JacksonJSONSerializer
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule
 import org.assertj.core.api.Assertions.assertThat
 import org.jdbi.v3.core.Jdbi
 import org.junit.jupiter.api.BeforeEach
@@ -65,12 +60,7 @@ class CompositeDocumentDbRepositoryIT {
         val repositoryFactory = DocumentDbRepositoryFactory(
             jdbi,
             JdbiUnitOfWorkFactory(jdbi),
-            JacksonJSONSerializer(
-                EssentialTypesJacksonModule.createObjectMapper(
-                    Jdk8Module(),
-                    JavaTimeModule()
-                ).registerKotlinModule()
-            )
+            TestObjectMappers.createJSONSerializer()
         )
 
         repository = repositoryFactory.createForCompositeId(CompositeOrder::class) { "${it.orderId.value}:${it.shippingOrderId.value}" }

@@ -26,7 +26,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
@@ -34,8 +34,6 @@ import dk.trustworks.essentials.components.foundation.fencedlock.FencedLock;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
@@ -94,7 +92,7 @@ class EventStoreSubscriptionManager_2_node_exclusivelySubscribeToAggregateEvents
 
         var unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         var eventMapper       = new TestPersistableEventMapper();
-        var jsonSerializer    = new JacksonJSONEventSerializer(createObjectMapper());
+        var jsonSerializer    = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                                                                                        unitOfWorkFactory,
                                                                                        eventMapper,
@@ -166,14 +164,8 @@ class EventStoreSubscriptionManager_2_node_exclusivelySubscribeToAggregateEvents
         // Start with node1 as the active subscriber
         var node1Subscription = createOrderSubscription(eventStoreSubscriptionManagerNode1);
         var node2Subscription = createOrderSubscription(eventStoreSubscriptionManagerNode2);
-        Thread.sleep(500);
         // Verify only one subscriber is active
-        boolean isNode1TheInitialActiveSubscriber;
-        if (node1Subscription.subscription.isActive()) {
-            assertThat(node2Subscription.subscription.isActive()).isFalse();
-        } else {
-            assertThat(node1Subscription.subscription.isActive()).isFalse();
-        }
+        assertExactlyOneSubscriptionIsActive(node1Subscription, node2Subscription);
 
         Thread.sleep(500);
         disruptDatabaseConnection();
@@ -183,12 +175,8 @@ class EventStoreSubscriptionManager_2_node_exclusivelySubscribeToAggregateEvents
         Thread.sleep(5000);
         restoreDatabaseConnection();
 
-        // Verify that there's still only one subscriber active
-        if (node1Subscription.subscription.isActive()) {
-            assertThat(node2Subscription.subscription.isActive()).isFalse();
-        } else {
-            assertThat(node1Subscription.subscription.isActive()).isFalse();
-        }
+        // Verify that exclusivity converges back to exactly one active subscriber
+        assertExactlyOneSubscriptionIsActive(node1Subscription, node2Subscription);
 
         // Verify we received all Order events
         Awaitility.waitAtMost(Duration.ofSeconds(15)) // Longer wait time due to the smaller batch fetch size
@@ -212,12 +200,8 @@ class EventStoreSubscriptionManager_2_node_exclusivelySubscribeToAggregateEvents
                                      .boxed()
                                      .toList());
 
-        // Verify that there's still only one subscriber active
-        if (node1Subscription.subscription.isActive()) {
-            assertThat(node2Subscription.subscription.isActive()).isFalse();
-        } else {
-            assertThat(node1Subscription.subscription.isActive()).isFalse();
-        }
+        // Verify that exclusivity converges back to exactly one active subscriber
+        assertExactlyOneSubscriptionIsActive(node1Subscription, node2Subscription);
 
         // Check subscription state after being stopped
         if (node1Subscription.subscription.isActive()) {
@@ -242,6 +226,29 @@ class EventStoreSubscriptionManager_2_node_exclusivelySubscribeToAggregateEvents
         if (node2Subscription.subscription.currentResumePoint().isPresent()) {
             assertThat(node2Subscription.subscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()); // When the subscriber is stopped we store the next global event order
         }
+    }
+
+    /**
+     * Asserts that exclusivity converges to exactly one active subscriber - deliberately eventual
+     * rather than instantaneous.
+     * <p>
+     * The fenced lock is lease-based (3 second timeout, confirmed every second), so while the database
+     * is unreachable the current owner cannot renew its lease and the other node will take over. There
+     * is necessarily a window where the previous owner has not yet discovered that it lost the lock and
+     * both report active - which is exactly why the received events are de-duplicated below. What the
+     * design guarantees is that exclusivity is restored, not that it holds at every instant during
+     * lease reconciliation.
+     */
+    private void assertExactlyOneSubscriptionIsActive(EventSubscriber node1Subscription,
+                                                      EventSubscriber node2Subscription) {
+        Awaitility.waitAtMost(Duration.ofSeconds(15))
+                  .untilAsserted(() -> {
+                      var numberOfActiveSubscriptions = (node1Subscription.subscription.isActive() ? 1 : 0) +
+                              (node2Subscription.subscription.isActive() ? 1 : 0);
+                      assertThat(numberOfActiveSubscriptions)
+                              .as("Exactly one of the two subscriptions should hold the fenced lock")
+                              .isEqualTo(1);
+                  });
     }
 
     private EventSubscriber createOrderSubscription(EventStoreSubscriptionManager eventStoreSubscriptionManager) {
@@ -321,8 +328,7 @@ class EventStoreSubscriptionManager_2_node_exclusivelySubscribeToAggregateEvents
                                      .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                                      .addModule(new Jdk8Module())
                                      .addModule(new JavaTimeModule())
-                                     .addModule(new EssentialTypesJacksonModule())
-                                     .addModule(new EssentialsImmutableJacksonModule())
+                                     .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
                                      .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()

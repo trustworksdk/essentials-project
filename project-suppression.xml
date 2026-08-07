@@ -198,6 +198,9 @@
     <suppress>
         <notes><![CDATA[
    file name: android-json-0.0.20131108.vaadin1.jar
+   Despite the com.vaadin.external.google coordinates this is NOT Vaadin residue and must not be removed along with
+   the Vaadin modules: it is how org.skyscreamer:jsonassert ships, and jsonassert arrives transitively through
+   spring-boot-starter-test.
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/com\.vaadin\.external\.google/android\-json@.*$</packageUrl>
         <cpe>cpe:/a:json-java_project:json-java</cpe>
@@ -313,5 +316,19 @@
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/org\.testcontainers/testcontainers-mongodb@.*$</packageUrl>
         <cpe>cpe:/a:mongodb:mongodb</cpe>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: kotlin-test-*.jar, kotlin-stdlib-*.jar, kotlin-reflect-*.jar, kotlin-stdlib-jdk8-*.jar
+   CVE-2026-53914 is a build-time deserialization flaw in the Kotlin compiler / KAPT build-cache
+   metadata (CWE-502), fixed in Kotlin 2.4.20. It is exploitable only by an attacker who can poison
+   the local build cache (JetBrains rates it 6.7/medium: local, high privileges). The scanner matches
+   it here via the broad cpe:2.3:a:jetbrains:kotlin CPE against any org.jetbrains.kotlin runtime
+   artifact at the flagged version - none of which contain the vulnerable build-cache/KAPT code, and
+   kotlin-test is test-scoped and not shipped to consumers. Remove this suppression once kotlin.version
+   is bumped to 2.4.20+ (stable expected ~Sept 2026; 2.4.0 does NOT contain the fix).
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.jetbrains\.kotlin/.*$</packageUrl>
+        <vulnerabilityName>CVE-2026-53914</vulnerabilityName>
     </suppress>
 </suppressions>

@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.foundation.postgresql;
 import dk.trustworks.essentials.shared.Exceptions;
 import org.jdbi.v3.core.Handle;
 import org.postgresql.util.PSQLException;
+import org.slf4j.*;
 
 import java.util.*;
 import java.util.regex.Pattern;
@@ -27,6 +28,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 public final class PostgresqlUtil {
+
+    private static final Logger log = LoggerFactory.getLogger(PostgresqlUtil.class);
+
     /**
      * Read the major Postgresql server version
      *
@@ -75,6 +79,217 @@ public final class PostgresqlUtil {
         requireNonNull(e, "No exception provided");
         Throwable rootCause = Exceptions.getRootCause(e);
         return rootCause instanceof PSQLException && rootCause.getMessage() != null && rootCause.getMessage().contains("must be loaded via \"shared_preload_libraries\"");
+    }
+
+    public static boolean isLogicalDecodingEnabled(org.jdbi.v3.core.Handle handle) {
+        var walLevel = handle.createQuery("show wal_level")
+                             .mapTo(String.class)
+                             .one()
+                             .trim()
+                             .toLowerCase();
+
+        int maxSlots = Integer.parseInt(handle.createQuery("show max_replication_slots")
+                                              .mapTo(String.class).one().trim());
+        int maxSenders = Integer.parseInt(handle.createQuery("show max_wal_senders")
+                                                .mapTo(String.class).one().trim());
+
+        log.debug("wal_level: '{}', max_replication_slots: '{}', max_wal_senders: '{}'", walLevel, maxSlots, maxSenders);
+        return ("logical".equals(walLevel)) && maxSlots > 0 && maxSenders > 0;
+    }
+
+    public static boolean isPublicationAvailable(Handle handle, String publicationName) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(publicationName, "No publicationName provided");
+        return handle.createQuery("""
+                                  SELECT exists(
+                                      SELECT 1
+                                      FROM pg_publication
+                                      WHERE pubname = :publicationName
+                                  )
+                                  """)
+                     .bind("publicationName", publicationName)
+                     .mapTo(Boolean.class)
+                     .first();
+    }
+
+    /**
+     * Detailed server-side view of a logical-replication publication — used by the CDC startup
+     * logging to make publication misconfiguration immediately obvious. Captures whether the
+     * publication exists at all, whether it was declared {@code FOR ALL TABLES} (dynamic
+     * membership), the schemas declared via {@code FOR TABLES IN SCHEMA} (Postgres 15+), and
+     * the explicit table members.
+     * <p>
+     * Returns {@link Optional#empty()} when the publication doesn't exist; returns a populated
+     * snapshot otherwise. Table members are fully qualified as {@code schema.table}.
+     */
+    public static Optional<PublicationInfo> getPublicationInfo(Handle handle, String publicationName) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(publicationName, "No publicationName provided");
+        var row = handle.createQuery(
+                                   """
+                                   SELECT puballtables, pg_get_userbyid(pubowner) AS owner_name
+                                   FROM pg_publication
+                                   WHERE pubname = :publicationName
+                                   """)
+                        .bind("publicationName", publicationName)
+                        .map((rs, ctx) -> new boolean[]{rs.getBoolean("puballtables")})
+                        .findFirst();
+        if (row.isEmpty()) return Optional.empty();
+
+        boolean forAllTables = row.get()[0];
+
+        // Only query membership if not FOR ALL TABLES — for all-tables publications, listing
+        // every table in the database would be misleading (the publication matches future
+        // tables dynamically) and potentially expensive.
+        Set<String> tables = Set.of();
+        if (!forAllTables) {
+            tables = new java.util.LinkedHashSet<>(handle.createQuery(
+                                                                 """
+                                                                 SELECT schemaname || '.' || tablename AS fqname
+                                                                 FROM pg_publication_tables
+                                                                 WHERE pubname = :publicationName
+                                                                 ORDER BY schemaname, tablename
+                                                                 """)
+                                                        .bind("publicationName", publicationName)
+                                                        .mapTo(String.class)
+                                                        .list());
+        }
+
+        return Optional.of(new PublicationInfo(publicationName, forAllTables, tables));
+    }
+
+    /**
+     * Immutable server-side snapshot of a publication's relevant metadata for CDC startup
+     * logging and membership verification. {@code tableMembers} is only populated when
+     * {@code forAllTables} is false — a FOR-ALL-TABLES publication is dynamic and listing its
+     * current members at one moment in time would mislead rather than inform.
+     */
+    public record PublicationInfo(String name,
+                                  boolean forAllTables,
+                                  Set<String> tableMembers) {
+    }
+
+    /**
+     * Server-side snapshot of a replication slot's position — used by CDC startup logging to
+     * warn operators when a slot is inheriting a large historical WAL backlog. A slot whose
+     * {@code confirmedFlushLsn} trails {@code currentWalLsn} by hundreds of MB will spend
+     * significant time replaying historical transactions before reaching any fresh events,
+     * which can look identical to "pgoutput is stuck" for observers waiting on live data.
+     * <p>
+     * Returns {@link Optional#empty()} when the slot doesn't exist (caller should treat that
+     * as "slot will be created shortly") or when a query error occurs.
+     */
+    public static Optional<SlotLagInfo> getSlotLagInfo(Handle handle, String slotName) {
+        requireNonNull(handle, "No handle provided");
+        requireNonNull(slotName, "No slotName provided");
+        try {
+            return handle.createQuery(
+                                 """
+                                 SELECT confirmed_flush_lsn::text AS flush_lsn,
+                                        pg_current_wal_lsn()::text AS current_wal_lsn,
+                                        pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS lag_bytes
+                                 FROM pg_replication_slots
+                                 WHERE slot_name = :slotName
+                                 """)
+                         .bind("slotName", slotName)
+                         .map((rs, ctx) -> new SlotLagInfo(
+                                 slotName,
+                                 rs.getString("flush_lsn"),
+                                 rs.getString("current_wal_lsn"),
+                                 rs.getLong("lag_bytes")))
+                         .findFirst();
+        } catch (Exception e) {
+            log.debug("Could not query pg_replication_slots for slot '{}': {}", slotName, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Immutable snapshot of a replication slot's current LSN position. {@code lagBytes} is
+     * bytes of WAL retained by Postgres past {@code confirmedFlushLsn} — steadily growing
+     * values indicate the tailer isn't acknowledging LSN progress back to Postgres.
+     */
+    public record SlotLagInfo(String slotName,
+                              String confirmedFlushLsn,
+                              String currentWalLsn,
+                              long lagBytes) {
+    }
+
+    /**
+     * Deterministic advisory-lock key used by {@link #acquireBootstrapLock(Handle)} so every
+     * framework component's bootstrap DDL serialises behind the same lock. The value is
+     * arbitrary — it just needs to be (1) constant across the entire framework and (2) unlikely
+     * to collide with an application's own advisory-lock keys. Pattern: 0xE55E ("ESSE"),
+     * 0x4711 (sentinel), 0xB007 ("BOOT"), 0xDD15 ("DDL15ish").
+     */
+    public static final long ESSENTIALS_BOOTSTRAP_LOCK_KEY = 0xE55E_4711_B007_DD15L;
+
+    /**
+     * Acquire the framework's bootstrap advisory lock inside the current transaction. All
+     * subsequent {@code CREATE TABLE IF NOT EXISTS} / {@code CREATE INDEX IF NOT EXISTS}
+     * statements in the same transaction are protected against concurrent execution from
+     * other JVMs by this single lock acquisition. The lock is released automatically when
+     * the transaction commits.
+     * <p>
+     * Why this exists: PG's {@code IF NOT EXISTS} is <b>not atomic</b> against concurrent
+     * sessions. Two JVMs starting truly simultaneously can both observe "doesn't exist" in
+     * {@code pg_class}, both commit the catalog write, and one ends up with:
+     * <pre>
+     * ERROR: duplicate key value violates unique constraint "pg_type_typname_nsp_index"
+     * </pre>
+     * The race window is small (tens of ms), so production K8s deployments with natural pod-
+     * startup spread + {@code RestartPolicy: Always} typically absorb it silently — the loser
+     * pod restarts once, the second time the tables exist, all is well. Tighter inter-process
+     * release timing (e.g. compose's {@code depends_on: service_healthy}, or future blue-green
+     * deployments that release a whole colour simultaneously) surfaces it.
+     * <p>
+     * Why an advisory lock and not the framework's {@code fenced_locks} table: {@code fenced_locks}
+     * is itself one of the tables that needs creating. {@code pg_advisory_xact_lock} requires
+     * no schema, is transaction-scoped (auto-released on commit), and is available during the
+     * earliest framework bootstrap.
+     * <p>
+     * <b>Must be called inside an open transaction.</b> The lock is {@code pg_advisory_xact_lock},
+     * not {@code pg_advisory_lock}. Outside a transaction, autocommit releases the lock between
+     * statements and the protection is gone. The framework's UoW pattern provides the
+     * transaction naturally; callers that bypass UoW must wrap explicitly.
+     * <p>
+     * Typical use:
+     * <pre>
+     * unitOfWorkFactory.usingUnitOfWork(uow -> {
+     *     var handle = uow.handle();
+     *     PostgresqlUtil.acquireBootstrapLock(handle);
+     *     handle.execute("CREATE TABLE IF NOT EXISTS …");
+     *     handle.execute("CREATE INDEX IF NOT EXISTS …");
+     * });
+     * </pre>
+     */
+    public static void acquireBootstrapLock(Handle handle) {
+        requireNonNull(handle, "No handle provided");
+        handle.execute("SELECT pg_advisory_xact_lock(?)", ESSENTIALS_BOOTSTRAP_LOCK_KEY);
+    }
+
+    public static boolean isOutputPluginUsable(Handle handle, String pluginName) {
+        // Requires a role with sufficient privileges to create replication slots
+        // (often needs REPLICATION role or superuser depending on setup).
+        String slot = "probe_" + pluginName + "_" + UUID.randomUUID().toString().replace("-", "");
+
+        try {
+            handle.execute("select * from pg_create_logical_replication_slot(?, ?)", slot, pluginName);
+
+            handle.execute("select pg_drop_replication_slot(?)", slot);
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to create replication slot for output plugin '{}' -> '{}'", pluginName, e.getMessage());
+            try {
+                handle.execute("select pg_drop_replication_slot(?)", slot);
+            } catch (Exception cleanupFailure) {
+                // Best-effort cleanup: if slot creation failed the slot typically never existed, so a
+                // drop failure here is expected — log at debug with the actual cleanup cause, not the
+                // outer creation failure.
+                log.debug("Failed to drop probe replication slot '{}' for plugin '{}': {}", slot, pluginName, cleanupFailure.getMessage());
+            }
+            return false;
+        }
     }
 
     /**

@@ -25,12 +25,22 @@
         </encoder>
     </appender>
 
+    <!-- Test logging is quiet by default and raised on demand: run with
+         -Dessentials.test.log.level=DEBUG (or TRACE) to get the Essentials detail back.
+         These loggers are the ones worth turning up when diagnosing this module; the root
+         logger deliberately stays at INFO so raising them does not also pull in the noise
+         from Spring, the JDBC/Mongo drivers and Testcontainers. -->
+
     <logger name="dk.trustworks.essentials" level="INFO"/>
     <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.PostgresqlEventStreamGapHandler" level="INFO"/>
     <logger name="dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory" level="INFO"/>
     <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreManagedUnitOfWork" level="INFO"/>
     <logger name="dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory" level="INFO"/>
-    <!--<logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.JitteredEventStorePollingOptimizer" level="TRACE"/>-->
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.JacksonWal2JsonToPersistedEventConverter" level="${essentials.test.log.level:-INFO}"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.converter.JacksonWalGlobalOrdersExtractor" level="${essentials.test.log.level:-INFO}"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.WalReplicationTailer" level="${essentials.test.log.level:-INFO}"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcDispatcher" level="${essentials.test.log.level:-INFO}"/>
+    <logger name="dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcInboxRepository" level="${essentials.test.log.level:-INFO}"/>
 
     <root level="INFO">
         <appender-ref ref="STDOUT"/>

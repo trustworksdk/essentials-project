@@ -20,12 +20,14 @@ import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import dk.trustworks.essentials.components.foundation.postgresql.ttl.PostgresqlTTLManager;
 import dk.trustworks.essentials.components.foundation.scheduler.pgcron.CronExpression;
 import org.slf4j.*;
+import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.config.*;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.core.env.Environment;
+import org.springframework.util.StringUtils;
 
 import java.util.Optional;
 
@@ -51,7 +53,8 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
-        var ttlJob = AnnotationUtils.findAnnotation(bean.getClass(), TTLJob.class);
+        var targetClass = AopProxyUtils.ultimateTargetClass(bean);
+        var ttlJob = AnnotationUtils.findAnnotation(targetClass, TTLJob.class);
         if (ttlJob == null || shouldSkipPostProcessing(bean, beanName)) {
             return bean;
         }
@@ -66,16 +69,20 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
         }
 
         var tableName = ttlJob.tableName();
-        if (tableName.isEmpty() && !ttlJob.tableNameProperty().isEmpty()) {
-            tableName = environment.getProperty(ttlJob.tableNameProperty(), tableName);
-        } else if (tableName.isEmpty()) {
+        if (StringUtils.hasText(ttlJob.tableNameProperty())) {
+            String configured = environment.getProperty(ttlJob.tableNameProperty());
+            if (StringUtils.hasText(configured)) {
+                tableName = configured;
+            }
+        }
+        if (tableName.isEmpty()) {
             throw new IllegalArgumentException(msg("@TTLJob on '{}' requires tableName or tableNameProperty", beanName));
         }
         PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
         PostgresqlUtil.checkIsValidTableOrColumnName(ttlJob.timestampColumn());
 
         var days = ttlJob.defaultTtlDays();
-        if (!ttlJob.ttlDurationProperty().isEmpty()) {
+        if (StringUtils.hasText(ttlJob.ttlDurationProperty())) {
             days = environment.getProperty(ttlJob.ttlDurationProperty(), Long.class, days);
         }
 
@@ -113,7 +120,8 @@ public class TTLJobBeanPostProcessor implements BeanPostProcessor {
         if (this.beanFactory != null) {
             try {
                 var beanDefinition = this.beanFactory.getBeanDefinition(beanName);
-                if (beanDefinition.getRole() == BeanDefinition.ROLE_INFRASTRUCTURE || bean.getClass().isAnnotationPresent(AutoConfiguration.class)) {
+                var targetClass = AopProxyUtils.ultimateTargetClass(bean);
+                if (beanDefinition.getRole() == BeanDefinition.ROLE_INFRASTRUCTURE || targetClass.isAnnotationPresent(AutoConfiguration.class)) {
                     return true;
                 }
             } catch (NoSuchBeanDefinitionException e) {

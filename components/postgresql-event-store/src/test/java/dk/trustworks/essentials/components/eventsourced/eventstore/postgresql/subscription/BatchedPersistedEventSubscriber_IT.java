@@ -27,15 +27,13 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.AggregateIdSerializer;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.JacksonJSONEventSerializer;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.*;
 import dk.trustworks.essentials.components.foundation.postgresql.SqlExecutionTimeLogger;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.types.*;
-import dk.trustworks.essentials.jackson.immutable.EssentialsImmutableJacksonModule;
-import dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule;
 import dk.trustworks.essentials.shared.collections.Lists;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
@@ -84,7 +82,7 @@ class BatchedPersistedEventSubscriber_IT {
         aggregateType = ORDERS;
         unitOfWorkFactory = new EventStoreManagedUnitOfWorkFactory(jdbi);
         eventMapper = new TestPersistableEventMapper();
-        var jsonSerializer = new JacksonJSONEventSerializer(createObjectMapper());
+        var jsonSerializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         var persistenceStrategy = new SeparateTablePerAggregateTypePersistenceStrategy(jdbi,
                 unitOfWorkFactory,
                 eventMapper,
@@ -359,20 +357,40 @@ class BatchedPersistedEventSubscriber_IT {
         productsSubscription.stop();
         ordersSubscription.stop();
 
-        // Check the ResumePoints are updated and saved
-        var lastEventOrder = new ArrayList<>(orderEventsReceived).get(totalNumberOfOrderEvents - 1);
-        var lastProductEvent = productEventsReceived.get(totalNumberOfProductEvents - 1);
+        // Check the ResumePoints are updated and saved.
+        // Take the HIGHEST globalEventOrder, not the last-arrived event: when db connectivity is
+        // interrupted the gap handler re-delivers skipped events afterwards, so the last event to
+        // arrive can be an older straggler (the same reason the ordering assertions above sort
+        // before comparing). A resume point only ever moves forward, so it reflects the furthest
+        // progress made - not whichever event happened to be handled last.
+        var lastEventOrder = orderEventsReceived.stream()
+                                                .max(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                                .orElseThrow();
+        var lastProductEvent = productEventsReceived.stream()
+                                                    .max(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                                    .orElseThrow();
 
         assertThat(ordersSubscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()); // When the subscriber is stopped we store the next global event order
-        var ordersSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(ordersSubscription.subscriberId(), ordersSubscription.aggregateType());
-        assertThat(ordersSubscriptionResumePoint).isPresent();
-        Awaitility.waitAtMost(Duration.ofSeconds(40))
-                .untilAsserted(() -> assertThat(ordersSubscriptionResumePoint.get().getResumeFromAndIncluding()).isEqualTo(lastEventOrder.globalEventOrder().increment()));  // When the subscriber is stopped we store the next global event order));
+        Awaitility.waitAtMost(Duration.ofSeconds(50))
+                .untilAsserted(() -> {
+                    var ordersSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(
+                            ordersSubscription.subscriberId(),
+                            ordersSubscription.aggregateType());
+                    assertThat(ordersSubscriptionResumePoint).isPresent();
+                    assertThat(ordersSubscriptionResumePoint.get().getResumeFromAndIncluding())
+                            .isEqualTo(lastEventOrder.globalEventOrder().increment());
+                });  // When the subscriber is stopped we store the next global event order
 
         assertThat(productsSubscription.currentResumePoint().get().getResumeFromAndIncluding()).isEqualTo(lastProductEvent.globalEventOrder().increment()); // // When the subscriber is stopped we store the next global event order
-        var productsSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(productsSubscription.subscriberId(), productsSubscription.aggregateType());
-        assertThat(productsSubscriptionResumePoint).isPresent();
-        assertThat(productsSubscriptionResumePoint.get().getResumeFromAndIncluding()).isEqualTo(lastProductEvent.globalEventOrder().increment());// When the subscriber is stopped we store the next global event order
+        Awaitility.waitAtMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> {
+                    var productsSubscriptionResumePoint = durableSubscriptionRepository.getResumePoint(
+                            productsSubscription.subscriberId(),
+                            productsSubscription.aggregateType());
+                    assertThat(productsSubscriptionResumePoint).isPresent();
+                    assertThat(productsSubscriptionResumePoint.get().getResumeFromAndIncluding())
+                            .isEqualTo(lastProductEvent.globalEventOrder().increment());
+                }); // When the subscriber is stopped we store the next global event order
     }
 
     @Test
@@ -552,8 +570,7 @@ class BatchedPersistedEventSubscriber_IT {
                 .enable(MapperFeature.PROPAGATE_TRANSIENT_MARKER)
                 .addModule(new Jdk8Module())
                 .addModule(new JavaTimeModule())
-                .addModule(new EssentialTypesJacksonModule())
-                .addModule(new EssentialsImmutableJacksonModule())
+                .addModules(dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.TestFasterxmlModules.optionalEssentialsModules())
                 .build();
 
         objectMapper.setVisibility(objectMapper.getSerializationConfig().getDefaultVisibilityChecker()
