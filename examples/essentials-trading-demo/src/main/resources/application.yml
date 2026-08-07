@@ -13,6 +13,13 @@ management:
     web:
       exposure:
         include: health,info,metrics
+  endpoint:
+    health:
+      # Actuator defaults show-components to `never`, which makes /actuator/health/cdc return 404
+      # even when CdcHealthIndicator is wired. The demo exposes components so the CDC health check
+      # is actually reachable.
+      show-components: always
+      show-details: always
 
 trading-demo:
   accounts:

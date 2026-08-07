@@ -31,6 +31,81 @@ What CDC does **not** change:
   polling and stay correct.
 - Subscription resume points are durable in the EventStore, not in CDC state.
 
+### 1.1 Enabling CDC (opt-in)
+
+**CDC is disabled by default.** Nothing in the CDC pipeline is wired unless you ask for
+it: no replication slot is created, no publication is touched, no tailer connects, and
+no inbox table is used. An application that says nothing about CDC polls, exactly as it
+did before CDC existed.
+
+Turn it on with a single property:
+
+```yaml
+essentials:
+  eventstore:
+    cdc:
+      enabled: true      # opt in — no CDC bean is created without this
+```
+
+This is deliberate. CDC needs server-side configuration and a replication-capable role,
+and those are decisions for whoever owns the database — not something a library should
+assume on an application's behalf. Enabling it should be a conscious act.
+
+#### What CDC needs before it will work
+
+| Requirement | Why | How to check |
+| --- | --- | --- |
+| `essentials.eventstore.cdc.enabled=true` | Gates every CDC bean | — |
+| `wal_level = logical` | Logical decoding cannot run without it. Requires a server restart | `SHOW wal_level;` |
+| `max_replication_slots` ≥ slots + headroom | Each CDC pipeline holds one slot | `SHOW max_replication_slots;` |
+| `max_wal_senders` ≥ slots + headroom | One walsender per active tailer | `SHOW max_wal_senders;` |
+| DB role with `REPLICATION` (or superuser) | The tailer opens a replication connection, separate from the pooled one | `\du` |
+| Decoding plugin available | `pgoutput` is built into PostgreSQL; `wal2json` is an extension that must be installed | `SELECT * FROM pg_get_replication_slots();` / see §2 |
+| A publication covering the event-stream tables (pgoutput only) | pgoutput streams only what the publication includes | `SELECT * FROM pg_publication_tables;` — see §4 |
+
+The publication is the one that catches people out. Either create it yourself, or let
+the framework own it:
+
+```yaml
+essentials:
+  eventstore:
+    cdc:
+      enabled: true
+      pg-output:
+        publication:
+          auto-manage: true
+          mode: FOR_TABLE_LIST   # explicit list; needs table ownership, not superuser
+```
+
+`FOR_TABLE_LIST` adds the registered event-stream tables to the publication at tailer
+startup. `FOR_ALL_TABLES` is the alternative and requires superuser. See §4.3 for the
+full semantics, including what happens to aggregates registered after startup.
+
+Managed PostgreSQL usually needs an extra step to get `wal_level=logical` — on AWS RDS
+set the `rds.logical_replication` parameter and reboot; on Azure and GCP enable logical
+decoding on the instance.
+
+#### If a requirement is missing
+
+The behaviour is governed by `cdc.mode` (§6.1): in `AUTO` (the default once CDC is
+enabled) the application starts and subscribers silently keep polling; in `REQUIRE`
+startup fails. `AUTO` means a missing prerequisite costs you latency, not correctness —
+which also means it can go unnoticed, so verify after enabling.
+
+#### Verifying it actually came up
+
+- `GET /actuator/health/cdc` — `CdcHealthIndicator`, registered only when CDC is enabled. The
+  per-component path is itself gated by Actuator: without
+  `management.endpoint.health.show-components: always` (or `show-details: always`) it returns
+  **404 even though the indicator is wired**, because Spring defaults both to `never`.
+- `GET <admin-api>/event-store/cdc/status` — availability state, slot state, tailer and
+  dispatcher counters.
+- Startup log: `⚙️ Starting CDC dispatcher …` followed by `CDC dispatcher started`.
+
+A pipeline that is enabled but not delivering shows as `availability.state=ACTIVE` with
+`dispatcher.publishedEvents` stuck at zero; §6.3's effectiveness monitor is what catches
+that and cuts back to polling.
+
 ---
 
 ## 2. Architecture
@@ -588,9 +663,11 @@ forget. The check is purely informational: it never fails startup.
 
 | `cdc.enabled` | `cdc.mode` | Behaviour                                                                                                              |
 | ------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `false`       | (n/a)      | CDC is off. Subscribers always poll. The slot is never created.                                                        |
-| `true`        | `AUTO`     | CDC starts up; on failure, subscribers transparently fall back to polling. **Default — recommended for production.**   |
+| `false`       | (n/a)      | **Default.** CDC is off — no beans are created, no slot, no publication changes. Subscribers always poll.              |
+| `true`        | `AUTO`     | **Default once enabled.** CDC starts up; on failure, subscribers transparently fall back to polling. Recommended.      |
 | `true`        | `REQUIRE`  | CDC startup failures **fail application startup**. Use when you need strict guarantees that CDC is the delivery path.  |
+
+See §1.1 for the full opt-in checklist.
 
 ### 6.2 `CdcAvailability` state machine
 
@@ -1319,9 +1396,11 @@ explicit so the choice of `cdc.enabled` and `cdc.mode` is informed.
   logical replication, no `wal_level=logical`).
 - Workloads where seconds of latency are fine and operational simplicity matters.
 
-### 12.4 Why hybrid is the recommended default
+### 12.4 Why hybrid is the recommended configuration
 
-The framework defaults to `cdc.enabled=true`, `cdc.mode=AUTO`. This means:
+CDC ships **off** (`cdc.enabled=false`) because it depends on database-side
+configuration the framework cannot assume — see §1.1. Once you enable it, the default
+`cdc.mode=AUTO` gives you the hybrid model, and that is the configuration to aim for:
 
 - When CDC is healthy, subscribers get sub-100ms latency.
 - When CDC fails (slot lost, plugin missing, replication privilege revoked,

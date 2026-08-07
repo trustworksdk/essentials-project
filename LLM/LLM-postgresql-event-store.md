@@ -186,6 +186,16 @@ public class MyPersistableEventMapper implements PersistableEventMapper {
 
 Hybrid CDC combines logical replication (`pgoutput` by default, `wal2json` optional) with polling semantics.
 
+**Disabled by default — opt in with `essentials.eventstore.cdc.enabled=true`.** No CDC bean is created without it: no slot, no publication changes, no tailer. Without CDC the event store polls, which is the pre-CDC behaviour.
+
+Enabling also requires, on the database side:
+- `wal_level = logical` (server restart; on RDS set `rds.logical_replication` and reboot)
+- `max_replication_slots` and `max_wal_senders` with headroom for one slot per pipeline
+- a role with `REPLICATION` — the tailer opens its own replication connection
+- for `pgoutput`, a publication covering the event-stream tables; let the framework own it with `cdc.pg-output.publication.auto-manage=true` (`mode: FOR_TABLE_LIST` needs table ownership, `FOR_ALL_TABLES` needs superuser)
+
+If a prerequisite is missing, `cdc.mode=auto` (the default once enabled) keeps the application up and subscribers on polling — so a broken CDC setup costs latency, not correctness, and is easy to miss. Verify via `/actuator/health/cdc` or the admin API's `event-store/cdc/status`. Full checklist: [docs/cdc.md §1.1](../docs/cdc.md).
+
 Key classes:
 - `cdc.WalReplicationTailer` - consumes logical replication stream into `eventstore_cdc_inbox` or publishes directly
 - `cdc.CdcDispatcher` - converts inbox rows to `PersistedEvent` and publishes live events

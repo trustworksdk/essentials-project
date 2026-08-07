@@ -649,7 +649,7 @@ public class EventStoreConfiguration {
     @Bean
     @ConditionalOnClass(HealthIndicator.class)
     @ConditionalOnEnabledHealthIndicator("cdc")
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public HealthIndicator cdcHealthIndicator(CdcAvailability availability,
                                               Optional<WalReplicationTailer> tailer,
                                               Optional<CdcDispatcher> dispatcher,
@@ -659,7 +659,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @Primary
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public EventStore cdcEventStore(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                                     EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                     EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
@@ -680,14 +680,14 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcAvailability cdcAvailability(Optional<MeterRegistry> meterRegistry) {
         return new CdcAvailability(meterRegistry);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcDispatcher cdcDispatcher(CdcInboxRepository cdcInboxRepository,
                                        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                        EventStreamGapHandler<SeparateTablePerAggregateEventStreamConfiguration> eventStreamGapHandler,
@@ -725,7 +725,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public SubscriptionResetOnPoisonNotifier subscriptionResetOnPoisonNotifier(EventStoreSubscriptionManager eventStoreSubscriptionManager,
                                                                                DurableSubscriptionRepository durableSubscriptionRepository) {
         return new SubscriptionResetOnPoisonNotifier(eventStoreSubscriptionManager, durableSubscriptionRepository);
@@ -733,7 +733,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcEventBus cdcEventBus(EssentialsEventStoreProperties properties) {
         // Surface the weakest delivery configuration (DIRECT + LOG_AND_DROP) loudly at startup — it
         // silently skips the live-tail push for a dropped event (recovery falls to store-backed backfill).
@@ -744,7 +744,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public LogicalReplicationToPersistedEventConverter logicalReplicationToPersistedEventConverter(JSONEventSerializer jsonSerializer,
                                                                                                    AggregateTypeResolver aggregateTypeResolver,
                                                                                                    @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
@@ -755,7 +755,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter(JSONEventSerializer jsonSerializer,
                                                                                AggregateTypeResolver aggregateTypeResolver,
                                                                                @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
@@ -766,14 +766,14 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public WalGlobalOrdersExtractor walGlobalOrdersExtractor(JSONEventSerializer jsonSerializer, AggregateTypeResolver aggregateTypeResolver) {
         return new JacksonWalGlobalOrdersExtractor(jsonSerializer, aggregateTypeResolver);
     }
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public AggregateTypeResolver aggregateTypeResolver(@Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
         // Pass a live supplier rather than a snapshot — aggregates registered at runtime via
         // addAggregateEventStreamConfiguration(...) must become visible to CDC conversion.
@@ -784,7 +784,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public WalMessageFilter walMessageFilter(JSONEventSerializer jsonSerializer,
                                              @Qualifier("essentialsEventStore") ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                                              EssentialsEventStoreProperties properties) {
@@ -810,14 +810,14 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcConsumerGroup cdcConsumerGroup(EssentialsEventStoreProperties props) {
         return CdcConsumerGroup.of(props.getCdc().getSlot().getGroup());
     }
 
     @Bean
     @ConditionalOnMissingBean(name = "wal2jsonLogicalDecodingPlugin")
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public LogicalDecodingPlugin wal2jsonLogicalDecodingPlugin(EssentialsEventStoreProperties properties,
                                                                 LogicalReplicationToPersistedEventConverter converter,
                                                                 WalGlobalOrdersExtractor walGlobalOrdersExtractor) {
@@ -829,7 +829,7 @@ public class EventStoreConfiguration {
 
     @Bean("configuredLogicalDecodingPlugin")
     @ConditionalOnMissingBean(name = "configuredLogicalDecodingPlugin")
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public LogicalDecodingPlugin logicalDecodingPlugin(EssentialsEventStoreProperties properties,
                                                        @Qualifier("wal2jsonLogicalDecodingPlugin") LogicalDecodingPlugin wal2jsonLogicalDecodingPlugin,
                                                        @Qualifier("pgoutputLogicalDecodingPlugin") LogicalDecodingPlugin pgoutputLogicalDecodingPlugin) {
@@ -845,7 +845,7 @@ public class EventStoreConfiguration {
 
     @Bean("pgoutputLogicalDecodingPlugin")
     @ConditionalOnMissingBean(name = "pgoutputLogicalDecodingPlugin")
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public LogicalDecodingPlugin pgoutputLogicalDecodingPlugin(EssentialsEventStoreProperties properties,
                                                                 PgOutputToPersistedEventConverter pgOutputToPersistedEventConverter) {
         return new PgOutputLogicalDecodingPlugin(properties.getCdc().getPgOutput(), pgOutputToPersistedEventConverter);
@@ -853,7 +853,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcSlotNameProvider cdcSlotNameProvider(DataSourceProperties dsProps) {
         String url = dsProps.getUrl();
         String db  = null;
@@ -872,7 +872,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public WalReplicationTailer walReplicationTailer(DataSourceProperties dataSourceProperties,
                                                      Jdbi jdbi,
                                                      EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
@@ -920,7 +920,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcInboxRepository cdcInboxRepository(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                                                  Optional<MeterRegistry> meterRegistry,
                                                  EssentialsEventStoreProperties essentialsProperties,
@@ -951,7 +951,7 @@ public class EventStoreConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcEffectivenessMonitor cdcEffectivenessMonitor(WalReplicationTailer walReplicationTailer,
                                                            CdcDispatcher cdcDispatcher,
                                                            CdcAvailability availability,
@@ -978,7 +978,7 @@ public class EventStoreConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcSlotMetrics cdcSlotMetrics(WalReplicationTailer walReplicationTailer,
                                          Optional<MeterRegistry> meterRegistry,
                                          EssentialsEventStoreProperties essentialsProperties,
@@ -1031,7 +1031,7 @@ public class EventStoreConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcApi cdcApi(EssentialsSecurityProvider securityProvider,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                          EssentialsEventStoreProperties properties,

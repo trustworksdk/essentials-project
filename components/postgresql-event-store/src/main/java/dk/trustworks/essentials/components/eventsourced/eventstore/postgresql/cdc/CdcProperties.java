@@ -41,7 +41,7 @@ import java.util.Optional;
  */
 public class CdcProperties {
 
-    private boolean         enabled                        = true;
+    private boolean         enabled                        = false;
     private CdcMode         mode                           = CdcMode.AUTO;
     private int             cdcEventStoreBackfillBatchSize = 1000;
     private String          plugin                         = PgOutputLogicalDecodingPlugin.PLUGIN_NAME;
