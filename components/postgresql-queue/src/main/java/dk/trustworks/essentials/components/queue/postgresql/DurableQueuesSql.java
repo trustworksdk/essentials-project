@@ -256,14 +256,19 @@ public class DurableQueuesSql {
                        WITH queue_config(queue_name, slots, exclude_keys) AS (
                            VALUES {:values}
                        ),
-                       -- 2) Numbered ordered candidates
-                           ordered_rn AS (
+                       -- 2) Number every eligible candidate, ordered and unordered alike, oldest first.
+                       --
+                       --    Ordered and unordered candidates are numbered together in a single window so that
+                       --    the per-queue slot limit in step 3 caps the TOTAL number of messages handed to a
+                       --    queue. Numbering them separately would apply the limit twice and allow a queue to
+                       --    be handed up to 2x its available worker slots.
+                           candidates_rn AS (
                              SELECT
                                q.id,
                                q.queue_name,
                                ROW_NUMBER() OVER (
                                  PARTITION BY q.queue_name
-                                 ORDER BY q.key_order, q.next_delivery_ts
+                                 ORDER BY q.next_delivery_ts, q.id
                                ) AS rn
                              FROM {:tableName} q
                              JOIN queue_config cfg USING(queue_name)
@@ -271,69 +276,53 @@ public class DurableQueuesSql {
                                   q.is_dead_letter_message = FALSE
                               AND q.is_being_delivered     = FALSE
                               AND q.next_delivery_ts      <= :now
-                              AND q.key IS NOT NULL
-                              AND NOT (q.key = ANY(cfg.exclude_keys))
-                              AND NOT EXISTS (
-                                SELECT 1
-                                FROM {:tableName} q2
-                                WHERE q2.queue_name = q.queue_name
-                                  AND q2.key        = q.key
-                                  AND q2.key_order  < q.key_order
+                              AND (
+                                    -- Unordered candidate. Note there is deliberately no exclude_keys predicate
+                                    -- here: the key is NULL, so it can never match an excluded key, and
+                                    -- "NOT (q.key = ANY(cfg.exclude_keys))" would evaluate to NULL rather than
+                                    -- TRUE for every row whenever exclude_keys is non-empty, silently starving
+                                    -- all unordered messages on that queue.
+                                    q.key IS NULL
+                                 OR (
+                                      -- Ordered candidate: not currently in process, and first in line for its key
+                                      NOT (q.key = ANY(cfg.exclude_keys))
+                                      AND NOT EXISTS (
+                                        SELECT 1
+                                        FROM {:tableName} q2
+                                        WHERE q2.queue_name = q.queue_name
+                                          AND q2.key        = q.key
+                                          AND q2.key_order  < q.key_order
+                                      )
+                                    )
                               )
                            ),
-                       
-                           -- 3) Numbered unordered candidates
-                           unordered_rn AS (
-                             SELECT
-                               q.id,
-                               q.queue_name,
-                               ROW_NUMBER() OVER (
-                                 PARTITION BY q.queue_name
-                                 ORDER BY q.next_delivery_ts
-                               ) AS rn
-                             FROM {:tableName} q
-                             JOIN queue_config cfg USING(queue_name)
-                             WHERE
-                                  q.is_dead_letter_message = FALSE
-                              AND q.is_being_delivered     = FALSE
-                              AND q.next_delivery_ts      <= :now
-                              AND q.key IS NULL
-                              AND NOT (q.key = ANY(cfg.exclude_keys))
-                           ),
-                       
-                           -- 4) Pick up to cfg.slots from each
-                           ordered_pick AS (
-                             SELECT orr.id
-                             FROM ordered_rn orr
-                             JOIN queue_config cfg
-                               ON orr.queue_name = cfg.queue_name
-                             WHERE orr.rn <= cfg.slots
-                           ),
-                           unordered_pick AS (
-                             SELECT unr.id
-                             FROM unordered_rn unr
-                             JOIN queue_config cfg
-                               ON unr.queue_name = cfg.queue_name
-                             WHERE unr.rn <= cfg.slots
-                           ),
-                       
-                           -- 5) Union them *without locking*
+
+                           -- 3) Take at most cfg.slots per queue *without locking*
                            candidates AS (
-                             SELECT id FROM ordered_pick
-                             UNION ALL
-                             SELECT id FROM unordered_pick
+                             SELECT c.id
+                             FROM candidates_rn c
+                             JOIN queue_config cfg
+                               ON c.queue_name = cfg.queue_name
+                             WHERE c.rn <= cfg.slots
                            ),
-                       
-                           -- 6) Now lock exactly those durable_queues rows
+
+                           -- 4) Now lock exactly those durable_queues rows
+                           --
+                           --    is_being_delivered is re-checked here on purpose. Under READ COMMITTED the
+                           --    candidate CTE above runs against the statement snapshot, so a competing consumer
+                           --    may have claimed a row in between. Repeating the predicate on the locking scan
+                           --    makes Postgres re-evaluate it against the freshly locked row version and drop
+                           --    rows that were claimed in the meantime.
                            locked AS (
                              SELECT q.id
                              FROM {:tableName} q
                              JOIN candidates c
                                ON q.id = c.id
+                             WHERE q.is_being_delivered = FALSE
                              FOR UPDATE SKIP LOCKED
                            )
-                       
-                         -- 7) Finally, update & return the locked rows
+
+                         -- 5) Finally, update & return the locked rows
                          UPDATE {:tableName} dq
                          SET
                            total_attempts     = dq.total_attempts + 1,

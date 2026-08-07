@@ -288,9 +288,9 @@ public class EssentialsComponentsProperties {
         private boolean           useCentralizedMessageFetcher             = true;
         private Duration          centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
         private Double            centralizedPollingDelayBackOffFactor     = 1.5d;
-        private int               centralizedBatchedFetchSwitchThreshold   = CentralizedMessageFetcher.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
-        private int               batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
-        private double            batchedFetchWarnDedupRatioThreshold      = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_DEDUP_RATIO_THRESHOLD;
+        private boolean           useBatchedFetch                          = false;
+        private int               batchedFetchSwitchThreshold              = 4;
+        private int               batchedFetchWarnRowsThreshold            = 5000;
 
         private boolean verboseTracing = false;
 
@@ -653,18 +653,39 @@ public class EssentialsComponentsProperties {
         }
 
         /**
+         * Is batched fetching enabled for the centralized message fetcher? Defaults to {@code false}, i.e. every
+         * poll uses per-queue fetching whatever the active queue count.
+         */
+        public boolean isUseBatchedFetch() {
+            return useBatchedFetch;
+        }
+
+        /**
+         * Opt in to batched fetching in the centralized message fetcher. Batched fetching collapses one query per
+         * active queue into a single query across all of them; the queue-fetch-strategy benchmark found this to pay
+         * off above roughly four active queues. Note the two strategies do not select identical messages: per-queue
+         * fetching is ordered-priority, batched fetching is oldest-first.
+         */
+        public void setUseBatchedFetch(boolean useBatchedFetch) {
+            this.useBatchedFetch = useBatchedFetch;
+        }
+
+        /**
          * Get the active queue-count threshold for switching between per-queue fetch and batched fetch in the centralized message fetcher.
          * Per-queue fetch is used for queue counts <= threshold, batched fetch for higher counts.
+         * Only consulted when batched fetching is enabled.
          */
-        public int getCentralizedBatchedFetchSwitchThreshold() {
-            return centralizedBatchedFetchSwitchThreshold;
+        public int getBatchedFetchSwitchThreshold() {
+            return batchedFetchSwitchThreshold;
         }
 
         /**
          * Set the active queue-count threshold for switching between per-queue fetch and batched fetch in the centralized message fetcher.
+         * Only consulted when batched fetching is enabled. Defaults to 4, the point at which the queue-fetch-strategy
+         * benchmark showed batched fetching starting to win.
          */
-        public void setCentralizedBatchedFetchSwitchThreshold(int centralizedBatchedFetchSwitchThreshold) {
-            this.centralizedBatchedFetchSwitchThreshold = centralizedBatchedFetchSwitchThreshold;
+        public void setBatchedFetchSwitchThreshold(int batchedFetchSwitchThreshold) {
+            this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
         }
 
         /**
@@ -679,20 +700,6 @@ public class EssentialsComponentsProperties {
          */
         public void setBatchedFetchWarnRowsThreshold(int batchedFetchWarnRowsThreshold) {
             this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
-        }
-
-        /**
-         * Get warning threshold for batched fetch dedup ratio (rawRows/uniqueRows).
-         */
-        public double getBatchedFetchWarnDedupRatioThreshold() {
-            return batchedFetchWarnDedupRatioThreshold;
-        }
-
-        /**
-         * Set warning threshold for batched fetch dedup ratio (rawRows/uniqueRows).
-         */
-        public void setBatchedFetchWarnDedupRatioThreshold(double batchedFetchWarnDedupRatioThreshold) {
-            this.batchedFetchWarnDedupRatioThreshold = batchedFetchWarnDedupRatioThreshold;
         }
 
         /**

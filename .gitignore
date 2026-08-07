@@ -8,7 +8,6 @@ target/
 .project
 
 .m2/
-.mvn/
 
 .DS_Store
 bin

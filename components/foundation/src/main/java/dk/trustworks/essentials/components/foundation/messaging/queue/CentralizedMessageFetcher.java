@@ -43,13 +43,12 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  */
 public class CentralizedMessageFetcher implements Lifecycle {
     private static final Logger log = LoggerFactory.getLogger(CentralizedMessageFetcher.class);
-    public static final int DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD = 4;
-
     private final DurableQueues                                              durableQueues;
     private final ScheduledExecutorService                                   scheduler;
     private final ConcurrentMap<QueueName, DurableQueueConsumerRegistration> consumerRegistrations;
     private final AtomicBoolean                                              started;
     private final long                                                       pollingIntervalMs;
+    private final boolean                                                    useBatchedFetch;
     private final int                                                        batchedFetchSwitchThreshold;
     private final List<DurableQueuesInterceptor>                             interceptors;
 
@@ -60,7 +59,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
     private final ConcurrentMap<QueueName, Set<String>> inProcessOrderedKeys;
 
     /**
-     * Create a new CentralizedMessageFetcher
+     * Create a new CentralizedMessageFetcher that always uses per-queue fetching.
      *
      * @param durableQueues     the DurableQueues instance to work with
      * @param pollingIntervalMs the polling interval in milliseconds
@@ -68,25 +67,30 @@ public class CentralizedMessageFetcher implements Lifecycle {
     public CentralizedMessageFetcher(DurableQueues durableQueues,
                                      long pollingIntervalMs,
                                      List<DurableQueuesInterceptor> interceptors) {
-        this(durableQueues, pollingIntervalMs, interceptors, DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD);
+        this(durableQueues, pollingIntervalMs, interceptors, false, 0);
     }
 
     /**
      * Create a new CentralizedMessageFetcher
      *
-     * @param durableQueues                the DurableQueues instance to work with
-     * @param pollingIntervalMs            the polling interval in milliseconds
-     * @param batchedFetchSwitchThreshold  fetch strategy switch threshold:
-     *                                     use per-queue fetch for queue counts <= threshold, use batched fetch above threshold
+     * @param durableQueues               the DurableQueues instance to work with
+     * @param pollingIntervalMs           the polling interval in milliseconds
+     * @param useBatchedFetch             opt in to batched fetching. When {@code false} (the default elsewhere) every poll
+     *                                    uses per-queue fetching regardless of how many queues are active, and
+     *                                    {@code batchedFetchSwitchThreshold} is ignored
+     * @param batchedFetchSwitchThreshold only consulted when {@code useBatchedFetch} is {@code true}: use per-queue fetch
+     *                                    for active queue counts &lt;= threshold, batched fetch above it
      */
     public CentralizedMessageFetcher(DurableQueues durableQueues,
                                      long pollingIntervalMs,
                                      List<DurableQueuesInterceptor> interceptors,
+                                     boolean useBatchedFetch,
                                      int batchedFetchSwitchThreshold) {
         this.durableQueues = requireNonNull(durableQueues, "No durableQueues provided");
         this.pollingIntervalMs = pollingIntervalMs;
         this.interceptors = requireNonNull(interceptors, "interceptors is missing");
         requireTrue(batchedFetchSwitchThreshold >= 0, "batchedFetchSwitchThreshold must be >= 0");
+        this.useBatchedFetch = useBatchedFetch;
         this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
         this.consumerRegistrations = new ConcurrentHashMap<>();
         this.inProcessOrderedKeys = new ConcurrentHashMap<>();
@@ -224,7 +228,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
             if (durableQueues instanceof BatchMessageFetchingCapableDurableQueues batchCapableDurableQueues) {
                 List<QueuedMessage> messages;
                 var queueNames = availableWorkerSlotsPerQueue.keySet();
-                if (queueNames.size() > batchedFetchSwitchThreshold) {
+                if (useBatchedFetch && queueNames.size() > batchedFetchSwitchThreshold) {
                     messages = batchCapableDurableQueues.fetchNextBatchOfMessagesBatched(
                             queueNames,
                             excludeKeysPerQueue,

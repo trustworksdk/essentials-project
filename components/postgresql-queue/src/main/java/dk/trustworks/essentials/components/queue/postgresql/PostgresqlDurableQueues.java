@@ -77,8 +77,19 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
 public final class PostgresqlDurableQueues implements BatchMessageFetchingCapableDurableQueues {
     private static final Logger log                               = LoggerFactory.getLogger(PostgresqlDurableQueues.class);
     public static final  String DEFAULT_DURABLE_QUEUES_TABLE_NAME = "durable_queues";
-    public static final  int    DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD = 5000;
-    public static final  double DEFAULT_BATCHED_FETCH_WARN_DEDUP_RATIO_THRESHOLD = 1.5d;
+    /**
+     * Batched fetching is opt-in. See {@link PostgresqlDurableQueuesBuilder#setUseBatchedFetch(boolean)}.
+     */
+    static final boolean DEFAULT_USE_BATCHED_FETCH = false;
+    /**
+     * Queue-count threshold above which batched fetching is used, once it has been opted in to.
+     * The value comes from the queue-fetch-strategy benchmark - see BENCHMARK-queue-fetch-strategy.md.
+     */
+    static final int     DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD = 4;
+    /**
+     * Row count above which a single batched fetch is logged as a warning.
+     */
+    static final int     DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD = 5000;
     private static final Object NO_PAYLOAD                        = new Object();
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>           unitOfWorkFactory;
@@ -98,9 +109,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     private final boolean                                                                 useCentralizedMessageFetcher;
     private final boolean                                                                 useOrderedUnorderedQuery;
-    private final int                                                                     centralizedBatchedFetchSwitchThreshold;
+    private final boolean                                                                 useBatchedFetch;
+    private final int                                                                     batchedFetchSwitchThreshold;
     private final int                                                                     batchedFetchWarnRowsThreshold;
-    private final double                                                                  batchedFetchWarnDedupRatioThreshold;
 
     private final DurableQueuesSql           durableQueuesSql;
     private final DurableQueuesSerialization durableQueuesSerialization;
@@ -308,9 +319,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              Duration.ofMillis(20), // With a 20ms polling interval by default
              null,
              true,
-             CentralizedMessageFetcher.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
-             DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD,
-             DEFAULT_BATCHED_FETCH_WARN_DEDUP_RATIO_THRESHOLD);
+             DEFAULT_USE_BATCHED_FETCH,
+             DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
+             DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD);
     }
 
     /**
@@ -376,22 +387,69 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                    boolean useCentralizedMessageFetcher,
                                    Duration centralizedMessageFetcherPollingInterval,
                                    Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
+                                   boolean useOrderedUnorderedQuery) {
+        this(unitOfWorkFactory,
+             jsonSerializer,
+             sharedQueueTableName,
+             multiTableChangeListener,
+             queuePollingOptimizerFactory,
+             transactionalMode,
+             messageHandlingTimeout,
+             useCentralizedMessageFetcher,
+             centralizedMessageFetcherPollingInterval,
+             centralizedQueuePollingOptimizerFactory,
+             useOrderedUnorderedQuery,
+             DEFAULT_USE_BATCHED_FETCH,
+             DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
+             DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD);
+    }
+
+    /**
+     * Create {@link DurableQueues} with full control over the batched-fetch tuning parameters.
+     *
+     * @param unitOfWorkFactory                        the {@link UnitOfWorkFactory} needed to access the database
+     * @param jsonSerializer                           the {@link JSONSerializer} that is used to serialize/deserialize message payloads
+     * @param sharedQueueTableName                     the name of the table that will contain all messages (across all {@link QueueName}'s).<br>
+     *                                                 See the other constructors for the full security note on this parameter.
+     * @param multiTableChangeListener                 optional {@link MultiTableChangeListener} that allows {@link PostgresqlDurableQueues} to use {@link QueuePollingOptimizer}
+     * @param queuePollingOptimizerFactory             optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command
+     * @param transactionalMode                        The {@link TransactionalMode} for this {@link DurableQueues} instance
+     * @param messageHandlingTimeout                   Only required if <code>transactionalMode</code> is {@link TransactionalMode#SingleOperationTransaction}
+     * @param useCentralizedMessageFetcher             Whether to use the {@link CentralizedMessageFetcher} (true) or fallback to the traditional {@link DefaultDurableQueueConsumer} (false)
+     * @param centralizedMessageFetcherPollingInterval Set the polling interval for the {@link CentralizedMessageFetcher}
+     * @param centralizedQueuePollingOptimizerFactory  Optional factory function that creates a {@link QueuePollingOptimizer} for each queue when using centralized message fetching
+     * @param useOrderedUnorderedQuery                 whether to use the ordered/unordered query optimization for message fetching
+     * @param useBatchedFetch                          opt in to batched fetching in the {@link CentralizedMessageFetcher}. Defaults to {@code false} everywhere else;
+     *                                                 when {@code false} every poll uses per-queue fetching and {@code batchedFetchSwitchThreshold} is ignored
+     * @param batchedFetchSwitchThreshold              only consulted when {@code useBatchedFetch} is {@code true}: per-queue fetch for active
+     *                                                 queue counts &lt;= threshold, batched fetch above it
+     * @param batchedFetchWarnRowsThreshold            warning threshold for the number of rows returned by a single batched fetch
+     */
+    public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                   JSONSerializer jsonSerializer,
+                                   String sharedQueueTableName,
+                                   MultiTableChangeListener<TableChangeNotification> multiTableChangeListener,
+                                   Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory,
+                                   TransactionalMode transactionalMode,
+                                   Duration messageHandlingTimeout,
+                                   boolean useCentralizedMessageFetcher,
+                                   Duration centralizedMessageFetcherPollingInterval,
+                                   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
                                    boolean useOrderedUnorderedQuery,
-                                   int centralizedBatchedFetchSwitchThreshold,
-                                   int batchedFetchWarnRowsThreshold,
-                                   double batchedFetchWarnDedupRatioThreshold) {
+                                   boolean useBatchedFetch,
+                                   int batchedFetchSwitchThreshold,
+                                   int batchedFetchWarnRowsThreshold) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer");
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
         this.useCentralizedMessageFetcher = useCentralizedMessageFetcher;
         this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
-        requireTrue(centralizedBatchedFetchSwitchThreshold >= 0, "centralizedBatchedFetchSwitchThreshold must be >= 0");
+        requireTrue(batchedFetchSwitchThreshold >= 0, "batchedFetchSwitchThreshold must be >= 0");
         requireTrue(batchedFetchWarnRowsThreshold >= 0, "batchedFetchWarnRowsThreshold must be >= 0");
-        requireTrue(batchedFetchWarnDedupRatioThreshold >= 1.0d, "batchedFetchWarnDedupRatioThreshold must be >= 1.0");
-        this.centralizedBatchedFetchSwitchThreshold = centralizedBatchedFetchSwitchThreshold;
+        this.useBatchedFetch = useBatchedFetch;
+        this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
         this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
-        this.batchedFetchWarnDedupRatioThreshold = batchedFetchWarnDedupRatioThreshold;
 
         // Initialize helper classes
         this.durableQueuesSql = new DurableQueuesSql(sharedQueueTableName);
@@ -412,7 +470,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             this.centralizedMessageFetcher = new CentralizedMessageFetcher(this,
                                                                            requireNonNull(centralizedMessageFetcherPollingInterval, "No centralizedMessageFetcherPollingInterval provided").toMillis(),
                                                                            interceptors,
-                                                                           this.centralizedBatchedFetchSwitchThreshold);
+                                                                           this.useBatchedFetch,
+                                                                           this.batchedFetchSwitchThreshold);
             this.centralizedQueuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory != null ? centralizedQueuePollingOptimizerFactory : this::createCentralizedQueuePollingOptimizerFor;
         }
 
@@ -1657,25 +1716,17 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 }
                 
                 var mappingResult = mapQueryResultsWithExceptionHandling(query);
-                var rawMessages = mappingResult.successfulMessages();
-                Set<QueueEntryId> seenQueueEntryIds = new HashSet<>();
-                var messages = rawMessages.stream()
-                                          .filter(m -> seenQueueEntryIds.add(m.getId()))
-                                          .toList();
-                int rawRowCount = rawMessages.size();
-                int uniqueRowCount = messages.size();
-                double dedupRatio = uniqueRowCount == 0 ? 1.0d : (double) rawRowCount / (double) uniqueRowCount;
+                // No de-duplication is applied here: the batched statement numbers all candidates for a queue in
+                // a single window and updates each row at most once, so a QueueEntryId cannot appear twice.
+                var messages = mappingResult.successfulMessages();
 
-                if (rawRowCount > batchedFetchWarnRowsThreshold || dedupRatio > batchedFetchWarnDedupRatioThreshold) {
-                    log.warn("Batched fetch produced high result volume: activeQueues={}, rawRows={}, uniqueRows={}, dedupRatio={}, warnRowsThreshold={}, warnDedupRatioThreshold={}",
+                if (messages.size() > batchedFetchWarnRowsThreshold) {
+                    log.warn("Batched fetch produced high result volume: activeQueues={}, rows={}, warnRowsThreshold={}",
                              activeQueues.size(),
-                             rawRowCount,
-                             uniqueRowCount,
-                             String.format(Locale.ROOT, "%.3f", dedupRatio),
-                             batchedFetchWarnRowsThreshold,
-                             batchedFetchWarnDedupRatioThreshold);
+                             messages.size(),
+                             batchedFetchWarnRowsThreshold);
                 }
-                
+
                 // Log failed mappings for monitoring purposes
                 if (!mappingResult.failedMappings().isEmpty()) {
                     log.warn("Failed to deserialize {} messages during batch fetch. Failed QueueEntryIds: {}",

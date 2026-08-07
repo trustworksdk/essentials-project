@@ -63,9 +63,9 @@ public final class PostgresqlDurableQueuesBuilder {
     private boolean                                    useCentralizedMessageFetcher             = true;
     private Duration                                   centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
     private Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory  = null;
-    private int                                        centralizedBatchedFetchSwitchThreshold   = CentralizedMessageFetcher.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
+    private boolean                                    useBatchedFetch                          = PostgresqlDurableQueues.DEFAULT_USE_BATCHED_FETCH;
+    private int                                        batchedFetchSwitchThreshold              = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
-    private double                                     batchedFetchWarnDedupRatioThreshold      = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_DEDUP_RATIO_THRESHOLD;
 
     private boolean useOrderedUnorderedQuery;
 
@@ -199,15 +199,36 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
-     * Set the active queue-count threshold for switching from per-queue fetch to batched fetch
-     * in the {@link CentralizedMessageFetcher}.<br>
-     * Default value is {@value dk.trustworks.essentials.components.foundation.messaging.queue.CentralizedMessageFetcher#DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD}.
+     * Opt in to batched fetching in the {@link CentralizedMessageFetcher}.<br>
+     * Default value is {@code false}: every poll uses per-queue fetching, whatever the active queue count.<br>
+     * <br>
+     * Batched fetching collapses one query per active queue into a single query across all of them. The
+     * queue-fetch-strategy benchmark found this to pay off above roughly four active queues - see
+     * {@code BENCHMARK-queue-fetch-strategy.md} and {@link #setBatchedFetchSwitchThreshold(int)}.<br>
+     * <br>
+     * Note that the two strategies do not select identical messages: per-queue fetching is ordered-priority,
+     * whereas batched fetching selects the oldest eligible messages regardless of delivery mode.
      *
-     * @param centralizedBatchedFetchSwitchThreshold threshold: per-queue fetch for queue counts <= threshold, batched fetch above threshold
+     * @param useBatchedFetch whether the centralized fetcher may use batched fetching
      * @return this builder instance
      */
-    public PostgresqlDurableQueuesBuilder setCentralizedBatchedFetchSwitchThreshold(int centralizedBatchedFetchSwitchThreshold) {
-        this.centralizedBatchedFetchSwitchThreshold = centralizedBatchedFetchSwitchThreshold;
+    public PostgresqlDurableQueuesBuilder setUseBatchedFetch(boolean useBatchedFetch) {
+        this.useBatchedFetch = useBatchedFetch;
+        return this;
+    }
+
+    /**
+     * Set the active queue-count threshold for switching from per-queue fetch to batched fetch
+     * in the {@link CentralizedMessageFetcher}.<br>
+     * Only consulted when batched fetching has been enabled via {@link #setUseBatchedFetch(boolean)}.<br>
+     * Default value is {@code 4}, the point at which the queue-fetch-strategy benchmark showed batched
+     * fetching starting to win.
+     *
+     * @param batchedFetchSwitchThreshold threshold: per-queue fetch for queue counts <= threshold, batched fetch above threshold
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setBatchedFetchSwitchThreshold(int batchedFetchSwitchThreshold) {
+        this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
         return this;
     }
 
@@ -219,17 +240,6 @@ public final class PostgresqlDurableQueuesBuilder {
      */
     public PostgresqlDurableQueuesBuilder setBatchedFetchWarnRowsThreshold(int batchedFetchWarnRowsThreshold) {
         this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
-        return this;
-    }
-
-    /**
-     * Set warning threshold for batched fetch dedup ratio (rawRows/uniqueRows).
-     *
-     * @param batchedFetchWarnDedupRatioThreshold warning threshold for dedup ratio
-     * @return this builder instance
-     */
-    public PostgresqlDurableQueuesBuilder setBatchedFetchWarnDedupRatioThreshold(double batchedFetchWarnDedupRatioThreshold) {
-        this.batchedFetchWarnDedupRatioThreshold = batchedFetchWarnDedupRatioThreshold;
         return this;
     }
 
@@ -257,8 +267,8 @@ public final class PostgresqlDurableQueuesBuilder {
                                            centralizedMessageFetcherPollingInterval,
                                            centralizedQueuePollingOptimizerFactory,
                                            useOrderedUnorderedQuery,
-                                           centralizedBatchedFetchSwitchThreshold,
-                                           batchedFetchWarnRowsThreshold,
-                                           batchedFetchWarnDedupRatioThreshold);
+                                           useBatchedFetch,
+                                           batchedFetchSwitchThreshold,
+                                           batchedFetchWarnRowsThreshold);
     }
 }
