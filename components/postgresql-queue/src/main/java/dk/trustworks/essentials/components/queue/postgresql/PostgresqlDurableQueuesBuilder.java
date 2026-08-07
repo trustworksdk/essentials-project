@@ -63,6 +63,9 @@ public final class PostgresqlDurableQueuesBuilder {
     private boolean                                    useCentralizedMessageFetcher             = true;
     private Duration                                   centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
     private Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory  = null;
+    private boolean                                    useBatchedFetch                          = PostgresqlDurableQueues.DEFAULT_USE_BATCHED_FETCH;
+    private int                                        batchedFetchSwitchThreshold              = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
+    private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
 
     private boolean useOrderedUnorderedQuery;
 
@@ -196,6 +199,51 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
+     * Opt in to batched fetching in the {@link CentralizedMessageFetcher}.<br>
+     * Default value is {@code false}: every poll uses per-queue fetching, whatever the active queue count.<br>
+     * <br>
+     * Batched fetching collapses one query per active queue into a single query across all of them. The
+     * queue-fetch-strategy benchmark found this to pay off above roughly four active queues - see
+     * {@code BENCHMARK-queue-fetch-strategy.md} and {@link #setBatchedFetchSwitchThreshold(int)}.<br>
+     * <br>
+     * Note that the two strategies do not select identical messages: per-queue fetching is ordered-priority,
+     * whereas batched fetching selects the oldest eligible messages regardless of delivery mode.
+     *
+     * @param useBatchedFetch whether the centralized fetcher may use batched fetching
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setUseBatchedFetch(boolean useBatchedFetch) {
+        this.useBatchedFetch = useBatchedFetch;
+        return this;
+    }
+
+    /**
+     * Set the active queue-count threshold for switching from per-queue fetch to batched fetch
+     * in the {@link CentralizedMessageFetcher}.<br>
+     * Only consulted when batched fetching has been enabled via {@link #setUseBatchedFetch(boolean)}.<br>
+     * Default value is {@code 4}, the point at which the queue-fetch-strategy benchmark showed batched
+     * fetching starting to win.
+     *
+     * @param batchedFetchSwitchThreshold threshold: per-queue fetch for queue counts <= threshold, batched fetch above threshold
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setBatchedFetchSwitchThreshold(int batchedFetchSwitchThreshold) {
+        this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
+        return this;
+    }
+
+    /**
+     * Set warning threshold for batched fetch raw result size.
+     *
+     * @param batchedFetchWarnRowsThreshold warning threshold for raw rows returned from batched fetch
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setBatchedFetchWarnRowsThreshold(int batchedFetchWarnRowsThreshold) {
+        this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
+        return this;
+    }
+
+    /**
      * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
      * performance for mixed, ordered and unordered message processing scenarios
      *
@@ -218,6 +266,9 @@ public final class PostgresqlDurableQueuesBuilder {
                                            useCentralizedMessageFetcher,
                                            centralizedMessageFetcherPollingInterval,
                                            centralizedQueuePollingOptimizerFactory,
-                                           useOrderedUnorderedQuery);
+                                           useOrderedUnorderedQuery,
+                                           useBatchedFetch,
+                                           batchedFetchSwitchThreshold,
+                                           batchedFetchWarnRowsThreshold);
     }
 }

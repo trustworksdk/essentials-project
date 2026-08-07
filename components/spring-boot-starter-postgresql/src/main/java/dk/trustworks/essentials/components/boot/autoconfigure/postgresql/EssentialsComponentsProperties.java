@@ -288,6 +288,9 @@ public class EssentialsComponentsProperties {
         private boolean           useCentralizedMessageFetcher             = true;
         private Duration          centralizedMessageFetcherPollingInterval = Duration.ofMillis(20);
         private Double            centralizedPollingDelayBackOffFactor     = 1.5d;
+        private boolean           useBatchedFetch                          = false;
+        private int               batchedFetchSwitchThreshold              = 4;
+        private int               batchedFetchWarnRowsThreshold            = 5000;
 
         private boolean verboseTracing = false;
 
@@ -647,6 +650,56 @@ public class EssentialsComponentsProperties {
          */
         public void setCentralizedPollingDelayBackOffFactor(Double centralizedPollingDelayBackOffFactor) {
             this.centralizedPollingDelayBackOffFactor = centralizedPollingDelayBackOffFactor;
+        }
+
+        /**
+         * Is batched fetching enabled for the centralized message fetcher? Defaults to {@code false}, i.e. every
+         * poll uses per-queue fetching whatever the active queue count.
+         */
+        public boolean isUseBatchedFetch() {
+            return useBatchedFetch;
+        }
+
+        /**
+         * Opt in to batched fetching in the centralized message fetcher. Batched fetching collapses one query per
+         * active queue into a single query across all of them; the queue-fetch-strategy benchmark found this to pay
+         * off above roughly four active queues. Note the two strategies do not select identical messages: per-queue
+         * fetching is ordered-priority, batched fetching is oldest-first.
+         */
+        public void setUseBatchedFetch(boolean useBatchedFetch) {
+            this.useBatchedFetch = useBatchedFetch;
+        }
+
+        /**
+         * Get the active queue-count threshold for switching between per-queue fetch and batched fetch in the centralized message fetcher.
+         * Per-queue fetch is used for queue counts <= threshold, batched fetch for higher counts.
+         * Only consulted when batched fetching is enabled.
+         */
+        public int getBatchedFetchSwitchThreshold() {
+            return batchedFetchSwitchThreshold;
+        }
+
+        /**
+         * Set the active queue-count threshold for switching between per-queue fetch and batched fetch in the centralized message fetcher.
+         * Only consulted when batched fetching is enabled. Defaults to 4, the point at which the queue-fetch-strategy
+         * benchmark showed batched fetching starting to win.
+         */
+        public void setBatchedFetchSwitchThreshold(int batchedFetchSwitchThreshold) {
+            this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
+        }
+
+        /**
+         * Get warning threshold for raw rows returned by batched fetch.
+         */
+        public int getBatchedFetchWarnRowsThreshold() {
+            return batchedFetchWarnRowsThreshold;
+        }
+
+        /**
+         * Set warning threshold for raw rows returned by batched fetch.
+         */
+        public void setBatchedFetchWarnRowsThreshold(int batchedFetchWarnRowsThreshold) {
+            this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
         }
 
         /**

@@ -17,9 +17,11 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 /**
- * Integration tests for distributed competing consumers using the centralized message fetcher
+ * Runs the shared distributed competing-consumer integration tests
+ * with centralized message fetching enabled.
  */
 class CentralizedPostgresqlDistributedCompetingConsumersDurableQueuesIT extends PostgresqlDistributedCompetingConsumersDurableQueuesIT {
+
     @Override
     protected boolean useCentralizedMessageFetcher() {
         return true;

@@ -1,20 +1,20 @@
 /*
- * Copyright 2021-2026 the original author or authors.
+ *  Copyright 2021-2025 the original author or authors.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
  *
- *      https://www.apache.org/licenses/LICENSE-2.0
+ *       https://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
  */
 
-package dk.trustworks.essentials.components.queue.postgresql;
+package dk.trustworks.essentials.components.queue.postgresql.benchmark;
 
 
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
@@ -23,11 +23,13 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.postgresql.MultiTableChangeListener;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesLoadIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.queue.postgresql.*;
 import dk.trustworks.essentials.components.queue.postgresql.test_data.TestMessageFactory;
 import dk.trustworks.essentials.reactive.LocalEventBus;
 import dk.trustworks.essentials.shared.time.StopWatch;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
@@ -41,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.waitAtMost;
 
 @Testcontainers
+@EnabledIfSystemProperty(named = "benchmark.run", matches = "true")
 public abstract class PostgresqlDurableQueuesPerformanceIT extends DurableQueuesLoadIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
 
     public static final int TOTAL_MESSAGES = 100000;
