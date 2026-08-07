@@ -344,7 +344,8 @@ public class CdcEventStoreSubscriptionManager_2_node_exclusive_vs_nonexclusive_I
 
             // Using your existing converter/extractor style (use the same resolver as your ITs)
             AggregateTypeResolver resolver  = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-            var                   converter = new JacksonWal2JsonToPersistedEventConverter(node1.jsonSerializer, resolver);
+            var                   converter = new JacksonWal2JsonToPersistedEventConverter(node1.jsonSerializer, resolver,
+                                                                                  AggregateIdSerializerResolver.forEventStore(node1.baseEventStore));
             var                   extractor = new JacksonWalGlobalOrdersExtractor(node1.jsonSerializer, resolver);
 
             var availability = new CdcAvailability();

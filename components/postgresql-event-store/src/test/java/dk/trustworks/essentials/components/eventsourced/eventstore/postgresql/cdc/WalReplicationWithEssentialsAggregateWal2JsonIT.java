@@ -91,7 +91,7 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
             if ("orders_events".equalsIgnoreCase(table)) return ORDERS;
             return null;
         };
-        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
         var extractor = new JacksonWalGlobalOrdersExtractor(jacksonJSONSerializer, resolver);
 
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
@@ -179,7 +179,7 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
             if ("orders_events".equalsIgnoreCase(table)) return ORDERS;
             return null;
         };
-        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
         var extractor = new JacksonWalGlobalOrdersExtractor(jacksonJSONSerializer, resolver);
 
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
@@ -267,7 +267,7 @@ public class WalReplicationWithEssentialsAggregateWal2JsonIT extends AbstractLog
             if ("orders_events".equalsIgnoreCase(table)) return ORDERS;
             return null;
         };
-        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
 
         var cfg = WalReplicationTailerProperties.defaults(

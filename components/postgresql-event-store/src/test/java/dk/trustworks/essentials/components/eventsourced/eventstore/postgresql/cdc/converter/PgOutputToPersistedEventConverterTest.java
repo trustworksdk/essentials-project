@@ -36,7 +36,8 @@ class PgOutputToPersistedEventConverterTest {
     private final AggregateType orders = AggregateType.of("Orders");
     private final PgOutputToPersistedEventConverter converter = new PgOutputToPersistedEventConverter(
             EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
-            tableName -> "orders_events".equals(tableName) ? orders : null
+            tableName -> "orders_events".equals(tableName) ? orders : null,
+            aggregateType -> Optional.empty()
     );
 
     @Test
@@ -169,7 +170,8 @@ class PgOutputToPersistedEventConverterTest {
         var strictResolver = new DefaultAggregateTypeResolver(Map.of("orders_events", orders));
         var strictConverter = new PgOutputToPersistedEventConverter(
                 EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
-                strictResolver
+                strictResolver,
+                aggregateType -> Optional.empty()
         );
         var otherTable = new PgOutputRowChange("insert", 1, "public", "durable_subscriptions", null, null, Map.of(), Map.of(), List.of());
 

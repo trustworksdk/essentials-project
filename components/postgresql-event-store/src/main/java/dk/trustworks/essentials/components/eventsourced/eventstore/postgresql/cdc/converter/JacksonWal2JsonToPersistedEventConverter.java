@@ -84,18 +84,6 @@ public final class JacksonWal2JsonToPersistedEventConverter implements LogicalRe
     }
 
     /**
-     * @deprecated Leaves {@link PersistedEvent#aggregateId()} as the raw WAL text instead of the typed
-     * aggregate id the polling path produces, so CDC-delivered events disagree with polled ones. Use
-     * {@link #JacksonWal2JsonToPersistedEventConverter(JSONEventSerializer, AggregateTypeResolver, AggregateIdSerializerResolver)}
-     * with {@link AggregateIdSerializerResolver#forEventStore} instead.
-     */
-    @Deprecated(forRemoval = true)
-    public JacksonWal2JsonToPersistedEventConverter(JSONEventSerializer jsonSerializer,
-                                                    AggregateTypeResolver aggregateTypeResolver) {
-        this(jsonSerializer, aggregateTypeResolver, AggregateIdSerializerResolver.rawText());
-    }
-
-    /**
      * Exposes the configured {@link JSONEventSerializer} so that the owning
      * {@code Wal2JsonLogicalDecodingPlugin} can supply a properly-wired
      * {@code DefaultWalMessageFilter} as its default raw-payload filter — without forcing every

@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.se
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -87,7 +88,8 @@ class PgOutputInboxDedupKeyTest {
         properties.setMessages(false);
         var converter = new PgOutputToPersistedEventConverter(
                 EssentialsJSONEventSerializers.createForActiveJacksonFlavor(),
-                table -> null);
+                table -> null,
+                aggregateType -> Optional.empty());
         return new PgOutputLogicalDecodingPlugin(properties, converter);
     }
 }

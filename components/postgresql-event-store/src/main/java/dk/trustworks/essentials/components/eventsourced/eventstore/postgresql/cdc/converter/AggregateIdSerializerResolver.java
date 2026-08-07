@@ -62,16 +62,6 @@ public interface AggregateIdSerializerResolver {
                                           .map(configuration -> configuration.aggregateIdSerializer);
     }
 
-    /**
-     * Resolver that never resolves, leaving aggregate ids as the raw text read from the WAL.
-     * <p>
-     * This reproduces the behaviour CDC had before the typed-id fix and exists only so the deprecated
-     * converter constructors keep their old semantics. Do not wire it into a running system: it is the
-     * configuration in which CDC-delivered events disagree with polled ones.
-     */
-    static AggregateIdSerializerResolver rawText() {
-        return aggregateType -> Optional.empty();
-    }
 
     /**
      * Apply this resolver to a raw WAL {@code aggregate_id}, falling back to the raw value when the aggregate

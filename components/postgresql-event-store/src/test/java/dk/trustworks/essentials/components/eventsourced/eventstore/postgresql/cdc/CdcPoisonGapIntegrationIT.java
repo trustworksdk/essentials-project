@@ -99,7 +99,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
             return null;
         };
 
-        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
 
         var walGlobalOrdersExtractor = new JacksonWalGlobalOrdersExtractor(
                 jacksonJSONSerializer,
@@ -316,7 +316,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
         var walGlobalOrdersExtractor = new JacksonWalGlobalOrdersExtractor(jacksonJSONSerializer, resolver);
         var poisonNotifier = new RecordingPoisonNotifier();
         var dispatched = new CopyOnWriteArrayList<PersistedEvent>();
@@ -373,7 +373,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
         String slotName = "slot_" + UUID.randomUUID().toString().replace("-", "");
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
         var walGlobalOrdersExtractor = new JacksonWalGlobalOrdersExtractor(jacksonJSONSerializer, resolver);
         var poisonNotifier = new RecordingPoisonNotifier();
         var dispatchedCount = new AtomicInteger(0);

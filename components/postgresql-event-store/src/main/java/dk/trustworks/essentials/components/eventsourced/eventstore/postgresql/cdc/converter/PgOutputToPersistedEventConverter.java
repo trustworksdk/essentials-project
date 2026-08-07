@@ -87,18 +87,6 @@ public final class PgOutputToPersistedEventConverter {
     }
 
     /**
-     * @deprecated Leaves {@link PersistedEvent#aggregateId()} as the raw WAL text instead of the typed
-     * aggregate id the polling path produces, so CDC-delivered events disagree with polled ones. Use
-     * {@link #PgOutputToPersistedEventConverter(JSONEventSerializer, AggregateTypeResolver, AggregateIdSerializerResolver)}
-     * with {@link AggregateIdSerializerResolver#forEventStore} instead.
-     */
-    @Deprecated(forRemoval = true)
-    public PgOutputToPersistedEventConverter(JSONEventSerializer jsonSerializer,
-                                             AggregateTypeResolver aggregateTypeResolver) {
-        this(jsonSerializer, aggregateTypeResolver, AggregateIdSerializerResolver.rawText());
-    }
-
-    /**
      * Convert the row change when it represents a relevant EventStore insert.
      * Optional.empty() means the row was not relevant for EventStore processing, not that conversion failed.
      */

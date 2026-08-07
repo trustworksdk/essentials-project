@@ -42,12 +42,14 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.te
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.ProductEvent;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.test_data.ProductId;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
+import dk.trustworks.essentials.types.LongRange;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -115,7 +117,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         createPublication(publicationName);
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
 
         var availability = new CdcAvailability();
@@ -162,7 +164,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         createPublication(publicationName);
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
 
         var availability = new CdcAvailability();
@@ -226,7 +228,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         createPublication(publicationName);
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
         List<PersistedEvent> node1Events = new CopyOnWriteArrayList<>();
         List<PersistedEvent> node2Events = new CopyOnWriteArrayList<>();
 
@@ -286,7 +288,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         createPublication(publicationName);
 
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
 
         var availability = new CdcAvailability();
         var tailer = new WalReplicationTailer(
@@ -356,7 +358,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         String publicationName = publicationName();
         createPublicationForOrdersAndProducts(publicationName);
 
-        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver());
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver(), AggregateIdSerializerResolver.forEventStore(eventStore));
         List<PersistedEvent> cdcPersistedEvents = new CopyOnWriteArrayList<>();
 
         var availability          = new CdcAvailability();
@@ -413,7 +415,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         List<PersistedEvent> firstRunEvents = new CopyOnWriteArrayList<>();
 
         var tailerPlugin = pgOutputPlugin(publicationName,
-                                          new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver()));
+                                          new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver(), AggregateIdSerializerResolver.forEventStore(eventStore)));
         var tailer       = inboxPgOutputTailer(slotName, tailerPlugin, ordersAndProductsTablesSupplier(), availability);
 
         var firstDispatcher = inboxDispatcher(slotName, tailerPlugin, availability, firstRunEvents);
@@ -433,7 +435,7 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
         // JVM restart. The RELATION rows are still in the inbox, already DISPATCHED.
         List<PersistedEvent> afterRestartEvents = new CopyOnWriteArrayList<>();
         var restartedPlugin     = pgOutputPlugin(publicationName,
-                                                 new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver()));
+                                                 new PgOutputToPersistedEventConverter(jacksonJSONSerializer, ordersAndProductsResolver(), AggregateIdSerializerResolver.forEventStore(eventStore)));
         var restartedDispatcher = inboxDispatcher(slotName, restartedPlugin, availability, afterRestartEvents);
         restartedDispatcher.start();
 
@@ -456,6 +458,97 @@ class WalReplicationWithEssentialsAggregatePgOutputIT extends AbstractLogicalRep
 
         restartedDispatcher.stop();
         tailer.stop();
+    }
+
+    /**
+     * Payload parity: an event delivered by CDC must be indistinguishable from the same event loaded
+     * through the polling path. Not just "the same events in the same order" — the same <em>values</em>,
+     * field for field, at the same types.
+     * <p>
+     * This is the gate that was missing. {@code CdcEventStoreSubscriptionParity_IT} compares
+     * global-event-orders and counts, and it runs against an INACTIVE {@link CdcAvailability}, so it
+     * exercises the fallback-to-polling path rather than the CDC decode path — it cannot see a converter
+     * defect at all. Nothing compared what CDC actually produced against what polling produces, which is
+     * how CDC came to deliver {@code aggregateId} as a raw {@code String} where polling delivers the typed
+     * id. Everything downstream that trusted the declared type then broke under CDC and only under CDC.
+     */
+    @Test
+    void cdc_delivered_events_are_field_for_field_identical_to_polled_events() {
+        String slotName = slotName();
+        String publicationName = publicationName();
+        createPublicationForOrdersAndProducts(publicationName);
+
+        var pgOutputConverter = new PgOutputToPersistedEventConverter(jacksonJSONSerializer,
+                                                                      ordersAndProductsResolver(),
+                                                                      AggregateIdSerializerResolver.forEventStore(eventStore));
+        List<PersistedEvent> cdcDelivered = new CopyOnWriteArrayList<>();
+
+        var availability          = new CdcAvailability();
+        var logicalDecodingPlugin = pgOutputPlugin(publicationName, pgOutputConverter);
+        var tailer                = inboxPgOutputTailer(slotName, logicalDecodingPlugin, ordersAndProductsTablesSupplier(), availability);
+        var dispatcher            = inboxDispatcher(slotName, logicalDecodingPlugin, availability, cdcDelivered);
+
+        tailer.startAndAwaitReady(Duration.ofSeconds(10));
+        dispatcher.start();
+
+        appendOrderEvents();
+        appendProductEvents();
+
+        await()
+                .atMost(Duration.ofSeconds(30))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> assertThat(cdcDelivered).hasSizeGreaterThanOrEqualTo(6));
+
+        for (var aggregateType : List.of(ORDERS, PRODUCTS)) {
+            var polled = unitOfWorkFactory.withUnitOfWork(uow ->
+                    eventStore.loadEventsByGlobalOrder(aggregateType, LongRange.from(1)).toList());
+            var streamed = cdcDelivered.stream()
+                                       .filter(event -> event.aggregateType().equals(aggregateType))
+                                       .sorted(Comparator.comparingLong(event -> event.globalEventOrder().longValue()))
+                                       .toList();
+
+            assertThat(comparableFormOf(streamed))
+                    .as("CDC-delivered events for '%s' must match the polled events field for field", aggregateType)
+                    .isEqualTo(comparableFormOf(polled));
+        }
+
+        dispatcher.stop();
+        tailer.stop();
+    }
+
+    /**
+     * Every field a subscriber can observe, with the aggregate-id's runtime class included explicitly —
+     * comparing only its {@code toString()} would let a raw {@code String} masquerade as the typed id,
+     * which is precisely the defect this guards.
+     */
+    private List<String> comparableFormOf(List<PersistedEvent> events) {
+        return events.stream()
+                     .map(event -> String.join("|",
+                                               event.eventId().toString(),
+                                               event.aggregateType().toString(),
+                                               String.valueOf(event.aggregateId()),
+                                               event.aggregateId().getClass().getName(),
+                                               String.valueOf(event.eventOrder().longValue()),
+                                               String.valueOf(event.eventRevision().intValue()),
+                                               String.valueOf(event.globalEventOrder().longValue()),
+                                               event.event().getEventTypeOrNamePersistenceValue(),
+                                               parsedJson(event.event().getJson()),
+                                               parsedJson(event.metaData().getJson()),
+                                               String.valueOf(event.tenant())))
+                     .toList();
+    }
+
+    /**
+     * Compare JSON payloads by structure, not by their exact text.
+     * <p>
+     * The two paths legitimately differ in formatting: the polling path returns the {@code jsonb} column as
+     * Postgres renders it ({@code {"orderId": "…"}}), while the CDC converter re-serializes what it decodes
+     * and so emits the canonical compact form ({@code {"orderId":"…"}}). That re-serialization is deliberate
+     * — it is what keeps the persisted payload byte-identical across Jackson majors. Values, ordering and
+     * types must still agree exactly, which is what parsing and comparing the structures checks.
+     */
+    private String parsedJson(String json) {
+        return String.valueOf(jacksonJSONSerializer.deserialize(json, Object.class));
     }
 
     private Set<AggregateType> aggregateTypesOf(List<PersistedEvent> events) {
