@@ -20,6 +20,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.json.EssentialsJSONEventSerializers;
 import org.junit.jupiter.api.Test;
 
+import java.util.Optional;
+
 import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,7 +33,7 @@ class WalParserModeBytesTest {
     void converter_parses_string_and_bytes_equivalently() {
         var serializer = EssentialsJSONEventSerializers.createForActiveJacksonFlavor();
         AggregateTypeResolver resolver = table -> "orders_events".equalsIgnoreCase(table) ? ORDERS : null;
-        var converter = new JacksonWal2JsonToPersistedEventConverter(serializer, resolver);
+        var converter = new JacksonWal2JsonToPersistedEventConverter(serializer, resolver, aggregateType -> Optional.empty());
 
         var fromString = converter.convert(validWal());
         var fromBytes = converter.convert(validWal().getBytes(StandardCharsets.UTF_8));

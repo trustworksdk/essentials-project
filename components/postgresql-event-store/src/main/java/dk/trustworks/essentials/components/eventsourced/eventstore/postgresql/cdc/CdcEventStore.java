@@ -202,6 +202,7 @@ public class CdcEventStore implements EventStore {
                                            Optional<SubscriberId> subscriptionId,
                                            Optional<Function<String, EventStorePollingOptimizer>> eventStorePollingOptimizerFactory) {
         if (!availability.isActive()) {
+            log.debug("Cdc is not active, using polling fallback");
             availability.fallbackUsed();
             if (fallbackPollCounter != null) fallbackPollCounter.increment();
             return buildAdaptiveLiveSource(

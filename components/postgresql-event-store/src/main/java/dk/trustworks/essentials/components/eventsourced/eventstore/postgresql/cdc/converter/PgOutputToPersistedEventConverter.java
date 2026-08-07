@@ -40,6 +40,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * Converts canonical {@link PgOutputRowChange} inserts into {@link PersistedEvent}s.
  */
@@ -57,6 +59,11 @@ public final class PgOutputToPersistedEventConverter {
 
     private final JSONEventSerializer jsonSerializer;
     private final AggregateTypeResolver      aggregateTypeResolver;
+    /**
+     * Turns the WAL's text {@code aggregate_id} back into the typed id, matching what
+     * {@code PersistedEventRowMapper} produces on the polling path.
+     */
+    private final AggregateIdSerializerResolver aggregateIdSerializerResolver;
 
     /**
      * Diagnostic counters — answer "why did the dispatcher publish 0 events?" without needing to
@@ -72,9 +79,11 @@ public final class PgOutputToPersistedEventConverter {
     private final AtomicLong insertsWithUnknownAggregateCount = new AtomicLong(0);
 
     public PgOutputToPersistedEventConverter(JSONEventSerializer jsonSerializer,
-                                             AggregateTypeResolver aggregateTypeResolver) {
+                                             AggregateTypeResolver aggregateTypeResolver,
+                                             AggregateIdSerializerResolver aggregateIdSerializerResolver) {
         this.jsonSerializer = jsonSerializer;
         this.aggregateTypeResolver = aggregateTypeResolver;
+        this.aggregateIdSerializerResolver = requireNonNull(aggregateIdSerializerResolver, "aggregateIdSerializerResolver cannot be null");
     }
 
     /**
@@ -129,7 +138,10 @@ public final class PgOutputToPersistedEventConverter {
     private PersistedEvent toPersistedEvent(AggregateType aggregateType,
                                             Map<String, PgOutputRowChange.PgOutputValue> values) {
         var eventId = EventId.of(requiredText(values, "event_id"));
-        var aggregateId = requiredObject(values, "aggregate_id");
+        // The WAL only ever carries the id as text. Deserialize it so PersistedEvent#aggregateId() holds the
+        // same typed id the polling path yields via PersistedEventRowMapper — consumers must not be able to
+        // tell which delivery path an event arrived on.
+        var aggregateId = aggregateIdSerializerResolver.deserializeOrRaw(aggregateType, requiredObject(values, "aggregate_id"));
         var eventOrder = EventOrder.of(requiredLong(values, "event_order"));
         var eventRevision = EventRevision.of(Integer.parseInt(requiredText(values, "event_revision")));
         var globalOrder = GlobalEventOrder.of(requiredLong(values, "global_order"));

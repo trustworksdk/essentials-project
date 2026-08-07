@@ -27,6 +27,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.PersistedEvent;
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 import org.jdbi.v3.core.Handle;
+import org.slf4j.*;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -47,6 +48,8 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public final class Wal2JsonLogicalDecodingPlugin implements LogicalDecodingPlugin {
     public static final String PLUGIN_NAME = "wal2json";
 
+     private static final Logger log = LoggerFactory.getLogger(Wal2JsonLogicalDecodingPlugin.class);
+
     private final WalReplicationTailerProperties              properties;
     private final LogicalReplicationToPersistedEventConverter converter;
     private final WalGlobalOrdersExtractor                    gapExtractor;
@@ -60,6 +63,7 @@ public final class Wal2JsonLogicalDecodingPlugin implements LogicalDecodingPlugi
         this.converter = requireNonNull(converter, "converter cannot be null");
         this.gapExtractor = requireNonNull(gapExtractor, "gapExtractor cannot be null");
         this.walParserMode = requireNonNull(walParserMode, "walParserMode cannot be null");
+        log.info("Wal2JsonLogicalDecodingPlugin created");
     }
 
     @Override

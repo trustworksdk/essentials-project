@@ -116,7 +116,7 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
             return null;
         };
 
-        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver);
+        var converter = new JacksonWal2JsonToPersistedEventConverter(jacksonJSONSerializer, resolver, AggregateIdSerializerResolver.forEventStore(eventStore));
 
         var walGlobalOrdersExtractor = new JacksonWalGlobalOrdersExtractor(
                 jacksonJSONSerializer,

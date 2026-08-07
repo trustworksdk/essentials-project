@@ -67,6 +67,7 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
         requireTrue(properties.getProtoVersion() > 0, "protoVersion must be > 0");
         this.messageDecoder = new PgOutputMessageDecoder(properties.getProtoVersion());
         this.rowChangeDecoder = new PgOutputRowChangeDecoder();
+        log.info("PgOutputLogicalDecodingPlugin created");
     }
 
     @Override
@@ -251,6 +252,44 @@ public final class PgOutputLogicalDecodingPlugin implements LogicalDecodingPlugi
         int dot = tableRef.indexOf('.');
         if (dot < 0) return quoteIdentifier(tableRef);
         return quoteIdentifier(tableRef.substring(0, dot)) + "." + quoteIdentifier(tableRef.substring(dot + 1));
+    }
+
+    /**
+     * pgoutput RELATION messages are <b>all reported at LSN {@code 0/0}</b> by
+     * {@code PGReplicationStream#getLastReceiveLSN()} — unlike row-change messages, they are
+     * synthesized by the walsender rather than read from a WAL record, so they carry no WAL
+     * position of their own.
+     * <p>
+     * That breaks the inbox's {@code unique(slot_name, lsn)} dedup key outright: the first
+     * RELATION message to arrive claims {@code 0/0} and every subsequent one — i.e. the schema
+     * for every <em>other</em> event-stream table — is swallowed by {@code on conflict do nothing}.
+     * The dispatcher's decoder then knows exactly one relation, and every INSERT on the remaining
+     * tables fails with {@link MissingRelationMetadataException} and is quarantined. With five
+     * event-stream tables that is four tables' worth of CDC silently dead from the first event on.
+     * <p>
+     * Qualifying the key with the relation OID keeps each table's schema on its own row while
+     * staying deterministic, so a RELATION message re-streamed after a reconnect still dedups
+     * against the row it wrote the first time.
+     */
+    @Override
+    public String inboxDedupKey(byte[] payloadBytes, String lsn) {
+        if (payloadBytes == null || payloadBytes.length < 5 || (char) payloadBytes[0] != 'R') {
+            return lsn;
+        }
+        int relationId = ((payloadBytes[1] & 0xFF) << 24)
+                | ((payloadBytes[2] & 0xFF) << 16)
+                | ((payloadBytes[3] & 0xFF) << 8)
+                | (payloadBytes[4] & 0xFF);
+        return lsn + ":R:" + relationId;
+    }
+
+    /**
+     * {@code 'R'} (RELATION) is pgoutput's schema message — the decoder cannot turn any INSERT
+     * into a row change until it has cached the matching relation.
+     */
+    @Override
+    public Set<Integer> schemaPayloadLeadingBytes() {
+        return Set.of((int) 'R');
     }
 
     /**

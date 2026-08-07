@@ -50,6 +50,31 @@ essentials:
       enabled: true
     closing-books:
       enabled: true
+    cdc:
+      # CDC is OFF by default (CdcProperties#enabled = false) — it needs database-side setup the
+      # framework won't assume. The demo opts in, and the compose Postgres is started with
+      # `wal_level=logical`, `max_replication_slots=10` and `max_wal_senders=10` (see compose.yml)
+      # with a superuser role, which covers the server-side prerequisites.
+      enabled: true
+      #
+      # The pgoutput publication is still NOT created by the framework unless auto-manage is
+      # switched on. Without a pre-created publication the tailer logs
+      #   "pgoutput publication 'essentials_cdc_publication' does not exist"
+      # and mode=AUTO silently falls back to polling. The demo lets the framework own the
+      # publication so a plain `docker compose up` gives a working CDC path with no DBA step.
+      #
+      # FOR_TABLE_LIST creates the publication with an explicit list of the registered event-stream
+      # tables, so pgoutput filters transactions that only touch non-event tables (durable_queues,
+      # fenced_locks, TTL, …) server-side. It requires only table ownership; the compose Postgres
+      # user is the image superuser, so either mode would work here.
+      #
+      # Note: auto-manage runs once at tailer startup. The demo's aggregate repositories are beans,
+      # so their event-stream tables are registered before the tailer starts — but aggregates
+      # registered after startup are not added to the publication without a restart.
+      pg-output:
+        publication:
+          auto-manage: true
+          mode: FOR_TABLE_LIST
 
 trading-demo:
   accounts:

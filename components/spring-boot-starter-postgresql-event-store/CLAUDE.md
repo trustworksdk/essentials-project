@@ -45,7 +45,7 @@ Override any `@ConditionalOnMissingBean` to replace defaults:
 
 ## Gotchas
 
-- **CDC enabled by default** (`matchIfMissing=true`). All CDC beans start unless explicitly disabled. Disabling requires `essentials.eventstore.cdc.enabled=false`.
+- **CDC is disabled by default** — every CDC `@Bean` is gated on `essentials.eventstore.cdc.enabled=true` with **no** `matchIfMissing`, so an app that says nothing gets no slot, no publication changes and no tailer. Consequences when adding a CDC bean: gate it the same way, or it starts for users who never opted in. Consequences for tests: an `ApplicationContextRunner` that expects `CdcApi`/`CdcHealthIndicator`/`CdcEventStore` must set the property explicitly — without it the beans are legitimately absent, and a test asserting their presence fails for the right reason
 - **Replication DataSource** created separately from the main `DataSource` — uses `PGSimpleDataSource` with `replication=database` + `preferQueryMode=simple` + `assumeMinServerVersion=17`. Parsed from `spring.datasource.url`; fails fast if URL absent.
 - **CDC + Notify-polling coexistence** — both can be enabled but WARN logged: CDC INBOX already delivers wake-up equivalent; running both adds DB load (trigger fire + LISTEN connection) for no liveness gain.
 - **`AggregateTypeResolver` and `WalMessageFilter` use live suppliers**, not snapshots — aggregates registered at runtime via `addAggregateEventStreamConfiguration(...)` become visible to CDC conversion and WAL filtering. Using snapshot would silently drop WAL events for late-registered aggregates.

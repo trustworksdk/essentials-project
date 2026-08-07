@@ -71,9 +71,39 @@ public class StarterAutoConfigurationIT {
                             "essentials.life-cycles.start-life-cycles=false"
                     ).applyTo(ctx.getEnvironment())); // needed
 
+    /**
+     * CDC is opt-in: every CDC bean is gated on {@code essentials.eventstore.cdc.enabled=true} with no
+     * {@code matchIfMissing}. Tests that assert on CDC beans must therefore opt in exactly as a real
+     * application does — see {@link #cdc_beans_are_absent_unless_explicitly_enabled()} for the other half
+     * of that contract.
+     */
+    private final ApplicationContextRunner cdcEnabledContextRunner =
+            contextRunner.withPropertyValues("essentials.eventstore.cdc.enabled=true");
+
+    /**
+     * CDC is opt-in. An application that says nothing about CDC must get no CDC pipeline at all — no
+     * tailer, no dispatcher, no availability state, and therefore no replication slot created and no
+     * publication touched on its database. This is the half of the contract that is easy to break by
+     * adding a new CDC bean without the gate, so it is asserted rather than assumed.
+     */
+    @Test
+    void cdc_beans_are_absent_unless_explicitly_enabled() {
+        contextRunner.run(ctx -> {
+            assertThat(ctx).doesNotHaveBean(CdcAvailability.class);
+            assertThat(ctx).doesNotHaveBean(CdcApi.class);
+            assertThat(ctx).doesNotHaveBean(WalReplicationTailer.class);
+            assertThat(ctx).doesNotHaveBean(CdcDispatcher.class);
+            assertThat(ctx).doesNotHaveBean(CdcEventStore.class);
+            assertThat(ctx).doesNotHaveBean("configuredLogicalDecodingPlugin");
+
+            // the event store itself must still be fully wired — CDC is an accelerator, not a dependency
+            assertThat(ctx).hasSingleBean(EventStoreApi.class);
+        });
+    }
+
     @Test
     void verify_api_beans() {
-        contextRunner.run(ctx -> {
+        cdcEnabledContextRunner.run(ctx -> {
             assertThat(ctx).hasSingleBean(EventStoreApi.class);
             EventStoreApi eventStoreApi = ctx.getBean(EventStoreApi.class);
             assertThat(eventStoreApi.findAllSubscriptions("principal")).isNotNull();
@@ -103,7 +133,7 @@ public class StarterAutoConfigurationIT {
 
     @Test
     void configures_pgoutput_plugin_and_exposes_publication_in_cdc_api() {
-        contextRunner
+        cdcEnabledContextRunner
                 .withPropertyValues(
                         "essentials.eventstore.cdc.plugin=pgoutput",
                         "essentials.eventstore.cdc.pg-output.publication-name=essentials_cdc_publication"
@@ -132,7 +162,7 @@ public class StarterAutoConfigurationIT {
 
     @Test
     void cdc_health_is_up_in_auto_mode_when_cdc_has_failed() {
-        contextRunner
+        cdcEnabledContextRunner
                 .withPropertyValues("essentials.eventstore.cdc.mode=AUTO")
                 .run(ctx -> {
                     assertThat(ctx).hasBean("cdcHealthIndicator");
@@ -148,7 +178,7 @@ public class StarterAutoConfigurationIT {
 
     @Test
     void cdc_health_is_down_in_require_mode_when_cdc_has_failed() {
-        contextRunner
+        cdcEnabledContextRunner
                 .withPropertyValues("essentials.eventstore.cdc.mode=REQUIRE")
                 .run(ctx -> {
                     assertThat(ctx).hasBean("cdcHealthIndicator");
@@ -164,7 +194,7 @@ public class StarterAutoConfigurationIT {
 
     @Test
     void cdc_availability_metrics_are_exposed_and_updated() {
-        contextRunner
+        cdcEnabledContextRunner
                 .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
                 .run(ctx -> {
                     var availability = ctx.getBean(CdcAvailability.class);

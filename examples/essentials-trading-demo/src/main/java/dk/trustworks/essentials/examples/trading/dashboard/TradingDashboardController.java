@@ -35,6 +35,15 @@ public class TradingDashboardController {
         this.streamService = streamService;
     }
 
+    /**
+     * Nothing is mapped at the root, so a bare {@code http://localhost:8080/} used to 404 — the first
+     * thing anyone starting the demo tries. Send them to the dashboard instead.
+     */
+    @GetMapping("/")
+    public String root() {
+        return "redirect:/admin";
+    }
+
     @GetMapping("/admin")
     public String admin() {
         return "forward:/admin/index.html";
