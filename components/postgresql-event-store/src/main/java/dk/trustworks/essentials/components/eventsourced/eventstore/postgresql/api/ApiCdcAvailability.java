@@ -18,12 +18,23 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.a
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.CdcAvailability;
 
+/**
+ * @param fallbackCount   subscriptions that fell back to polling <em>after</em> CDC had been active - a real
+ *                        CDC regression, and the number worth alerting on
+ * @param warmupPollCount subscriptions that started on polling because CDC had not become active yet. Expected
+ *                        on every startup, since the lifecycle starts subscriptions before the WAL tailer has
+ *                        connected. Not an error
+ * @param everActive      whether CDC has been active at least once in this JVM. A non-zero
+ *                        {@code warmupPollCount} with {@code everActive=false} means CDC never came up
+ */
 public record ApiCdcAvailability(
         String state,
         String slotName,
         String reason,
         long lastChangedEpochMs,
-        long fallbackCount
+        long fallbackCount,
+        long warmupPollCount,
+        boolean everActive
 ) {
     public static ApiCdcAvailability from(CdcAvailability.Snapshot snapshot) {
         return new ApiCdcAvailability(
@@ -31,7 +42,9 @@ public record ApiCdcAvailability(
                 snapshot.slotName(),
                 snapshot.reason(),
                 snapshot.lastChangedEpochMs(),
-                snapshot.fallbackCount()
+                snapshot.fallbackCount(),
+                snapshot.warmupPollCount(),
+                snapshot.everActive()
         );
     }
 }

@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.accounts;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateGeneration;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksLogicalAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.LogicalAggregateId;
 import org.slf4j.*;
@@ -106,6 +107,17 @@ public class TradingAccountService {
     @Transactional(readOnly = true)
     public TradingAccount load(TradingAccountId accountId) {
         return repository.load(new LogicalAggregateId<>(accountId));
+    }
+
+    /**
+     * The generation the account's books are currently open in, or {@code 0} if no generation exists yet.
+     * Lets a caller observe a policy-driven rollover happening without having to know how it was triggered.
+     */
+    @Transactional(readOnly = true)
+    public long currentGeneration(TradingAccountId accountId) {
+        return repository.resolveCurrentGeneration(new LogicalAggregateId<>(accountId))
+                         .map(AggregateGeneration::generation)
+                         .orElse(0L);
     }
 
     @Transactional(readOnly = true)

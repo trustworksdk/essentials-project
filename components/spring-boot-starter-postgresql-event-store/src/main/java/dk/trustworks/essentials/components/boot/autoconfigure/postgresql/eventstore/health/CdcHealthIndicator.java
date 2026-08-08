@@ -59,6 +59,8 @@ public class CdcHealthIndicator implements HealthIndicator {
                             .withDetail("slot", snapshot.slotName() == null ? "" : snapshot.slotName())
                             .withDetail("reason", snapshot.reason() == null ? "" : snapshot.reason())
                             .withDetail("fallbackCount", snapshot.fallbackCount())
+                            .withDetail("warmupPollCount", snapshot.warmupPollCount())
+                            .withDetail("everActive", snapshot.everActive())
                             .withDetail("lastChanged", snapshot.lastChangedEpochMs() == 0
                                                      ? ""
                                                      : Instant.ofEpochMilli(snapshot.lastChangedEpochMs()).toString());

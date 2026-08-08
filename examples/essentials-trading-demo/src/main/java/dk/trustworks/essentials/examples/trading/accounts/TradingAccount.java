@@ -34,11 +34,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * both snapshots and closing books.
  */
 @AggregateSnapshotPolicy(aggregateType = "TradingAccounts",
-                         enabled = true,
                          mode = SnapshotExecutionMode.SYNC,
                          everyNEvents = 100)
 @AggregateClosingBooksPolicy(aggregateType = "TradingAccounts",
-                             enabled = true,
                              triggerMode = ClosingBooksTriggerMode.ON_ACCESS,
                              defaultPolicy = ClosingBooksDefaultPolicyType.EVENT_COUNT_OR_TIME_BOUNDARY,
                              eventThreshold = 100,

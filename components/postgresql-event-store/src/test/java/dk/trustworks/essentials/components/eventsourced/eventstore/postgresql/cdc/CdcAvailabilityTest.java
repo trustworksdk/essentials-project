@@ -60,4 +60,43 @@ class CdcAvailabilityTest {
         assertThat(inactiveSnapshot.reason()).isEqualTo("tailer stopped");
         assertThat(meterRegistry.get("essentials.cdc.active").gauge().value()).isEqualTo(0.0);
     }
+
+    @Test
+    void polling_before_cdc_has_ever_been_active_counts_as_warm_up_not_fallback() {
+        // The startup case: the lifecycle starts subscriptions before the WAL tailer has connected, so each
+        // subscription legitimately begins on polling. Reporting that as a fallback made a healthy boot claim
+        // "CDC has fallen back to polling N times" with no reason and no error.
+        var meterRegistry = new SimpleMeterRegistry();
+        var availability = new CdcAvailability(Optional.of(meterRegistry));
+
+        availability.fallbackUsed();
+        availability.fallbackUsed();
+        availability.fallbackUsed();
+
+        var snapshot = availability.snapshot();
+        assertThat(snapshot.fallbackCount()).isZero();
+        assertThat(snapshot.warmupPollCount()).isEqualTo(3);
+        assertThat(snapshot.everActive()).isFalse();
+        assertThat(meterRegistry.counter("essentials.cdc.fallback_total").count()).isEqualTo(0.0);
+        assertThat(meterRegistry.counter("essentials.cdc.warmup_poll_total").count()).isEqualTo(3.0);
+    }
+
+    @Test
+    void polling_after_cdc_has_been_active_counts_as_a_real_fallback() {
+        var meterRegistry = new SimpleMeterRegistry();
+        var availability = new CdcAvailability(Optional.of(meterRegistry));
+
+        availability.fallbackUsed();              // warm-up, before CDC ever came up
+        availability.active("slot_a");
+        availability.inactive("slot_a", "tailer stopped");
+        availability.fallbackUsed();              // genuine regression
+
+        var snapshot = availability.snapshot();
+        assertThat(snapshot.fallbackCount()).isEqualTo(1);
+        assertThat(snapshot.warmupPollCount()).isEqualTo(1);
+        // everActive stays true once set: a later INACTIVE is exactly what makes the second poll a fallback.
+        assertThat(snapshot.everActive()).isTrue();
+        assertThat(meterRegistry.counter("essentials.cdc.fallback_total").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter("essentials.cdc.warmup_poll_total").count()).isEqualTo(1.0);
+    }
 }

@@ -19,9 +19,11 @@ package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
+import io.micrometer.core.instrument.MeterRegistry;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -37,6 +39,7 @@ public class ClosingBooksCoordinator<ID> {
     private final ClosingBooksStreamIdGenerator<ID>                                   streamIdGenerator;
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>       unitOfWorkFactory;
     private final Clock                                                               clock;
+    private final ClosingBooksManagementMeasurementSupport                            measurementSupport;
 
     /**
      * Constructs a new instance of {@code ClosingBooksCoordinator}.
@@ -62,11 +65,37 @@ public class ClosingBooksCoordinator<ID> {
                                    ClosingBooksStreamIdGenerator<ID> streamIdGenerator,
                                    HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    Clock clock) {
+        this(aggregateType,
+             generationRepository,
+             streamIdGenerator,
+             unitOfWorkFactory,
+             clock,
+             Optional.empty());
+    }
+
+    /**
+     * Constructs a new instance of {@code ClosingBooksCoordinator} that reports rollover metrics.
+     *
+     * @param aggregateType         The type of the aggregate being coordinated.
+     * @param generationRepository  The repository for managing closing-book generations.
+     * @param streamIdGenerator     The generator for creating unique stream IDs for aggregate instances.
+     * @param unitOfWorkFactory     The factory for creating instances of {@code HandleAwareUnitOfWork}.
+     * @param clock                 The clock used to timestamp policy evaluations and rollovers.
+     * @param meterRegistryOptional Optional Micrometer registry. When empty, no metrics are recorded.
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public ClosingBooksCoordinator(AggregateType aggregateType,
+                                   ClosingBooksGenerationRepository<ID> generationRepository,
+                                   ClosingBooksStreamIdGenerator<ID> streamIdGenerator,
+                                   HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                                   Clock clock,
+                                   Optional<MeterRegistry> meterRegistryOptional) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.generationRepository = requireNonNull(generationRepository, "No generationRepository provided");
         this.streamIdGenerator = requireNonNull(streamIdGenerator, "No streamIdGenerator provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.clock = requireNonNull(clock, "No clock provided");
+        this.measurementSupport = new ClosingBooksManagementMeasurementSupport(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"));
     }
 
     /**
@@ -111,16 +140,29 @@ public class ClosingBooksCoordinator<ID> {
      */
     public AggregateGeneration<ID> closeAndOpenNextGeneration(LogicalAggregateId<ID> logicalAggregateId) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
-        return generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> unitOfWorkFactory.withUnitOfWork(uow -> {
-            generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
-                                .orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
-            generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
-            // The repository decides the next generation number and feeds it to the generator, so the stream id it
-            // persists always names the generation on the row it is stored with.
-            return generationRepository.openNextGeneration(aggregateType,
-                                                           logicalAggregateId,
-                                                           streamIdGenerator);
-        }));
+        // The counters are incremented after the UnitOfWork returns, never inside it: a rollback must not leave a
+        // count claiming a generation was closed that the database then rolled back.
+        try {
+            var nextGeneration = measurementSupport.recordRollover(aggregateType,
+                                                                    () -> generationRepository.withGenerationLock(aggregateType, logicalAggregateId, () -> unitOfWorkFactory.withUnitOfWork(uow -> {
+                                                                        generationRepository.resolveCurrentGeneration(aggregateType, logicalAggregateId)
+                                                                                            .orElseThrow(() -> new IllegalStateException("No open generation exists for logicalAggregateId '" + logicalAggregateId + "'"));
+                                                                        generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
+                                                                        // The repository decides the next generation number and feeds it to the generator, so the stream id it
+                                                                        // persists always names the generation on the row it is stored with.
+                                                                        return generationRepository.openNextGeneration(aggregateType,
+                                                                                                                       logicalAggregateId,
+                                                                                                                       streamIdGenerator);
+                                                                    })));
+            measurementSupport.incrementGenerationsClosed(aggregateType);
+            measurementSupport.incrementGenerationsOpened(aggregateType);
+            measurementSupport.incrementRolloverOutcome(aggregateType, "succeeded");
+            measurementSupport.recordRolloverTimestamp(aggregateType, clock.millis());
+            return nextGeneration;
+        } catch (RuntimeException e) {
+            measurementSupport.incrementRolloverOutcome(aggregateType, "failed");
+            throw e;
+        }
     }
 
     /**
@@ -148,9 +190,16 @@ public class ClosingBooksCoordinator<ID> {
                                                                              triggerMode,
                                                                              OffsetDateTime.now(clock)));
 
+            measurementSupport.incrementPolicyDecision(aggregateType, decision, triggerMode);
+
             return switch (decision) {
                 case KEEP_OPEN -> currentGeneration;
-                case CLOSE_ONLY -> generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
+                case CLOSE_ONLY -> {
+                    var closed = generationRepository.closeCurrentGeneration(aggregateType, logicalAggregateId);
+                    measurementSupport.incrementGenerationsClosed(aggregateType);
+                    yield closed;
+                }
+                // Counts its own generations_closed / generations_opened, so nothing is added here.
                 case CLOSE_AND_OPEN_NEXT -> closeAndOpenNextGeneration(logicalAggregateId);
             };
         });
@@ -160,8 +209,10 @@ public class ClosingBooksCoordinator<ID> {
         // "First" only in the sense of the first one currently open: closed generations may already exist, and the
         // repository numbers past them. It used to load every generation here to work that number out for the stream
         // id, duplicating the repository's own rule; the repository now supplies it to the generator instead.
-        return unitOfWorkFactory.withUnitOfWork(uow -> generationRepository.openNextGeneration(aggregateType,
-                                                                                              logicalAggregateId,
-                                                                                              streamIdGenerator));
+        var generation = unitOfWorkFactory.withUnitOfWork(uow -> generationRepository.openNextGeneration(aggregateType,
+                                                                                                        logicalAggregateId,
+                                                                                                        streamIdGenerator));
+        measurementSupport.incrementGenerationsOpened(aggregateType);
+        return generation;
     }
 }

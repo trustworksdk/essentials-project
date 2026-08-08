@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.examples.trading.simulation;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksTimeBoundaryCalculator;
+import dk.trustworks.essentials.examples.trading.accounts.TradingAccountClosingBooksPolicy;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountService;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.instruments.InstrumentService;
@@ -32,14 +34,38 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * Headless demo runner that exercises the example aggregates against the event store at startup.
+ * <p>
+ * The demo exists to show snapshots and closing books, so bootstrap deliberately leaves the three accounts in
+ * three different states, one per mechanism:
+ * <ul>
+ *   <li><b>ACC-DEMO-001 — policy driven.</b> Fed ordinary deposits until the configured
+ *       {@code @AggregateClosingBooksPolicy} event threshold is crossed and <em>the framework</em> rolls the
+ *       generation on next access. This is the headline feature; nothing here asks for a rollover.
+ *       Crossing the threshold also crosses the snapshot policy's {@code everyNEvents}, so this account is the
+ *       one that has snapshots to look at.</li>
+ *   <li><b>ACC-DEMO-002 — explicit command.</b> Rolled by the application calling
+ *       {@code closeBooksAndOpenNextGeneration} directly. The escape hatch, for period ends a policy cannot
+ *       express. No policy involvement.</li>
+ *   <li><b>ACC-DEMO-003 — baseline.</b> Left in generation 1 so there is something to compare against.</li>
+ * </ul>
+ * Accounts are opened in the <em>current</em> period, derived from the configured boundary via
+ * {@link ClosingBooksTimeBoundaryCalculator#currentPeriodId}. A hardcoded period id would age into the past and
+ * make every later evaluation report skipped periods — which is exactly what this runner used to do.
  */
 public class TradingSimulationRunner implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(TradingSimulationRunner.class);
+    /**
+     * Mirrors {@code @AggregateSnapshotPolicy(everyNEvents = …)} on TradingAccount. Only used for log text —
+     * the policy itself is the source of truth and is resolved by the framework.
+     */
+    private static final int    SNAPSHOT_EVERY_N_EVENTS = 100;
     private static final List<InstrumentSeed> INSTRUMENT_SEEDS = List.of(
             new InstrumentSeed("AAPL", "Apple Inc."),
             new InstrumentSeed("MSFT", "Microsoft Corporation"),
@@ -53,28 +79,46 @@ public class TradingSimulationRunner implements ApplicationRunner {
             new InstrumentSeed("NOVO-B", "Novo Nordisk A/S B")
     );
 
-    private final TradingDemoSimulationProperties properties;
-    private final TradingAccountService           tradingAccountService;
-    private final SettlementService               settlementService;
-    private final InstrumentService               instrumentService;
-    private final DirectInstrumentPriceService    directInstrumentPriceService;
-    private final InstrumentPriceService          instrumentPriceService;
-    private final TradeService                    tradeService;
+    private final TradingDemoSimulationProperties   properties;
+    private final TradingAccountService             tradingAccountService;
+    private final TradingAccountClosingBooksPolicy  closingBooksPolicy;
+    private final SettlementService                 settlementService;
+    private final InstrumentService                 instrumentService;
+    private final DirectInstrumentPriceService      directInstrumentPriceService;
+    private final InstrumentPriceService            instrumentPriceService;
+    private final TradeService                      tradeService;
+    private final Clock                             clock;
 
     public TradingSimulationRunner(TradingDemoSimulationProperties properties,
                                   TradingAccountService tradingAccountService,
+                                  TradingAccountClosingBooksPolicy closingBooksPolicy,
                                   SettlementService settlementService,
                                   InstrumentService instrumentService,
                                   DirectInstrumentPriceService directInstrumentPriceService,
                                   InstrumentPriceService instrumentPriceService,
                                   TradeService tradeService) {
+        this(properties, tradingAccountService, closingBooksPolicy, settlementService, instrumentService,
+             directInstrumentPriceService, instrumentPriceService, tradeService, Clock.systemUTC());
+    }
+
+    public TradingSimulationRunner(TradingDemoSimulationProperties properties,
+                                  TradingAccountService tradingAccountService,
+                                  TradingAccountClosingBooksPolicy closingBooksPolicy,
+                                  SettlementService settlementService,
+                                  InstrumentService instrumentService,
+                                  DirectInstrumentPriceService directInstrumentPriceService,
+                                  InstrumentPriceService instrumentPriceService,
+                                  TradeService tradeService,
+                                  Clock clock) {
         this.properties = properties;
         this.tradingAccountService = tradingAccountService;
+        this.closingBooksPolicy = closingBooksPolicy;
         this.settlementService = settlementService;
         this.instrumentService = instrumentService;
         this.directInstrumentPriceService = directInstrumentPriceService;
         this.instrumentPriceService = instrumentPriceService;
         this.tradeService = tradeService;
+        this.clock = clock;
     }
 
     @Override
@@ -100,13 +144,17 @@ public class TradingSimulationRunner implements ApplicationRunner {
             return;
         }
 
-        log.info("Trading demo simulation bootstrap starting with {} accounts, {} instruments, {} settlements per account, rolloverAccounts={}, initialPeriodId={}, nextPeriodId={}",
+        var initialPeriodId = currentPeriodId();
+        log.info("Trading demo simulation bootstrap starting with {} accounts, {} instruments, {} settlements per account, initialPeriodId={} (derived from time boundary {} in zone {})",
                  properties.getAccountCount(),
                  properties.getInstrumentCount(),
                  properties.getSettlementsPerAccount(),
-                 properties.isRolloverAccounts(),
-                 properties.getInitialPeriodId(),
-                 properties.getNextPeriodId());
+                 initialPeriodId,
+                 closingBooksPolicy.timeBoundary(),
+                 closingBooksPolicy.zoneId());
+        log.info("Closing-books policy in effect: {}. Snapshot policy takes a snapshot every {} events.",
+                 closingBooksPolicy.description(),
+                 SNAPSHOT_EVERY_N_EVENTS);
 
         for (int instrumentIndex = 0; instrumentIndex < properties.getInstrumentCount(); instrumentIndex++) {
             var seed = INSTRUMENT_SEEDS.get(instrumentIndex % INSTRUMENT_SEEDS.size());
@@ -128,9 +176,10 @@ public class TradingSimulationRunner implements ApplicationRunner {
 
         for (int accountIndex = 0; accountIndex < properties.getAccountCount(); accountIndex++) {
             var accountId = TradingAccountId.of("ACC-DEMO-%03d".formatted(accountIndex + 1));
+            var role      = roleFor(accountIndex);
             tradingAccountService.openAccount(accountId,
                                               "demo-owner-" + (accountIndex + 1),
-                                              properties.getInitialPeriodId());
+                                              initialPeriodId);
 
             for (int depositIndex = 0; depositIndex < properties.getDepositsPerAccount(); depositIndex++) {
                 tradingAccountService.depositCash(accountId, BigDecimal.valueOf(1_000L * (depositIndex + 1)));
@@ -175,23 +224,88 @@ public class TradingSimulationRunner implements ApplicationRunner {
                                                           BigDecimal.valueOf(12));
             }
 
-            if (properties.isRolloverAccounts()) {
-                log.info("Trading demo simulation is closing books and opening the next period for account {}. The admin endpoint will therefore show the current account generation as 2 after bootstrap.",
-                         accountId);
-                tradingAccountService.closeBooksAndOpenNextPeriod(accountId, properties.getNextPeriodId());
-            } else {
-                log.info("Trading demo simulation is closing books without opening the next generation for account {}. The admin endpoint will therefore show the account as closed in generation 1.",
-                         accountId);
-                tradingAccountService.closeBooks(accountId, properties.getNextPeriodId());
+            switch (role) {
+                case POLICY_DRIVEN -> driveUntilPolicyRollsTheBooks(accountId);
+                case EXPLICIT_COMMAND -> {
+                    // The escape hatch: the application decides, the policy is not consulted. nextPeriodId comes
+                    // from the policy so the new generation is labelled with the period it actually opens in.
+                    var account = tradingAccountService.load(accountId);
+                    var nextPeriodId = closingBooksPolicy.nextPeriodId(account);
+                    tradingAccountService.closeBooksAndOpenNextPeriod(accountId, nextPeriodId);
+                    log.info("[{}] EXPLICIT COMMAND: application called closeBooksAndOpenNextGeneration directly (nextPeriodId={}). Now in generation {}. The closing-books policy played no part in this.",
+                             accountId,
+                             nextPeriodId,
+                             tradingAccountService.currentGeneration(accountId));
+                }
+                case BASELINE -> log.info("[{}] BASELINE: left untouched in generation {} so there is an un-rolled account to compare against.",
+                                          accountId,
+                                          tradingAccountService.currentGeneration(accountId));
             }
         }
 
-        log.info("Trading demo simulation completed with {} accounts, {} instruments, {} settlements per account, rolloverAccounts={}",
+        log.info("Trading demo simulation completed with {} accounts, {} instruments, {} settlements per account",
                  properties.getAccountCount(),
                  properties.getInstrumentCount(),
-                 properties.getSettlementsPerAccount(),
-                 properties.isRolloverAccounts());
+                 properties.getSettlementsPerAccount());
         logEndpointHints();
+    }
+
+    /**
+     * Writes ordinary business events until the closing-books policy decides to roll the generation.
+     * <p>
+     * Nothing here asks for a rollover: every deposit goes through the normal mutation path, which evaluates the
+     * policy on load. The loop simply stops once the generation number moves, which is the framework acting on
+     * its own. Bounded by {@code maxPolicyDrivenEvents} so a misconfigured threshold cannot spin forever.
+     */
+    private void driveUntilPolicyRollsTheBooks(TradingAccountId accountId) {
+        var startingGeneration = tradingAccountService.currentGeneration(accountId);
+        log.info("[{}] POLICY DRIVEN: writing deposits until the policy rolls the books by itself (threshold {} events, currently in generation {})",
+                 accountId,
+                 closingBooksPolicy.eventThreshold(),
+                 startingGeneration);
+
+        for (int deposit = 1; deposit <= properties.getMaxPolicyDrivenEvents(); deposit++) {
+            tradingAccountService.depositCash(accountId, BigDecimal.valueOf(10));
+            var generation = tradingAccountService.currentGeneration(accountId);
+            if (generation > startingGeneration) {
+                log.info("[{}] POLICY DRIVEN: the closing-books policy rolled generation {} → {} after {} deposits, without the application asking. Snapshots were written along the way (every {} events).",
+                         accountId,
+                         startingGeneration,
+                         generation,
+                         deposit,
+                         SNAPSHOT_EVERY_N_EVENTS);
+                return;
+            }
+        }
+
+        // Reaching here means the policy never fired - worth saying loudly, because the account is then
+        // indistinguishable from the baseline one and the demo silently stops demonstrating its main feature.
+        log.warn("[{}] POLICY DRIVEN: wrote {} deposits without the policy rolling the books. Check that closing books is enabled and that the event threshold ({}) is below trading-demo.simulation.max-policy-driven-events.",
+                 accountId,
+                 properties.getMaxPolicyDrivenEvents(),
+                 closingBooksPolicy.eventThreshold());
+    }
+
+    /**
+     * The period id a newly opened account belongs to, in whatever format the configured boundary requires.
+     * Delegates to the framework calculator rather than formatting a date here, so the seed can never disagree
+     * with the boundary the policy evaluates against.
+     */
+    private String currentPeriodId() {
+        var periodId = ClosingBooksTimeBoundaryCalculator.currentPeriodId(closingBooksPolicy.timeBoundary(),
+                                                                          ZoneId.of(closingBooksPolicy.zoneId()),
+                                                                          clock,
+                                                                          closingBooksPolicy.intervalDays());
+        // NONE has no period concept, but the aggregate still requires a non-null period id.
+        return periodId != null ? periodId : "no-time-boundary";
+    }
+
+    private AccountRole roleFor(int accountIndex) {
+        return switch (accountIndex) {
+            case 0 -> AccountRole.POLICY_DRIVEN;
+            case 1 -> AccountRole.EXPLICIT_COMMAND;
+            default -> AccountRole.BASELINE;
+        };
     }
 
     private SeedState seedDataState() {
@@ -214,6 +328,10 @@ public class TradingSimulationRunner implements ApplicationRunner {
 
     private void logEndpointHints() {
         log.info("Trading demo admin endpoint hints:");
+        log.info("  ACC-DEMO-001 was rolled by the closing-books POLICY and is the account with snapshots");
+        log.info("  ACC-DEMO-002 was rolled by an EXPLICIT command");
+        log.info("  ACC-DEMO-003 was never rolled (baseline)");
+        log.info("  compare them in the admin UI under Aggregates → Aggregate lookup");
         log.info("  account ids: {}", demoAccountIds());
         log.info("  trade ids: {}", demoTradeIds());
         log.info("  settlement ids: {}", demoSettlementIds());
@@ -265,5 +383,15 @@ public class TradingSimulationRunner implements ApplicationRunner {
         NONE,
         COMPLETE,
         LEGACY_OR_PARTIAL
+    }
+
+    /** What each seeded account is there to demonstrate. */
+    private enum AccountRole {
+        /** Rolled by the closing-books policy, with no application involvement. */
+        POLICY_DRIVEN,
+        /** Rolled by an explicit application command, with no policy involvement. */
+        EXPLICIT_COMMAND,
+        /** Never rolled — the comparison case. */
+        BASELINE
     }
 }

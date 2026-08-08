@@ -19,6 +19,7 @@ package dk.trustworks.essentials.examples.trading.accounts;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateArchiveApi;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.ApiArchivedGeneration;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.AggregateLifecycleApi;
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.ApiAggregateSnapshot;
 import dk.trustworks.essentials.components.eventsourced.aggregates.api.ApiClosingBooksGenerationEventStream;
 import dk.trustworks.essentials.components.eventsourced.aggregates.archive.AggregateGenerationArchiver;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.GenerationState;
@@ -102,6 +103,26 @@ public class TradingAccountAdminQueryService {
                                                                                                           generation.openedAt(),
                                                                                                           generation.closedAt()))
                                                       .toList());
+    }
+
+    /**
+     * Snapshots stored for the account's <em>current</em> generation.
+     * <p>
+     * Scoped to the current generation on purpose: snapshots are keyed by the per-generation stream id, so
+     * "all snapshots for this account" means one lookup per generation, and the demo's load generator rolls
+     * generations continuously — an unbounded fan-out on a dashboard that refreshes on a timer. The live
+     * generation is also the interesting one when watching the snapshot policy work.
+     */
+    @Transactional(readOnly = true)
+    public List<ApiAggregateSnapshot> getCurrentGenerationSnapshots(TradingAccountId accountId) {
+        var currentGeneration = aggregateLifecycleApi.findCurrentClosingBooksGeneration("demo-admin",
+                                                                                        TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                                                        accountId.toString());
+        return currentGeneration.map(generation -> aggregateLifecycleApi.findSnapshots("demo-admin",
+                                                                                        TradingDemoAggregateConfiguration.TRADING_ACCOUNTS,
+                                                                                        generation.streamAggregateId(),
+                                                                                        false))
+                                .orElseGet(List::of);
     }
 
     @Transactional(readOnly = true)

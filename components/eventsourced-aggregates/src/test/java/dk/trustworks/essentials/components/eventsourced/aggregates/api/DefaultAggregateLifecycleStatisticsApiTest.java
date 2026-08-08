@@ -60,8 +60,36 @@ class DefaultAggregateLifecycleStatisticsApiTest {
         assertThat(api.findAggregateClosingBooksStatistics("principal"))
                 .singleElement()
                 .satisfies(stats -> {
-                    assertThat(stats.counters()).containsEntry("outcome=success", 1L);
-                    assertThat(stats.counters()).containsEntry("policy_type=TIME_BOUNDARY", 2L);
+                    assertThat(stats.counters()).containsEntry("essentials.aggregate_closing_books.manager.poll.outcome[outcome=success]", 1L);
+                    assertThat(stats.counters()).containsEntry("essentials.closing_books.time_boundary_gap_detected[policy_type=TIME_BOUNDARY]", 2L);
+                });
+    }
+
+    @Test
+    void closing_books_counters_that_differ_only_by_meter_name_are_reported_separately() {
+        // generations_closed and generations_opened carry no tags beyond aggregate_type, so keying them by
+        // tags alone would collapse both into a single "count" entry and silently sum them.
+        var closingBooksRegistry = new InMemoryAggregateClosingBooksPolicyRegistry();
+        closingBooksRegistry.register(new AggregateClosingBooksPolicyDescriptor(TestAggregate.class,
+                                                                               Optional.of("Orders"),
+                                                                               TestAggregate.class.getAnnotation(dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicy.class)));
+
+        var meterRegistry = new SimpleMeterRegistry();
+        meterRegistry.counter("essentials.aggregate_closing_books.generations_closed", "aggregate_type", "Orders").increment(3);
+        meterRegistry.counter("essentials.aggregate_closing_books.generations_opened", "aggregate_type", "Orders").increment(4);
+        meterRegistry.timer("essentials.aggregate_closing_books.rollover", "aggregate_type", "Orders").record(Duration.ofMillis(7));
+
+        var api = new DefaultAggregateLifecycleStatisticsApi(new EssentialsSecurityProvider.AllAccessSecurityProvider(),
+                                                             new InMemoryAggregateSnapshotPolicyRegistry(),
+                                                             closingBooksRegistry,
+                                                             Optional.of(meterRegistry));
+
+        assertThat(api.findAggregateClosingBooksStatistics("principal"))
+                .singleElement()
+                .satisfies(stats -> {
+                    assertThat(stats.counters()).containsEntry("essentials.aggregate_closing_books.generations_closed", 3L);
+                    assertThat(stats.counters()).containsEntry("essentials.aggregate_closing_books.generations_opened", 4L);
+                    assertThat(stats.timedMetrics()).containsKey("rollover");
                 });
     }
 

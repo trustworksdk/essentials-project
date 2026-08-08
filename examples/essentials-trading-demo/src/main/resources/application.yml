@@ -34,9 +34,10 @@ trading-demo:
     deposits-per-account: 2
     settlements-per-account: 1
     instrument-count: 2
-    rollover-accounts: true
-    initial-statement-period: 2026-03
-    next-statement-period: 2026-04
+    # The accounts' opening period is derived from the configured closing-books time boundary, not configured
+    # here: a hardcoded period id ages into the past and makes every later evaluation report skipped periods.
+    # ACC-DEMO-001 is rolled by the policy, ACC-DEMO-002 by an explicit command, ACC-DEMO-003 not at all.
+    max-policy-driven-events: 500
   load:
     enabled: false
     trade-interval: 2s

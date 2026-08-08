@@ -21,11 +21,18 @@ import java.math.BigDecimal;
 /**
  * Small account summary used by the lightweight admin dashboard.
  */
+/**
+ * @param snapshotCount          snapshots stored for the account's current generation
+ * @param lastSnapshotEventOrder event order of the newest snapshot in the current generation, or {@code null}
+ *                               when none has been taken yet
+ */
 public record DashboardAccountSummaryView(String accountId,
                                           int generationCount,
                                           long currentGeneration,
                                           String periodId,
                                           BigDecimal cashBalance,
                                           BigDecimal realizedPnl,
-                                          boolean booksClosed) {
+                                          boolean booksClosed,
+                                          int snapshotCount,
+                                          Long lastSnapshotEventOrder) {
 }

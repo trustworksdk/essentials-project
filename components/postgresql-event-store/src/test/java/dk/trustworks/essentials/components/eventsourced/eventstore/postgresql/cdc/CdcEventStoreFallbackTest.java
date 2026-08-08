@@ -86,9 +86,57 @@ class CdcEventStoreFallbackTest {
         assertThat(first.globalEventOrder()).isEqualTo(GlobalEventOrder.of(1));
 
         // Delivery while inactive is served by the delegate poll (the adaptive source's fallback
-        // branch), and the fallback signal is recorded exactly once.
+        // branch), and the signal is recorded exactly once. CDC has never been active here, which is the
+        // startup case, so it lands on the warm-up counter rather than being reported as a CDC regression.
         verify(delegate, atLeastOnce()).pollEvents(any(), anyLong(), any(), any(), any(), any(), any());
+        assertThat(availability.getWarmupPollCount()).isEqualTo(1);
+        assertThat(availability.getFallbackCount()).isZero();
+    }
+
+    /**
+     * The counterpart to the test above: once CDC has been active, a subscription that starts while it is
+     * unavailable is a genuine regression and must be counted as a fallback.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void pollEvents_after_cdc_has_been_active_records_a_fallback() {
+        EventStore delegate = mock(EventStore.class);
+        EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
+        EventStreamGapHandler<?> gapHandler = mock(EventStreamGapHandler.class);
+
+        var availability = new CdcAvailability();
+        availability.active("slot_a");
+        availability.inactive("slot_a", "tailer stopped");
+
+        var cdcEventStore = new CdcEventStore(
+                delegate,
+                unitOfWorkFactory,
+                gapHandler,
+                new CdcEventBus(),
+                new CdcProperties(),
+                availability
+        );
+
+        var liveEvent = mock(PersistedEvent.class);
+        when(liveEvent.globalEventOrder()).thenReturn(GlobalEventOrder.of(1));
+        when(liveEvent.aggregateType()).thenReturn(AggregateType.of("orders"));
+        when(liveEvent.tenant()).thenReturn(Optional.empty());
+        when(delegate.pollEvents(any(), anyLong(), any(), any(), any(), any(), any()))
+                .thenReturn(Flux.just(liveEvent));
+
+        var result = cdcEventStore.pollEvents(
+                AggregateType.of("orders"),
+                0L,
+                Optional.empty(),
+                Optional.of(Duration.ofMillis(50)),
+                Optional.empty(),
+                Optional.of(SubscriberId.of("sub-1")),
+                Optional.of((Function<String, EventStorePollingOptimizer>) name -> null)
+        );
+
+        assertThat(result.blockFirst(Duration.ofSeconds(2))).isNotNull();
         assertThat(availability.getFallbackCount()).isEqualTo(1);
+        assertThat(availability.getWarmupPollCount()).isZero();
     }
 
     /**

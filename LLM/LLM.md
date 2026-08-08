@@ -67,7 +67,7 @@ Consolidated view of all component modules [LLM-components.md](LLM-components.md
 | **foundation** | `FencedLock`, `DurableQueues`, `UnitOfWork`, `Inbox`/`Outbox`, `DurableLocalCommandBus` | [LLM-foundation.md](LLM-foundation.md) |
 | **foundation-test** | Internal Test utilities and abstractions  | [LLM-foundation-test.md](LLM-foundation-test.md) |
 | **postgresql-event-store** | `EventStore` with subscriptions, `EventProcessor`| [LLM-postgresql-event-store.md](LLM-postgresql-event-store.md) |
-| **eventsourced-aggregates** | `StatefulAggregate`, `Aggregate`, `Decider`, Repository patterns | [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) |
+| **eventsourced-aggregates** | `StatefulAggregate`, `Aggregate`, `Decider`, Repository patterns, snapshots, closing the books | [LLM-eventsourced-aggregates.md](LLM-eventsourced-aggregates.md) |
 | **spring-postgresql-event-store** | Spring transaction integration for `EventStore` | [LLM-spring-postgresql-event-store.md](LLM-spring-postgresql-event-store.md) |
 | **postgresql-distributed-fenced-lock** | Distributed locking via PostgreSQL | [LLM-postgresql-distributed-fenced-lock.md](LLM-postgresql-distributed-fenced-lock.md) |
 | **postgresql-queue** | Durable queues with PostgreSQL | [LLM-postgresql-queue.md](LLM-postgresql-queue.md) |

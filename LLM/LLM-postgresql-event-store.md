@@ -200,7 +200,7 @@ Key classes:
 - `cdc.WalReplicationTailer` - consumes logical replication stream into `eventstore_cdc_inbox` or publishes directly
 - `cdc.CdcDispatcher` - converts inbox rows to `PersistedEvent` and publishes live events
 - `cdc.CdcEventStore` - chooses hybrid (`ACTIVE`) or polling fallback (`INACTIVE`/`FAILED`)
-- `cdc.CdcAvailability` - state machine + metrics (`essentials.cdc.active`, `...fallback_total`, `...start_failures_total`)
+- `cdc.CdcAvailability` - state machine + metrics (`essentials.cdc.active`, `...fallback_total`, `...warmup_poll_total`, `...start_failures_total`). A poll on the inactive path **before** CDC has ever been active is a warm-up (`warmupPollCount`), not a fallback — subscriptions start before the WAL tailer connects, so this happens on every startup and is not an error. `fallbackCount` counts only polls after CDC had been active; that is the alertable signal. `everActive=false` with a non-zero `warmupPollCount` means CDC never came up
 
 Operational model:
 - advisory lock per slot ensures one active tailer per slot (`slotLockAcquired`)

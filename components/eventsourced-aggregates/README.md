@@ -22,6 +22,18 @@ This library provides multiple flavors of Event-Sourced Aggregates designed to w
     - [Assertion Exceptions](#assertion-exceptions)
 - [Decider Pattern](#decider-pattern)
 - [Aggregate Snapshots](#aggregate-snapshots)
+  - [Policy-Driven Snapshotting](#policy-driven-snapshotting)
+  - [Snapshot Execution Modes](#snapshot-execution-modes)
+  - [Durable Async Snapshots](#durable-async-snapshots)
+  - [Spring Boot Configuration](#spring-boot-configuration)
+- [Closing the Books](#closing-the-books)
+  - [Generations](#generations)
+  - [Declaring a Closing-Books Policy](#declaring-a-closing-books-policy)
+  - [Decision Policies](#decision-policies)
+  - [Repositories and the Coordinator](#repositories-and-the-coordinator)
+  - [Scheduled Scans](#scheduled-scans)
+  - [Archiving Closed Generations](#archiving-closed-generations)
+  - [Closing-Books Spring Boot Configuration](#closing-books-spring-boot-configuration)
 - [In-Memory Projections](#in-memory-projections)
 - [Other Aggregate Patterns](#other-aggregate-patterns)
   - [FlexAggregate](#flexaggregate)
@@ -1204,13 +1216,30 @@ unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
 
 ## Aggregate Snapshots
 
-**Interface:** `dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotRepository`
+**Package:** `dk.trustworks.essentials.components.eventsourced.aggregates.snapshot`
 
 In event sourcing, loading an aggregate means replaying all its events to reconstruct current state.  
 For aggregates with hundreds or thousands of events, this becomes slow.  
 **Snapshots** solve this by periodically saving the aggregate's state, so subsequent loads only need to replay events since the snapshot.
 
 Supported by `StatefulAggregateRepository` and the `Decider`'s associated `CommandHandler`.
+
+The module offers two ways of wiring snapshotting up. Both implement the same `AggregateSnapshotRepository`
+SPI, so the repositories and command handlers that consume snapshots are unaffected by the choice:
+
+| Approach | Entry point | Wiring | Use when |
+|----------|-------------|--------|----------|
+| **Manual** | `PostgresqlAggregateSnapshotRepository` | Construct the repository yourself and pass strategies explicitly | You wire everything by hand, or you already use this and don't need policies |
+| **Policy-driven** | `@AggregateSnapshotPolicy` + `AsyncAggregateSnapshotRepository` / `DurableAsyncAggregateSnapshotRepository` on top of an `AggregateSnapshotStore` | Declared per aggregate class (or per `AggregateType` in Spring Boot properties) and resolved for you | You want per-aggregate policies, asynchronous snapshotting, or crash-safe snapshot jobs |
+
+Key types in the policy-driven model:
+
+| Type | Role |
+|------|------|
+| `AggregateSnapshotStore` | Storage abstraction — `loadSnapshot`, `loadAllSnapshots`, `findMostRecentLastIncludedEventOrder`, `saveSnapshot`, `deleteSnapshotsOlderThan`, `deleteAllSnapshots`. Postgres implementation: `PostgresqlAggregateSnapshotStore` |
+| `AggregateSnapshotStateAdapter` | Converts between an aggregate instance and its serialized snapshot state. `DefaultAggregateSnapshotStateAdapter` instantiates aggregates via Objenesis, with a Jackson empty-JSON fallback |
+| `AggregateSnapshotPolicyRegistry` | Holds the resolved `AggregateSnapshotPolicyDescriptor` per `AggregateType`. In-memory implementation: `InMemoryAggregateSnapshotPolicyRegistry` |
+| `AggregateSnapshotRepositoryProvider` | Resolves the `AggregateSnapshotRepository` to use for a given `AggregateType` |
 
 ### Why Use Snapshots
 
@@ -1294,11 +1323,11 @@ Example timeline:
 - Aggregates where load latency matters
 
 **Consider alternatives first:**
-- **"Closing the Books" pattern**: Periodically create a summary event and start a new stream
+- **["Closing the Books" pattern](#closing-the-books)**: Periodically close the current event stream and start a new generation
 - **Shorter aggregate lifecycles**: Design aggregates to complete/archive naturally
 - **CQRS read models**: If reads are slow, optimize the read side instead
 
-### Configuration
+### Manual Configuration
 
 ```java
 var snapshotRepository = new PostgresqlAggregateSnapshotRepository(
@@ -1332,11 +1361,448 @@ var ordersRepository = StatefulAggregateRepository.from(
 - `keepAllHistoricSnapshots()` - Never delete
 - `deleteAllHistoricSnapshots()` - Only keep latest
 
-> **Tip:** Before implementing snapshots, consider the "Closing the Books" pattern to keep event streams small.
+> **Tip:** Before implementing snapshots, consider the ["Closing the Books"](#closing-the-books) pattern to keep event streams small.
+
+### Policy-Driven Snapshotting
+
+Instead of hand-wiring strategies per repository, annotate the aggregate implementation with
+`@AggregateSnapshotPolicy`. The annotation is a **code-local default** that external configuration
+(for example Spring Boot properties keyed by `AggregateType`) can override.
+
+```java
+@AggregateSnapshotPolicy(
+        aggregateType = "Orders",
+        mode = SnapshotExecutionMode.ASYNC_DURABLE,
+        everyNEvents = 100,
+        deletionMode = SnapshotDeletionMode.KEEP_LAST_N,
+        keepLastSnapshots = 3
+)
+public class Order extends AggregateRoot<OrderId, OrderEvent, Order> {
+    // ...
+}
+```
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | `boolean` | `true` | Whether snapshotting is enabled for this aggregate |
+| `mode` | `SnapshotExecutionMode` | `SYNC` | How snapshots are persisted — see [Snapshot Execution Modes](#snapshot-execution-modes) |
+| `everyNEvents` | `int` | `100` | Snapshot when the aggregate is this many events behind the last snapshot |
+| `deletionMode` | `SnapshotDeletionMode` | `DELETE_ALL_HISTORIC` | `DELETE_ALL_HISTORIC` or `KEEP_LAST_N` |
+| `keepLastSnapshots` | `int` | `1` | Number of snapshots retained when `deletionMode = KEEP_LAST_N` |
+| `aggregateType` | `String` | `""` | The `AggregateType` this policy applies to |
+
+The annotation is turned into an `AggregateSnapshotPolicyDescriptor` and registered in an
+`AggregateSnapshotPolicyRegistry`. Under Spring Boot, `AggregateSnapshotPolicyBeanPostProcessor`
+discovers annotated beans automatically.
+
+### Snapshot Execution Modes
+
+`SnapshotExecutionMode` decides **where** snapshot creation runs, and whether it survives a crash:
+
+| Mode | Repository | Behaviour | Trade-off |
+|------|------------|-----------|-----------|
+| `SYNC` | `AsyncAggregateSnapshotRepository` | Snapshot is written on the calling thread inside the same `UnitOfWork` as the events | Simplest and consistent, but adds latency to every qualifying command |
+| `ASYNC_IN_MEMORY` | `AsyncAggregateSnapshotRepository` | Snapshot work is handed to a fixed-size daemon-threaded executor | No command latency, but a crash before the executor runs simply loses that snapshot (events are untouched, so correctness is preserved — only the optimization is lost) |
+| `ASYNC_DURABLE` | `DurableAsyncAggregateSnapshotRepository` | A snapshot **job row** is enqueued and processed later by a background worker | No command latency and the job survives a crash; costs one extra table and a poller |
+
+`AsyncAggregateSnapshotRepository` is a `Lifecycle` bean — `start()` provisions the executor sized by
+`AsyncAggregateSnapshotSettings.workerThreads()`, `stop()` tears it down. The executor it creates uses daemon
+threads, so a forgotten `stop()` cannot keep the JVM alive. In `SYNC` mode no executor is created at all and
+tasks run on the calling thread.
+
+```java
+var snapshotStore = new PostgresqlAggregateSnapshotStore(eventStore,
+                                                         unitOfWorkFactory,
+                                                         Optional.empty(),   // default snapshot table name
+                                                         jsonSerializer);
+
+var snapshotRepository = new AsyncAggregateSnapshotRepository(
+        snapshotStore,
+        jsonSerializer,
+        AddNewAggregateSnapshotStrategy.updateWhenBehindByNumberOfEvents(100),
+        AggregateSnapshotDeletionStrategy.keepALimitedNumberOfHistoricSnapshots(3),
+        AsyncAggregateSnapshotSettings.asynchronous(),   // or .synchronous()
+        unitOfWorkFactory);
+
+snapshotRepository.start();
+```
+
+### Durable Async Snapshots
+
+`ASYNC_DURABLE` splits snapshotting into *enqueue* and *process*:
+
+```
+Command                                 Background worker
+   │                                           │
+   ├─ append events to EventStore              │
+   ├─ (after commit) enqueue snapshot job ─────┼─→ lockNextBatch()
+   │                                           ├─→ delete old snapshots
+   │  user UnitOfWork commits                  ├─→ saveSnapshot()
+   ▼                                           └─→ markCompleted()   (all in ONE UnitOfWork)
+```
+
+| Type | Role |
+|------|------|
+| `AggregateSnapshotJob` | The queued unit of work — aggregate type, id, event order, serialized payload, attempt count |
+| `AggregateSnapshotJobRepository` | Enqueue / lock / complete / fail / park operations. Postgres implementation: `PostgresqlAggregateSnapshotJobRepository` |
+| `PostgresqlAggregateSnapshotJobProcessor` | Processes one locked batch; delete + save + mark-completed run in a single `UnitOfWork` |
+| `DurableAsyncSnapshotManager` | `Lifecycle` bean that polls the job table and drives the processor |
+| `DurableAsyncSnapshotSettings` | `pollInterval`, `batchSize`, `workerThreads`, `maxRetries`, `retryDelay`, `processingTimeout` — `DurableAsyncSnapshotSettings.defaults()` |
+
+`AggregateSnapshotJobStatus` values:
+
+| Status | Meaning |
+|--------|---------|
+| `PENDING` | Waiting to be picked up |
+| `PROCESSING` | Locked by a worker. Rows whose `processing_started_ts` is older than `processingTimeout` (default 5 minutes) are reclaimed — a dead worker cannot strand a job |
+| `FAILED` | An attempt failed and the job will be retried after `retryDelay`, up to `maxRetries` |
+| `PARKED` | Retries exhausted. The job stays visible for inspection; re-enqueueing the same aggregate/event-order **replaces** a `PARKED` row, so a corrected payload can displace a poison pill. `PENDING` / `PROCESSING` / `FAILED` rows are left untouched |
+
+Correctness properties worth knowing:
+
+- **Enqueue happens after commit.** The job is registered via a `UnitOfWorkLifecycleCallback`, so a rollback of the
+  user's `UnitOfWork` never leaves a job referencing uncommitted events.
+- **Saves are version-guarded.** `saveSnapshot` will not overwrite a newer snapshot, and deletion is bounded via
+  `deleteSnapshotsOlderThan`, so an out-of-order worker cannot resurrect a stale snapshot or wipe a newer one.
+
+### Spring Boot Configuration
+
+`spring-boot-starter-postgresql-event-store` auto-configures the whole snapshot subsystem
+(`SnapshotConfiguration`). Snapshotting is **off by default**.
+
+```properties
+essentials.eventstore.snapshots.enabled=true
+essentials.eventstore.snapshots.default-mode=async-durable
+essentials.eventstore.snapshots.default-every-n-events=100
+essentials.eventstore.snapshots.default-deletion-mode=keep-last-n
+essentials.eventstore.snapshots.default-keep-last-snapshots=3
+
+# ASYNC_IN_MEMORY executor pool size
+essentials.eventstore.snapshots.worker-threads=1
+
+# ASYNC_DURABLE worker
+essentials.eventstore.snapshots.durable.enabled=true
+essentials.eventstore.snapshots.durable.poll-interval=1s
+essentials.eventstore.snapshots.durable.batch-size=25
+essentials.eventstore.snapshots.durable.worker-threads=2
+essentials.eventstore.snapshots.durable.max-retries=3
+essentials.eventstore.snapshots.durable.retry-delay=5s
+essentials.eventstore.snapshots.durable.processing-timeout=5m
+
+# Per-AggregateType override of the @AggregateSnapshotPolicy defaults
+essentials.eventstore.snapshots.aggregates.Orders.enabled=true
+essentials.eventstore.snapshots.aggregates.Orders.mode=async-in-memory
+essentials.eventstore.snapshots.aggregates.Orders.every-n-events=50
+essentials.eventstore.snapshots.aggregates.Orders.deletion-mode=keep-last-n
+essentials.eventstore.snapshots.aggregates.Orders.keep-last-snapshots=3
+```
+
+> ⚠️ **Security:** `snapshot-table-name` and `durable.job-table-name` are concatenated into the SQL that creates and
+> queries these tables. Only use hardcoded, trusted values — see [Security](#security).
 
 **Test references:**
 - [`PostgresqlAggregateSnapshotRepositoryTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/PostgresqlAggregateSnapshotRepositoryTest.java)
 - [`PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshotsIT`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/PostgresqlAggregateSnapshotRepository_keepALimitedNumberOfHistoricSnapshotsIT.java)
+- [`AsyncAggregateSnapshotRepositoryTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/AsyncAggregateSnapshotRepositoryTest.java)
+- [`DurableAsyncAggregateSnapshotRepositoryTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/DurableAsyncAggregateSnapshotRepositoryTest.java)
+- [`PostgresqlAggregateSnapshotJobProcessorTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/PostgresqlAggregateSnapshotJobProcessorTest.java)
+- [`PostgresqlAggregateSnapshotJobRepositoryIT`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/PostgresqlAggregateSnapshotJobRepositoryIT.java)
+- [`PostgresqlAggregateSnapshotStoreIT`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/snapshot/PostgresqlAggregateSnapshotStoreIT.java)
+
+---
+
+## Closing the Books
+
+**Package:** `dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks`
+
+Snapshots make a long event stream *cheaper to load*. **Closing the books** stops the stream from growing at all:
+at a chosen boundary the current stream is closed, and a new one — a **generation** — is opened for the same
+business entity. The classic accounting analogy: at the end of the period you close the ledger, carry the balance
+forward, and start a fresh book.
+
+| | Snapshots | Closing the books |
+|---|-----------|-------------------|
+| Event stream | Keeps growing forever | Bounded per generation |
+| Load cost | Snapshot + tail of events | Only the current generation's events |
+| Old events | Stay in the hot table | Closed generations can be [archived](#archiving-closed-generations) and pruned |
+| Best for | Long-lived entities with no natural period | Entities with a natural period — accounts, ledgers, monthly/yearly books |
+
+### Generations
+
+Application code keeps using a stable business id; the event store sees a different stream id per generation.
+
+| Type | Role |
+|------|------|
+| `LogicalAggregateId<ID>` | The stable business id, e.g. `Account-123`. Unchanged across generations |
+| `AggregateGeneration<ID>` | Metadata for one generation: `aggregateType`, `logicalAggregateId`, `generation`, `streamAggregateId`, `state`, `openedAt`, `closedAt` |
+| `GenerationState` | `OPEN` (accepting writes) or `CLOSED` (finalized) |
+| `ClosingBooksStreamIdGenerator` | Derives the concrete stream id from the logical id + generation number, e.g. `Account-123#2` |
+
+```
+Logical aggregate id:  Account-123
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+   generation 1        generation 2        generation 3
+   Account-123#1       Account-123#2       Account-123#3
+   [E1 … E900]         [E1 … E640]         [E1 … E12]
+   CLOSED              CLOSED              OPEN   ← all reads/writes land here
+```
+
+Only **one** generation is open at a time. Loading resolves the open generation and delegates to the underlying
+`StatefulAggregateRepository` using that generation's stream id.
+
+Generation state is owned by a small interface hierarchy:
+
+```
+ClosingBooksGenerationResolver<ID>          resolve / open next / close current
+        ▲
+ClosingBooksGenerationRepository<ID>        marker for a persistent resolver
+        ▲
+ClosingBooksOpenGenerationRepository<ID>    + scan open generations across many logical aggregates
+```
+
+| Implementation | Use |
+|----------------|-----|
+| `InMemoryClosingBooksGenerationResolver` | Tests and single-process scenarios |
+| `PostgresqlClosingBooksGenerationRepository` | Production — persists generations in `aggregate_generations`, and serializes rollovers so two callers cannot both act on the same open generation |
+
+### Declaring a Closing-Books Policy
+
+`@AggregateClosingBooksPolicy` declares the code-local default for an aggregate implementation; Spring Boot
+properties keyed by `AggregateType` override it.
+
+```java
+@AggregateClosingBooksPolicy(
+        aggregateType = "Accounts",
+        triggerMode = ClosingBooksTriggerMode.SCHEDULED_SCAN,
+        defaultPolicy = ClosingBooksDefaultPolicyType.EVENT_COUNT_OR_TIME_BOUNDARY,
+        eventThreshold = 10_000,
+        timeBoundary = ClosingBooksTimeBoundary.END_OF_MONTH,
+        zoneId = "Europe/Copenhagen"
+)
+public class Account extends AggregateRoot<String, AccountEvent, Account> implements HasClosingBooksPeriodId {
+    @Override
+    public String currentClosingBooksPeriodId() {
+        return currentPeriod;   // "2026-08" for END_OF_MONTH
+    }
+}
+```
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | `boolean` | `true` | Whether closing-books is enabled for this aggregate |
+| `triggerMode` | `ClosingBooksTriggerMode` | `ON_ACCESS` | When the policy is evaluated |
+| `defaultPolicy` | `ClosingBooksDefaultPolicyType` | `UNSPECIFIED` | Which built-in rule decides |
+| `eventThreshold` | `long` | `-1` | Event count that triggers a close, for the `EVENT_COUNT*` policies |
+| `timeBoundary` | `ClosingBooksTimeBoundary` | `NONE` | Period boundary, for the `TIME_BOUNDARY*` policies |
+| `zoneId` | `String` | `"UTC"` | Time zone used to evaluate the boundary |
+| `intervalDays` | `int` | `-1` | Interval, for `EVERY_N_DAYS` |
+| `aggregateType` | `String` | `""` | The `AggregateType` this policy applies to |
+
+**`ClosingBooksTriggerMode`** — when evaluation happens:
+
+| Mode | Evaluated |
+|------|-----------|
+| `ON_ACCESS` | Whenever the aggregate is loaded through a closing-books repository |
+| `EXPLICIT_COMMAND` | Only when the application explicitly asks for a rollover |
+| `SCHEDULED_SCAN` | By the background [scheduled scan](#scheduled-scans) |
+
+**`ClosingBooksDefaultPolicyType`** — which built-in rule decides:
+
+| Type | Rule |
+|------|------|
+| `UNSPECIFIED` | No built-in rule; supply your own `ClosingBooksDecisionPolicy` |
+| `MANUAL_ONLY` | Never closes automatically |
+| `EVENT_COUNT` | Close once the generation exceeds `eventThreshold` events |
+| `TIME_BOUNDARY` | Close when the aggregate's period id no longer matches the current period |
+| `EVENT_COUNT_OR_TIME_BOUNDARY` | Close when either condition holds |
+| `EXPLICIT_ONLY` | Close only on an explicit command |
+
+**`ClosingBooksTimeBoundary`** and the period-id format the aggregate must expose:
+
+| Boundary | Period-id format | Example |
+|----------|------------------|---------|
+| `NONE` | — | — |
+| `END_OF_DAY` | `yyyy-MM-dd` | `2026-08-08` |
+| `EVERY_N_DAYS` | `yyyy-MM-dd` | `2026-08-08` (interval from `intervalDays`) |
+| `END_OF_WEEK` | `yyyy-Www` | `2026-W32` |
+| `END_OF_MONTH` | `yyyy-MM` | `2026-08` |
+| `END_OF_YEAR` | `yyyy` | `2026` |
+
+> **Important:** for `TIME_BOUNDARY` and `EVENT_COUNT_OR_TIME_BOUNDARY` the aggregate **must** expose its persisted
+> current period id, and the stored format must match the configured boundary. Either implement
+> `HasClosingBooksPeriodId`, or pass a custom `currentPeriodIdProvider` function to
+> `BuiltInClosingBooksPolicyEvaluator`. Under Spring Boot the first form is checked at startup — see
+> [Closing-Books Spring Boot Configuration](#closing-books-spring-boot-configuration).
+
+### Decision Policies
+
+Evaluation yields a `ClosingBooksDecision`:
+
+| Decision | Effect |
+|----------|--------|
+| `KEEP_OPEN` | Nothing happens |
+| `CLOSE_ONLY` | Current generation is closed; no new generation is opened |
+| `CLOSE_AND_OPEN_NEXT` | Current generation is closed and the next one is opened, atomically |
+
+`BuiltInClosingBooksPolicyEvaluator` implements the `ClosingBooksDefaultPolicyType` rules above. For anything else,
+implement `ClosingBooksDecisionPolicy<ID, AGGREGATE>` or compose one with `ClosingBooksDecisionPolicies`:
+
+```java
+// Close and roll over when the aggregate says the books are ready
+var policy = ClosingBooksDecisionPolicies.<String, Account>closeAndOpenNextWhenAggregate(Account::isPeriodComplete);
+
+// Only act on a scheduled scan
+var scanOnly = ClosingBooksDecisionPolicies.<String, Account>closeOnlyOnScheduledScan(Account::isPeriodComplete);
+
+// Compose
+var combined = ClosingBooksDecisionPolicies.anyOf(policy, scanOnly);
+```
+
+| Factory | Result |
+|---------|--------|
+| `keepOpen()` / `closeOnly()` / `closeAndOpenNext()` | Constant decision |
+| `when(predicate, decision)` | Decision when the `ClosingBooksEvaluationContext` predicate holds |
+| `closeWhenAggregate(predicate, decision)` | Decision based on the aggregate instance |
+| `closeAndOpenNextWhenAggregate(predicate)` / `closeOnlyWhenAggregate(predicate)` | Shorthands for the above |
+| `whenTriggeredBy(decision, triggerModes…)` | Decision only for the given trigger modes |
+| `closeAndOpenNextOnAccess(predicate)` / `closeAndOpenNextOnExplicitCommand(predicate)` / `closeOnlyOnScheduledScan(predicate)` | Trigger-scoped shorthands |
+| `allOf(policies…)` / `anyOf(policies…)` | Composition |
+| `fromLegacyPolicy(policy)` | Adapts an older `ClosingBooksPolicy` |
+
+### Repositories and the Coordinator
+
+| Type | Role |
+|------|------|
+| `ClosingBooksCoordinator<ID>` | Generation lifecycle for one `AggregateType` — resolve current, open first on demand, close-and-open-next atomically, evaluate a policy |
+| `ClosingBooksStatefulAggregateRepository` | Thin wrapper over a `StatefulAggregateRepository` that translates a `LogicalAggregateId` to the open generation's stream id |
+| `ClosingBooksLogicalAggregateRepository` | The main ergonomic seam — application code stays on logical business ids while the repository resolves and manages generation stream ids |
+
+```java
+var coordinator = new ClosingBooksCoordinator<String>(
+        AggregateType.of("Accounts"),
+        new PostgresqlClosingBooksGenerationRepository(unitOfWorkFactory),
+        (aggregateType, logicalId, generation) -> logicalId.value() + "#" + generation,
+        unitOfWorkFactory);
+
+// <LOGICAL_ID, STREAM_ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>
+var repository = new ClosingBooksLogicalAggregateRepository<String, String, AccountEvent, Account>(
+        AggregateType.of("Accounts"),
+        delegateStatefulAggregateRepository,
+        coordinator,
+        ClosingBooksStreamIdSerializer.stringBased());
+
+unitOfWorkFactory.usingUnitOfWork(uow -> {
+    var account = repository.load(new LogicalAggregateId<>("Account-123"));
+    account.deposit(Amount.of("100.00"));
+});
+```
+
+`ClosingBooksLogicalAggregateRepository` methods, all taking a `LogicalAggregateId`:
+
+| Method | Behaviour |
+|--------|-----------|
+| `tryLoad(id)` | Load from the open generation, or empty if there is none |
+| `load(id)` | Load from the open generation; throws if no generation is open |
+| `resolveCurrentGeneration(id)` / `resolveOrOpenCurrentGeneration(id)` | Inspect, or open generation `1` on demand |
+| `loadOrOpen(id, …)` | Load, opening the first generation if the aggregate is new |
+| `closeAndOpenNextGeneration(id, …)` | Explicit rollover; returns the aggregate in the new generation |
+| `save(aggregate)` | Delegates to the underlying `StatefulAggregateRepository` |
+
+`closeAndOpenNextGeneration(...)` runs the close + open pair inside a **single** `UnitOfWork`: a crash between the
+two rolls the close back, leaving the previous generation `OPEN` for a safe retry rather than stranding the
+aggregate with no open generation.
+
+> **Carrying state forward is your job.** Closing a generation does not copy balances into the new stream. Emit an
+> opening/carry-forward event on the new generation — that is what `ClosingBooksNextGenerationFactory` /
+> `TypedClosingBooksNextGenerationFactory` are for.
+
+### Scheduled Scans
+
+`ClosingBooksManager` is a `Lifecycle` bean that periodically runs `ClosingBooksScheduledScanProcessor`s
+(default implementation: `DefaultClosingBooksScheduledScanProcessor`). It takes a `FencedLockManager` lock so
+**only one node** scans at a time.
+
+```java
+var manager = new ClosingBooksManager(List.of(scanProcessor),
+                                      new ClosingBooksManagerSettings(Duration.ofMinutes(5),   // pollInterval
+                                                                      100,                     // batchSize
+                                                                      Duration.ofSeconds(5)),  // lockAcquireTimeout
+                                      fencedLockManager,
+                                      LockName.of("closing-books-scan"));
+manager.start();
+```
+
+This is the mechanism behind `ClosingBooksTriggerMode.SCHEDULED_SCAN` — time-boundary policies need it, since
+nothing else would notice that the month rolled over on an idle aggregate.
+
+### Archiving Closed Generations
+
+**Package:** `dk.trustworks.essentials.components.eventsourced.aggregates.archive`
+
+Once a generation is `CLOSED` its events are immutable, which makes them safe to export out of the hot event
+tables. `AggregateGenerationArchiver` archives one `(aggregateType, logicalAggregateId, generation)` triple and
+returns an `AggregateArchiveEntry` with the metadata and result.
+
+| Type | Role |
+|------|------|
+| `AggregateGenerationArchiver` | Entry point. Default implementation: `DefaultAggregateGenerationArchiver` |
+| `AggregateArchiveExporter` | Streams persisted events into the destination's `OutputStream` without buffering the whole payload. Default: `JacksonJsonLinesAggregateArchiveExporter` |
+| `AggregateArchiveDestination` | The sink. Owns the stream and wraps it with checksum/byte-counting. Built-in: `FileSystemAggregateArchiveDestination` |
+| `AggregateArchiveRegistry` | Tracks archive entries. Postgres implementation: `PostgresqlAggregateArchiveRegistry` |
+| `AggregateArchiveFormat` | `JSONL` (newline-delimited JSON) or `PARQUET` |
+| `AggregateArchiveStatus` | `IN_PROGRESS` (reserved by a worker — prevents duplicate concurrent exports across nodes), `ARCHIVED`, `FAILED` |
+
+### Closing-Books Spring Boot Configuration
+
+`spring-boot-starter-postgresql-event-store` auto-configures closing books (`ClosingBooksConfiguration`) and
+archiving (`AggregateArchiveApiConfiguration`). Both are **off by default**.
+
+```properties
+essentials.eventstore.closing-books.enabled=true
+essentials.eventstore.closing-books.default-trigger-mode=scheduled-scan
+essentials.eventstore.closing-books.default-policy=event-count-or-time-boundary
+essentials.eventstore.closing-books.event-threshold=10000
+essentials.eventstore.closing-books.time-boundary=end-of-month
+essentials.eventstore.closing-books.zone-id=Europe/Copenhagen
+
+# Per-AggregateType override of the @AggregateClosingBooksPolicy defaults
+essentials.eventstore.closing-books.aggregates.Accounts.enabled=true
+essentials.eventstore.closing-books.aggregates.Accounts.trigger-mode=on-access
+essentials.eventstore.closing-books.aggregates.Accounts.time-boundary=end-of-year
+
+essentials.eventstore.archives.enabled=true
+essentials.eventstore.archives.filesystem-root-directory=/var/lib/essentials/archives
+```
+
+`AggregateClosingBooksPolicyBeanPostProcessor` discovers `@AggregateClosingBooksPolicy`-annotated beans, and
+`DefaultAggregateLifecycleConfigurationValidator` validates the combined snapshot + closing-books configuration at
+startup. It fails fast when:
+
+- `triggerMode = SCHEDULED_SCAN` but no `FencedLockManager` is configured
+- a policy that closes *and opens the next* generation is active but no `TypedClosingBooksNextGenerationFactory`
+  is registered for that aggregate — the framework would otherwise open a generation with no carry-forward state
+- a `TIME_BOUNDARY` / `EVENT_COUNT_OR_TIME_BOUNDARY` policy is active but the resolved `timeBoundary` is `NONE`, so
+  the boundary can never advance and the books would never close. For `EVENT_COUNT_OR_TIME_BOUNDARY` the message also
+  points at `EVENT_COUNT`, in case only the event-count condition was intended
+- a `TIME_BOUNDARY` / `EVENT_COUNT_OR_TIME_BOUNDARY` policy is active but the aggregate does not implement
+  `HasClosingBooksPeriodId`, so the boundary can never be evaluated. If the period id is supplied through a custom
+  `currentPeriodIdProvider` instead, opt out with
+  `essentials.eventstore.closing-books.period-id-provided-externally=true` (or the per-aggregate
+  `…closing-books.aggregates.<AggregateType>.period-id-provided-externally=true`)
+- `zoneId` is not a valid time zone
+
+and warns when a policy relies on a value that was silently defaulted (`event-threshold`, `interval-days`).
+
+**Test references:**
+- [`ClosingBooksCoordinatorTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/closingbooks/ClosingBooksCoordinatorTest.java)
+- [`ClosingBooksDecisionPoliciesTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/closingbooks/ClosingBooksDecisionPoliciesTest.java)
+- [`ClosingBooksLogicalAggregateRepositoryTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/closingbooks/ClosingBooksLogicalAggregateRepositoryTest.java)
+- [`BuiltInClosingBooksPolicyEvaluatorTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/closingbooks/BuiltInClosingBooksPolicyEvaluatorTest.java)
+- [`ClosingBooksTimeBoundaryCalculatorTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/closingbooks/ClosingBooksTimeBoundaryCalculatorTest.java)
+- [`DefaultClosingBooksScheduledScanProcessorTest`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/closingbooks/DefaultClosingBooksScheduledScanProcessorTest.java)
+- [`PostgresqlClosingBooksGenerationRepositoryIT`](src/test/java/dk/trustworks/essentials/components/eventsourced/aggregates/closingbooks/PostgresqlClosingBooksGenerationRepositoryIT.java)
 
 ---
 
