@@ -307,9 +307,14 @@ td.actions, th.sticky {
 
 /* ── Key/value grid (CDC configuration, slot detail) ───────────────────────────────── */
 .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 28px; }
-.kv-item { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--gridline); }
-.kv-key { color: var(--ink-secondary); }
-.kv-val { font-variant-numeric: tabular-nums; text-align: right; }
+/* min-width: 0 is load-bearing on both the row and the value, for the same reason it is on .main:
+   a flex item's automatic minimum size is its min-content width. Values like a replication slot name
+   or QUARANTINE_AND_CONTINUE are single unbreakable tokens, so without this the value refuses to
+   shrink and paints over the neighbouring grid column. overflow-wrap: anywhere then gives the token
+   a break opportunity — it also reduces min-content size, which text-overflow/word-break do not. */
+.kv-item { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--gridline); min-width: 0; }
+.kv-key { color: var(--ink-secondary); flex: 0 0 auto; }
+.kv-val { font-variant-numeric: tabular-nums; text-align: right; min-width: 0; overflow-wrap: anywhere; }
 
 /* ── States ────────────────────────────────────────────────────────────────────────── */
 .empty { padding: 28px 14px; text-align: center; color: var(--ink-secondary); }

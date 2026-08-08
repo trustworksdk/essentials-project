@@ -50,6 +50,13 @@ essentials:
       enabled: true
     closing-books:
       enabled: true
+      aggregates:
+        TradingAccounts:
+          # TradingAccount does not implement HasClosingBooksPeriodId - TradingAccountClosingBooksPolicy
+          # builds its BuiltInClosingBooksPolicyEvaluator with an explicit currentPeriodIdProvider
+          # (account -> account.periodId) instead. Opt out of the startup check that would otherwise
+          # reject the time-boundary policy.
+          period-id-provided-externally: true
     cdc:
       # CDC is OFF by default (CdcProperties#enabled = false) — it needs database-side setup the
       # framework won't assume. The demo opts in, and the compose Postgres is started with

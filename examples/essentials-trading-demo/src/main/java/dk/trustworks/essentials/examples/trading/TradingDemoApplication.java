@@ -80,6 +80,7 @@ public class TradingDemoApplication {
     @Bean
     public ApplicationRunner tradingSimulationRunner(TradingDemoSimulationProperties properties,
                                                      TradingAccountService tradingAccountService,
+                                                     TradingAccountClosingBooksPolicy closingBooksPolicy,
                                                      SettlementService settlementService,
                                                      InstrumentService instrumentService,
                                                      DirectInstrumentPriceService directInstrumentPriceService,
@@ -87,6 +88,7 @@ public class TradingDemoApplication {
                                                      TradeService tradeService) {
         return new TradingSimulationRunner(properties,
                                            tradingAccountService,
+                                           closingBooksPolicy,
                                            settlementService,
                                            instrumentService,
                                            directInstrumentPriceService,

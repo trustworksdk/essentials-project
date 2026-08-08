@@ -28,9 +28,12 @@ public class TradingDemoSimulationProperties {
     private int depositsPerAccount = 2;
     private int settlementsPerAccount = 1;
     private int instrumentCount = 2;
-    private boolean rolloverAccounts = true;
-    private String initialPeriodId = "2026-03";
-    private String nextPeriodId = "2026-04";
+    /**
+     * Safety cap on the deposits the policy-driven account is fed while waiting for the configured
+     * closing-books event threshold to be crossed. Only a backstop - the loop stops as soon as the policy
+     * rolls the generation, so raising the threshold does not require changing this unless it exceeds the cap.
+     */
+    private int maxPolicyDrivenEvents = 500;
 
     public boolean isEnabled() {
         return enabled;
@@ -72,27 +75,11 @@ public class TradingDemoSimulationProperties {
         this.instrumentCount = instrumentCount;
     }
 
-    public boolean isRolloverAccounts() {
-        return rolloverAccounts;
+    public int getMaxPolicyDrivenEvents() {
+        return maxPolicyDrivenEvents;
     }
 
-    public void setRolloverAccounts(boolean rolloverAccounts) {
-        this.rolloverAccounts = rolloverAccounts;
-    }
-
-    public String getInitialPeriodId() {
-        return initialPeriodId;
-    }
-
-    public void setInitialPeriodId(String initialPeriodId) {
-        this.initialPeriodId = initialPeriodId;
-    }
-
-    public String getNextPeriodId() {
-        return nextPeriodId;
-    }
-
-    public void setNextPeriodId(String nextPeriodId) {
-        this.nextPeriodId = nextPeriodId;
+    public void setMaxPolicyDrivenEvents(int maxPolicyDrivenEvents) {
+        this.maxPolicyDrivenEvents = maxPolicyDrivenEvents;
     }
 }

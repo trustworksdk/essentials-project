@@ -18,7 +18,7 @@ Depends on `spring-boot-starter-postgresql` (common Essentials Spring wiring). S
 | `EventStoreConfiguration` | Single `@AutoConfiguration` — wires every event-store and CDC bean via `@ConditionalOnMissingBean`; all CDC beans are additionally gated on `essentials.eventstore.cdc.enabled=true` |
 | `EssentialsEventStoreProperties` | `@ConfigurationProperties(prefix="essentials.eventstore")` — identifierColumnType, jsonColumnType, gap handler, metrics, subscriptionManager, cdc (delegates to `CdcProperties`) |
 | `EventStoreNotifyPollingBootstrap` | S1 NOTIFY wake-up: on construction calls `strategy.enableNotifyTriggerInstallation(...)` which installs `pg_notify` AFTER INSERT trigger + registers table with `MultiTableChangeListener`. Uses advisory lock to serialise DDL across JVMs |
-| `CdcHealthIndicator` | Actuator health: ACTIVE→UP, FAILED→DOWN (REQUIRE mode) or UP (PREFER/OPTIONAL), INACTIVE→UP. Includes tailer LSN + dispatcher started details |
+| `CdcHealthIndicator` | Actuator health: ACTIVE→UP, FAILED→DOWN (REQUIRE mode) or UP (PREFER/OPTIONAL), INACTIVE→UP. Includes tailer LSN + dispatcher started details, plus `fallbackCount` / `warmupPollCount` / `everActive` |
 
 ## Test Structure
 
@@ -50,6 +50,7 @@ Override any `@ConditionalOnMissingBean` to replace defaults:
 - **CDC + Notify-polling coexistence** — both can be enabled but WARN logged: CDC INBOX already delivers wake-up equivalent; running both adds DB load (trigger fire + LISTEN connection) for no liveness gain.
 - **`AggregateTypeResolver` and `WalMessageFilter` use live suppliers**, not snapshots — aggregates registered at runtime via `addAggregateEventStreamConfiguration(...)` become visible to CDC conversion and WAL filtering. Using snapshot would silently drop WAL events for late-registered aggregates.
 - **CdcHealthIndicator** only registered when `management.health.cdc.enabled` is true (default) AND CDC enabled. FAILED state maps to DOWN only in `REQUIRE` mode; PREFER/OPTIONAL degrade gracefully → UP.
+- **`warmupPollCount > 0` in the health details is normal, `fallbackCount > 0` is not.** Subscriptions start before `walReplicationTailer`, so each one begins on polling and is switched to the CDC bus once availability goes ACTIVE — see the warm-up-vs-fallback gotcha in `postgresql-event-store/CLAUDE.md`. A health payload showing `everActive=true`, `fallbackCount=0`, `warmupPollCount=<n subscriptions>` is a healthy startup, not a degraded one
 - **Notify-polling optimizer fallback** — log name format `EventStream:<aggregateType>:<subscriberId>` parsed to find table; unknown format or unregistered aggregate type → falls back to `JitteredEventStorePollingOptimizer`, not `EventStorePollingOptimizer.None()` (which would peg the DB).
 - **`@Primary` on `cdcEventStore`** — when CDC enabled, `CdcEventStore` wraps `ConfigurableEventStore` and is registered as `@Primary`. Inject `EventStore` (not `ConfigurableEventStore`) to get CDC-wrapped instance; inject `@Qualifier("essentialsEventStore")` to bypass CDC wrapping.
 - **Jackson config** — `JSONEventSerializer` disables getter/setter visibility; uses field + creator visibility only. Adding `com.fasterxml.jackson.databind.Module` beans auto-registers them. The mapper comes from `EssentialsObjectMappers`; never hand-build one, or the persisted format drifts.

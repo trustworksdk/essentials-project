@@ -98,21 +98,28 @@ public class DefaultAggregateLifecycleStatisticsApi implements AggregateLifecycl
         var aggregateType = descriptor.aggregateType().map(AggregateType::of).orElse(null);
         return new ApiAggregateClosingBooksStatistics(aggregateType,
                                                       descriptor.aggregateImplementationType().getName(),
+                                                      // "rollover" is recorded by ClosingBooksCoordinator, so it is present for every
+                                                      // trigger mode. The "scan."/"manager." entries only exist for SCHEDULED_SCAN.
                                                       timedMetrics(null,
                                                                    aggregateType,
-                                                                   List.of("scan.load_open_generations",
+                                                                   List.of("rollover",
+                                                                           "scan.load_open_generations",
                                                                            "scan.process_generation",
                                                                            "manager.poll"),
                                                                    "essentials.aggregate_closing_books."),
                                                       counters(null,
                                                                aggregateType,
-                                                               List.of("essentials.aggregate_closing_books.manager.poll.outcome",
+                                                               List.of("essentials.aggregate_closing_books.generations_closed",
+                                                                       "essentials.aggregate_closing_books.generations_opened",
+                                                                       "essentials.aggregate_closing_books.rollover.outcome",
+                                                                       "essentials.aggregate_closing_books.policy.decision",
+                                                                       "essentials.aggregate_closing_books.manager.poll.outcome",
                                                                        "essentials.aggregate_closing_books.scan.process_generation.outcome",
                                                                        "essentials.closing_books.time_boundary_gap_detected"),
-                                                               false),
+                                                               true),
                                                       gauges(null,
                                                              aggregateType,
-                                                             List.of()));
+                                                             List.of("essentials.aggregate_closing_books.last_rollover_epoch_ms")));
     }
 
     private Map<String, ApiTimedMetricStatistics> timedMetrics(String aggregateImplementationType,

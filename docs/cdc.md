@@ -604,7 +604,7 @@ Three mechanisms in [`WalReplicationTailer`](../components/postgresql-event-stor
 | **Tailer is dead** (JVM crash, deployment removed CDC)     | `pg_replication_slots.active = false` for the slot, growing `lag_bytes`.                               | Restart the app. If the app is permanently gone: `SELECT pg_drop_replication_slot('…')`. |
 | **Slot is orphaned** (renamed group, abandoned slot)       | Slot exists in `pg_replication_slots` but no app references its name.                                  | Manually drop the slot.                                                              |
 | **Tailer connected but stuck in retry loop**               | Tailer `connect.failures` metric climbs; `essentials.cdc.active` gauge = 0.                            | Investigate logs; common causes: revoked replication privilege, plugin missing.       |
-| **Effectiveness monitor flips FAILED but slot still alive**| `essentials.cdc.eventstore.fallback.poll.count` climbs; subscribers fall back to polling.              | Subscribers stay correct. Investigate dispatcher/decode failures in logs.            |
+| **Effectiveness monitor flips FAILED but slot still alive**| `essentials.cdc.fallback_total` climbs (a real fallback — CDC had been active); subscribers fall back to polling. | Subscribers stay correct. Investigate dispatcher/decode failures in logs.            |
 | **Long downtime + high write rate**                        | Predictable on restart: slot lag = bytes written during downtime.                                      | Either let the tailer catch up (WAL is bounded by your write volume × downtime), or recreate the slot if the backlog isn't worth replaying (you'll get backfill from polling). |
 | **PostgreSQL restart with replication slot left active**   | `wal_status = 'lost'` or `'unreserved'`; `conflicting = true`.                                         | Slot is unrecoverable — drop and recreate. Backfill picks up the missed events.       |
 
@@ -639,8 +639,13 @@ SELECT pg_size_pretty(SUM(size)) AS total_wal_size FROM pg_ls_waldir();
   Pick `X` based on your `max_wal_size` and free disk; a sensible default is
   10–20% of disk free space.
 - `active = false AND inactive_since > 1 hour` → warn (orphaned slot risk).
-- `essentials.cdc.fallback.poll.count` rising while `essentials.cdc.active = 0`
-  for an extended period → CDC isn't recovering on its own, investigate.
+- `essentials.cdc.fallback_total` rising → CDC was working and stopped. This counter excludes startup
+  warm-up polls, so any increase is real and worth paging on.
+- `essentials.cdc.eventstore.fallback.poll.count` rising while `essentials.cdc.active = 0`
+  for an extended period → CDC isn't recovering on its own, investigate. Note this counter also ticks
+  during normal startup; the "for an extended period" qualifier is what keeps it from firing on every boot.
+- `essentials.cdc.warmup_poll_total > 0` with `essentials.cdc.active = 0` well past startup → CDC never
+  became active at all. Check the slot, the publication and the tailer.
 
 ### 5.6 Belt-and-braces: bound retention server-side
 
@@ -1080,11 +1085,36 @@ Sampled every `cdc.slot.metricsInterval` (default 30s) by `CdcSlotMetrics`. Tagg
 ### EventStore / Bus
 
 - `essentials.cdc.active` (gauge: 0/1)
-- `essentials.cdc.eventstore.fallback.poll.count` (counter — rises when CDC unavailable)
+- `essentials.cdc.eventstore.fallback.poll.count` (counter — every poll that took the polling branch, **including
+  startup warm-up**; see [Warm-up polls vs fallbacks](#warm-up-polls-vs-fallbacks))
 - `essentials.cdc.eventstore.live_source.switch.count` (counter — mid-stream cutover)
 - `essentials.cdc.eventstore.backfill.page.latency` / `.loaded` / `.query_range`
 - `essentials.cdc.backfill_live.buffer.size` (gauge — backfill→live handover buffer)
-- `essentials.cdc.fallback_total` / `essentials.cdc.start_failures_total` (with reason tag)
+- `essentials.cdc.fallback_total` (counter — subscriptions that fell back to polling **after** CDC had been
+  active, i.e. a real regression. This is the one to alert on)
+- `essentials.cdc.warmup_poll_total` (counter — subscriptions that started on polling because CDC had not
+  become active yet. Expected on every startup; **not** an error)
+- `essentials.cdc.start_failures_total` (with reason tag)
+
+### Warm-up polls vs fallbacks
+
+Availability starts `INACTIVE` and only becomes `ACTIVE` once the WAL tailer has connected and taken the slot.
+The lifecycle starts subscriptions *before* that, so every subscription that comes up during boot legitimately
+begins on the polling path and switches to the CDC bus a few milliseconds later, when
+`CdcEventStore`'s adaptive live source sees the state change.
+
+Those startup polls are **warm-up polls**, counted by `essentials.cdc.warmup_poll_total` and reported as
+`warmupPollCount`. They are not failures, and how many you get depends on a race between subscription startup
+and tailer connection — typically one per subscription, but fewer if a subscription is slow to acquire its
+fenced lock. A healthy application therefore reports a non-zero `warmupPollCount` and a **zero**
+`fallbackCount` on every start.
+
+`fallbackCount` / `essentials.cdc.fallback_total` count only polls that happen *after* CDC has been active at
+least once — a genuine loss of CDC. Alert on that one; ignore warm-up.
+
+`everActive` (health detail `everActive`) disambiguates the third case: `fallbackCount = 0` with
+`everActive = false` and a non-zero `warmupPollCount` means CDC never came up at all and everything is being
+served by polling. Zero fallbacks alone cannot tell that apart from a healthy run.
 
 ---
 
@@ -1110,6 +1140,8 @@ Sampled every `cdc.slot.metricsInterval` (default 30s) by `CdcSlotMetrics`. Tagg
 ### "CDC isn't delivering events"
 
 1. Check `essentials.cdc.active` gauge. `0` ⇒ availability is not ACTIVE.
+   Then check the `everActive` health detail: `false` means CDC has never come up in this JVM at all
+   (look at the slot, the publication and the tailer), `true` means it came up and was lost.
 2. Check `essentials.cdc.eventstore.fallback.poll.count` — if it's climbing, polling
    is keeping subscribers afloat, so this is a CDC pipeline issue, not a data-loss issue.
 3. Look at the most recent effectiveness-monitor log line (it includes a `SlotState`

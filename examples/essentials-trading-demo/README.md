@@ -7,6 +7,28 @@ Small Spring Boot example app for validating:
 - typed logical ids vs internal generation ids
 - starter auto-configuration in a realistic app
 
+## What Bootstrap Leaves Behind
+
+On a clean database the startup runner seeds three accounts and deliberately leaves each in a different state,
+one per closing-books mechanism, so they can be compared side by side in the admin UI under
+**Aggregates → Aggregate lookup**:
+
+| Account | Rolled by | Ends up as |
+|---|---|---|
+| `ACC-DEMO-001` | The **closing-books policy**, with no application involvement | Generation 2, and the only account with snapshots — crossing the closing-books event threshold also crosses the snapshot policy's `everyNEvents` |
+| `ACC-DEMO-002` | An **explicit application command** (`closeBooksAndOpenNextGeneration`), with no policy involvement | Generation 2, no snapshots |
+| `ACC-DEMO-003` | Nothing — the baseline | Generation 1, still open |
+
+`ACC-DEMO-001` gets ordinary deposits written to it until the policy decides to roll; nothing in the runner asks
+for that rollover, which is the point. The log says which mechanism acted on which account.
+
+Accounts are opened in the **current** period, derived from the configured time boundary via
+`ClosingBooksTimeBoundaryCalculator.currentPeriodId(...)`. Don't replace this with a hardcoded period id: it
+ages into the past, and every later policy evaluation then reports skipped periods and trips gap detection.
+
+Thresholds are deliberately production-shaped (snapshot every 100 events, closing-books threshold 100) rather
+than shrunk for the demo, so bootstrap writes ~100 events into `ACC-DEMO-001` to cross them.
+
 ## Run Locally
 
 From the repo root:

@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.examples.trading.prices;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
+import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
 import dk.trustworks.essentials.examples.trading.instruments.InstrumentId;
 
@@ -27,6 +28,9 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Latest price aggregate for one instrument.
  */
+@AggregateSnapshotPolicy(aggregateType = "InstrumentPrices",
+                         mode = SnapshotExecutionMode.ASYNC_DURABLE,
+                         everyNEvents = 1000)
 public class InstrumentPrice extends AggregateRoot<InstrumentId, InstrumentPriceEvent, InstrumentPrice> {
     public BigDecimal latestPrice;
 

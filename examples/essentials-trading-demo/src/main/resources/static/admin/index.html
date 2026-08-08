@@ -56,6 +56,41 @@
             gap: 14px;
             margin-top: 14px;
         }
+        /* ── Tabs ─────────────────────────────────────────────────────────────────────────
+           The page grew to a dozen sections covering four unrelated concerns. Each tab is one
+           concern; every panel stays in the DOM so the single dashboard-summary renderer keeps
+           updating hidden tabs and switching shows current data immediately. */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin: 18px 0 20px;
+            border-bottom: 1px solid var(--border);
+            flex-wrap: wrap;
+        }
+        .tab {
+            appearance: none;
+            border: 1px solid transparent;
+            border-bottom: none;
+            background: transparent;
+            color: var(--muted);
+            font-family: inherit;
+            font-size: 15px;
+            padding: 10px 18px;
+            border-radius: 10px 10px 0 0;
+            cursor: pointer;
+            margin-bottom: -1px;
+        }
+        .tab:hover { color: var(--ink); }
+        .tab[aria-selected="true"] {
+            background: var(--panel);
+            border-color: var(--border);
+            color: var(--ink);
+            font-weight: 600;
+        }
+        .tab-panel[hidden] { display: none; }
+        .tab-intro {
+            margin-bottom: 14px;
+        }
         .section-title {
             margin: 4px 0 0;
             font-size: 0.9rem;
@@ -255,12 +290,21 @@
         <p>Plain HTML admin/dashboard for inspecting load generation, snapshots, and closing-books behavior while the demo is running.</p>
     </section>
 
+    <nav class="tabs" role="tablist" aria-label="Demo sections">
+        <button class="tab" role="tab" data-tab="dashboard" aria-selected="true">Dashboard</button>
+        <button class="tab" role="tab" data-tab="snapshots" aria-selected="false">Snapshots</button>
+        <button class="tab" role="tab" data-tab="closing-books" aria-selected="false">Closing Books</button>
+        <button class="tab" role="tab" data-tab="price-stress" aria-selected="false">Price Stress</button>
+    </nav>
+
     <section class="panel">
         <h2>Overview</h2>
         <div class="kpis" id="kpis"></div>
         <div class="status-line" id="statusLine"></div>
     </section>
 
+    <!-- ── Dashboard ─────────────────────────────────────────────────────────────────── -->
+    <div class="tab-panel" data-tab-panel="dashboard">
     <section class="stack">
         <div class="section-title">Trading Flow</div>
         <div class="actions five-up">
@@ -286,6 +330,51 @@
             </div>
         </div>
 
+    </section>
+
+    <section class="grid two-up" style="margin-top: 14px;">
+        <div class="panel links">
+            <h2>Quick Links</h2>
+            <div id="accountLinks" class="muted"></div>
+            <div id="sampleLinks" class="muted" style="margin-top: 12px;"></div>
+        </div>
+        <div class="panel">
+            <h2>Projections</h2>
+            <p class="muted">Two read models are available and use different Essentials processor styles.</p>
+            <div class="projection-grid">
+                <a class="projection-link" href="/api/admin/projections/account-statements">
+                    <strong>Account Statements</strong>
+                    Durable `ViewEventProcessor` projection of latest statement state
+                </a>
+                <a class="projection-link" href="/api/admin/projections/trade-settlements">
+                    <strong>Trade Settlements</strong>
+                    `EventProcessor` projection combining trade and settlement lifecycle state
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <section class="grid" style="margin-top: 14px;">
+        <div class="panel">
+            <h2>How To Verify</h2>
+            <p class="muted">
+                Burst trades and settlements, then use the <strong>Snapshots</strong> and
+                <strong>Closing Books</strong> tabs to watch each feature react. The dashboard summary is
+                sourced from <code>/api/admin/dashboard</code> and streamed from
+                <code>/api/admin/dashboard/stream</code>.
+            </p>
+        </div>
+    </section>
+    </div>
+
+    <!-- ── Price Stress ──────────────────────────────────────────────────────────────── -->
+    <div class="tab-panel" data-tab-panel="price-stress" hidden>
+    <section class="stack">
+        <p class="muted tab-intro">
+            Contrasts two ways of writing prices: through the event-sourced aggregate, and straight into a
+            latest-price table. A deliberate contrast case — the aggregate path is heavier but keeps the full
+            event history.
+        </p>
         <div class="section-title">Price Stress</div>
         <div class="actions five-up">
             <div class="panel compact">
@@ -318,79 +407,6 @@
                 <button class="secondary" data-endpoint="/api/admin/load-generator/comparisons/price-path?count=100">Run Price Path Comparison</button>
                 <div class="button-note">Runs the same 100 price updates through both paths and records the latest comparison result.</div>
             </div>
-            <div class="panel compact">
-                <button class="secondary" data-endpoint="/api/admin/load-generator/comparisons/trading-account?count=90&readPasses=25&eventThreshold=20">Run TradingAccount Comparison</button>
-                <div class="button-note">Runs the same account mutation and repeated-read workload with manual-only vs event-count rollover.</div>
-            </div>
-        </div>
-
-        <div class="section-title">Closing Books</div>
-        <div class="actions two-up">
-            <div class="panel fill">
-                <label for="closingBooksMode"><strong>Closing-Books Mode</strong></label>
-                <select id="closingBooksMode" class="control-field">
-                    <option value="manual-only">manual-only</option>
-                    <option value="event-count">event-count</option>
-                    <option value="time-boundary">time-boundary</option>
-                    <option value="event-count-or-time-boundary">event-count-or-time-boundary</option>
-                </select>
-                <button class="secondary" id="updateClosingBooksMode" style="margin-top: 12px;">Apply Closing-Books Mode</button>
-                <div class="button-note">POST `/api/admin/trading-accounts/closing-books/mode?value=time-boundary`</div>
-            </div>
-            <div class="panel fill">
-                <label for="timeBoundary"><strong>Time Boundary</strong></label>
-                <select id="timeBoundary" class="control-field">
-                    <option value="none">none</option>
-                    <option value="end-of-day">end-of-day</option>
-                    <option value="end-of-week">end-of-week</option>
-                    <option value="end-of-month">end-of-month</option>
-                    <option value="end-of-year">end-of-year</option>
-                    <option value="every-n-days">every-n-days</option>
-                </select>
-                <input id="timeBoundaryZoneId" type="text" placeholder="Europe/Copenhagen" class="control-field" style="margin-top: 10px;">
-                <input id="timeBoundaryIntervalDays" type="number" min="1" placeholder="Interval days (for every-n-days)" class="control-field" style="margin-top: 10px;">
-                <button class="secondary" id="updateTimeBoundary" style="margin-top: 12px;">Apply Time Boundary</button>
-                <div class="button-note">POST `/api/admin/trading-accounts/closing-books/time-boundary`, `/zone-id`, `/interval-days`</div>
-            </div>
-        </div>
-    </section>
-
-    <section class="grid" style="margin-top: 14px;">
-        <div class="panel">
-            <h2>Trading Accounts</h2>
-            <table class="table">
-                <thead>
-                <tr>
-                    <th>Account</th>
-                    <th>Generations</th>
-                    <th>Generation</th>
-                    <th>Statement</th>
-                    <th>Cash</th>
-                </tr>
-                </thead>
-                <tbody id="accountsBody"></tbody>
-            </table>
-            <div class="summary-card">
-                <strong id="accountScenarioWinner">No TradingAccount comparison run yet</strong>
-                <p class="muted" id="accountScenarioSummary"></p>
-            </div>
-        </div>
-    </section>
-
-    <section class="grid" style="margin-top: 14px;">
-        <div class="panel">
-            <h2>Snapshot Metrics</h2>
-            <table class="table">
-                <thead>
-                <tr>
-                    <th>Metric</th>
-                    <th>Count</th>
-                    <th>Total ms</th>
-                    <th>Max ms</th>
-                </tr>
-                </thead>
-                <tbody id="metricsBody"></tbody>
-            </table>
         </div>
     </section>
 
@@ -434,39 +450,122 @@
             </table>
         </div>
     </section>
+    </div>
 
-    <section class="grid two-up" style="margin-top: 14px;">
-        <div class="panel links">
-            <h2>Quick Links</h2>
-            <div id="accountLinks" class="muted"></div>
-            <div id="sampleLinks" class="muted" style="margin-top: 12px;"></div>
-        </div>
+    <!-- ── Snapshots ─────────────────────────────────────────────────────────────────── -->
+    <div class="tab-panel" data-tab-panel="snapshots" hidden>
+    <section class="grid" style="margin-top: 4px;">
         <div class="panel">
-            <h2>Projections</h2>
-            <p class="muted">Two read models are available and use different Essentials processor styles.</p>
-            <div class="projection-grid">
-                <a class="projection-link" href="/api/admin/projections/account-statements">
-                    <strong>Account Statements</strong>
-                    Durable `ViewEventProcessor` projection of latest statement state
-                </a>
-                <a class="projection-link" href="/api/admin/projections/trade-settlements">
-                    <strong>Trade Settlements</strong>
-                    `EventProcessor` projection combining trade and settlement lifecycle state
-                </a>
+            <p class="muted tab-intro">
+                A snapshot stores the aggregate's state at a given event order so a later load replays only the
+                events after it. The policy on <code>TradingAccount</code> takes one every 100 events, so
+                snapshots appear once an account has taken enough load.
+            </p>
+            <h2>Accounts</h2>
+            <table class="table">
+                <thead>
+                <tr>
+                    <th>Account</th>
+                    <th>Generation</th>
+                    <th>Snapshots in generation</th>
+                    <th>Last snapshot at event</th>
+                </tr>
+                </thead>
+                <tbody id="snapshotAccountsBody"></tbody>
+            </table>
+            <p class="muted" style="margin-top: 10px;">
+                Snapshots are keyed by the per-generation stream id, so these counts are for each account's
+                current generation. A rollover starts a fresh stream, which starts again with no snapshot.
+            </p>
+        </div>
+    </section>
+
+    <section class="grid" style="margin-top: 14px;">
+        <div class="panel">
+            <h2>Snapshot Metrics</h2>
+            <table class="table">
+                <thead>
+                <tr>
+                    <th>Metric</th>
+                    <th>Count</th>
+                    <th>Total ms</th>
+                    <th>Max ms</th>
+                </tr>
+                </thead>
+                <tbody id="metricsBody"></tbody>
+            </table>
+        </div>
+    </section>
+    </div>
+
+    <!-- ── Closing Books ─────────────────────────────────────────────────────────────── -->
+    <div class="tab-panel" data-tab-panel="closing-books" hidden>
+    <section class="stack">
+        <p class="muted tab-intro">
+            Closing the books ends an account's current event stream and opens the next <em>generation</em> for
+            the same business id, so streams stay bounded instead of growing forever. A rollover happens either
+            because the policy below decides, or because the application explicitly asks.
+        </p>
+        <div class="section-title">Closing Books</div>
+        <div class="actions two-up">
+            <div class="panel fill">
+                <label for="closingBooksMode"><strong>Closing-Books Mode</strong></label>
+                <select id="closingBooksMode" class="control-field">
+                    <option value="manual-only">manual-only</option>
+                    <option value="event-count">event-count</option>
+                    <option value="time-boundary">time-boundary</option>
+                    <option value="event-count-or-time-boundary">event-count-or-time-boundary</option>
+                </select>
+                <button class="secondary" id="updateClosingBooksMode" style="margin-top: 12px;">Apply Closing-Books Mode</button>
+                <div class="button-note">POST `/api/admin/trading-accounts/closing-books/mode?value=time-boundary`</div>
+            </div>
+            <div class="panel fill">
+                <label for="timeBoundary"><strong>Time Boundary</strong></label>
+                <select id="timeBoundary" class="control-field">
+                    <option value="none">none</option>
+                    <option value="end-of-day">end-of-day</option>
+                    <option value="end-of-week">end-of-week</option>
+                    <option value="end-of-month">end-of-month</option>
+                    <option value="end-of-year">end-of-year</option>
+                    <option value="every-n-days">every-n-days</option>
+                </select>
+                <input id="timeBoundaryZoneId" type="text" placeholder="Europe/Copenhagen" class="control-field" style="margin-top: 10px;">
+                <input id="timeBoundaryIntervalDays" type="number" min="1" placeholder="Interval days (for every-n-days)" class="control-field" style="margin-top: 10px;">
+                <button class="secondary" id="updateTimeBoundary" style="margin-top: 12px;">Apply Time Boundary</button>
+                <div class="button-note">POST `/api/admin/trading-accounts/closing-books/time-boundary`, `/zone-id`, `/interval-days`</div>
+            </div>
+        </div>
+
+        <div class="actions">
+            <div class="panel compact">
+                <button class="secondary" data-endpoint="/api/admin/load-generator/comparisons/trading-account?count=90&readPasses=25&eventThreshold=20">Run TradingAccount Comparison</button>
+                <div class="button-note">Runs the same account mutation and repeated-read workload with manual-only vs event-count rollover.</div>
             </div>
         </div>
     </section>
 
     <section class="grid" style="margin-top: 14px;">
         <div class="panel">
-            <h2>How To Verify</h2>
-            <p class="muted">
-                Burst trades and settlements, watch account generations rise above 1 for closing-books behavior,
-                and inspect the snapshot metric table after repeated load. The dashboard summary is sourced from
-                <code>/api/admin/dashboard</code>.
-            </p>
+            <h2>Trading Accounts</h2>
+            <table class="table">
+                <thead>
+                <tr>
+                    <th>Account</th>
+                    <th>Generations</th>
+                    <th>Generation</th>
+                    <th>Statement</th>
+                    <th>Cash</th>
+                </tr>
+                </thead>
+                <tbody id="accountsBody"></tbody>
+            </table>
+            <div class="summary-card">
+                <strong id="accountScenarioWinner">No TradingAccount comparison run yet</strong>
+                <p class="muted" id="accountScenarioSummary"></p>
+            </div>
         </div>
     </section>
+    </div>
 </div>
 
 <script>
@@ -527,6 +626,16 @@
                 <td>${account.currentGeneration}</td>
                 <td>${account.periodId}</td>
                 <td>${account.cashBalance}</td>
+            </tr>
+        `).join("");
+        // Same accounts, read through the snapshot lens: generations matter to closing books, snapshot counts
+        // to snapshotting, and seeing them separately is the point of splitting the tabs.
+        document.getElementById("snapshotAccountsBody").innerHTML = summary.accounts.map(account => `
+            <tr>
+                <td><a href="/api/admin/trading-accounts/${account.accountId}">${account.accountId}</a></td>
+                <td>${account.currentGeneration}</td>
+                <td>${account.snapshotCount}</td>
+                <td>${account.lastSnapshotEventOrder ?? "—"}</td>
             </tr>
         `).join("");
         document.getElementById("accountLinks").innerHTML = summary.accounts
@@ -636,6 +745,26 @@
         renderLinks(summary);
         renderSummaryText(summary);
     }
+
+    /* Tabs. Every panel stays rendered and only visibility changes, so the summary renderers above do not
+       need to know which tab is showing. The choice is kept in the URL hash so a reload — and the demo is
+       reloaded a lot — comes back to the same place, and so a tab can be linked to directly. */
+    const tabs = Array.from(document.querySelectorAll(".tab"));
+    const tabPanels = Array.from(document.querySelectorAll("[data-tab-panel]"));
+
+    function selectTab(name) {
+        const known = tabs.some(tab => tab.dataset.tab === name);
+        const target = known ? name : "dashboard";
+        tabs.forEach(tab => tab.setAttribute("aria-selected", String(tab.dataset.tab === target)));
+        tabPanels.forEach(panel => { panel.hidden = panel.dataset.tabPanel !== target; });
+        if (window.location.hash !== `#${target}`) {
+            window.history.replaceState(null, "", `#${target}`);
+        }
+    }
+
+    tabs.forEach(tab => tab.addEventListener("click", () => selectTab(tab.dataset.tab)));
+    window.addEventListener("hashchange", () => selectTab(window.location.hash.replace("#", "")));
+    selectTab(window.location.hash.replace("#", ""));
 
     document.getElementById("startGenerator").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/start"));
     document.getElementById("stopGenerator").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/stop"));

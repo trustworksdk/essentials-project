@@ -65,8 +65,21 @@ public final class CdcAvailability {
     private final AtomicReference<String> reason             = new AtomicReference<>(null);
     private final AtomicLong              lastChangedEpochMs = new AtomicLong(0);
     private final AtomicLong              fallbackCount      = new AtomicLong(0);
+    private final AtomicLong              warmupPollCount    = new AtomicLong(0);
+    /**
+     * Whether CDC has been {@link State#ACTIVE} at least once in this JVM.
+     * <p>
+     * This is what separates a warm-up poll from a fallback. Availability starts {@link State#INACTIVE}
+     * and only becomes ACTIVE once the WAL tailer has connected and taken the slot, but subscriptions are
+     * started by the lifecycle before that — so every subscription that starts during boot legitimately
+     * begins on the polling path. Counting those as fallbacks made a healthy startup report
+     * "CDC has fallen back to polling N times" with no reason and no error, N varying run to run with a
+     * lock-acquisition race. A fallback now means what the name says: CDC was working and stopped.
+     */
+    private final AtomicBoolean           everActive         = new AtomicBoolean(false);
 
     private final Counter fallbackCounter;
+    private final Counter warmupPollCounter;
     private final MeterRegistry meterRegistry;
 
     /**
@@ -87,7 +100,12 @@ public final class CdcAvailability {
         if (this.meterRegistry != null) {
             Gauge.builder("essentials.cdc.active", state, s -> s.get() == State.ACTIVE ? 1.0 : 0.0)
                  .register(this.meterRegistry);
-            fallbackCounter = Counter.builder("essentials.cdc.fallback_total").register(this.meterRegistry);
+            fallbackCounter = Counter.builder("essentials.cdc.fallback_total")
+                                     .description("Number of subscriptions that fell back to polling after CDC had been active - i.e. a real CDC regression. Safe to alert on")
+                                     .register(this.meterRegistry);
+            warmupPollCounter = Counter.builder("essentials.cdc.warmup_poll_total")
+                                       .description("Number of subscriptions that started on polling because CDC had not become active yet. Expected on every startup, one per subscription that wins the race against the WAL tailer. Not an error")
+                                       .register(this.meterRegistry);
             // Pre-register the start-failure counter with a baseline reason tag so the series is
             // visible from startup. Every registration of this meter must share the same tag keys —
             // Prometheus-backed registries reject same-named meters whose tag key sets differ — so
@@ -98,6 +116,7 @@ public final class CdcAvailability {
                    .register(this.meterRegistry);
         } else {
             fallbackCounter = null;
+            warmupPollCounter = null;
         }
         // Seed the replay sink with the initial state so subscribers that connect before any
         // transition (which is the common case) still get a starting value to drive source
@@ -107,6 +126,7 @@ public final class CdcAvailability {
     }
 
     public void active(String slot) {
+        everActive.set(true);
         set(State.ACTIVE, slot, null);
     }
 
@@ -119,9 +139,20 @@ public final class CdcAvailability {
         incrementStartFailureReason(reason);
     }
 
+    /**
+     * Records that a subscription started on the polling path because CDC was not active.
+     * <p>
+     * Routed by {@link #everActive}: before CDC has ever been active this is a warm-up poll, which is
+     * the normal startup case and is not a fallback. Afterwards it is a genuine fallback.
+     */
     public void fallbackUsed() {
-        fallbackCount.incrementAndGet();
-        if (fallbackCounter != null) fallbackCounter.increment();
+        if (everActive.get()) {
+            fallbackCount.incrementAndGet();
+            if (fallbackCounter != null) fallbackCounter.increment();
+        } else {
+            warmupPollCount.incrementAndGet();
+            if (warmupPollCounter != null) warmupPollCounter.increment();
+        }
     }
 
     public boolean isActive() {
@@ -134,6 +165,22 @@ public final class CdcAvailability {
 
     public long getFallbackCount() {
         return fallbackCount.get();
+    }
+
+    /**
+     * Subscriptions that started on polling before CDC had ever become active. Expected on startup; not an error.
+     */
+    public long getWarmupPollCount() {
+        return warmupPollCount.get();
+    }
+
+    /**
+     * Whether CDC has been active at least once in this JVM. {@code false} together with a non-zero
+     * {@link #getWarmupPollCount()} means CDC never came up, which a zero {@link #getFallbackCount()} alone
+     * would not distinguish from a healthy run.
+     */
+    public boolean hasEverBeenActive() {
+        return everActive.get();
     }
 
     /**
@@ -153,7 +200,9 @@ public final class CdcAvailability {
                 slotName.get(),
                 reason.get(),
                 lastChangedEpochMs.get(),
-                fallbackCount.get()
+                fallbackCount.get(),
+                warmupPollCount.get(),
+                everActive.get()
         );
     }
 
@@ -193,6 +242,8 @@ public final class CdcAvailability {
                            String slotName,
                            String reason,
                            long lastChangedEpochMs,
-                           long fallbackCount) {
+                           long fallbackCount,
+                           long warmupPollCount,
+                           boolean everActive) {
     }
 }

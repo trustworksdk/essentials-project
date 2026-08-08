@@ -126,6 +126,33 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
                                                        "' but no TypedClosingBooksNextGenerationFactory is registered");
             }
 
+            if (resolvedClosingBooksConfiguration.enabled() &&
+                usesTimeBoundaryPolicy(resolvedClosingBooksConfiguration.defaultPolicy()) &&
+                resolvedClosingBooksConfiguration.timeBoundary() == ClosingBooksTimeBoundary.NONE) {
+                throw new IllegalStateException("Aggregate '" + aggregateImplementationType.getName() + "' uses time-boundary closing-books policy '" +
+                                                        resolvedClosingBooksConfiguration.defaultPolicy() + "' for aggregateType '" + aggregateType +
+                                                        "' but the resolved time boundary is NONE, so the boundary can never advance and the policy would never close the books. " +
+                                                        "Set a boundary via 'essentials.eventstore.closing-books.time-boundary', " +
+                                                        "'essentials.eventstore.closing-books.aggregates." + aggregateType + ".time-boundary', " +
+                                                        "or @AggregateClosingBooksPolicy.timeBoundary" +
+                                                        (resolvedClosingBooksConfiguration.defaultPolicy() == ClosingBooksDefaultPolicyType.EVENT_COUNT_OR_TIME_BOUNDARY
+                                                         ? " - or use policy 'EVENT_COUNT' if only the event-count condition was intended."
+                                                         : "."));
+            }
+
+            if (resolvedClosingBooksConfiguration.enabled() &&
+                usesTimeBoundaryPolicy(resolvedClosingBooksConfiguration.defaultPolicy()) &&
+                !HasClosingBooksPeriodId.class.isAssignableFrom(aggregateImplementationType) &&
+                !periodIdProvidedExternally(aggregateType)) {
+                throw new IllegalStateException("Aggregate '" + aggregateImplementationType.getName() + "' uses time-boundary closing-books policy '" +
+                                                        resolvedClosingBooksConfiguration.defaultPolicy() + "' for aggregateType '" + aggregateType +
+                                                        "' but does not implement " + HasClosingBooksPeriodId.class.getName() +
+                                                        ", so the framework cannot determine whether the configured boundary has advanced. " +
+                                                        "Implement the interface, or - if the period id is supplied through a custom currentPeriodIdProvider - set " +
+                                                        "'essentials.eventstore.closing-books.period-id-provided-externally=true' or " +
+                                                        "'essentials.eventstore.closing-books.aggregates." + aggregateType + ".period-id-provided-externally=true'.");
+            }
+
             if (resolvedClosingBooksConfiguration.enabled()) {
                 validateZoneId(aggregateImplementationType, aggregateType, resolvedClosingBooksConfiguration);
                 if (eventThresholdRequired(resolvedClosingBooksConfiguration.defaultPolicy())
@@ -237,6 +264,21 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
             return false;
         }
         return properties.getClosingBooks().getIntervalDays() == null;
+    }
+
+    private boolean usesTimeBoundaryPolicy(ClosingBooksDefaultPolicyType defaultPolicy) {
+        return switch (defaultPolicy) {
+            case TIME_BOUNDARY, EVENT_COUNT_OR_TIME_BOUNDARY -> true;
+            case EVENT_COUNT, MANUAL_ONLY, EXPLICIT_ONLY, UNSPECIFIED -> false;
+        };
+    }
+
+    private boolean periodIdProvidedExternally(AggregateType aggregateType) {
+        var override = properties.getClosingBooks().getAggregates().get(aggregateType.toString());
+        if (override != null && override.getPeriodIdProvidedExternally() != null) {
+            return override.getPeriodIdProvidedExternally();
+        }
+        return properties.getClosingBooks().isPeriodIdProvidedExternally();
     }
 
     private boolean requiresNextGenerationFactory(ClosingBooksDefaultPolicyType defaultPolicy) {

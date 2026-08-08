@@ -41,6 +41,43 @@ public final class ClosingBooksTimeBoundaryCalculator {
     }
 
     /**
+     * The period id an aggregate created <em>now</em> belongs to, in the format the given
+     * {@link ClosingBooksTimeBoundary} requires.
+     * <p>
+     * Unlike {@link #resolveCurrentPeriodId(ClosingBooksTimeBoundary, ZoneId, Clock, String, Integer)} this needs
+     * no existing period id, which is the point: a brand-new aggregate under a TIME_BOUNDARY policy has none yet,
+     * and its initial {@link HasClosingBooksPeriodId#closingBooksPeriodId()} value has to be in the boundary's
+     * format or every later evaluation misreads it. Hand-formatting that value in application code is the usual
+     * way to get it wrong - a {@code yyyy-MM-dd} seed under {@link ClosingBooksTimeBoundary#END_OF_MONTH}, or a
+     * hardcoded literal that silently ages into the past and makes every evaluation report a skipped period.
+     *
+     * @param timeBoundary the configured boundary. {@link ClosingBooksTimeBoundary#NONE} has no period concept and
+     *                     returns {@code null}
+     * @param zoneId       the zone the boundary is evaluated in
+     * @param clock        the clock supplying "now"
+     * @param intervalDays interval for {@link ClosingBooksTimeBoundary#EVERY_N_DAYS}; ignored otherwise. A new
+     *                     aggregate starts its first interval today, so this only affects later evaluations
+     * @return the period id for the current instant, or {@code null} for {@code NONE}
+     */
+    public static String currentPeriodId(ClosingBooksTimeBoundary timeBoundary,
+                                         ZoneId zoneId,
+                                         Clock clock,
+                                         Integer intervalDays) {
+        requireNonNull(timeBoundary, "No timeBoundary provided");
+        requireNonNull(zoneId, "No zoneId provided");
+        requireNonNull(clock, "No clock provided");
+
+        var now = LocalDate.now(clock.withZone(zoneId));
+        return switch (timeBoundary) {
+            case NONE -> null;
+            case END_OF_DAY, EVERY_N_DAYS -> now.format(DAY_FORMATTER);
+            case END_OF_WEEK -> formatIsoWeek(now);
+            case END_OF_MONTH -> YearMonth.from(now).format(MONTH_FORMATTER);
+            case END_OF_YEAR -> now.format(YEAR_FORMATTER);
+        };
+    }
+
+    /**
      * Resolves the current period ID based on the provided time boundary, zone, clock,
      * current period ID, and interval days. This method evaluates the time boundary
      * and determines the appropriate period ID for the current context.

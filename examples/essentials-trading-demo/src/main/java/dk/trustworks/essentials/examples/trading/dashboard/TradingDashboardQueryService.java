@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.dashboard;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.api.ApiAggregateSnapshot;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccount;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountAdminQueryService;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountClosingBooksPolicy;
@@ -69,14 +70,20 @@ public class TradingDashboardQueryService {
         for (int index = 0; index < simulationProperties.getAccountCount(); index++) {
             var accountId = TradingAccountId.of("ACC-DEMO-%03d".formatted(index + 1));
             try {
-                var view = tradingAccountAdminQueryService.getAccountView(accountId);
+                var view      = tradingAccountAdminQueryService.getAccountView(accountId);
+                var snapshots = tradingAccountAdminQueryService.getCurrentGenerationSnapshots(accountId);
                 accountSummaries.add(new DashboardAccountSummaryView(view.logicalAccountId(),
                                                                      view.generations().size(),
                                                                      view.currentGeneration(),
                                                                      view.currentStatementPeriod(),
                                                                      view.cashBalance(),
                                                                      view.realizedPnl(),
-                                                                     view.booksClosed()));
+                                                                     view.booksClosed(),
+                                                                     snapshots.size(),
+                                                                     snapshots.stream()
+                                                                              .map(ApiAggregateSnapshot::lastIncludedEventOrder)
+                                                                              .max(Long::compareTo)
+                                                                              .orElse(null)));
             } catch (Exception ignored) {
             }
         }

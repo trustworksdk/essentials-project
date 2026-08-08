@@ -784,6 +784,7 @@ public class EssentialsEventStoreProperties {
         private ClosingBooksTimeBoundary                           timeBoundary       = ClosingBooksTimeBoundary.NONE;
         private String                                             zoneId             = "UTC";
         private Integer                                            intervalDays;
+        private boolean                                            periodIdProvidedExternally = false;
         private Map<String, AggregateClosingBooksPolicyProperties> aggregates         = new LinkedHashMap<>();
 
         public boolean isEnabled() {
@@ -842,6 +843,24 @@ public class EssentialsEventStoreProperties {
             this.intervalDays = intervalDays;
         }
 
+        /**
+         * Whether aggregates supply their closing-books period id outside of the {@link HasClosingBooksPeriodId}
+         * contract - i.e. by passing a custom {@code currentPeriodIdProvider} to
+         * {@link dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.BuiltInClosingBooksPolicyEvaluator}.
+         * <p>
+         * When {@code false} (the default) a time-boundary closing-books policy on an aggregate that does not implement
+         * {@link HasClosingBooksPeriodId} fails fast at startup.
+         *
+         * @return {@code true} if the period id is provided externally
+         */
+        public boolean isPeriodIdProvidedExternally() {
+            return periodIdProvidedExternally;
+        }
+
+        public void setPeriodIdProvidedExternally(boolean periodIdProvidedExternally) {
+            this.periodIdProvidedExternally = periodIdProvidedExternally;
+        }
+
         public Map<String, AggregateClosingBooksPolicyProperties> getAggregates() {
             return aggregates;
         }
@@ -859,6 +878,7 @@ public class EssentialsEventStoreProperties {
         private ClosingBooksTimeBoundary      timeBoundary;
         private String                        zoneId;
         private Integer                       intervalDays;
+        private Boolean                       periodIdProvidedExternally;
 
         public Boolean getEnabled() {
             return enabled;
@@ -914,6 +934,20 @@ public class EssentialsEventStoreProperties {
 
         public void setIntervalDays(Integer intervalDays) {
             this.intervalDays = intervalDays;
+        }
+
+        /**
+         * Per-{@code AggregateType} override of
+         * {@link AggregateClosingBooksProperties#isPeriodIdProvidedExternally()}.
+         *
+         * @return {@code true} if the period id is provided externally, {@code null} to inherit the global value
+         */
+        public Boolean getPeriodIdProvidedExternally() {
+            return periodIdProvidedExternally;
+        }
+
+        public void setPeriodIdProvidedExternally(Boolean periodIdProvidedExternally) {
+            this.periodIdProvidedExternally = periodIdProvidedExternally;
         }
     }
 

@@ -132,14 +132,15 @@ function errorState(err, requiredRole) {
 const views = {};
 
 views.overview = async () => {
+    /* Cache hit ratio is deliberately not fetched here: it lives on the PostgreSQL stats view, where it is
+       shown with low-ratio highlighting and alongside the other table statistics it has to be read against. */
     const settled = await Promise.allSettled([
         api('/fenced-locks'),
         api('/durable-queues'),
         api('/event-store/subscriptions'),
-        api('/event-store/cdc/status'),
-        api('/event-store/statistics/table-cache-hit-ratio')
+        api('/event-store/cdc/status')
     ]);
-    const [locks, queues, subs, cdc, cacheHit] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const [locks, queues, subs, cdc] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
     const firstError = settled.find((r) => r.status === 'rejected')?.reason;
 
     const held = locks ? locks.filter((l) => l.currentToken != null).length : null;
@@ -154,25 +155,16 @@ views.overview = async () => {
       ${tile('Subscriptions', subs ? subs.length : nil())}
       ${tile('CDC', cdc ? badge(cdc.availability.state === 'ACTIVE' ? 'good' : 'warning', cdc.availability.state) : nil(),
              cdc ? 'slot ' + esc(cdc.availability.slotName ?? '—') : '')}
-      ${tile('CDC fallbacks', cdc ? num(cdc.availability.fallbackCount) : nil(), 'since start',
+      ${tile('CDC fallbacks', cdc ? num(cdc.availability.fallbackCount) : nil(), 'since CDC went active',
              cdc ? cdc.availability.fallbackCount > 0 : false)}
     </div>
 
-    <div class="grid-2">
-      ${card('Subscription lag', subs
+    ${card('Subscription lag', subs
         ? table([{ label: 'Subscriber' }, { label: 'Aggregate type' }, { label: 'Current global order', num: true }],
                 subs.map((s) => `<tr><td>${esc(s.subscriberId)}</td><td>${esc(s.aggregateType)}</td>
                   <td class="num">${num(s.currentGlobalOrder)}</td></tr>`),
                 { empty: 'No active subscriptions' })
-        : errorState(settled[2].reason, 'essentials_subscription_reader'), 'highest order loaded on demand', true)}
-
-      ${card('Cache hit ratio', cacheHit
-        ? Object.entries(cacheHit).map(([t, v]) => `
-          <div class="meter-row"><span class="mono">${esc(t)}</span>
-            <span class="meter-track" role="img" aria-label="${v.cacheHitRatio}%"><span class="meter-fill" style="width:${v.cacheHitRatio}%"></span></span>
-            <span class="meter-val">${v.cacheHitRatio}%</span></div>`).join('') || '<div class="empty">No statistics reported</div>'
-        : errorState(settled[4].reason, 'essentials_postgresql_stats_reader'), 'ratio against 100%')}
-    </div>`;
+        : errorState(settled[2].reason, 'essentials_subscription_reader'), 'highest order loaded on demand', true)}`;
 };
 
 views.locks = async () => {
@@ -460,22 +452,32 @@ views.cdc = async () => {
 
     return `
     ${a.fallbackCount > 0 ? `<div class="banner banner-warning"><span aria-hidden="true">▲</span>
-      <div><strong>CDC has fallen back to polling ${a.fallbackCount === 1 ? 'once' : a.fallbackCount + ' times'}.</strong>
+      <div><strong>CDC has fallen back to polling ${a.fallbackCount === 1 ? 'once' : a.fallbackCount + ' times'} after having been active.</strong>
       In <code class="mono">AUTO</code> mode a fallback is silent by design — polling keeps delivering events, so this
       is the only place it surfaces.</div></div>` : ''}
+    ${/* Warm-up polls are the normal startup case and must not look like a fault: subscriptions start before the
+          WAL tailer has connected, so each one begins on polling and switches to the CDC bus once it goes active.
+          Only worth surfacing at all if CDC never came up, in which case polling is all there is. */
+      !a.everActive && a.warmupPollCount > 0 ? `<div class="banner banner-warning"><span aria-hidden="true">▲</span>
+      <div><strong>CDC has never become active.</strong> ${num(a.warmupPollCount)} subscription${a.warmupPollCount === 1 ? '' : 's'}
+      started on polling and ${a.warmupPollCount === 1 ? 'is' : 'are'} still there. Events keep flowing, but nothing is
+      being delivered over CDC — check the slot, the publication and the tailer below.</div></div>` : ''}
 
     <div class="kpi-row">
       ${tile('Availability', stateBadge, 'changed ' + epoch(a.lastChangedEpochMs))}
       ${tile('Published events', d ? num(d.publishedEvents) : nil(), d ? 'last batch ' + d.lastBatchSize : 'dispatcher not running')}
       ${tile('Poison rows', d ? num(d.poisonRows) : nil(), d && d.poisonRows > 0 ? 'inspect inbox' : null, d ? d.poisonRows > 0 : false)}
-      ${tile('Fallbacks', num(a.fallbackCount), 'since start', a.fallbackCount > 0)}
+      ${tile('Fallbacks', num(a.fallbackCount), 'since CDC went active', a.fallbackCount > 0)}
       ${tile('Slot WAL', `<span class="is-text">${esc(s.walStatus ?? '—')}</span>`,
              s.safeWalSize != null ? 'safe ' + (s.safeWalSize / 1073741824).toFixed(0) + ' GiB' : null)}
     </div>
 
     <div class="grid-2">
-      ${card('Availability', kv({ state: a.state, slotName: a.slotName, reason: a.reason, lastChanged: epoch(a.lastChangedEpochMs), fallbackCount: a.fallbackCount },
-        { state: () => stateBadge, lastChanged: (v) => v, reason: (v) => (v == null ? nil('no reason reported') : esc(v)) }))}
+      ${card('Availability', kv({ state: a.state, slotName: a.slotName, reason: a.reason, lastChanged: epoch(a.lastChangedEpochMs),
+                                 everActive: a.everActive, fallbackCount: a.fallbackCount, warmupPollCount: a.warmupPollCount },
+        { state: () => stateBadge, lastChanged: (v) => v, reason: (v) => (v == null ? nil('no reason reported') : esc(v)),
+          everActive: bool,
+          warmupPollCount: (v) => `${num(v)}<span class="tile-sub" style="font-size:12px"> · started before CDC was ready</span>` }))}
 
       ${card('Replication slot', kv(s, {
         exists: bool, active: bool, expectedPluginMatches: bool, temporary: bool, failover: bool, synced: bool,
@@ -724,12 +726,22 @@ views.aggregates = async () => {
 
     /* timedMetrics, counters and gauges are open maps keyed by metric name, so they are rendered as they arrive
        rather than projected onto fixed columns a future metric would fall outside of. */
+    /* Counter and gauge keys arrive as fully-qualified meter names ("essentials.aggregate_closing_books.
+       generations_closed"), which pushes the interesting part off the right of the cell. Timed-metric keys are
+       already bare suffixes. Only the "essentials.<namespace>." head is dropped — the rest, tag suffix included,
+       is left intact so two meters differing only in their leaf or tags stay distinguishable. */
+    const metricLabel = (name) => name.replace(/^essentials\.[a-z0-9_]+\./, '');
+    /* An epoch-ms gauge is a timestamp, not a magnitude: 1,786,178,687,567 tells an operator nothing. */
+    const metricValue = (name, v) => (/_epoch_ms(\[|$)/.test(name) && v > 0
+        ? ts(new Date(v).toISOString())
+        : num(v));
+
     const metrics = (st) => {
         const timed = Object.entries(st.timedMetrics ?? {}).map(([name, m]) =>
             `${esc(name)} ${num(m.count)}<span class="tile-sub" style="font-size:12px"> · avg ${
                 m.count > 0 ? num(Math.round(m.totalTimeMs / m.count)) : 0} ms · max ${num(Math.round(m.maxTimeMs))} ms</span>`);
-        const counters = Object.entries(st.counters ?? {}).map(([name, v]) => `${esc(name)} ${num(v)}`);
-        const gauges   = Object.entries(st.gauges ?? {}).map(([name, v]) => `${esc(name)} ${num(v)}`);
+        const counters = Object.entries(st.counters ?? {}).map(([name, v]) => `${esc(metricLabel(name))} ${num(v)}`);
+        const gauges   = Object.entries(st.gauges ?? {}).map(([name, v]) => `${esc(metricLabel(name))} ${metricValue(name, v)}`);
         const all      = [...timed, ...counters, ...gauges];
         return all.length ? all.join('<br>') : nil('no metrics recorded');
     };
@@ -848,15 +860,50 @@ views.aggregateLookup = async () => {
     const settled = await Promise.allSettled([
         api(`/aggregate-lifecycle/aggregate-types/${encodeURIComponent(type)}/logical-aggregates/${encodeURIComponent(logicalId)}/closing-books-generations`),
         api(`/aggregate-lifecycle/aggregate-types/${encodeURIComponent(type)}/logical-aggregates/${encodeURIComponent(logicalId)}/closing-books-generations/current`),
-        api(`/aggregate-lifecycle/aggregate-types/${encodeURIComponent(type)}/aggregates/${encodeURIComponent(logicalId)}/snapshots?includeSnapshotPayload=${aggregateState.includePayload}`),
         api(`/aggregate-archive/aggregate-types/${encodeURIComponent(type)}/logical-aggregates/${encodeURIComponent(logicalId)}/archived-generations`)
     ]);
-    const [generations, current, snapshots, archived] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const [generations, current, archived] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
     /* 404 is the contract's answer for "no such generation", which is an outcome here rather than a failure. */
     const notFound = (i) => settled[i].status === 'rejected' && settled[i].reason.status === 404;
     const failure  = (i) => errorState(settled[i].reason, 'essentials_subscription_reader');
 
     const currentGeneration = current?.generation ?? null;
+
+    /* Snapshots are keyed by the *stream* aggregate id, which for a closing-books aggregate is the
+       per-generation id (ACC-1#13) and never the logical id. Querying by logical id therefore always came
+       back empty for those. An aggregate with no generations has no such split, so its logical id IS its
+       stream id and the single lookup below is the right one. */
+    const SNAPSHOT_GENERATION_LIMIT = 25;
+    const generationsNewestFirst = [...(generations ?? [])].sort((a, b) => b.generation - a.generation);
+    const snapshotSources = generationsNewestFirst.length
+        ? generationsNewestFirst.slice(0, SNAPSHOT_GENERATION_LIMIT)
+              .map((g) => ({ generation: g.generation, aggregateId: g.streamAggregateId }))
+        : [{ generation: null, aggregateId: logicalId }];
+    const skippedGenerations = Math.max(0, generationsNewestFirst.length - snapshotSources.length);
+
+    const snapshotSettled = await Promise.allSettled(snapshotSources.map((source) =>
+        api(`/aggregate-lifecycle/aggregate-types/${encodeURIComponent(type)}/aggregates/${encodeURIComponent(source.aggregateId)}/snapshots?includeSnapshotPayload=${aggregateState.includePayload}`)));
+    /* One unreachable generation must not blank the whole panel, so failures are collected and reported
+       alongside whatever did resolve. */
+    const snapshotFailure = snapshotSettled.find((r) => r.status === 'rejected');
+    const snapshots = snapshotSettled.every((r) => r.status === 'rejected') && snapshotSettled.length
+        ? null
+        : snapshotSettled.flatMap((r, i) => (r.status === 'fulfilled'
+            ? (r.value ?? []).map((sn) => ({ ...sn, generation: snapshotSources[i].generation }))
+            : []));
+    /* Say what was left out. A capped fan-out that stays silent reads as "this aggregate has no older
+       snapshots", which is a different statement from "we did not ask". */
+    const snapshotNotes = [
+        skippedGenerations > 0
+            ? `Newest ${snapshotSources.length} of ${generationsNewestFirst.length} generations queried — ${skippedGenerations} older ${skippedGenerations === 1 ? 'generation' : 'generations'} not checked`
+            : null,
+        snapshotFailure && snapshots
+            ? `${snapshotSettled.filter((r) => r.status === 'rejected').length} of ${snapshotSettled.length} generation lookups failed`
+            : null
+    ].filter(Boolean);
+    const snapshotNote = snapshotNotes.length
+        ? `<div class="tile-sub" style="padding:0 0 10px">${esc(snapshotNotes.join(' · '))}</div>`
+        : '';
     const generationRow = (g) => `<tr>
       <td class="num"><button class="link" data-generation="${esc(String(g.generation))}">${esc(String(g.generation))}</button></td>
       <td class="mono truncate">${esc(g.streamAggregateId)}</td>
@@ -866,6 +913,8 @@ views.aggregateLookup = async () => {
     </tr>`;
 
     const snapshotRow = (sn) => `<tr>
+      <td class="num">${sn.generation == null ? nil('n/a') : num(sn.generation)}</td>
+      <td class="mono truncate">${esc(sn.aggregateId ?? '')}</td>
       <td class="num">${num(sn.lastIncludedEventOrder)}</td>
       <td class="mono truncate">${esc(sn.aggregateImplementationType ?? '')}</td>
       <td class="truncate mono">${sn.snapshotPayload == null
@@ -966,10 +1015,11 @@ views.aggregateLookup = async () => {
 
     ${card('Snapshots',
         snapshots
-            ? table([{ label: 'Last included event order', num: true }, { label: 'Implementation' },
-                     { label: 'Payload' }],
-                    snapshots.map(snapshotRow), { empty: 'No snapshots are stored for this aggregate' })
-            : failure(2),
+            ? `${snapshotNote}${table([{ label: 'Generation', num: true }, { label: 'Stream aggregate id' },
+                                       { label: 'Last included event order', num: true }, { label: 'Implementation' },
+                                       { label: 'Payload' }],
+                                      snapshots.map(snapshotRow), { empty: 'No snapshots are stored for this aggregate' })}`
+            : errorState(snapshotFailure.reason, 'essentials_subscription_reader'),
         'GET /aggregate-lifecycle/aggregate-types/{aggregateType}/aggregates/{aggregateId}/snapshots', true)}
 
     ${card('Archived generations',
@@ -977,7 +1027,7 @@ views.aggregateLookup = async () => {
             ? table([{ label: 'Generation', num: true }, { label: 'Status' }, { label: 'Format' },
                      { label: 'Events', num: true }, { label: 'Location' }, { label: 'Archived' }],
                     archived.map(archivedRow), { empty: 'Nothing has been archived for this logical aggregate' })
-            : failure(3),
+            : failure(2),
         'GET /aggregate-archive/aggregate-types/{aggregateType}/logical-aggregates/{logicalAggregateId}/archived-generations', true)}
 
     ${archivedDetailCard}`;

@@ -313,9 +313,12 @@
 
         /* ── Key/value grid (CDC configuration, slot detail) ───────────────────────────────── */
         .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 28px; }
-        .kv-item { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--gridline); }
-        .kv-key { color: var(--ink-secondary); }
-        .kv-val { font-variant-numeric: tabular-nums; text-align: right; }
+        /* min-width: 0 lets the flex item shrink below its min-content width; overflow-wrap gives an
+           unbreakable token (slot names, QUARANTINE_AND_CONTINUE) a break opportunity. Without both,
+           a long value paints over the neighbouring grid column. */
+        .kv-item { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--gridline); min-width: 0; }
+        .kv-key { color: var(--ink-secondary); flex: 0 0 auto; }
+        .kv-val { font-variant-numeric: tabular-nums; text-align: right; min-width: 0; overflow-wrap: anywhere; }
 
         /* ── States ────────────────────────────────────────────────────────────────────────── */
         .empty { padding: 28px 14px; text-align: center; color: var(--ink-secondary); }

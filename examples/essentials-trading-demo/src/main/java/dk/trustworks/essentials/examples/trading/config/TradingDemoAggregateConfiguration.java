@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.examples.trading.config;
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
-import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotRepositoryProvider;
+import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
@@ -25,8 +25,6 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicyRegistry;
-import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicyDescriptor;
-import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicyRegistry;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicyDescriptor;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
 import org.springframework.beans.factory.InitializingBean;
@@ -49,6 +47,9 @@ import dk.trustworks.essentials.examples.trading.trades.TradeId;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import io.micrometer.core.instrument.MeterRegistry;
+
+import java.time.Clock;
 import java.util.Optional;
 
 /**
@@ -77,18 +78,26 @@ public class TradingDemoAggregateConfiguration {
                                                               AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry) {
         return () -> {
             var snapshotPolicy = AnnotationUtils.findAnnotation(TradingAccount.class,
-                                                                dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicy.class);
+                                                               AggregateSnapshotPolicy.class);
             if (snapshotPolicy != null) {
                 snapshotPolicyRegistry.register(new AggregateSnapshotPolicyDescriptor(TradingAccount.class,
                                                                                      Optional.of(TRADING_ACCOUNTS.toString()),
                                                                                      snapshotPolicy));
             }
             var closingBooksPolicy = AnnotationUtils.findAnnotation(TradingAccount.class,
-                                                                   dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicy.class);
+                                                                   AggregateClosingBooksPolicy.class);
             if (closingBooksPolicy != null) {
                 closingBooksPolicyRegistry.register(new AggregateClosingBooksPolicyDescriptor(TradingAccount.class,
                                                                                               Optional.of(TRADING_ACCOUNTS.toString()),
                                                                                               closingBooksPolicy));
+            }
+
+            snapshotPolicy = AnnotationUtils.findAnnotation(InstrumentPrice.class,
+                                                            AggregateSnapshotPolicy.class);
+            if (snapshotPolicy != null) {
+                snapshotPolicyRegistry.register(new AggregateSnapshotPolicyDescriptor(InstrumentPrice.class,
+                                                                                      Optional.of(INSTRUMENT_PRICES.toString()),
+                                                                                      snapshotPolicy));
             }
         };
     }
@@ -150,11 +159,17 @@ public class TradingDemoAggregateConfiguration {
     @Bean
     public ClosingBooksCoordinator<TradingAccountId> tradingAccountClosingBooksCoordinator(
             ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository,
-            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+            Optional<MeterRegistry> meterRegistry) {
+        // TradingAccounts roll over via ON_ACCESS, which never runs a scheduled scan - the coordinator is the
+        // only place the rollover can be measured, so the registry has to reach it for the admin UI's
+        // closing-books statistics to show anything.
         return new ClosingBooksCoordinator<>(TRADING_ACCOUNTS,
                                              tradingAccountGenerationRepository,
                                              (aggregateType, logicalAggregateId, generation) -> logicalAggregateId.value() + "#" + generation,
-                                             unitOfWorkFactory);
+                                             unitOfWorkFactory,
+                                             Clock.systemUTC(),
+                                             meterRegistry);
     }
 
     @Bean

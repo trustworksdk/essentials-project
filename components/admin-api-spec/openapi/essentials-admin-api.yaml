@@ -2070,8 +2070,10 @@ components:
           type: string
     ApiCdcAvailability:
       required:
+      - everActive
       - fallbackCount
       - lastChangedEpochMs
+      - warmupPollCount
       type: object
       properties:
         state:
@@ -2086,6 +2088,11 @@ components:
         fallbackCount:
           type: integer
           format: int64
+        warmupPollCount:
+          type: integer
+          format: int64
+        everActive:
+          type: boolean
     ApiCdcConfiguration:
       required:
       - cdcEventStoreBackfillBatchSize

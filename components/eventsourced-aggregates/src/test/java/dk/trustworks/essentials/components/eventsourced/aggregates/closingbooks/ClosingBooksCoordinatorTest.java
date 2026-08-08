@@ -17,12 +17,14 @@
 package dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
@@ -30,6 +32,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ClosingBooksCoordinatorTest {
     @Test
@@ -47,6 +50,84 @@ class ClosingBooksCoordinatorTest {
         assertThat(generation.generation()).isEqualTo(1);
         assertThat(generation.streamAggregateId()).isEqualTo("Account-123#1");
         assertThat(generation.isOpen()).isTrue();
+    }
+
+    @Test
+    void rollovers_are_recorded_as_metrics_for_every_trigger_mode() {
+        // ON_ACCESS and EXPLICIT_COMMAND never touch the scheduled-scan path, so the coordinator is the
+        // only place a rollover can be counted for them.
+        var aggregateType = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var meterRegistry = new SimpleMeterRegistry();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        new InMemoryClosingBooksGenerationResolver<String>(),
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
+                                                        Clock.fixed(Instant.parse("2026-08-08T10:00:00Z"), ZoneOffset.UTC),
+                                                        Optional.of(meterRegistry));
+
+        coordinator.resolveOrOpenCurrentGeneration(logicalAggregateId);
+        coordinator.closeAndOpenNextGeneration(logicalAggregateId);
+
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.rollover")
+                                .tag("aggregate_type", "Accounts").timer().count()).isEqualTo(1);
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.rollover.outcome")
+                                .tag("outcome", "succeeded").counter().count()).isEqualTo(1.0);
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.generations_closed")
+                                .counter().count()).isEqualTo(1.0);
+        // Two opens: the first generation, then the one the rollover opened.
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.generations_opened")
+                                .counter().count()).isEqualTo(2.0);
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.last_rollover_epoch_ms")
+                                .gauge().value()).isEqualTo(Instant.parse("2026-08-08T10:00:00Z").toEpochMilli());
+    }
+
+    @Test
+    void a_failed_rollover_is_counted_as_failed_and_does_not_count_a_closed_generation() {
+        var aggregateType = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var meterRegistry = new SimpleMeterRegistry();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        new InMemoryClosingBooksGenerationResolver<String>(),
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
+                                                        Clock.systemUTC(),
+                                                        Optional.of(meterRegistry));
+
+        // No generation was ever opened, so the rollover throws.
+        assertThatThrownBy(() -> coordinator.closeAndOpenNextGeneration(logicalAggregateId))
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.rollover.outcome")
+                                .tag("outcome", "failed").counter().count()).isEqualTo(1.0);
+        assertThat(meterRegistry.find("essentials.aggregate_closing_books.generations_closed").counter()).isNull();
+    }
+
+    @Test
+    void policy_evaluations_are_counted_by_decision_and_trigger_mode() {
+        var aggregateType = AggregateType.of("Accounts");
+        var logicalAggregateId = new LogicalAggregateId<>("Account-123");
+        var meterRegistry = new SimpleMeterRegistry();
+        var coordinator = new ClosingBooksCoordinator<>(aggregateType,
+                                                        new InMemoryClosingBooksGenerationResolver<String>(),
+                                                        (type, id, nextGeneration) -> id + "#" + nextGeneration,
+                                                        InlineUnitOfWorkFactories.inline(),
+                                                        Clock.systemUTC(),
+                                                        Optional.of(meterRegistry));
+
+        coordinator.evaluatePolicy(logicalAggregateId, "aggregate", ClosingBooksTriggerMode.ON_ACCESS,
+                                   ClosingBooksDecisionPolicies.keepOpen());
+        coordinator.evaluatePolicy(logicalAggregateId, "aggregate", ClosingBooksTriggerMode.ON_ACCESS,
+                                   ClosingBooksDecisionPolicies.closeAndOpenNext());
+
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.policy.decision")
+                                .tag("decision", "KEEP_OPEN").tag("trigger_mode", "ON_ACCESS").counter().count()).isEqualTo(1.0);
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.policy.decision")
+                                .tag("decision", "CLOSE_AND_OPEN_NEXT").tag("trigger_mode", "ON_ACCESS").counter().count()).isEqualTo(1.0);
+        // The CLOSE_AND_OPEN_NEXT branch delegates to closeAndOpenNextGeneration, which owns the counting -
+        // the generation must be counted once, not twice.
+        assertThat(meterRegistry.get("essentials.aggregate_closing_books.generations_closed")
+                                .counter().count()).isEqualTo(1.0);
     }
 
     @Test

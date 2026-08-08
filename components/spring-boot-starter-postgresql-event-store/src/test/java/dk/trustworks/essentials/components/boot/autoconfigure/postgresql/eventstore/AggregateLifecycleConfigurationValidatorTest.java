@@ -151,6 +151,107 @@ class AggregateLifecycleConfigurationValidatorTest {
                 });
     }
 
+    @Test
+    void startup_fails_when_a_time_boundary_policy_resolves_to_no_time_boundary() {
+        // TIME_BOUNDARY policy but timeBoundary is left at its NONE default: BuiltInClosingBooksPolicyEvaluator
+        // would report advancedPeriods=0 forever, so the books would never close.
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true")
+                .withBean(TimeBoundaryAggregateWithoutBoundary.class)
+                .withBean(TimeBoundaryAggregateWithoutBoundaryNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNotNull();
+                    assertThat(ctx.getStartupFailure())
+                            .hasMessageContaining("the resolved time boundary is NONE")
+                            .hasMessageContaining("essentials.eventstore.closing-books.aggregates.Vouchers.time-boundary");
+                });
+    }
+
+    @Test
+    void startup_fails_when_an_event_count_or_time_boundary_policy_resolves_to_no_time_boundary() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true",
+                                    "essentials.eventstore.closing-books.aggregates.Ledgers.default-policy=EVENT_COUNT_OR_TIME_BOUNDARY",
+                                    "essentials.eventstore.closing-books.aggregates.Ledgers.time-boundary=NONE")
+                .withBean(TimeBoundaryAggregateWithoutPeriodId.class)
+                .withBean(TimeBoundaryAggregateWithoutPeriodIdNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNotNull();
+                    assertThat(ctx.getStartupFailure())
+                            .hasMessageContaining("the resolved time boundary is NONE")
+                            .hasMessageContaining("use policy 'EVENT_COUNT' if only the event-count condition was intended");
+                });
+    }
+
+    @Test
+    void startup_succeeds_when_a_time_boundary_is_supplied_through_properties() {
+        // The annotation leaves timeBoundary at NONE; the property supplies it.
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true",
+                                    "essentials.eventstore.closing-books.aggregates.Vouchers.time-boundary=END_OF_WEEK")
+                .withBean(TimeBoundaryAggregateWithoutBoundary.class)
+                .withBean(TimeBoundaryAggregateWithoutBoundaryNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNull();
+                    assertThat(ctx).hasSingleBean(AggregateLifecycleConfigurationValidator.class);
+                });
+    }
+
+    @Test
+    void startup_fails_when_a_time_boundary_policy_aggregate_cannot_expose_its_period_id() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true")
+                .withBean(TimeBoundaryAggregateWithoutPeriodId.class)
+                .withBean(TimeBoundaryAggregateWithoutPeriodIdNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNotNull();
+                    assertThat(ctx.getStartupFailure())
+                            .hasMessageContaining("does not implement")
+                            .hasMessageContaining(HasClosingBooksPeriodId.class.getName())
+                            .hasMessageContaining("essentials.eventstore.closing-books.aggregates.Ledgers.period-id-provided-externally=true");
+                });
+    }
+
+    @Test
+    void startup_succeeds_when_a_time_boundary_policy_aggregate_implements_has_closing_books_period_id() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true")
+                .withBean(TimeBoundaryAggregateWithPeriodId.class)
+                .withBean(TimeBoundaryAggregateWithPeriodIdNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNull();
+                    assertThat(ctx).hasSingleBean(AggregateLifecycleConfigurationValidator.class);
+                });
+    }
+
+    @Test
+    void startup_succeeds_when_the_period_id_is_declared_as_provided_externally() {
+        // The aggregate supplies its period id through a custom currentPeriodIdProvider instead of
+        // implementing HasClosingBooksPeriodId, so the check is opted out of per AggregateType.
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true",
+                                    "essentials.eventstore.closing-books.aggregates.Ledgers.period-id-provided-externally=true")
+                .withBean(TimeBoundaryAggregateWithoutPeriodId.class)
+                .withBean(TimeBoundaryAggregateWithoutPeriodIdNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNull();
+                    assertThat(ctx).hasSingleBean(AggregateLifecycleConfigurationValidator.class);
+                });
+    }
+
+    @Test
+    void startup_succeeds_when_the_period_id_is_globally_declared_as_provided_externally() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.closing-books.enabled=true",
+                                    "essentials.eventstore.closing-books.period-id-provided-externally=true")
+                .withBean(TimeBoundaryAggregateWithoutPeriodId.class)
+                .withBean(TimeBoundaryAggregateWithoutPeriodIdNextGenerationFactory.class)
+                .run(ctx -> {
+                    assertThat(ctx.getStartupFailure()).isNull();
+                    assertThat(ctx).hasSingleBean(AggregateLifecycleConfigurationValidator.class);
+                });
+    }
+
     @AggregateSnapshotPolicy(aggregateType = "Orders", enabled = true)
     @AggregateClosingBooksPolicy(aggregateType = "Orders", enabled = true)
     static class ConflictingAggregate {
@@ -174,6 +275,37 @@ class AggregateLifecycleConfigurationValidatorTest {
                                  defaultPolicy = ClosingBooksDefaultPolicyType.EVENT_COUNT,
                                  eventThreshold = 10)
     static class AutoRolloverAggregateWithoutFactory {
+    }
+
+    @AggregateClosingBooksPolicy(aggregateType = "Ledgers",
+                                 enabled = true,
+                                 triggerMode = ClosingBooksTriggerMode.ON_ACCESS,
+                                 defaultPolicy = ClosingBooksDefaultPolicyType.TIME_BOUNDARY,
+                                 timeBoundary = ClosingBooksTimeBoundary.END_OF_MONTH)
+    static class TimeBoundaryAggregateWithoutPeriodId {
+    }
+
+    @AggregateClosingBooksPolicy(aggregateType = "Vouchers",
+                                 enabled = true,
+                                 triggerMode = ClosingBooksTriggerMode.ON_ACCESS,
+                                 defaultPolicy = ClosingBooksDefaultPolicyType.TIME_BOUNDARY)
+    static class TimeBoundaryAggregateWithoutBoundary implements HasClosingBooksPeriodId {
+        @Override
+        public String closingBooksPeriodId() {
+            return "2026-W32";
+        }
+    }
+
+    @AggregateClosingBooksPolicy(aggregateType = "Journals",
+                                 enabled = true,
+                                 triggerMode = ClosingBooksTriggerMode.ON_ACCESS,
+                                 defaultPolicy = ClosingBooksDefaultPolicyType.TIME_BOUNDARY,
+                                 timeBoundary = ClosingBooksTimeBoundary.END_OF_MONTH)
+    static class TimeBoundaryAggregateWithPeriodId implements HasClosingBooksPeriodId {
+        @Override
+        public String closingBooksPeriodId() {
+            return "2026-08";
+        }
     }
 
     static class ConflictingAggregateNextGenerationFactory implements TypedClosingBooksNextGenerationFactory<String, String, ConflictingAggregate, String> {
@@ -201,6 +333,48 @@ class AggregateLifecycleConfigurationValidatorTest {
                                                                   ClosingBooksAggregateInstantiationContext<String, String> context,
                                                                   String hint) {
             return new OnAccessClosingBooksAggregate();
+        }
+    }
+
+    static class TimeBoundaryAggregateWithoutPeriodIdNextGenerationFactory implements TypedClosingBooksNextGenerationFactory<String, String, TimeBoundaryAggregateWithoutPeriodId, String> {
+        @Override
+        public Class<TimeBoundaryAggregateWithoutPeriodId> aggregateImplementationType() {
+            return TimeBoundaryAggregateWithoutPeriodId.class;
+        }
+
+        @Override
+        public TimeBoundaryAggregateWithoutPeriodId createNextGeneration(TimeBoundaryAggregateWithoutPeriodId currentAggregate,
+                                                                          ClosingBooksAggregateInstantiationContext<String, String> context,
+                                                                          String hint) {
+            return new TimeBoundaryAggregateWithoutPeriodId();
+        }
+    }
+
+    static class TimeBoundaryAggregateWithoutBoundaryNextGenerationFactory implements TypedClosingBooksNextGenerationFactory<String, String, TimeBoundaryAggregateWithoutBoundary, String> {
+        @Override
+        public Class<TimeBoundaryAggregateWithoutBoundary> aggregateImplementationType() {
+            return TimeBoundaryAggregateWithoutBoundary.class;
+        }
+
+        @Override
+        public TimeBoundaryAggregateWithoutBoundary createNextGeneration(TimeBoundaryAggregateWithoutBoundary currentAggregate,
+                                                                          ClosingBooksAggregateInstantiationContext<String, String> context,
+                                                                          String hint) {
+            return new TimeBoundaryAggregateWithoutBoundary();
+        }
+    }
+
+    static class TimeBoundaryAggregateWithPeriodIdNextGenerationFactory implements TypedClosingBooksNextGenerationFactory<String, String, TimeBoundaryAggregateWithPeriodId, String> {
+        @Override
+        public Class<TimeBoundaryAggregateWithPeriodId> aggregateImplementationType() {
+            return TimeBoundaryAggregateWithPeriodId.class;
+        }
+
+        @Override
+        public TimeBoundaryAggregateWithPeriodId createNextGeneration(TimeBoundaryAggregateWithPeriodId currentAggregate,
+                                                                       ClosingBooksAggregateInstantiationContext<String, String> context,
+                                                                       String hint) {
+            return new TimeBoundaryAggregateWithPeriodId();
         }
     }
 }

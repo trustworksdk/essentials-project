@@ -208,7 +208,9 @@ public class AdminUiDemoApplication {
     CdcApi cdcApi() {
         var api = mock(CdcApi.class);
         when(api.getStatus(any())).thenReturn(new ApiCdcStatus(
-                new ApiCdcAvailability("ACTIVE", "slot_orders_prod", null, 1785484502000L, 1),
+                // Healthy steady state: no fallbacks, and the two warm-up polls every startup produces while
+                // subscriptions wait for the WAL tailer to connect.
+                new ApiCdcAvailability("ACTIVE", "slot_orders_prod", null, 1785484502000L, 0, 2, true),
                 new ApiCdcConfiguration(true, "AUTO", "pgoutput", "essentials_pub", "INBOX", "BYTES", 500,
                                         "eventstore_cdc_inbox", 3600L, "slot_orders_prod", "PERSISTENT", "orders",
                                         "PT0.05S", "PT0.2S", "PT2S", "PT10S", 200, "PT0.05S", "SKIP_AND_LOG", "DELETE"),
