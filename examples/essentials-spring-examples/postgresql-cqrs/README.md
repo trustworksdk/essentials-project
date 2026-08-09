@@ -4,6 +4,42 @@ The example uses the `spring-boot-starter-postgresql-event-store` that provides 
 Postgresql `EventStore`.  
 All `@Beans` auto-configured by this library use `@ConditionalOnMissingBean` to allow for easy overriding.
 
+## How the code is laid out
+
+The module follows the Essentials **slice-design law**: code is grouped by the feature it serves, not by the
+layer it belongs to. There is no `controllers/`, `services/`, `domain/` or `repositories/` anywhere. Each
+bounded context looks like this, and each slice directory carries its own `slice.yaml` and `CLAUDE.md`:
+
+```
+<bc>/use_cases/<slice>/        command slices  - one command, one handler, one endpoint
+    /views/<slice>/            view slices     - a read model, its projection and its queries
+    /automations/<slice>/      process managers - react to events, no external API
+    /external_systems/<sys>/   anti-corruption boundaries
+    /events/  /types/  /aggregates/  /routing/
+```
+
+| Bounded context | Slices |
+|---|---|
+| `banking` | `request_intra_bank_money_transfer` (command), `transfer_money` (automation), `account_balance` (view) |
+| `shipping` | `register_shipping_order`, `ship_order` (commands), `order_management` (translation), `order_status` (view) |
+| `task` | `create_task`, `add_comment` (commands), `comment_on_task_created` (automation) |
+
+All three contexts use the **aggregate** write style (`AggregateRoot` + `StatefulAggregateRepository`), which
+is a sanctioned lane — the slice law's decider style is the other. Start from a context's `CLAUDE.md`.
+
+### Endpoints
+
+| Method | Path | Slice |
+|---|---|---|
+| POST | `/banking/transfer-money` | `banking.request_intra_bank_money_transfer` |
+| GET | `/banking/accounts`, `/banking/accounts/{accountId}` | `banking.account_balance` |
+| POST | `/shipping/register-order` | `shipping.register_shipping_order` |
+| POST | `/shipping/ship-order` | `shipping.ship_order` |
+| GET | `/shipping/orders`, `/shipping/orders/{orderId}`, `/shipping/orders?status=` | `shipping.order_status` |
+| POST | `/tasks/create`, `/tasks/add-comment` | `task.create_task`, `task.add_comment` |
+
+The two `GET` families are served by projections, not by the write model, and are **eventually consistent** —
+a read taken immediately after a command may still show the previous state.
 
 ## Transfer Money example
 

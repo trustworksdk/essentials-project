@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: shipping.ship_order
+kind: command
+bc: shipping
+owner: shipping-team
+status: live
+summary: Mark a registered shipping order as shipped.
+generator: essentials
+language: java
+
+handles: [ShipOrder]
+publishes: [OrderShipped]
+writes: [ShippingOrder]
+reads:
+  - { name: ShippingOrder }
+endpoints:
+  - { method: POST, path: /shipping/ship-order }
+invariants:
+  - id: INV-SO-1
+    text: "An order is shipped at most once - markOrderAsShipped only applies OrderShipped when the order is not already shipped, because ShipOrder arrives over an at-least-once Inbox."
+    enforcedBy: ShippingOrder
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

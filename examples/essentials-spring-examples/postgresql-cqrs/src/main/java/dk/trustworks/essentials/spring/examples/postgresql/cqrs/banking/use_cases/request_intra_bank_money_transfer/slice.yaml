@@ -1,0 +1,31 @@
+schemaVersion: "1.1"
+slice: banking.request_intra_bank_money_transfer
+kind: command
+bc: banking
+owner: banking-team
+status: live
+summary: Accept a request to move money between two accounts in the same bank.
+generator: essentials
+language: java
+
+handles: [RequestIntraBankMoneyTransfer]
+publishes: [IntraBankMoneyTransferRequested]
+writes: [IntraBankMoneyTransfer]
+reads:
+  - { name: Account }
+  - { name: IntraBankMoneyTransfer }
+endpoints:
+  - { method: POST, path: /banking/transfer-money, auth: anonymous }
+invariants:
+  - id: INV-RIBMT-1
+    text: "A transfer is rejected unless both the from-account and the to-account exist"
+    enforcedBy: RequestIntraBankMoneyTransferHandler
+  - id: INV-RIBMT-2
+    text: "Re-sending the same TransactionId is an idempotent no-op, not a second transfer"
+    enforcedBy: RequestIntraBankMoneyTransferHandler
+forbidden:
+  - cross-slice-internal:banking
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }
