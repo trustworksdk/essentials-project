@@ -42,6 +42,27 @@
             <artifactId>eventsourced-aggregates</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Backs the read models of the view slices (banking/views/account_balance,
+             shipping/views/order_status). JSONB document store over the same Jdbi and
+             UnitOfWork the EventStore already uses. See config/DocumentDbConfiguration. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-document-db</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- postgresql-document-db is written in Kotlin and declares both of these as `provided`, so they are
+             not transitive: consumers declare their own. Needed at compile time even from pure Java, because
+             the factory and query DSL expose KClass/KProperty1 overloads that javac must resolve against. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib-jdk8</artifactId>
+            <version>${kotlin.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-reflect</artifactId>
+            <version>${kotlin.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.objenesis</groupId>
             <artifactId>objenesis</artifactId>
