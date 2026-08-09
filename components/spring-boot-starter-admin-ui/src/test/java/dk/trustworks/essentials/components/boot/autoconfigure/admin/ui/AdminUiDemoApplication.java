@@ -179,13 +179,34 @@ public class AdminUiDemoApplication {
 
     @Bean
     EventStoreApi eventStoreApi() {
-        var api = mock(EventStoreApi.class);
+        var orderProcessor    = dk.trustworks.essentials.components.foundation.types.SubscriberId.of("OrderProcessor");
+        var paymentProjection = dk.trustworks.essentials.components.foundation.types.SubscriberId.of("PaymentProjection");
+        var api               = mock(EventStoreApi.class);
         when(api.findAllSubscriptions(any())).thenReturn(List.of(
-                new ApiSubscription(dk.trustworks.essentials.components.foundation.types.SubscriberId.of("OrderProcessor"),
-                                    AggregateType.of("Orders"), 918204L, OffsetDateTime.parse("2026-07-31T12:04:29Z")),
-                new ApiSubscription(dk.trustworks.essentials.components.foundation.types.SubscriberId.of("PaymentProjection"),
-                                    AggregateType.of("Payments"), 45219L, OffsetDateTime.parse("2026-07-31T12:04:22Z"))));
+                new ApiSubscription(orderProcessor,
+                                    AggregateType.of("Orders"), 918204L, OffsetDateTime.parse("2026-07-31T12:04:29Z"),
+                                    true, true, true, true, false, null, 918211L),
+                new ApiSubscription(paymentProjection,
+                                    AggregateType.of("Payments"), 45219L, OffsetDateTime.parse("2026-07-31T12:04:22Z"),
+                                    true, false, null, null, null, null, null)));
         when(api.findHighestGlobalEventOrderPersisted(any(), any())).thenReturn(Optional.of(GlobalEventOrder.of(918204L)));
+        var orderProcessorStatistics = new ApiSubscriptionStatistics(
+                orderProcessor,
+                AggregateType.of("Orders"),
+                OffsetDateTime.parse("2026-07-31T09:12:04Z"),
+                new ApiSubscriptionLifecycleStatistics(1, 0, OffsetDateTime.parse("2026-07-31T09:12:04Z"), null),
+                new ApiSubscriptionEventHandlingStatistics(918211, 918204, 3,
+                                                           OffsetDateTime.parse("2026-07-31T12:04:29Z"), 918204L,
+                                                           4L, 812L,
+                                                           OffsetDateTime.parse("2026-07-31T11:47:02Z"),
+                                                           "OptimisticLockingException: Aggregate 'Order:42' was modified concurrently",
+                                                           100),
+                new ApiSubscriptionPollingStatistics(41204, 38911, 12044,
+                                                     OffsetDateTime.parse("2026-07-31T12:04:29Z"), 2L, 4, 18),
+                new ApiSubscriptionLockStatistics(1, 0, true, OffsetDateTime.parse("2026-07-31T09:12:05Z"), null),
+                new ApiSubscriptionResetStatistics(0, null, null));
+        when(api.findAllSubscriptionStatistics(any())).thenReturn(List.of(orderProcessorStatistics));
+        when(api.findSubscriptionStatistics(any(), any(), any())).thenReturn(Optional.of(orderProcessorStatistics));
         return api;
     }
 

@@ -1191,6 +1191,103 @@ paths:
       x-required-roles:
       - essentials_subscription_reader
       - essentials_admin
+  /event-store/subscriptions/statistics:
+    get:
+      tags:
+      - event-store
+      summary: List runtime statistics for every event-store subscription running
+        in this instance.
+      operationId: findAllSubscriptionStatistics
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiSubscriptionStatistics"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
+  /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics:
+    get:
+      tags:
+      - event-store
+      summary: Get runtime statistics for one event-store subscription running in
+        this instance.
+      operationId: findSubscriptionStatistics
+      parameters:
+      - name: subscriberId
+        in: path
+        description: The subscriber id.
+        required: true
+        schema:
+          type: string
+      - name: aggregateType
+        in: path
+        description: The aggregate type the subscriber subscribes to.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The subscription statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiSubscriptionStatistics"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_subscription_reader
+      - essentials_admin
   /event-store/cdc/status:
     get:
       tags:
@@ -2573,6 +2670,8 @@ components:
       required:
       - aggregateType
       - currentGlobalOrder
+      - durableResumePointPresent
+      - runningInThisInstance
       - subscriberId
       type: object
       properties:
@@ -2585,7 +2684,190 @@ components:
           format: int64
         lastUpdated:
           type: string
+          description: When the durable resume point was last updated. Null when the
+            subscription has no durable resume point - see durableResumePointPresent.
           format: date-time
+          nullable: true
+        durableResumePointPresent:
+          type: boolean
+        runningInThisInstance:
+          type: boolean
+        active:
+          type: boolean
+          description: Whether the subscription is currently active. Null when the
+            subscription is not running in this instance.
+          nullable: true
+        exclusive:
+          type: boolean
+          description: Whether only one instance at a time may run this subscription.
+            Null when the subscription is not running in this instance.
+          nullable: true
+        inTransaction:
+          type: boolean
+          description: Whether events are handled in the transaction that persisted
+            them. Null when the subscription is not running in this instance.
+          nullable: true
+        tenant:
+          type: string
+          description: The tenant the subscription is restricted to. Null when the
+            subscription is not restricted to a tenant or is not running in this instance.
+          nullable: true
+        inMemoryGlobalOrder:
+          type: integer
+          description: The in-memory resume point of the running subscription. It
+            can be ahead of currentGlobalOrder. Null when the subscription is not
+            running in this instance.
+          format: int64
+          nullable: true
+    ApiSubscriptionEventHandlingStatistics:
+      required:
+      - eventsHandled
+      - eventsPublishedToSubscriber
+      - failures
+      - lastNumberOfEventsRequested
+      type: object
+      properties:
+        eventsPublishedToSubscriber:
+          type: integer
+          format: int64
+        eventsHandled:
+          type: integer
+          format: int64
+        failures:
+          type: integer
+          format: int64
+        lastEventHandledAt:
+          type: string
+          format: date-time
+        lastEventHandledGlobalOrder:
+          type: integer
+          format: int64
+        averageHandlingTimeMillis:
+          type: integer
+          format: int64
+        maxHandlingTimeMillis:
+          type: integer
+          format: int64
+        lastFailureAt:
+          type: string
+          format: date-time
+        lastFailureReason:
+          type: string
+        lastNumberOfEventsRequested:
+          type: integer
+          format: int64
+    ApiSubscriptionLifecycleStatistics:
+      required:
+      - starts
+      - stops
+      type: object
+      properties:
+        starts:
+          type: integer
+          format: int64
+        stops:
+          type: integer
+          format: int64
+        lastStartedAt:
+          type: string
+          format: date-time
+        lastStoppedAt:
+          type: string
+          format: date-time
+    ApiSubscriptionLockStatistics:
+      required:
+      - acquisitions
+      - currentlyHeld
+      - releases
+      type: object
+      properties:
+        acquisitions:
+          type: integer
+          format: int64
+        releases:
+          type: integer
+          format: int64
+        currentlyHeld:
+          type: boolean
+        lastAcquiredAt:
+          type: string
+          format: date-time
+        lastReleasedAt:
+          type: string
+          format: date-time
+    ApiSubscriptionPollingStatistics:
+      required:
+      - consecutiveNoPersistedEventsReturned
+      - gapReconciliations
+      - polls
+      - pollsWithoutEvents
+      - skippedPolls
+      type: object
+      properties:
+        polls:
+          type: integer
+          format: int64
+        pollsWithoutEvents:
+          type: integer
+          format: int64
+        skippedPolls:
+          type: integer
+          format: int64
+        lastPollAt:
+          type: string
+          format: date-time
+        lastPollDurationMillis:
+          type: integer
+          format: int64
+        consecutiveNoPersistedEventsReturned:
+          type: integer
+          format: int32
+        gapReconciliations:
+          type: integer
+          format: int64
+    ApiSubscriptionResetStatistics:
+      required:
+      - resets
+      type: object
+      properties:
+        resets:
+          type: integer
+          format: int64
+        lastResetAt:
+          type: string
+          format: date-time
+        lastResetToGlobalOrder:
+          type: integer
+          format: int64
+    ApiSubscriptionStatistics:
+      required:
+      - aggregateType
+      - eventHandling
+      - lifecycle
+      - lock
+      - polling
+      - reset
+      - statisticsSince
+      - subscriberId
+      type: object
+      properties:
+        subscriberId:
+          type: string
+        aggregateType:
+          type: string
+        statisticsSince:
+          type: string
+          format: date-time
+        lifecycle:
+          $ref: "#/components/schemas/ApiSubscriptionLifecycleStatistics"
+        eventHandling:
+          $ref: "#/components/schemas/ApiSubscriptionEventHandlingStatistics"
+        polling:
+          $ref: "#/components/schemas/ApiSubscriptionPollingStatistics"
+        lock:
+          $ref: "#/components/schemas/ApiSubscriptionLockStatistics"
+        reset:
+          $ref: "#/components/schemas/ApiSubscriptionResetStatistics"
     ApiTableActivityStatistics:
       required:
       - idx_scan

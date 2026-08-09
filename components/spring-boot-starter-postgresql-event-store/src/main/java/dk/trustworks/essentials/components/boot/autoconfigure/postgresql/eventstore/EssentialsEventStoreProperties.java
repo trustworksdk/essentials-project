@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cd
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.FlushAndPublishPersistedEventsToEventBusRightAfterAppendToStream;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -338,6 +339,7 @@ public class EssentialsEventStoreProperties {
         private Duration                                         snapshotResumePointsEvery    = Duration.ofSeconds(10);
         private EssentialsComponentsProperties.MetricsProperties metrics                      = new EssentialsComponentsProperties.MetricsProperties();
         private final NotifyPollingProperties                    notifyPolling                = new NotifyPollingProperties();
+        private final SubscriptionStatisticsProperties            statistics                   = new SubscriptionStatisticsProperties();
 
         /**
          * How many events should The {@link EventStore} maximum return when polling for events
@@ -459,6 +461,68 @@ public class EssentialsEventStoreProperties {
          */
         public NotifyPollingProperties getNotifyPolling() {
             return notifyPolling;
+        }
+
+        /**
+         * Configuration of the in-memory per-subscription statistics that back the admin API's subscription
+         * statistics endpoints.
+         *
+         * @return the subscription statistics configuration
+         */
+        public SubscriptionStatisticsProperties getStatistics() {
+            return statistics;
+        }
+    }
+
+    /**
+     * Properties for the in-memory per-subscription runtime statistics collected by
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.StatisticsCollectingEventStoreSubscriptionObserver}
+     * and exposed through
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi#findAllSubscriptionStatistics(Object)}.
+     * <p>
+     * Properties example:
+     * <pre>{@code
+     * essentials.event-store.subscription-manager.statistics.enabled=true
+     * essentials.event-store.subscription-manager.statistics.max-tracked-subscriptions=1000
+     * }</pre>
+     */
+    public static class SubscriptionStatisticsProperties {
+        private boolean enabled                 = true;
+        private int     maxTrackedSubscriptions = SubscriptionStatisticsRegistry.DEFAULT_MAX_TRACKED_SUBSCRIPTIONS;
+
+        /**
+         * Whether per-subscription runtime statistics are collected. Default is {@code true}.<br>
+         * When {@code false} the statistics endpoints answer empty and the collecting observer is not wired.
+         *
+         * @return whether statistics are collected
+         */
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        /**
+         * @param enabled whether per-subscription runtime statistics are collected
+         */
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        /**
+         * The maximum number of subscriptions tracked concurrently - a backstop for applications that generate
+         * subscriber ids dynamically. Default is
+         * {@value dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry#DEFAULT_MAX_TRACKED_SUBSCRIPTIONS}.
+         *
+         * @return the maximum number of subscriptions tracked concurrently
+         */
+        public int getMaxTrackedSubscriptions() {
+            return maxTrackedSubscriptions;
+        }
+
+        /**
+         * @param maxTrackedSubscriptions the maximum number of subscriptions tracked concurrently
+         */
+        public void setMaxTrackedSubscriptions(int maxTrackedSubscriptions) {
+            this.maxTrackedSubscriptions = maxTrackedSubscriptions;
         }
     }
 

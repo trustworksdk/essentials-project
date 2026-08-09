@@ -289,22 +289,55 @@ views.queues = async () => {
              : 'GET /durable-queues/queues/{queueName}/messages', true)}`;
 };
 
-views.subscriptions = async () => {
-    let subs;
-    try {
-        subs = await api('/event-store/subscriptions');
-    } catch (e) {
-        return card('Subscriptions', errorState(e, 'essentials_subscription_reader'), 'GET /event-store/subscriptions', true);
-    }
+/* Statistics are collected in memory by the instance that runs a subscription, while resume points come from the
+   database and therefore cover every instance. The two are joined per row but labelled apart, so a subscription
+   owned by another instance reads as "elsewhere" rather than as a stalled one. */
+const subscriptionKey = (subscriberId, aggregateType) => `${subscriberId} ${aggregateType}`;
 
-    const rows = subs.map((s, i) => `<tr>
+function subscriptionState(s) {
+    if (!s.runningInThisInstance) return badge('neutral', 'Other instance');
+    const chips = [s.active ? badge('good', 'Active') : badge('warning', 'Inactive')];
+    if (s.exclusive) chips.push(`<span class="chip">exclusive</span>`);
+    if (s.inTransaction) chips.push(`<span class="chip">in-transaction</span>`);
+    if (s.tenant) chips.push(`<span class="chip">${esc(s.tenant)}</span>`);
+    return chips.join(' ');
+}
+
+views.subscriptions = async () => {
+    const settled = await Promise.allSettled([
+        api('/event-store/subscriptions'),
+        api('/event-store/subscriptions/statistics')
+    ]);
+    if (settled[0].status === 'rejected') {
+        return card('Subscriptions', errorState(settled[0].reason, 'essentials_subscription_reader'),
+            'GET /event-store/subscriptions', true);
+    }
+    const subs = settled[0].value;
+    const stats = settled[1].status === 'fulfilled' ? settled[1].value : [];
+    const byKey = new Map(stats.map((s) => [subscriptionKey(s.subscriberId, s.aggregateType), s]));
+
+    const runningHere = subs.filter((s) => s.runningInThisInstance).length;
+    const failures = stats.reduce((total, s) => total + s.eventHandling.failures, 0);
+    const replays = stats.reduce((total, s) => total + s.reset.resets, 0);
+
+    const rows = subs.map((s, i) => {
+        const stat = byKey.get(subscriptionKey(s.subscriberId, s.aggregateType));
+        return `<tr>
       <td>${esc(s.subscriberId)}</td>
       <td><span class="chip">${esc(s.aggregateType)}</span></td>
-      <td class="num">${num(s.currentGlobalOrder)}</td>
+      <td>${subscriptionState(s)}</td>
+      <td class="num">${s.durableResumePointPresent ? num(s.currentGlobalOrder) : nil('none')}</td>
+      <td class="num">${num(s.inMemoryGlobalOrder)}</td>
+      <td class="num">${stat ? num(stat.eventHandling.eventsHandled) : nil()}</td>
+      <td class="num">${stat && stat.eventHandling.failures > 0
+            ? badge('critical', num(stat.eventHandling.failures)) : stat ? num(0) : nil()}</td>
       <td class="num" id="hi${i}">${nil('not loaded')}</td>
       <td>${ts(s.lastUpdated)}</td>
-      <td class="actions"><button class="btn btn-sm" data-hi="${i}" data-agg="${esc(s.aggregateType)}">Load highest</button></td>
-    </tr>`);
+      <td class="actions"><button class="btn btn-sm" data-hi="${i}" data-agg="${esc(s.aggregateType)}">Load highest</button>
+        <button class="btn btn-sm" data-sub="${esc(s.subscriberId)}" data-sub-agg="${esc(s.aggregateType)}"
+          ${stat ? '' : 'disabled title="No statistics are collected for this subscription in this instance"'}>Statistics</button></td>
+    </tr>`;
+    });
 
     return `
     <div class="banner banner-warning">
@@ -312,9 +345,25 @@ views.subscriptions = async () => {
       <div><strong>Loading the highest global order is expensive.</strong> It scans per aggregate type, so it
       stays on demand per row — calling it frequently affects event-store performance.</div>
     </div>
+    <div class="banner banner-info">
+      <span aria-hidden="true">○</span>
+      <div><strong>Statistics cover this instance only.</strong> Resume points are shared through the database, but
+      throughput, failures and lock ownership are counted in memory by the instance running the subscription. An
+      exclusive subscription only handles events where it holds its lock, so zero counters elsewhere are expected.
+      ${settled[1].status === 'rejected' ? '<em>Statistics could not be loaded for this instance.</em>' : ''}</div>
+    </div>
+    <div class="kpi-row">
+      ${tile('Subscriptions', num(subs.length), 'across all instances')}
+      ${tile('Running here', num(runningHere), 'registered in this instance')}
+      ${tile('Handler failures', num(failures), 'since this instance started', failures > 0)}
+      ${tile('Replays', num(replays), 'resume-point resets here')}
+    </div>
     ${card('Subscriptions', table([
-        { label: 'Subscriber' }, { label: 'Aggregate type' }, { label: 'Current global order', num: true },
-        { label: 'Highest persisted', num: true }, { label: 'Last updated' }, { label: '', width: '120px', sticky: true }
+        { label: 'Subscriber' }, { label: 'Aggregate type' }, { label: 'State' },
+        { label: 'Durable order', num: true }, { label: 'In-memory order', num: true },
+        { label: 'Handled', num: true }, { label: 'Failures', num: true },
+        { label: 'Highest persisted', num: true }, { label: 'Last updated' },
+        { label: '', width: '210px', sticky: true }
     ], rows, { empty: 'No active subscriptions' }), 'GET /event-store/subscriptions', true)}`;
 };
 
@@ -598,6 +647,86 @@ async function openDrawer(id) {
         : `<button class="btn btn-sm" data-act="dlq" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Mark as dead letter</button>`}
       <div class="spacer"></div>
       <button class="btn btn-sm btn-danger" data-act="delete" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Delete message</button>
+    </div>`;
+    document.getElementById('drawerClose').focus();
+}
+
+/* One subscription's statistics, fetched per click rather than joined into the list — the list endpoint already
+   carries the summary columns, and the detail is only ever read for one row at a time. */
+async function openSubscriptionDrawer(subscriberId, aggregateType) {
+    const drawer = document.getElementById('drawer');
+    drawer.innerHTML = `<div class="drawer-head"><div class="drawer-title" id="drawerTitle">Subscription statistics</div>
+      <button class="btn btn-sm" id="drawerClose">Close</button></div>
+      <div class="drawer-body">${loadingRows(4, ['60%', '90%', '40%', '70%'])}</div>`;
+    drawer.classList.add('is-open');
+    document.getElementById('scrim').classList.add('is-open');
+
+    let s;
+    try {
+        s = await api(`/event-store/subscriptions/${encodeURIComponent(subscriberId)}/aggregate-types/${encodeURIComponent(aggregateType)}/statistics`);
+    } catch (e) {
+        drawer.querySelector('.drawer-body').innerHTML = e.status === 404
+            ? errorState({ status: 404, error: 'No statistics', message: 'This instance collects no statistics for that subscription.' })
+            : errorState(e, 'essentials_subscription_reader');
+        return;
+    }
+
+    const kvItem = (k, v) => `<div class="kv-item"><span class="kv-key">${esc(k)}</span><span class="kv-val">${v}</span></div>`;
+    const field = (label, items) => `<div class="field">
+        <div class="field-label"><span>${esc(label)}</span></div>
+        <div class="kv" style="grid-template-columns:1fr">${items.join('')}</div>
+      </div>`;
+    const millis = (v) => (v == null ? nil() : `${num(v)} ms`);
+
+    drawer.innerHTML = `
+    <div class="drawer-head">
+      <div><div class="drawer-title" id="drawerTitle">Subscription statistics</div>
+        <div class="drawer-sub mono">${esc(s.subscriberId)} · ${esc(s.aggregateType)}</div></div>
+      <button class="btn btn-sm" id="drawerClose" aria-label="Close">Close</button>
+    </div>
+    <div class="drawer-body">
+      <div class="banner banner-info">
+        <span aria-hidden="true">○</span>
+        <div>Counted in this instance since ${ts(s.statisticsSince)}. A resume-point reset does not clear them.</div>
+      </div>
+      ${s.eventHandling.lastFailureReason ? `<div class="field"><div class="field-label"><span>Last handler failure</span></div>
+        <pre class="code is-trace">${esc(s.eventHandling.lastFailureReason)}</pre></div>` : ''}
+      ${field('Event handling', [
+        kvItem('eventsHandled', num(s.eventHandling.eventsHandled)),
+        kvItem('eventsPublishedToSubscriber', num(s.eventHandling.eventsPublishedToSubscriber)),
+        kvItem('failures', num(s.eventHandling.failures)),
+        kvItem('lastEventHandledAt', ts(s.eventHandling.lastEventHandledAt)),
+        kvItem('lastEventHandledGlobalOrder', num(s.eventHandling.lastEventHandledGlobalOrder)),
+        kvItem('averageHandlingTime', millis(s.eventHandling.averageHandlingTimeMillis)),
+        kvItem('maxHandlingTime', millis(s.eventHandling.maxHandlingTimeMillis)),
+        kvItem('lastFailureAt', ts(s.eventHandling.lastFailureAt)),
+        kvItem('lastNumberOfEventsRequested', num(s.eventHandling.lastNumberOfEventsRequested))
+    ])}
+      ${field('Polling — zero while CDC delivers the events', [
+        kvItem('polls', num(s.polling.polls)),
+        kvItem('pollsWithoutEvents', num(s.polling.pollsWithoutEvents)),
+        kvItem('skippedPolls', num(s.polling.skippedPolls)),
+        kvItem('lastPollAt', ts(s.polling.lastPollAt)),
+        kvItem('lastPollDuration', millis(s.polling.lastPollDurationMillis)),
+        kvItem('consecutiveNoPersistedEventsReturned', num(s.polling.consecutiveNoPersistedEventsReturned)),
+        kvItem('gapReconciliations', num(s.polling.gapReconciliations))
+    ])}
+      ${field('Fenced lock — exclusive subscriptions only', [
+        kvItem('currentlyHeld', String(s.lock.currentlyHeld)),
+        kvItem('acquisitions', num(s.lock.acquisitions)),
+        kvItem('releases', num(s.lock.releases)),
+        kvItem('lastAcquiredAt', ts(s.lock.lastAcquiredAt)),
+        kvItem('lastReleasedAt', ts(s.lock.lastReleasedAt))
+    ])}
+      ${field('Lifecycle and replays', [
+        kvItem('starts', num(s.lifecycle.starts)),
+        kvItem('stops', num(s.lifecycle.stops)),
+        kvItem('lastStartedAt', ts(s.lifecycle.lastStartedAt)),
+        kvItem('lastStoppedAt', ts(s.lifecycle.lastStoppedAt)),
+        kvItem('resets', num(s.reset.resets)),
+        kvItem('lastResetAt', ts(s.reset.lastResetAt)),
+        kvItem('lastResetToGlobalOrder', num(s.reset.lastResetToGlobalOrder))
+    ])}
     </div>`;
     document.getElementById('drawerClose').focus();
 }
@@ -1148,6 +1277,12 @@ document.addEventListener('click', async (e) => {
         } catch (err) {
             cell.innerHTML = err.status === 404 ? nil('no events') : badge('critical', String(err.status));
         }
+        return;
+    }
+
+    const subStats = e.target.closest('[data-sub-agg]');
+    if (subStats) {
+        await openSubscriptionDrawer(subStats.dataset.sub, subStats.dataset.subAgg);
         return;
     }
 

@@ -161,7 +161,10 @@ whatever credentials your deployment uses via `ApiClient.setRequestInterceptor(.
   introduced under a new `/api/essentials/admin/v2` served side-by-side, so existing `v1` consumers
   and their generated clients keep working.
 - **Drift gate.** `OpenApiSpecGenerationTest` fails if the committed YAML no longer matches the
-  SPIs (e.g. a new interface method, or a changed DTO field).
+  SPIs (e.g. a new interface method, or a changed DTO field). The two documents are compared
+  semantically — mapping keys are sorted first, so a key-order difference between build hosts is not
+  drift, while sequence order (parameters, tags, `enum` values) is still compared strictly. The
+  failure lists the differing JSON pointers rather than the whole contract.
 - **Validation gate.** `OpenApiSpecValidationTest` parses the contract with swagger-parser and fails
   on any structural problem or dangling `$ref`.
 - **Conformance gate.** `AdminApiContractConformanceTest` in the adapter compares the endpoints it
@@ -179,9 +182,15 @@ whatever credentials your deployment uses via `ApiClient.setRequestInterceptor(.
 Regenerate the contract after intentionally changing an SPI or DTO:
 
 ```bash
-mvn -pl components/admin-api-spec test \
-    -Dtest=OpenApiSpecGenerationTest -Dopenapi.regenerate=true
+mvn -pl components/admin-api-spec -am test \
+    -Dtest=OpenApiSpecGenerationTest -Dsurefire.failIfNoSpecifiedTests=false \
+    -Dopenapi.regenerate=true
 ```
+
+`-am` matters: the generator reflects over the SPI modules, so without it they are resolved from
+`~/.m2` and an uninstalled SPI edit regenerates the *old* contract. The file is rewritten only when
+the contract actually differs, so regenerating on a different machine cannot introduce a
+key-order-only diff.
 
 Run the drift + compatibility gates:
 

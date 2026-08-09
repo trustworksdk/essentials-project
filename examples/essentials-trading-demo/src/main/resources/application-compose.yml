@@ -82,6 +82,8 @@ essentials:
         publication:
           auto-manage: true
           mode: FOR_TABLE_LIST
+      wal-parser-mode: bytes
+      inbox-ttl-duration-days: 1
 
 trading-demo:
   accounts:

@@ -16,10 +16,13 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.DurableSubscriptionRepository;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.SubscriptionStatisticsRegistry.SubscriptionKey;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
 import java.util.*;
@@ -33,19 +36,59 @@ import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidat
  * providing methods to interact with the event store and manage event-related data.
  * This implementation enforces security through role validation and provides functionality
  * to retrieve event and subscription information.
+ * <p>
+ * Subscriptions are described from up to three sources, deliberately kept apart because their scopes differ:
+ * the {@link DurableSubscriptionRepository} resume points shared by every instance through the database, the
+ * {@link EventStoreSubscriptionManager} of this instance, and the {@link SubscriptionStatisticsRegistry} collected in
+ * this instance's memory. The last two are optional - without them the API answers exactly what it did before they
+ * existed.
  */
 public class DefaultEventStoreApi implements EventStoreApi {
 
-    private final EssentialsSecurityProvider essentialsSecurityProvider;
-    private final EventStore eventStore;
-    private final DurableSubscriptionRepository durableSubscriptionRepository;
+    private final EssentialsSecurityProvider               essentialsSecurityProvider;
+    private final EventStore                               eventStore;
+    private final DurableSubscriptionRepository            durableSubscriptionRepository;
+    private final Optional<EventStoreSubscriptionManager>  eventStoreSubscriptionManager;
+    private final Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry;
 
+    /**
+     * Create an API that only reports the durable resume points shared by every instance.
+     *
+     * @param essentialsSecurityProvider    the security provider used for role validation
+     * @param eventStore                    the event store queried
+     * @param durableSubscriptionRepository the repository holding the durable subscription resume points
+     */
     public DefaultEventStoreApi(EssentialsSecurityProvider essentialsSecurityProvider,
                                 EventStore eventStore,
                                 DurableSubscriptionRepository durableSubscriptionRepository) {
+        this(essentialsSecurityProvider,
+             eventStore,
+             durableSubscriptionRepository,
+             Optional.empty(),
+             Optional.empty());
+    }
+
+    /**
+     * @param essentialsSecurityProvider     the security provider used for role validation
+     * @param eventStore                     the event store queried
+     * @param durableSubscriptionRepository  the repository holding the durable subscription resume points
+     * @param eventStoreSubscriptionManager  the subscription manager of this instance, used to report the live state of
+     *                                       the subscriptions running here. {@link Optional#empty()} when this instance
+     *                                       runs no subscription manager
+     * @param subscriptionStatisticsRegistry the registry holding the statistics collected in this instance.
+     *                                       {@link Optional#empty()} when statistics collection is disabled
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public DefaultEventStoreApi(EssentialsSecurityProvider essentialsSecurityProvider,
+                                EventStore eventStore,
+                                DurableSubscriptionRepository durableSubscriptionRepository,
+                                Optional<EventStoreSubscriptionManager> eventStoreSubscriptionManager,
+                                Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
         this.essentialsSecurityProvider = requireNonNull(essentialsSecurityProvider, "EssentialsSecurityProvider must not be null");
         this.eventStore = requireNonNull(eventStore, "EventStore must not be null");
-        this.durableSubscriptionRepository =requireNonNull(durableSubscriptionRepository, "DurableSubscriptionRepository must not be null");
+        this.durableSubscriptionRepository = requireNonNull(durableSubscriptionRepository, "DurableSubscriptionRepository must not be null");
+        this.eventStoreSubscriptionManager = requireNonNull(eventStoreSubscriptionManager, "EventStoreSubscriptionManager Optional must not be null");
+        this.subscriptionStatisticsRegistry = requireNonNull(subscriptionStatisticsRegistry, "SubscriptionStatisticsRegistry Optional must not be null");
     }
 
     private void validateSubscriptionReaderRoles(Object principal) {
@@ -60,9 +103,114 @@ public class DefaultEventStoreApi implements EventStoreApi {
         });
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The durable resume points are combined with the subscriptions registered in this instance: a subscription that
+     * has no durable resume point - an in-transaction subscription, or one whose resume point has not been persisted
+     * yet - is reported as well, marked {@link ApiSubscription#durableResumePointPresent()} {@code false}.
+     * <p>
+     * No aggregate-type event stream is queried, so the call stays cheap; use
+     * {@link #findHighestGlobalEventOrderPersisted(Object, AggregateType)} per aggregate type to establish how far
+     * behind a subscription is.
+     */
     @Override
     public List<ApiSubscription> findAllSubscriptions(Object principal) {
         validateSubscriptionReaderRoles(principal);
-        return durableSubscriptionRepository.findAllResumePoints().stream().map(ApiSubscription::from).toList();
+        var subscriptions = new ArrayList<ApiSubscription>();
+        var reportedKeys  = new HashSet<SubscriptionKey>();
+        durableSubscriptionRepository.findAllResumePoints().forEach(resumePoint -> {
+            var key = new SubscriptionKey(resumePoint.getSubscriberId(), resumePoint.getAggregateType());
+            reportedKeys.add(key);
+            subscriptions.add(toApiSubscription(resumePoint, findSubscription(key.subscriberId(), key.aggregateType())));
+        });
+        eventStoreSubscriptionManager.ifPresent(subscriptionManager -> subscriptionManager.getSubscriptions().forEach(subscriberIdAndAggregateType -> {
+            var key = new SubscriptionKey(subscriberIdAndAggregateType._1, subscriberIdAndAggregateType._2);
+            if (reportedKeys.add(key)) {
+                subscriptionManager.getSubscription(key.subscriberId(), key.aggregateType())
+                                   .map(DefaultEventStoreApi::toApiSubscription)
+                                   .ifPresent(subscriptions::add);
+            }
+        }));
+        return List.copyOf(subscriptions);
+    }
+
+    @Override
+    public List<ApiSubscriptionStatistics> findAllSubscriptionStatistics(Object principal) {
+        validateSubscriptionReaderRoles(principal);
+        return subscriptionStatisticsRegistry.map(registry -> registry.allStatistics().stream()
+                                                                      .map(ApiSubscriptionStatistics::from)
+                                                                      .toList())
+                                             .orElseGet(List::of);
+    }
+
+    @Override
+    public Optional<ApiSubscriptionStatistics> findSubscriptionStatistics(Object principal,
+                                                                         SubscriberId subscriberId,
+                                                                         AggregateType aggregateType) {
+        validateSubscriptionReaderRoles(principal);
+        requireNonNull(subscriberId, "No subscriberId provided");
+        requireNonNull(aggregateType, "No aggregateType provided");
+        return subscriptionStatisticsRegistry.flatMap(registry -> registry.findStatistics(subscriberId, aggregateType))
+                                             .map(ApiSubscriptionStatistics::from);
+    }
+
+    private Optional<EventStoreSubscription> findSubscription(SubscriberId subscriberId, AggregateType aggregateType) {
+        return eventStoreSubscriptionManager.flatMap(subscriptionManager -> subscriptionManager.getSubscription(subscriberId, aggregateType));
+    }
+
+    /**
+     * Describe a subscription from its durable resume point, enriched with the live state of the subscription if it
+     * runs in this instance
+     *
+     * @param resumePoint            the durable resume point
+     * @param eventStoreSubscription the live subscription of this instance, if any
+     * @return the subscription
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private static ApiSubscription toApiSubscription(SubscriptionResumePoint resumePoint,
+                                                    Optional<EventStoreSubscription> eventStoreSubscription) {
+        return new ApiSubscription(
+                resumePoint.getSubscriberId(),
+                resumePoint.getAggregateType(),
+                resumePoint.getResumeFromAndIncluding().longValue(),
+                resumePoint.getLastUpdated(),
+                true,
+                eventStoreSubscription.isPresent(),
+                eventStoreSubscription.map(EventStoreSubscription::isActive).orElse(null),
+                eventStoreSubscription.map(EventStoreSubscription::isExclusive).orElse(null),
+                eventStoreSubscription.map(EventStoreSubscription::isInTransaction).orElse(null),
+                eventStoreSubscription.flatMap(subscription -> subscription.onlyIncludeEventsForTenant().map(Object::toString)).orElse(null),
+                inMemoryGlobalOrderOf(eventStoreSubscription.orElse(null)));
+    }
+
+    /**
+     * Describe a subscription that runs in this instance but has no durable resume point - either because it is an
+     * in-transaction subscription, or because its resume point has not been persisted yet
+     *
+     * @param eventStoreSubscription the live subscription of this instance
+     * @return the subscription
+     */
+    private static ApiSubscription toApiSubscription(EventStoreSubscription eventStoreSubscription) {
+        return new ApiSubscription(
+                eventStoreSubscription.subscriberId(),
+                eventStoreSubscription.aggregateType(),
+                0,
+                null,
+                false,
+                true,
+                eventStoreSubscription.isActive(),
+                eventStoreSubscription.isExclusive(),
+                eventStoreSubscription.isInTransaction(),
+                eventStoreSubscription.onlyIncludeEventsForTenant().map(Object::toString).orElse(null),
+                inMemoryGlobalOrderOf(eventStoreSubscription));
+    }
+
+    private static Long inMemoryGlobalOrderOf(EventStoreSubscription eventStoreSubscription) {
+        return eventStoreSubscription != null
+               ? eventStoreSubscription.currentResumePoint()
+                                       .map(resumePoint -> resumePoint.getResumeFromAndIncluding().longValue())
+                                       .orElse(null)
+               : null;
     }
 }

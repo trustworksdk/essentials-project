@@ -544,7 +544,7 @@ class OrderStateEvolver : Evolver<OrderEvent, OrderState> {
 
 Package: `dk.trustworks.essentials.components.adminapi.rest`
 
-27 operations over fenced locks, durable queues, scheduler, event-store subscriptions, CDC status and PostgreSQL statistics, generated code-first from the `*Api` SPIs.
+40 operations over fenced locks, durable queues, scheduler, event-store subscriptions and their runtime statistics, CDC status, PostgreSQL statistics and the aggregate lifecycle/archive, generated code-first from the `*Api` SPIs.
 
 **Usage:** Include `spring-boot-starter-admin-api` and implement `EssentialsAuthenticatedUser` + `EssentialsSecurityProvider`. Build any UI on the published contract or the generated Java client.
 

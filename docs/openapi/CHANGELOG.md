@@ -19,7 +19,7 @@ Initial contract, generated code-first from the seven Essentials admin SPI inter
 - `CdcApi` → `cdc`
 - `PostgresqlEventStoreStatisticsApi` → `event-store-statistics`
 
-27 operations across 25 paths, served under `/api/essentials/admin/v1`. Authorization is role-based
+40 operations across 38 paths, served under `/api/essentials/admin/v1`. Authorization is role-based
 and surfaced per operation via the `x-required-roles` vendor extension; the contract is
 transport-agnostic.
 

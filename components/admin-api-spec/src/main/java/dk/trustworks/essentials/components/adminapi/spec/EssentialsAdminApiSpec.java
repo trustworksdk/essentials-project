@@ -75,6 +75,7 @@ final class EssentialsAdminApiSpec {
             ApiQueuedMessage.class,
             ApiQueuedStatistics.class,
             ApiSubscription.class,
+            ApiSubscriptionStatistics.class,
             ApiCdcStatus.class,
             ApiAggregateSnapshotPolicy.class,
             ApiAggregateClosingBooksPolicy.class,
@@ -99,6 +100,8 @@ final class EssentialsAdminApiSpec {
             "ApiQueuedMessage", Set.of("id", "queueName"),
             "ApiQueuedStatistics", Set.of("queueName"),
             "ApiSubscription", Set.of("subscriberId", "aggregateType"),
+            "ApiSubscriptionStatistics", Set.of("subscriberId", "aggregateType", "statisticsSince",
+                                                "lifecycle", "eventHandling", "polling", "lock", "reset"),
             "ApiCdcStatus", Set.of("availability", "configuration", "slot"));
 
     /**
@@ -112,7 +115,20 @@ final class EssentialsAdminApiSpec {
                             + "or ESSENTIALS_ADMIN role."),
             "ApiCdcStatus", Map.of(
                     "tailer", "Null when no WAL replication tailer is running in this instance.",
-                    "dispatcher", "Null when no CDC dispatcher is running in this instance."));
+                    "dispatcher", "Null when no CDC dispatcher is running in this instance."),
+            "ApiSubscription", Map.of(
+                    "lastUpdated", "When the durable resume point was last updated. Null when the subscription has no "
+                            + "durable resume point - see durableResumePointPresent.",
+                    "active", "Whether the subscription is currently active. Null when the subscription is not running "
+                            + "in this instance.",
+                    "exclusive", "Whether only one instance at a time may run this subscription. Null when the "
+                            + "subscription is not running in this instance.",
+                    "inTransaction", "Whether events are handled in the transaction that persisted them. Null when the "
+                            + "subscription is not running in this instance.",
+                    "tenant", "The tenant the subscription is restricted to. Null when the subscription is not "
+                            + "restricted to a tenant or is not running in this instance.",
+                    "inMemoryGlobalOrder", "The in-memory resume point of the running subscription. It can be ahead of "
+                            + "currentGlobalOrder. Null when the subscription is not running in this instance."));
 
     /** Tag name &rarr; description, in display order. */
     static final Map<String, String> TAGS = new LinkedHashMap<>() {{
@@ -304,6 +320,20 @@ final class EssentialsAdminApiSpec {
          .summary("List all active event-store subscriptions.")
          .roles(SUBSCRIPTION_R, ADMIN)
          .responseArray("ApiSubscription");
+
+        b.operation(EventStoreApi.class, "findAllSubscriptionStatistics")
+         .tag("event-store").get("/event-store/subscriptions/statistics")
+         .summary("List runtime statistics for every event-store subscription running in this instance.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .responseArray("ApiSubscriptionStatistics");
+
+        b.operation(EventStoreApi.class, "findSubscriptionStatistics")
+         .tag("event-store").get("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics")
+         .summary("Get runtime statistics for one event-store subscription running in this instance.")
+         .roles(SUBSCRIPTION_R, ADMIN)
+         .pathParam("subscriberId", new StringSchema(), "The subscriber id.")
+         .pathParam("aggregateType", new StringSchema(), "The aggregate type the subscriber subscribes to.")
+         .responseOptionalRef("ApiSubscriptionStatistics", "The subscription statistics.");
 
         // ---- cdc ----
         b.operation(CdcApi.class, "getStatus")

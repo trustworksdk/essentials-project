@@ -155,7 +155,7 @@ Package: `dk.trustworks.essentials.components.boot.autoconfigure.admin.api`
 public class EssentialsAdminApiAutoConfiguration
 ```
 
-**Endpoints:** 27 operations under `/api/essentials/admin/v1` — see [LLM-admin-api.md](LLM-admin-api.md)
+**Endpoints:** 40 operations under `/api/essentials/admin/v1` — see [LLM-admin-api.md](LLM-admin-api.md)
 
 **Required:** Implement `EssentialsAuthenticatedUser` and `EssentialsSecurityProvider` beans. Both default to no-access, so an application that implements neither exposes nothing.
 
