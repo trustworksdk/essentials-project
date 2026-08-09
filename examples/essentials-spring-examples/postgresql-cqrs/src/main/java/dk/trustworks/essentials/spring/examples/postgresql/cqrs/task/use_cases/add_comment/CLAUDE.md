@@ -9,6 +9,11 @@
   equivalent `Comment` is not already in the aggregate's comment set). This dedup is what makes
   the automation path below safe to re-run.
 
+  Note what that key does *not* cover: because `createdAt` is part of it, dedup protects against
+  redelivery of the *same* command, but a client retrying with a freshly stamped `createdAt` produces
+  a comment the aggregate considers new. Conversely two genuinely distinct comments with identical
+  text at the same instant collapse into one. Fine for an example; size it up before copying.
+
 ## Boundaries
 **Reacts to / reads:** `AddComment` — **two triggers reach this one slice**: `POST /tasks/add-comment`
   (`AddCommentAPI`), and the `task.comment_on_task_created` automation, which issues the same command
