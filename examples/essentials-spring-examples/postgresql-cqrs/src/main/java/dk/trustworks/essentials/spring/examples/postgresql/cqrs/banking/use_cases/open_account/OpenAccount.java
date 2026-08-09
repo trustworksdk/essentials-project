@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.outgoing;
+package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.use_cases.open_account;
 
-/**
- * The shape shipping publishes to the outside world. As with the inbound side, the identifier is a plain
- * {@code String}: the published contract is owned by this boundary, not by the domain, so it should not move when an
- * internal type does.
- */
-public interface ExternalOrderShippingEvent {
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountNumber;
 
-    String orderId();
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+public record OpenAccount(AccountId accountId,
+                          AccountNumber accountNumber) {
+    public OpenAccount {
+        requireNonNull(accountId, "No accountId provided");
+        requireNonNull(accountNumber, "No accountNumber provided");
+    }
 }

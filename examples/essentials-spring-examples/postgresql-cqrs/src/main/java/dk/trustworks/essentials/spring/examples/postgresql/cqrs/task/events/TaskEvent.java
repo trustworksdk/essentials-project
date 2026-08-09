@@ -18,7 +18,12 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events;
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
 
-public interface TaskEvent {
+/**
+ * The set of events a {@code Task} can emit is closed, so the interface is {@code sealed}: adding a variant means
+ * updating the {@code permits} clause, which is a compile error away rather than a silent omission. Sealing does not
+ * restrict the EventStore, which deserializes the concrete records reflectively by their fully qualified class name.
+ */
+public sealed interface TaskEvent permits TaskCreated, CommentAdded {
 
     TaskId taskId();
 }

@@ -20,7 +20,7 @@ bounded context looks like this, and each slice directory carries its own `slice
 
 | Bounded context | Slices |
 |---|---|
-| `banking` | `request_intra_bank_money_transfer` (command), `transfer_money` (automation), `account_balance` (view) |
+| `banking` | `open_account`, `request_intra_bank_money_transfer` (commands), `transfer_money` (automation), `account_balance` (view) |
 | `shipping` | `register_shipping_order`, `ship_order` (commands), `order_management` (translation), `order_status` (view) |
 | `task` | `create_task`, `add_comment` (commands), `comment_on_task_created` (automation) |
 
@@ -31,6 +31,7 @@ is a sanctioned lane — the slice law's decider style is the other. Start from 
 
 | Method | Path | Slice |
 |---|---|---|
+| POST | `/banking/open-account` | `banking.open_account` |
 | POST | `/banking/transfer-money` | `banking.request_intra_bank_money_transfer` |
 | GET | `/banking/accounts`, `/banking/accounts/{accountId}` | `banking.account_balance` |
 | POST | `/shipping/register-order` | `shipping.register_shipping_order` |

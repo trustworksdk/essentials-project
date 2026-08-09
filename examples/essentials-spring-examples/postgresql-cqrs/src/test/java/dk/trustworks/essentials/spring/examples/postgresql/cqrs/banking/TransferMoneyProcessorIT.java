@@ -28,6 +28,7 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.Ac
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.use_cases.request_intra_bank_money_transfer.RequestIntraBankMoneyTransferHandler;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransactionId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountNumber;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Account;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Accounts;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.IntraBankMoneyTransfers;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransferLifeCycleStatus;
@@ -102,14 +103,14 @@ public class TransferMoneyProcessorIT {
         var account1Id                    = AccountId.random();
         var account1BalanceBeforeTransfer = Amount.of("100");
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-            var account1 = accounts.openNewAccount(account1Id,
-                                                   AccountNumber.of("001123456"));
+            var account1 = accounts.openNewAccount(new Account(account1Id,
+                                                               AccountNumber.of("001123456")));
             account1.depositToday(account1BalanceBeforeTransfer, TransactionId.random());
         });
 
         var account2Id = AccountId.random();
-        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> accounts.openNewAccount(account2Id,
-                                                                                AccountNumber.of("9876541")));
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> accounts.openNewAccount(new Account(account2Id,
+                                                                                           AccountNumber.of("9876541"))));
 
         var transactionId  = TransactionId.random();
         var transferAmount = Amount.of("10");

@@ -11,6 +11,7 @@ everything else: their command type, their one API file, their handler and their
 
 | Slice | Kind | Role |
 |---|---|---|
+| `use_cases/open_account` | command | Opens an `Account` at a zero balance |
 | `use_cases/request_intra_bank_money_transfer` | command | Accepts the transfer intent, creates the `IntraBankMoneyTransfer` |
 | `automations/transfer_money` | automation | The process manager that carries the transfer through its lifecycle |
 | `views/account_balance` | view | Projects the running balance per account |
@@ -23,15 +24,16 @@ and `TransactionId` flows through both event streams so each side can correlate.
 writes exactly one aggregate; that is deliberate, and the reason this is an automation rather than a
 command slice.
 
-## Known gap: there is no `open_account` slice
+## The repository does not construct aggregates
 
-`Accounts.openNewAccount(...)` is a slice-shaped hole. Opening an account has no command type, no handler
-and no endpoint — the decision sits on the repository and is reachable only from the integration tests.
-It was left that way on purpose during the slice migration: inventing a command with no caller would have
-been new domain logic rather than restructuring. The practical consequence is that `views/account_balance`
-has no API-driven way to create the account it projects.
+`Accounts.openNewAccount(Account)` takes an already-constructed aggregate and persists it; it does not
+build one from an id and an account number. Constructing an `Account` is what emits `AccountOpened`, and
+that decision belongs to `use_cases/open_account`, not to a repository wrapper.
 
-If you add the slice, it goes in `use_cases/open_account/` and `openNewAccount` moves out of `Accounts`.
+This is worth stating because it was wrong until recently: `openNewAccount(accountId, accountNumber)` put
+the decision on the repository, where no command, handler or endpoint could reach it — only the tests
+could. The two sibling wrappers, `ShippingOrders.registerNewOrder` and
+`IntraBankMoneyTransfers.requestNewTransfer`, always had the right shape; `Accounts` now matches them.
 
 ## Boundaries
 

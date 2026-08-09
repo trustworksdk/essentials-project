@@ -21,11 +21,18 @@ decide anything itself.
     command type of the slice this one triggers.
   - Never let an external schema (`OrderEvent`, `ExternalOrderShippingEvent`) escape this directory.
 
-## Known weakness of this example
-`OrderEvent` and `OrderAccepted` are typed with shipping's **own** `OrderId`, not a foreign
-representation of the external identifier. So the ACL does not actually translate the id — it accepts
-the internal type straight off the wire. A real anti-corruption layer would carry the external id
-shape and map it here. Read this slice as a structural example, not as a model ACL.
+## The id is translated, not shared
+The wire contracts carry a plain `String` id in both directions; `OrderId` exists only on our side of
+the boundary. Two lines do the whole translation:
+
+- `OrderEventsKafkaListener` — `new ShipOrder(OrderId.of(event.id()))`
+- `ShippingEventKafkaPublisher` — `new ExternalOrderShipped(e.orderId().toString(), …)`
+
+Keep it that way. Typing the DTOs with `OrderId` compiles and looks tidier, but then the ACL does not
+actually translate: an upstream id-format change reaches straight into the domain instead of stopping
+here, and our internal type becomes part of a contract we do not own. It is also why no
+`shipping.types` package appears in `KafkaConfiguration`'s trusted packages — nothing internal crosses
+the wire.
 
 ## Files
 - `incoming/OrderEvent.java` — the external inbound contract (interface)

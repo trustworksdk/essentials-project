@@ -35,12 +35,12 @@ into this aggregate.
 Note that `banking` and `shipping` have no equivalent — this context is the only one here that demonstrates
 the pattern.
 
-## `TaskEvent` is not sealed
+## `TaskEvent` is sealed
 
-Unlike `AccountEvent`, `IntraBankMoneyTransferEvent` and `ShippingEvent`, `TaskEvent` is a plain interface.
-The non-sealed marker is permitted by §R3, but it forfeits exhaustive `switch` checking and it makes this
-context the odd one out. Either seal it or record why not — right now it reads as drift rather than as a
-decision.
+`permits TaskCreated, CommentAdded`, like the other three hierarchies in this module. §R3 permits a
+non-sealed marker, but sealing buys exhaustive `switch` checking and makes adding a variant a compile
+error rather than a silent omission. Adding one means appending a name to the `permits` clause — the
+single sanctioned cross-slice edit in the law.
 
 ## Boundaries
 

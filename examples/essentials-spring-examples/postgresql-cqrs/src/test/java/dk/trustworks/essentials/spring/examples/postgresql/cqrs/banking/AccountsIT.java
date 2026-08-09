@@ -28,6 +28,7 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.TestConfiguratio
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransactionId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountNumber;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Account;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Accounts;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.AccountDeposited;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.AccountOpened;
@@ -97,8 +98,8 @@ public class AccountsIT {
         });
 
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-            var account1 = accounts.openNewAccount(account1Id,
-                                                   AccountNumber.of("001123456"));
+            var account1 = accounts.openNewAccount(new Account(account1Id,
+                                                               AccountNumber.of("001123456")));
             account1.depositToday(depositAmount, transactionId);
         });
 

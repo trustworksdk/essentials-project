@@ -19,7 +19,7 @@ repo with the property unresolved and **both** Jackson flavours land on the clas
 
 | BC | Slices | Aggregates |
 |---|---|---|
-| `banking` | `request_intra_bank_money_transfer`, `transfer_money` (automation), `account_balance` (view) | `Account`, `IntraBankMoneyTransfer` |
+| `banking` | `open_account`, `request_intra_bank_money_transfer`, `transfer_money` (automation), `account_balance` (view) | `Account`, `IntraBankMoneyTransfer` |
 | `shipping` | `register_shipping_order`, `ship_order`, `order_management` (translation), `order_status` (view) | `ShippingOrder` |
 | `task` | `create_task`, `add_comment`, `comment_on_task_created` (automation) | `Task` |
 
@@ -28,13 +28,19 @@ Start from a context's own `CLAUDE.md`; each slice directory has one too, plus a
 **All three use the aggregate write style** (`AggregateRoot` + `StatefulAggregateRepository`), which
 is a sanctioned lane in the law — §R5. Do **not** "modernise" them into `Decider`s.
 
-## Known gaps, deliberately left
+## Three things not to undo
 
-- `banking` has no `open_account` slice: the decision sits on `Accounts.openNewAccount` and is
-  reachable only from tests, so `account_balance` has no API-driven way to create what it projects.
-- `shipping`'s inbound Kafka DTOs are typed with shipping's own `OrderId`, so the anti-corruption
-  layer does not actually translate the identifier.
-- `task`'s `TaskEvent` is the one non-sealed event hierarchy of the three.
+Each of these was wrong once and is easy to reintroduce because the wrong version looks tidier.
+
+- **Repositories do not construct aggregates.** `Accounts.openNewAccount(Account)` persists an
+  aggregate the `open_account` slice built. An `openNewAccount(accountId, accountNumber)` overload
+  would put the decision back on the repository, out of reach of any command or endpoint.
+- **The Kafka DTOs carry a plain `String` id, not `OrderId`.** Converting happens in the two adapters
+  of `external_systems/order_management`. Typing the DTOs with `OrderId` means the ACL stops
+  translating and an upstream format change reaches the domain.
+- **All four event hierarchies are `sealed`.** Adding a variant means appending to `permits` — the one
+  sanctioned cross-slice edit in the law. Dropping `sealed` to avoid that forfeits exhaustive
+  `switch` checking.
 
 ## Commands do not cross into `events/` or `aggregates/`
 

@@ -142,7 +142,8 @@ public class OrderShippingProcessorIT {
 
         // When
         Thread.sleep(2000); // Wait for Kafka to be ready :(
-        var orderAccepted = new OrderAccepted(orderId, 1000);
+        // The external system speaks in plain ids -- OrderId only exists on our side of the boundary.
+        var orderAccepted = new OrderAccepted(orderId.toString(), 1000);
         kafkaTemplate.send(new ProducerRecord<>(OrderEventsKafkaListener.ORDER_EVENTS_TOPIC_NAME,
                                                 orderId.toString(),
                                                 orderAccepted));
@@ -154,7 +155,7 @@ public class OrderShippingProcessorIT {
                       assertThat(shippingRecordsReceived.size()).isEqualTo(1);
                   });
         assertThat(shippingRecordsReceived.get(0).value()).isInstanceOf(ExternalOrderShipped.class);
-        assertThat((CharSequence) ((ExternalOrderShipped) shippingRecordsReceived.get(0).value()).orderId()).isEqualTo(orderId);
+        assertThat(((ExternalOrderShipped) shippingRecordsReceived.get(0).value()).orderId()).isEqualTo(orderId.toString());
         assertThat(((ExternalOrderShipped) shippingRecordsReceived.get(0).value()).eventOrder()).isEqualTo(1L);
 
         // Verify that both the DurableLocalCommandBus and Outbox are empty

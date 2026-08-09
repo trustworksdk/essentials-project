@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.foundation.transaction.UnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.Application;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.TestConfiguration;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Account;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Accounts;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountNumber;
@@ -84,7 +85,7 @@ public class AccountBalanceViewIT {
         var accountId = AccountId.random();
 
         unitOfWorkFactory.usingUnitOfWork(uow -> {
-            var account = accounts.openNewAccount(accountId, AccountNumber.of("001123456"));
+            var account = accounts.openNewAccount(new Account(accountId, AccountNumber.of("001123456")));
             account.depositToday(Amount.of("250"), TransactionId.random());
             account.withdrawToday(Amount.of("100"), TransactionId.random(), AllowOverdrawingBalance.NO);
         });
@@ -106,7 +107,7 @@ public class AccountBalanceViewIT {
         var accountId = AccountId.random();
 
         unitOfWorkFactory.usingUnitOfWork(uow -> {
-            var account = accounts.openNewAccount(accountId, AccountNumber.of("001987654"));
+            var account = accounts.openNewAccount(new Account(accountId, AccountNumber.of("001987654")));
             account.depositToday(Amount.of("40"), TransactionId.random());
         });
 

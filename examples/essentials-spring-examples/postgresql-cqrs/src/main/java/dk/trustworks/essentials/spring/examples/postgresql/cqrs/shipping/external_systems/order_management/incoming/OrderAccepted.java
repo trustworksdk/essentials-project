@@ -16,7 +16,5 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.incoming;
 
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
-
-public record OrderAccepted(OrderId id, long orderNumber) implements OrderEvent {
+public record OrderAccepted(String id, long orderNumber) implements OrderEvent {
 }

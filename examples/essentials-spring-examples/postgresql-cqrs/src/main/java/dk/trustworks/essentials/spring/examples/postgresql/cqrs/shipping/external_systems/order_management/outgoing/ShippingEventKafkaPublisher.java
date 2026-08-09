@@ -87,10 +87,11 @@ public class ShippingEventKafkaPublisher extends EventProcessor {
     @MessageHandler
     void handle(OrderShipped e, OrderedMessage eventMessage) {
         log.info("*** Received {} for Order '{}' and adding it to the Outbox as a {} message", e.getClass().getSimpleName(), e.orderId(), ExternalOrderShipped.class.getSimpleName());
-        var externalEvent = new ExternalOrderShipped(e.orderId(), eventMessage.getOrder());
+        // This is the translation: shipping's OrderId becomes a plain String on the way out, and nowhere else.
+        var externalEvent = new ExternalOrderShipped(e.orderId().toString(), eventMessage.getOrder());
         log.info("*** Forwarding {} message to Kafka. Order '{}'", externalEvent.getClass().getSimpleName(), externalEvent.orderId());
         var producerRecord = new ProducerRecord<String, Object>(SHIPPING_EVENTS_TOPIC_NAME,
-                                                                externalEvent.orderId().toString(),
+                                                                externalEvent.orderId(),
                                                                 externalEvent);
         kafkaTemplate.send(producerRecord);
         log.info("*** Completed sending event {} to Kafka. Order '{}'", externalEvent.getClass().getSimpleName(), externalEvent.orderId());

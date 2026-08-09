@@ -27,10 +27,9 @@ command slice is identified by its command type, not by its transport.
 `OrderId` lives here, but an *order* is not this context's concept — it belongs to the order-management
 system, which is not part of this module. `external_systems/order_management/` is the seam.
 
-**Known weakness of this example:** the inbound DTOs (`OrderEvent`, `OrderAccepted`) are typed with
-shipping's own `OrderId` rather than a foreign representation, so the anti-corruption layer does not
-actually translate the identifier. A real ACL would carry the external id shape and map it. Left as-is
-because changing it is a domain-modelling decision, not a restructuring one.
+The wire contracts in both directions carry a plain `String` id; `OrderId` exists only inside this
+context, and the two adapters convert at the boundary. Do not "simplify" the DTOs to use `OrderId` —
+that is the ACL not translating, and it is what this slice previously got wrong.
 
 ## Kafka trusted packages
 

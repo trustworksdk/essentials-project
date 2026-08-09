@@ -16,11 +16,9 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.outgoing;
 
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public record ExternalOrderShipped(OrderId orderId, long eventOrder) implements ExternalOrderShippingEvent {
+public record ExternalOrderShipped(String orderId, long eventOrder) implements ExternalOrderShippingEvent {
     public ExternalOrderShipped {
         requireNonNull(orderId, "No orderId provided");
     }

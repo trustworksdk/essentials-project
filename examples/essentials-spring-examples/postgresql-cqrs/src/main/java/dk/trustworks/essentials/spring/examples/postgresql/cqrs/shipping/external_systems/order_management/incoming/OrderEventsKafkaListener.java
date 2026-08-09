@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.incoming;
 
 import dk.trustworks.essentials.reactive.command.CommandBus;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.ship_order.ShipOrder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,7 +45,8 @@ public class OrderEventsKafkaListener {
             log.info("*** Since Order '{}' is Accepted we can start Shipping the Order. Forwarding {} to CommandBus",
                      event.id(),
                      ShipOrder.class.getSimpleName());
-            commandBus.sendAndDontWait(new ShipOrder(event.id()));
+            // This is the translation: the foreign String id becomes shipping's OrderId here, and nowhere else.
+            commandBus.sendAndDontWait(new ShipOrder(OrderId.of(event.id())));
         } else {
             log.debug("Ignoring {}: {}", event.getClass().getSimpleName(), event);
         }

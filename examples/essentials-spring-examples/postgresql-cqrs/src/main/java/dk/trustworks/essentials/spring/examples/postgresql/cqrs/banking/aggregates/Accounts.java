@@ -70,11 +70,13 @@ public class Accounts {
         return repository.load(accountId);
     }
 
-    public Account openNewAccount(AccountId accountId,
-                                  AccountNumber accountNumber) {
-        requireNonNull(accountId, "No accountId provided");
-        requireNonNull(accountNumber, "No accountNumber provided");
-        var account = new Account(accountId, accountNumber);
+    /**
+     * Persists an already-constructed {@link Account}. Constructing it — which is what emits {@code AccountOpened} —
+     * is the {@code banking.open_account} slice's decision, not this repository's, so it happens there. Mirrors
+     * {@code ShippingOrders.registerNewOrder} and {@code IntraBankMoneyTransfers.requestNewTransfer}.
+     */
+    public Account openNewAccount(Account account) {
+        requireNonNull(account, "No account provided");
         return repository.save(account);
     }
 }

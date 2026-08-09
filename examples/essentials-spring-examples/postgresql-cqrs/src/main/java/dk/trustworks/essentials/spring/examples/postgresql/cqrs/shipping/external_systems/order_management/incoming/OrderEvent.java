@@ -16,9 +16,15 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.incoming;
 
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
-
+/**
+ * The order-management system's own event shape, as it arrives on the wire.
+ *
+ * <p>The identifier is a plain {@code String}, deliberately: this is the foreign contract, and it must not be stated
+ * in terms of shipping's {@code OrderId}. Typing it as {@code OrderId} would mean the anti-corruption layer never
+ * actually translates -- an upstream id-format change would then reach straight into the domain instead of stopping
+ * at {@code OrderEventsKafkaListener}, which is the one place allowed to know both shapes.
+ */
 public interface OrderEvent {
 
-    OrderId id();
+    String id();
 }
