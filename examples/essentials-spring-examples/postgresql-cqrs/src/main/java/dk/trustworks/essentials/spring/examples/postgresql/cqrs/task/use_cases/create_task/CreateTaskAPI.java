@@ -14,30 +14,33 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.adapters.web;
+package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.create_task;
 
 import dk.trustworks.essentials.reactive.command.CommandBus;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.ship_order.ShipOrder;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-@RestController
-@RequestMapping(path = "/shipping")
-public class ShippingAPI {
-    @Autowired
-    CommandBus commandBus;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-    @PostMapping("/register-order")
-    public void registerShippingOrder(@RequestBody RegisterShippingOrder cmd) {
-        commandBus.sendAndDontWait(cmd);
+/**
+ * The API file of the {@code task.create_task} slice (rules/slice-design.md §R2).
+ * <p>
+ * Uses {@code send} rather than {@code sendAndDontWait} so a caller learns synchronously that the task was
+ * accepted — this slice has no view to poll yet.
+ */
+@RestController
+@RequestMapping(path = "/tasks")
+public class CreateTaskAPI {
+    private final CommandBus commandBus;
+
+    public CreateTaskAPI(CommandBus commandBus) {
+        this.commandBus = requireNonNull(commandBus, "No commandBus provided");
     }
 
-    @PostMapping("/ship-order")
-    public void shipOrder(@RequestBody ShipOrder cmd) {
-        commandBus.sendAndDontWait(cmd);
+    @PostMapping("/create")
+    public void createTask(@RequestBody CreateTask cmd) {
+        commandBus.send(cmd);
     }
 }

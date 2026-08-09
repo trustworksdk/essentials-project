@@ -25,6 +25,8 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.externa
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.outgoing.ExternalOrderShipped;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.outgoing.ShippingEventKafkaPublisher;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order.RegisterShippingOrderHandler;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.ship_order.ShipOrderHandler;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.ShippingDestinationAddress;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -85,8 +87,13 @@ public class OrderShippingProcessorIT {
     private KafkaTemplate<String, Object> kafkaTemplate;
 
 
+    // Injected so the test fails fast if either command slice split out of the old OrderShippingProcessor
+    // is unwired -- an unregistered @CmdHandler compiles and passes every unit test.
     @Autowired
-    private OrderShippingProcessor orderShippingProcessor;
+    private RegisterShippingOrderHandler registerShippingOrderHandler;
+
+    @Autowired
+    private ShipOrderHandler shipOrderHandler;
 
     @Autowired
     private ShippingEventKafkaPublisher shippingEventKafkaPublisher;

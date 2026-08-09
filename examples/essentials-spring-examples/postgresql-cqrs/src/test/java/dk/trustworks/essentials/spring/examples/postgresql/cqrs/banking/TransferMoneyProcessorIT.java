@@ -23,7 +23,9 @@ import dk.trustworks.essentials.reactive.command.CommandBus;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.Application;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.TestConfiguration;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.use_cases.request_intra_bank_money_transfer.RequestIntraBankMoneyTransfer;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.automations.transfer_money.TransferMoneyProcessor;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.use_cases.request_intra_bank_money_transfer.RequestIntraBankMoneyTransferHandler;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransactionId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountNumber;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Accounts;
@@ -86,6 +88,11 @@ public class TransferMoneyProcessorIT {
 
     @Autowired
     private DurableQueues durableQueues;
+
+    // Injected so the test fails fast if either half of the split banking context is unwired:
+    // the command slice's handler, and the automation that drives the transfer lifecycle.
+    @Autowired
+    private RequestIntraBankMoneyTransferHandler requestIntraBankMoneyTransferHandler;
 
     @Autowired
     private TransferMoneyProcessor transferMoneyProcessor;

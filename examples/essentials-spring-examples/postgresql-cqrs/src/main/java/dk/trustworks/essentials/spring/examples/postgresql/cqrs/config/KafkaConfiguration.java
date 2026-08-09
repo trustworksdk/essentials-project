@@ -17,7 +17,9 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.config;
 
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.OrderShippingProcessor;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.incoming.OrderEvent;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.outgoing.ExternalOrderShippingEvent;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -70,7 +72,15 @@ public class KafkaConfiguration {
         return new DefaultKafkaConsumerFactory<>(config,
                                                  new StringDeserializer(),
                                                  new JacksonJsonDeserializer<>(jsonMapper)
-                                                         .trustedPackages(OrderShippingProcessor.class.getPackageName() + ".*"));
+                                                         // Both directions of the order_management translation slice, plus the shipping
+                                                         // types its payloads carry. Outgoing is needed as well as incoming because this
+                                                         // one ConsumerFactory also backs the integration test's consumer on the
+                                                         // shipping-events topic.
+                                                         // No ".*" suffix -- that form trusts strict subpackages only, so it would
+                                                         // exclude the very packages these classes live in.
+                                                         .trustedPackages(OrderEvent.class.getPackageName(),
+                                                                          ExternalOrderShippingEvent.class.getPackageName(),
+                                                                          OrderId.class.getPackageName()));
     }
 
     @Bean

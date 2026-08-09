@@ -51,6 +51,20 @@ import java.util.Optional;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
+/**
+ * <strong>Not wired — kept deliberately, as the "before" half of a before/after pair.</strong> The live
+ * implementation is {@link TransferMoneyProcessor} beside it; this class is never registered (note the
+ * commented-out {@code @Service}) and nothing references it.
+ * <p>
+ * It shows how the same money-transfer process manager had to be written before {@code EventProcessor}
+ * existed: subscribing to each {@code AggregateType} by hand through the
+ * {@code EventStoreSubscriptionManager}, forwarding every event into a manually configured {@code Outbox},
+ * and opening a {@code UnitOfWork} explicitly inside each handler. {@link TransferMoneyProcessor} expresses
+ * the identical behaviour as four {@code @MessageHandler} methods and one
+ * {@code reactsToEventsRelatedToAggregateTypes()} declaration.
+ * <p>
+ * Read the two side by side to see what the abstraction removed. Do not copy this one into new code.
+ */
 //@Service
 public class TransferMoneyProcessorOld extends AnnotatedCommandHandler {
     private static final Logger log = LoggerFactory.getLogger(TransferMoneyProcessorOld.class);

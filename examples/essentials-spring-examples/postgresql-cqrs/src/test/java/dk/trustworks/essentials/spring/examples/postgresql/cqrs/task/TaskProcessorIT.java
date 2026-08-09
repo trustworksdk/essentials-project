@@ -26,6 +26,8 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.Application;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.TestConfiguration;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates.Tasks;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.automations.comment_on_task_created.CommentOnTaskCreatedProcessor;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.create_task.CreateTask;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.CommentAdded;
@@ -63,7 +65,9 @@ public class TaskProcessorIT {
             .withUsername("test");
 
     @Autowired
-    private TaskProcessor                                                             eventProcessor;
+    private CommentOnTaskCreatedProcessor                                             commentOnTaskCreatedProcessor;
+    @Autowired
+    private Tasks                                                                     tasks;
     @Autowired
     private ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
@@ -96,12 +100,13 @@ public class TaskProcessorIT {
 
     /**
      * This test involves creating Task aggregate with CreateTask command and with a second command AddComment
-     * add comment to the just created Task aggregate using the same unit of work. This flow is impl. in TaskProcessor
+     * add comment to the just created Task aggregate using the same unit of work. The second command is raised by
+     * the {@code task.comment_on_task_created} automation, i.e. {@link CommentOnTaskCreatedProcessor}.
      */
     @Test
     public void create_task_and_comment_in_same_unit_of_work() {
         collectPersistedEvents();
-        Awaitility.waitAtMost(Duration.ofMillis(500)).until(() -> eventProcessor.isActive());
+        Awaitility.waitAtMost(Duration.ofMillis(500)).until(() -> commentOnTaskCreatedProcessor.isActive());
 
         TaskId taskId  = TaskId.random();
         String comment = "This is a good comment!";
@@ -121,7 +126,7 @@ public class TaskProcessorIT {
         assertThat(commentAdded).isExactlyInstanceOf(CommentAdded.class);
         assertThat(collectedEvents.get(1).events.get(0).aggregateId()).isEqualTo(taskId);
 
-        var task = unitOfWorkFactory.withUnitOfWork(() -> eventProcessor.getTaskEventStoreRepository().getTask(taskId));
+        var task = unitOfWorkFactory.withUnitOfWork(() -> tasks.getTask(taskId));
         assertThat(task.getComments()).hasSize(1);
     }
 }

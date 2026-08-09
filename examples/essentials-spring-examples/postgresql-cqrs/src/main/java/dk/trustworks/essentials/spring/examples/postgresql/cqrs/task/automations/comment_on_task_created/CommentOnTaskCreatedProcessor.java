@@ -14,65 +14,50 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task;
+package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.automations.comment_on_task_created;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.InTransactionEventProcessor;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
-import dk.trustworks.essentials.reactive.command.CmdHandler;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.add_comment.AddComment;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.create_task.CreateTask;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates.Task;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates.Tasks;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.TaskCreated;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.add_comment.AddComment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates.Tasks;
 
 import static java.util.Objects.nonNull;
 
+/**
+ * The {@code task.comment_on_task_created} automation: when a task is created carrying an initial comment,
+ * turn that comment into an explicit {@code AddComment} command so it lands as its own event.
+ * <p>
+ * This is an {@link InTransactionEventProcessor} rather than a plain {@code EventProcessor} because the
+ * follow-up command must be applied in the same unit of work that appended {@code TaskCreated} — that
+ * synchronous, strongly-consistent behaviour is what this example exists to demonstrate.
+ * <p>
+ * An automation reacts and issues a command; it never appends events itself, and it has no external API
+ * (rules/slice-design.md § The four slice kinds).
+ */
 @Service
-public class TaskProcessor extends InTransactionEventProcessor {
-    private static final Logger log = LoggerFactory.getLogger(TaskProcessor.class);
+public class CommentOnTaskCreatedProcessor extends InTransactionEventProcessor {
+    private static final Logger log = LoggerFactory.getLogger(CommentOnTaskCreatedProcessor.class);
 
-
-    private final Tasks taskEventStoreRepository;
-
-    protected TaskProcessor(Tasks taskEventStoreRepository,
-                            EventProcessorDependencies eventProcessorDependencies) {
+    protected CommentOnTaskCreatedProcessor(EventProcessorDependencies eventProcessorDependencies) {
         super(eventProcessorDependencies, true);
-        this.taskEventStoreRepository = taskEventStoreRepository;
-    }
-
-    public Tasks getTaskEventStoreRepository() {
-        return taskEventStoreRepository;
     }
 
     @Override
     public String getProcessorName() {
-        return "TaskProcessor";
+        return "CommentOnTaskCreatedProcessor";
     }
 
     @Override
     protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
         return List.of(Tasks.AGGREGATE_TYPE);
-    }
-
-    @CmdHandler
-    public void handle(CreateTask cmd) {
-        log.info("Creating task with command '{}'", cmd);
-        taskEventStoreRepository.createTask(cmd.taskId(), cmd);
-
-    }
-
-    @CmdHandler
-    public void handle(AddComment cmd) {
-        log.info("Adding comment '{}'", cmd);
-        Task task = taskEventStoreRepository.findTask(cmd.taskId()).orElseThrow();
-        task.addComment(cmd);
     }
 
     @MessageHandler

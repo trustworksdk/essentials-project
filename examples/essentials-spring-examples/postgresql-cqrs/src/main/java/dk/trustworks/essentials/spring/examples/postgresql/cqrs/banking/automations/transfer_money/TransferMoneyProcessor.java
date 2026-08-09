@@ -14,24 +14,20 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking;
+package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.automations.transfer_money;
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessor;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.EventProcessorDependencies;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
-import dk.trustworks.essentials.reactive.command.CmdHandler;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.use_cases.request_intra_bank_money_transfer.RequestIntraBankMoneyTransfer;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.Accounts;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AllowOverdrawingBalance;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.IntraBankMoneyTransfers;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.AccountDeposited;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.AccountWithdrawn;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransactionException;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.IntraBankMoneyTransfer;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates.IntraBankMoneyTransfers;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransferLifeCycleStatus;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.IntraBankMoneyTransferRequested;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.IntraBankMoneyTransferStatusChanged;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AllowOverdrawingBalance;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransferLifeCycleStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -39,13 +35,28 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
+/**
+ * The {@code banking.transfer_money} automation slice: the process manager that carries one intra-bank
+ * transfer through its lifecycle.
+ * <p>
+ * The four handlers below are the four states of <em>one</em> process, not four slices — which is why they
+ * live in one automation. Each reacts to what happened and writes exactly one aggregate, never two in the
+ * same transaction:
+ * <pre>
+ *   IntraBankMoneyTransferRequested     -> withdraw from the source Account
+ *   AccountWithdrawn                    -> mark the Transfer as withdrawn
+ *   IntraBankMoneyTransferStatusChanged -> deposit into the destination Account
+ *   AccountDeposited                    -> mark the Transfer as deposited, completing it
+ * </pre>
+ * An automation has no external API (rules/slice-design.md § The four slice kinds). The command side of this
+ * bounded context lives in {@code use_cases/request_intra_bank_money_transfer/}.
+ */
 @Service
 public class TransferMoneyProcessor extends EventProcessor {
     private static final Logger log = LoggerFactory.getLogger(TransferMoneyProcessor.class);
 
-    private final Accounts accounts;
+    private final Accounts                accounts;
     private final IntraBankMoneyTransfers intraBankMoneyTransfers;
 
     public TransferMoneyProcessor(Accounts accounts,
@@ -67,23 +78,6 @@ public class TransferMoneyProcessor extends EventProcessor {
     protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
         return List.of(Accounts.AGGREGATE_TYPE,
                        IntraBankMoneyTransfers.AGGREGATE_TYPE);
-    }
-
-    @CmdHandler
-    public void handle(RequestIntraBankMoneyTransfer cmd) {
-        requireNonNull(cmd, "No cmd provided");
-        if (accounts.isAccountMissing(cmd.fromAccount())) {
-            throw new TransactionException(msg("Couldn't find fromAccount with id '{}'", cmd.fromAccount()));
-        }
-        if (accounts.isAccountMissing(cmd.toAccount())) {
-            throw new TransactionException(msg("Couldn't find toAccount with id '{}'", cmd.toAccount()));
-        }
-
-        var existingTransfer = intraBankMoneyTransfers.findTransfer(cmd.transactionId());
-        if (existingTransfer.isEmpty()) {
-            log.debug("===> Requesting New Transfer '{}'", cmd.transactionId());
-            intraBankMoneyTransfers.requestNewTransfer(new IntraBankMoneyTransfer(cmd));
-        }
     }
 
     @MessageHandler

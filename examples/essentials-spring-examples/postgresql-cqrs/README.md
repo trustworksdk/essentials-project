@@ -16,7 +16,13 @@ Flow:
 
 ![Intra Bank Money Transfer Flow](img/TransferMoneyFlow.png)
 
-See `dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.TransferMoneyProcessor`
+See `banking/automations/transfer_money/TransferMoneyProcessor` for the lifecycle, and
+`banking/use_cases/request_intra_bank_money_transfer/` for the command that starts it.
+
+Beside the processor sits `TransferMoneyProcessorOld` — deliberately unwired, and kept as the "before" half
+of a before/after pair. It implements exactly the same process the way it had to be written before
+`EventProcessor` existed: hand-rolled `EventStoreSubscriptionManager` subscriptions, a manually configured
+`Outbox`, and an explicit `UnitOfWork` in every handler. Read the two side by side.
 
 ### Test the Transfer Money flow
 Run `TransferMoneyProcessorIT` from within your IDE or using Maven `mvn verify -pl :postgresql-cqrs` from the `examples/essentials-spring-examples` folder. 
@@ -83,10 +89,10 @@ then the `traceId` can be entered into the `Trace ID` text box.
 The `OrderShippingProcessorIT` integration-test coordinates the test flow:
 
 - First a `ShippingOrder` aggregate is created, by sending `RegisterShippingOrder` over the `CommandBus`
-  - The `OrderShippingProcessor` is auto registered with the `CommandBus` as a `CommandHandler` because it implements the `CommandHandler` interface through the `AnnotatedCommandHandler` base class
-  - The `OrderShippingProcessor.handle(RegisterShippingOrder)` command handler method reacts to the `RegisterShippingOrder` in an existing Transaction/`UnitOfWork`  since the `Inbox` is configured
+  - The `RegisterShippingOrderHandler` is auto registered with the `CommandBus` as a `CommandHandler` because it implements the `CommandHandler` interface through the `AnnotatedCommandHandler` base class
+  - The `RegisterShippingOrderHandler.handle(RegisterShippingOrder)` command handler method reacts to the `RegisterShippingOrder` in an existing Transaction/`UnitOfWork`  since the `Inbox` is configured
     with `TransactionalMode.FullyTransactional`.
-  - The `OrderShippingProcessor.handle(RegisterShippingOrder)` ensures that the `ShippingOrder` aggregate is stored
+  - The `RegisterShippingOrderHandler.handle(RegisterShippingOrder)` ensures that the `ShippingOrder` aggregate is stored
   - After the transaction/`UnitOfWork` the `ShippingOrderRegistered` event is published via the `EventStoreSubscriptionManager`
 - Next we simulate that the **OrderService** publishes a `OrderAccepted` event via Kafka, which the `OrderEventsKafkaListener` is listening for
 - The `OrderEventsKafkaListener` reacts to the `OrderAccepted` and converts it into a `ShipOrder` command.
@@ -94,7 +100,7 @@ The `OrderShippingProcessorIT` integration-test coordinates the test flow:
   - After the transaction/`UnitOfWork` the `OrderAccepted` event is published via the `EventStoreSubscriptionManager`
 - Asynchronously the `shipOrdersInbox` will forward the `ShipOrder` command to the `CommandBus`
   - Note: the `Order` and `ShippingOrder` are correlated/linked through the `OrderId` (aggregates reference each other using id's)
-- The `OrderShippingProcessor.handle(ShipOrder)` command handler method reacts to the `ShipOrder` command
+- The `ShipOrderHandler.handle(ShipOrder)` command handler method reacts to the `ShipOrder` command
   - ![Handling a Kafka Message using an Inbox](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/images/inbox.png?raw=true)
   - It loads the corresponding `ShippingOrder` instance and performs an idempotency check - if the order is already **marked-as-shipped**
     - This idempotency check is necessary as we're using in Messaging we deal with At-Least-Once message delivery guarantee and delivery of the `ShipOrder` command can end up

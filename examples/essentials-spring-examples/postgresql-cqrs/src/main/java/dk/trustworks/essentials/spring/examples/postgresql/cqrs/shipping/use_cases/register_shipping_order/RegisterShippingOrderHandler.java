@@ -14,12 +14,10 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping;
+package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order;
 
 import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.ship_order.ShipOrder;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.aggregates.ShippingOrder;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.aggregates.ShippingOrders;
 import org.slf4j.Logger;
@@ -28,15 +26,18 @@ import org.springframework.stereotype.Service;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The single decision component of the {@code shipping.register_shipping_order} slice — one command, one
+ * handler (rules/slice-design.md §R1).
+ */
 @Service
-public class OrderShippingProcessor extends AnnotatedCommandHandler {
-    private static Logger log = LoggerFactory.getLogger(OrderShippingProcessor.class);
+public class RegisterShippingOrderHandler extends AnnotatedCommandHandler {
+    private static final Logger log = LoggerFactory.getLogger(RegisterShippingOrderHandler.class);
 
     private final ShippingOrders shippingOrders;
 
-    public OrderShippingProcessor(ShippingOrders shippingOrders) {
-        requireNonNull(shippingOrders, "No shippingOrders provided");
-        this.shippingOrders = shippingOrders;
+    public RegisterShippingOrderHandler(ShippingOrders shippingOrders) {
+        this.shippingOrders = requireNonNull(shippingOrders, "No shippingOrders provided");
     }
 
     // Automatically runs in a transaction as it's forwarded by the DurableLocalCommandBus
@@ -47,13 +48,5 @@ public class OrderShippingProcessor extends AnnotatedCommandHandler {
             log.debug("===> Requesting New ShippingOrder '{}'", cmd.orderId());
             shippingOrders.registerNewOrder(new ShippingOrder(cmd));
         }
-    }
-
-    // Automatically runs in a transaction as it's forwarded by the DurableLocalCommandBus
-    @CmdHandler
-    void handle(ShipOrder cmd) {
-        log.debug("===> Initiating Shipping of Order '{}'", cmd.orderId());
-        var existingOrder = shippingOrders.getOrder(cmd.orderId());
-        existingOrder.markOrderAsShipped();
     }
 }
