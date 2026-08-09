@@ -6,7 +6,7 @@
 - **Base Package**: `dk.trustworks.essentials.components.adminapi.rest`
 - **Purpose**: HTTP admin/monitoring API over the in-process `*Api` SPIs — replaced the removed Vaadin admin UI
 - **Key Deps**: Spring WebMVC (provided), Spring Boot (provided), Jackson 3
-- **Contract**: `components/admin-api-spec/openapi/essentials-admin-api.yaml` — 27 operations, generated code-first from the SPIs
+- **Contract**: `components/admin-api-spec/openapi/essentials-admin-api.yaml` — 40 operations, generated code-first from the SPIs
 - **No Node**: build and validation are JVM-only. The bundled default UI is Thymeleaf + vanilla JavaScript; any other UI consumes the same contract
 
 ```xml
@@ -48,7 +48,7 @@ Mounted under `/api/essentials/admin/v1` (configurable). Contract paths are rela
 | `scheduler` | `GET /scheduler/pg-cron-jobs[/count]`, `.../{jobId}/run-details[/count]`, `GET /scheduler/executor-jobs[/count]` | `essentials_scheduler_reader` |
 | `postgresql-query-statistics` | `GET /postgresql/query-statistics/top-ten-slowest` | `essentials_postgresql_stats_reader` |
 | `durable-queues` | `GET /durable-queues`, message get/delete/resurrect/mark-as-dead-letter, per-queue messages, dead-letters, counts, statistics, purge | `essentials_queue_reader` / `essentials_queue_writer` |
-| `event-store` | `GET /event-store/subscriptions`, `GET /event-store/aggregate-types/{aggregateType}/highest-global-event-order` | `essentials_subscription_reader` |
+| `event-store` | `GET /event-store/subscriptions`, `GET /event-store/subscriptions/statistics`, `GET /event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics`, `GET /event-store/aggregate-types/{aggregateType}/highest-global-event-order` | `essentials_subscription_reader` |
 | `cdc` | `GET /event-store/cdc/status` | `essentials_subscription_reader` |
 | `event-store-statistics` | `GET /event-store/statistics/table-sizes`, `table-activity`, `table-cache-hit-ratio` | `essentials_postgresql_stats_reader` |
 
@@ -91,6 +91,7 @@ The `native` library generates no auth helpers by design, matching the contract 
 
 - **Adding an operation touches 3 places**: the `*Api` SPI, the `EssentialsAdminApiSpec` mapping table, and a controller. A conformance test fails until all three agree.
 - **PostgreSQL-oriented**: the scheduler and statistics endpoints are backed by `pg_cron` and `pg_stat_statements`. The MongoDB starter wires no `*Api` beans, so there is no admin API surface there.
+- **Subscription statistics are per-instance, subscription rows are not**: `GET /event-store/subscriptions` reports resume points from the database, so it lists the subscriptions of every instance, while the two `.../statistics` operations are counted in memory by the instance that answers. A subscription running elsewhere has no statistics, and an exclusive subscription only handles events where it holds its fenced lock — read a zero counter together with `active`/`lock`, never as a stall. Turn collection off with `essentials.eventstore.subscription-manager.statistics.enabled=false`, and the endpoints answer empty/`404`.
 - **Destructive operations are exposed**: `DELETE /durable-queues/queues/{queueName}/messages` purges a queue. Role enforcement is entirely your `EssentialsSecurityProvider` implementation.
 - **`5xx` bodies carry no detail** — the cause is logged instead, so internal failures cannot leak schema names, SQL, or hostnames.
 - **Path-major versioning**: breaking changes ship as `/api/essentials/admin/v2` served side-by-side; `v1` consumers and their generated clients keep working.

@@ -19,6 +19,7 @@ Depends on `spring-boot-starter-postgresql` (common Essentials Spring wiring). S
 | `EssentialsEventStoreProperties` | `@ConfigurationProperties(prefix="essentials.eventstore")` — identifierColumnType, jsonColumnType, gap handler, metrics, subscriptionManager, cdc (delegates to `CdcProperties`) |
 | `EventStoreNotifyPollingBootstrap` | S1 NOTIFY wake-up: on construction calls `strategy.enableNotifyTriggerInstallation(...)` which installs `pg_notify` AFTER INSERT trigger + registers table with `MultiTableChangeListener`. Uses advisory lock to serialise DDL across JVMs |
 | `CdcHealthIndicator` | Actuator health: ACTIVE→UP, FAILED→DOWN (REQUIRE mode) or UP (PREFER/OPTIONAL), INACTIVE→UP. Includes tailer LSN + dispatcher started details, plus `fallbackCount` / `warmupPollCount` / `everActive` |
+| `SubscriptionStatisticsProperties` | Nested under `subscription-manager.statistics`: `enabled` (default true), `max-tracked-subscriptions` |
 
 ## Test Structure
 
@@ -46,6 +47,7 @@ Override any `@ConditionalOnMissingBean` to replace defaults:
 ## Gotchas
 
 - **CDC is disabled by default** — every CDC `@Bean` is gated on `essentials.eventstore.cdc.enabled=true` with **no** `matchIfMissing`, so an app that says nothing gets no slot, no publication changes and no tailer. Consequences when adding a CDC bean: gate it the same way, or it starts for users who never opted in. Consequences for tests: an `ApplicationContextRunner` that expects `CdcApi`/`CdcHealthIndicator`/`CdcEventStore` must set the property explicitly — without it the beans are legitimately absent, and a test asserting their presence fails for the right reason
+- **`eventStoreSubscriptionObserver` returns the interface, not `MeasurementEventStoreSubscriptionObserver`** — it composes the measurement observer with `StatisticsCollectingEventStoreSubscriptionObserver` when the `SubscriptionStatisticsRegistry` bean is present (statistics enabled). Consequence: a consumer that defines its own observer bean satisfies the `@ConditionalOnMissingBean` and loses *both*; the javadoc tells them to wrap. Splitting this back into two competing observer beans creates an ambiguous injection point in `eventStore(...)`
 - **Replication DataSource** created separately from the main `DataSource` — uses `PGSimpleDataSource` with `replication=database` + `preferQueryMode=simple` + `assumeMinServerVersion=17`. Parsed from `spring.datasource.url`; fails fast if URL absent.
 - **CDC + Notify-polling coexistence** — both can be enabled but WARN logged: CDC INBOX already delivers wake-up equivalent; running both adds DB load (trigger fire + LISTEN connection) for no liveness gain.
 - **`AggregateTypeResolver` and `WalMessageFilter` use live suppliers**, not snapshots — aggregates registered at runtime via `addAggregateEventStreamConfiguration(...)` become visible to CDC conversion and WAL filtering. Using snapshot would silently drop WAL events for late-registered aggregates.

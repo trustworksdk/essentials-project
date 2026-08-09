@@ -292,6 +292,11 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     }
 
     @Override
+    public Set<Pair<SubscriberId, AggregateType>> getSubscriptions() {
+        return Set.copyOf(this.subscribers.keySet());
+    }
+
+    @Override
     public Optional<EventStoreSubscription> getSubscription(SubscriberId subscriberId, AggregateType aggregateType) {
         requireNonNull(subscriberId, "No subscriberId provided");
         requireNonNull(aggregateType, "No aggregateType provided");

@@ -913,6 +913,7 @@ Observability for `EventStore` operations and subscription lifecycle.
 |----------------|----------|
 | `NoOpEventStoreSubscriptionObserver` | Default - no observability |
 | `MeasurementEventStoreSubscriptionObserver` | Micrometer metrics (production) |
+| `StatisticsCollectingEventStoreSubscriptionObserver` | Decorator - records per-subscription statistics for the admin API, then forwards to a delegate |
 
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
@@ -931,6 +932,18 @@ var observer = new MeasurementEventStoreSubscriptionObserver(
 );
 var eventStore = new PostgresqlEventStore<>(..., observer);
 ```
+
+The SPI has a single slot, so collecting statistics **composes** with the metrics observer rather than replacing it:
+
+```java
+var statisticsRegistry = new SubscriptionStatisticsRegistry();      // read by EventStoreApi
+var eventStore = new PostgresqlEventStore<>(...,
+    new StatisticsCollectingEventStoreSubscriptionObserver(observer, statisticsRegistry));
+```
+
+The Spring Boot starter wires exactly that by default (`essentials.eventstore.subscription-manager.statistics.enabled=true`, `...max-tracked-subscriptions=1000`). Defining your own `EventStoreSubscriptionObserver` bean replaces both - wrap it the same way to keep the statistics.
+
+**Statistics scope**: counters live in the JVM that runs the subscription. `EventStoreApi.findAllSubscriptions` reports database-backed resume points and therefore every instance's subscriptions; `findSubscriptionStatistics` only answers for subscriptions running in the instance queried. An exclusive subscription handles events only where it holds its fenced lock, so zero throughput on the other instances is normal. Polling counters stay at zero while CDC delivers the events. `resetFrom(...)` does not clear the counters - it is reported as a reset instead.
 
 See [README EventStoreSubscriptionObserver](../components/postgresql-event-store/README.md#eventstoresubscriptionobserver) for metrics and custom implementations.
 

@@ -69,8 +69,8 @@ class AdminApiContractConformanceTest {
     /** Keeps the comparisons below from passing vacuously if either side fails to be discovered. */
     @Test
     void both_sides_of_the_comparison_are_actually_discovered() {
-        assertThat(contractOperations()).hasSize(38);
-        assertThat(implementedOperations()).hasSize(38);
+        assertThat(contractOperations()).hasSize(40);
+        assertThat(implementedOperations()).hasSize(40);
     }
 
     @Test

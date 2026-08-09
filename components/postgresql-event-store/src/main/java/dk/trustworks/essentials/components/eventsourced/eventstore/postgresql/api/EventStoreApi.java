@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.a
 
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 
 import java.util.*;
 
@@ -53,4 +54,36 @@ public interface EventStoreApi {
      * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
      */
     List<ApiSubscription> findAllSubscriptions(Object principal);
+
+    /**
+     * Retrieves the runtime statistics collected for every subscription running in the queried instance, such as
+     * event-handling throughput and timing, handler failures, polling activity and fenced-lock ownership.
+     * <p>
+     * Unlike {@link #findAllSubscriptions(Object)}, which is backed by the resume points shared by all instances
+     * through the database, these statistics are collected in memory by the instance that runs the subscription. A
+     * subscription running on another instance is therefore absent here, and an exclusive subscription only shows
+     * event-handling activity on the instance that holds its fenced lock.
+     *
+     * @param principal the principal or identity requesting the statistics, typically representing
+     *                  the authenticated user or system performing the action
+     * @return a list of {@code ApiSubscriptionStatistics}, one per subscription observed in this instance. Empty if
+     * statistics collection is disabled
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     */
+    List<ApiSubscriptionStatistics> findAllSubscriptionStatistics(Object principal);
+
+    /**
+     * Retrieves the runtime statistics collected for a single subscription running in the queried instance.
+     *
+     * @param principal     the principal or identity requesting the statistics, typically representing
+     *                      the authenticated user or system performing the action
+     * @param subscriberId  the id of the subscriber to return statistics for
+     * @param aggregateType the aggregate type the subscriber subscribes to - a subscriber may subscribe to more than one
+     * @return an {@code Optional} containing the statistics, or an empty {@code Optional} if the subscription is not
+     * running in this instance or statistics collection is disabled
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     */
+    Optional<ApiSubscriptionStatistics> findSubscriptionStatistics(Object principal,
+                                                                  SubscriberId subscriberId,
+                                                                  AggregateType aggregateType);
 }

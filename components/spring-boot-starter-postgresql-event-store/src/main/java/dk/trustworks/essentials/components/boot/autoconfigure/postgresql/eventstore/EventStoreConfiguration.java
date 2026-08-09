@@ -37,7 +37,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ev
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.interceptor.micrometer.*;
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.*;
@@ -87,7 +87,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import javax.sql.DataSource;
 import java.net.URI;
 import java.sql.SQLException;
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 import java.util.function.Function;
 
@@ -618,19 +618,51 @@ public class EventStoreConfiguration {
     }
 
     /**
-     * The {@link EventStoreSubscriptionObserver} to use for collecting statistics related to {@link EventStoreSubscription} and {@link EventStore} event polling - default is {@link MeasurementEventStoreSubscriptionObserver}
+     * The registry holding the in-memory per-subscription runtime statistics that
+     * {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.EventStoreApi#findAllSubscriptionStatistics(Object)}
+     * reports. Only registered when {@code essentials.eventstore.subscription-manager.statistics.enabled} is
+     * {@code true} (the default).
      *
-     * @return the {@link EventStoreSubscriptionObserver} to use for collecting statistics - default is {@link MeasurementEventStoreSubscriptionObserver}
+     * @param properties {@link EssentialsEventStoreProperties} configuration properties
+     * @return the {@link SubscriptionStatisticsRegistry}
      */
     @Bean
     @ConditionalOnMissingBean
-    public MeasurementEventStoreSubscriptionObserver eventStoreSubscriptionObserver(EssentialsEventStoreProperties properties,
-                                                                                    Optional<MeterRegistry> meterRegistry,
-                                                                                    EssentialsComponentsProperties essentialsProperties) {
-        return new MeasurementEventStoreSubscriptionObserver(meterRegistry,
-                                                             properties.getSubscriptionManager().getMetrics().isEnabled(),
-                                                             properties.getSubscriptionManager().getMetrics().toLogThresholds(),
-                                                             essentialsProperties.getTracingProperties().getModuleTag());
+    @ConditionalOnProperty(prefix = "essentials.eventstore.subscription-manager.statistics", name = "enabled", havingValue = "true", matchIfMissing = true)
+    public SubscriptionStatisticsRegistry subscriptionStatisticsRegistry(EssentialsEventStoreProperties properties) {
+        return new SubscriptionStatisticsRegistry(properties.getSubscriptionManager().getStatistics().getMaxTrackedSubscriptions(),
+                                                  Clock.systemUTC());
+    }
+
+    /**
+     * The {@link EventStoreSubscriptionObserver} to use for collecting statistics related to {@link EventStoreSubscription} and {@link EventStore} event polling.
+     * <p>
+     * Defaults to a {@link MeasurementEventStoreSubscriptionObserver}, wrapped in a
+     * {@link StatisticsCollectingEventStoreSubscriptionObserver} when a {@link SubscriptionStatisticsRegistry} is
+     * present - the SPI has a single slot, so the two are composed rather than chosen between.
+     * <p>
+     * An application that defines its own {@link EventStoreSubscriptionObserver} bean replaces both. To keep the admin
+     * API's subscription statistics, wrap the custom observer in a
+     * {@link StatisticsCollectingEventStoreSubscriptionObserver} the same way this method does.
+     *
+     * @param properties                     {@link EssentialsEventStoreProperties} configuration properties
+     * @param meterRegistry                  the {@link MeterRegistry} to record metrics into, if any
+     * @param essentialsProperties           {@link EssentialsComponentsProperties} configuration properties
+     * @param subscriptionStatisticsRegistry the registry to record subscription statistics into, if statistics are enabled
+     * @return the {@link EventStoreSubscriptionObserver} to use for collecting statistics
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public EventStoreSubscriptionObserver eventStoreSubscriptionObserver(EssentialsEventStoreProperties properties,
+                                                                        Optional<MeterRegistry> meterRegistry,
+                                                                        EssentialsComponentsProperties essentialsProperties,
+                                                                        Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
+        EventStoreSubscriptionObserver observer = new MeasurementEventStoreSubscriptionObserver(meterRegistry,
+                                                                                               properties.getSubscriptionManager().getMetrics().isEnabled(),
+                                                                                               properties.getSubscriptionManager().getMetrics().toLogThresholds(),
+                                                                                               essentialsProperties.getTracingProperties().getModuleTag());
+        return subscriptionStatisticsRegistry.<EventStoreSubscriptionObserver>map(registry -> new StatisticsCollectingEventStoreSubscriptionObserver(observer, registry))
+                                             .orElse(observer);
     }
 
     @Bean
@@ -1023,10 +1055,14 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     public EventStoreApi eventStoreApi(EssentialsSecurityProvider securityProvider,
                                        EventStore eventStore,
-                                       DurableSubscriptionRepository durableSubscriptionRepository) {
+                                       DurableSubscriptionRepository durableSubscriptionRepository,
+                                       Optional<EventStoreSubscriptionManager> eventStoreSubscriptionManager,
+                                       Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
         return new DefaultEventStoreApi(securityProvider,
                                         eventStore,
-                                        durableSubscriptionRepository);
+                                        durableSubscriptionRepository,
+                                        eventStoreSubscriptionManager,
+                                        subscriptionStatisticsRegistry);
     }
 
     @Bean

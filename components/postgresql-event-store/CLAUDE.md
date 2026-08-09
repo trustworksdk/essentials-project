@@ -28,7 +28,7 @@ All under `dk.trustworks.essentials.components.eventsourced.eventstore.postgresq
 | `cdc.converter` | WAL payload → `PersistedEvent` converters; `LogicalDecodingPlugin` impls |
 | `cdc.filter` | `WalMessageFilter` SPI, regex filter, pgoutput raw filter |
 | `cdc.handler` | `WalReplicationTailerErrorHandler` SPI |
-| `api` | REST-style status/config DTOs and `CdcApi`/`EventStoreApi` facades |
+| `api` | REST-style status/config DTOs and `CdcApi`/`EventStoreApi` facades. DTOs must not reference runtime subscription types — see gotchas |
 
 ## Key Classes
 
@@ -54,6 +54,9 @@ All under `dk.trustworks.essentials.components.eventsourced.eventstore.postgresq
 | `NotifyTriggerInstaller` | Functional interface; persistence strategy calls back to install `pg_notify` trigger per table |
 | `InMemoryProjector` | SPI for in-memory aggregate rehydration |
 | `EventStoreUnitOfWork` | UoW carrying accumulated `PersistedEvent` list; fires `PersistedEventsCommitLifecycleCallback` on commit |
+| `SubscriptionStatisticsRegistry` | In-memory per-subscription counters keyed `(SubscriberId, AggregateType)`; capped by `maxTrackedSubscriptions`, entry evicted on unsubscribe. Read by `EventStoreApi` |
+| `MutableSubscriptionStatistics` | Package-private hot-path counters (`LongAdder` + volatile) behind a `SubscriptionStatistics` snapshot |
+| `StatisticsCollectingEventStoreSubscriptionObserver` | Observer decorator — delegates every callback, then records into the registry |
 
 ## Test Structure
 
@@ -115,3 +118,8 @@ Both Jackson majors are supported; a build selects one via `essentials.types-jac
 - **Warm-up subscribers** (backfill phase) must not stay pinned to polling mode after catching up — `CdcEventStore` tracks per-subscriber phase transitions explicitly.
 - **Test code is flavor-sensitive too** — a test that builds a Jackson 2 mapper and registers `EssentialTypesJacksonModule` will not compile under the Jackson 3 flavor (same FQCN, different Jackson major). Use the flavor-neutral factories.
 - **Multi-tenancy**: tenant filtering happens at query time via optional `Tenant` param on all load/poll ops. No row-level security — tenant isolation is application-layer only.
+- **`EventStoreSubscriptionObserver` is a single-slot SPI** — one instance is handed to `PostgresqlEventStore` and the subscription manager. Anything new that needs the callbacks decorates, never replaces: `StatisticsCollectingEventStoreSubscriptionObserver` delegates first and records after, and swallows its own recording failures (logged once) so observability can never break a subscription.
+- **Subscription statistics are per-JVM, resume points are cluster-wide** — mixing them silently is the trap. `DefaultEventStoreApi` marks the join explicitly (`runningInThisInstance`, nullable live-state fields), because an exclusive subscription legitimately reports zero throughput on every instance that does not hold the lock. A zero counter is not a stall.
+- **Polling callbacks fire only on the polling path** — `eventStorePolled` / `resolvedBatchSizeForEventStorePoll` / `skippingPollingDueToNoNewEventsPersisted` are invoked by `PostgresqlEventStore`; `CdcEventStore` only delegates `getEventStoreSubscriptionObserver()`. `handleEvent` still fires under CDC (`PersistedEventSubscriber`), so a CDC-served subscription shows throughput with zero polls. Don't read that as a broken subscription
+- **`api` DTOs must stay loadable without reactor on the classpath** — `admin-api-spec` reflects over them with only the API types present, so a DTO method signature mentioning `EventStoreSubscription` (which drags in reactive-streams) fails spec generation with `NoClassDefFoundError: org/reactivestreams/Subscription`. Live-state mapping therefore lives in `DefaultEventStoreApi`, not in `ApiSubscription`
+- **`findAllSubscriptions` deliberately queries no event stream** — `findHighestGlobalEventOrderPersisted` scans per aggregate type and is exposed as its own on-demand operation. Don't compute lag inside the list call; the admin UI's cost banner says why

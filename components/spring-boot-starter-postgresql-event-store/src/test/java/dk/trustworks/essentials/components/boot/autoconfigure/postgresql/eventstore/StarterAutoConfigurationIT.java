@@ -19,6 +19,8 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.events
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -147,6 +149,38 @@ public class StarterAutoConfigurationIT {
                     var cdcStatus = ctx.getBean(CdcApi.class).getStatus("principal");
                     assertThat(cdcStatus.configuration().plugin()).isEqualTo(PgOutputLogicalDecodingPlugin.PLUGIN_NAME);
                     assertThat(cdcStatus.configuration().pgOutputPublicationName()).isEqualTo("essentials_cdc_publication");
+                });
+    }
+
+    /**
+     * The {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.EventStoreSubscriptionObserver}
+     * SPI has a single slot, so collecting subscription statistics must compose with the Micrometer observer instead of
+     * replacing it - and there must still be exactly one observer bean, or {@code eventStore(...)} cannot be injected.
+     */
+    @Test
+    void subscription_statistics_are_collected_by_decorating_the_measurement_observer() {
+        contextRunner.run(ctx -> {
+            assertThat(ctx).hasSingleBean(SubscriptionStatisticsRegistry.class);
+            assertThat(ctx).hasSingleBean(EventStoreSubscriptionObserver.class);
+
+            var observer = ctx.getBean(EventStoreSubscriptionObserver.class);
+            assertThat(observer).isInstanceOf(StatisticsCollectingEventStoreSubscriptionObserver.class);
+            assertThat(((StatisticsCollectingEventStoreSubscriptionObserver) observer).getDelegate())
+                    .isInstanceOf(MeasurementEventStoreSubscriptionObserver.class);
+
+            assertThat(ctx.getBean(EventStoreApi.class).findAllSubscriptionStatistics("principal")).isNotNull();
+        });
+    }
+
+    @Test
+    void statistics_collection_can_be_turned_off_leaving_the_measurement_observer_in_place() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.subscription-manager.statistics.enabled=false")
+                .run(ctx -> {
+                    assertThat(ctx).doesNotHaveBean(SubscriptionStatisticsRegistry.class);
+                    assertThat(ctx.getBean(EventStoreSubscriptionObserver.class))
+                            .isInstanceOf(MeasurementEventStoreSubscriptionObserver.class);
+                    assertThat(ctx.getBean(EventStoreApi.class).findAllSubscriptionStatistics("principal")).isEmpty();
                 });
     }
 

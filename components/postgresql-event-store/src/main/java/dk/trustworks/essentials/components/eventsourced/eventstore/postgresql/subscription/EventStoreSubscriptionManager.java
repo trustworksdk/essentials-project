@@ -575,6 +575,22 @@ public interface EventStoreSubscriptionManager extends Lifecycle {
     Set<Pair<SubscriberId, AggregateType>> getActiveSubscriptions();
 
     /**
+     * Retrieves the set of subscriptions registered with this subscription manager, whether or not they are active.
+     * <br>
+     * An exclusive subscription that has not (yet) acquired its {@link dk.trustworks.essentials.components.foundation.fencedlock.FencedLock}
+     * is registered but not active, so this set is a superset of {@link #getActiveSubscriptions()}.
+     * <p>
+     * The default implementation returns {@link #getActiveSubscriptions()}, which under-reports for a custom
+     * subscription manager that has not overridden it.
+     *
+     * @return a set of pairs where each pair consists of a SubscriberId and an AggregateType,
+     * representing the registered subscriptions.
+     */
+    default Set<Pair<SubscriberId, AggregateType>> getSubscriptions() {
+        return getActiveSubscriptions();
+    }
+
+    /**
      * Retrieves the subscription associated with the given subscriber ID and aggregate type.
      *
      * @param subscriberId the unique identifier of the subscriber for which the subscription is to be retrieved

@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.adminapi.rest;
 import dk.trustworks.essentials.components.adminapi.rest.dto.GlobalEventOrderResult;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.foundation.types.SubscriberId;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -52,5 +53,21 @@ public class EventStoreController {
     @GetMapping("/event-store/subscriptions")
     public List<ApiSubscription> findAllSubscriptions() {
         return eventStoreApi.findAllSubscriptions(principalResolver.requireAuthenticatedPrincipal());
+    }
+
+    @GetMapping("/event-store/subscriptions/statistics")
+    public List<ApiSubscriptionStatistics> findAllSubscriptionStatistics() {
+        return eventStoreApi.findAllSubscriptionStatistics(principalResolver.requireAuthenticatedPrincipal());
+    }
+
+    @GetMapping("/event-store/subscriptions/{subscriberId}/aggregate-types/{aggregateType}/statistics")
+    public ApiSubscriptionStatistics findSubscriptionStatistics(@PathVariable String subscriberId,
+                                                               @PathVariable String aggregateType) {
+        return eventStoreApi.findSubscriptionStatistics(principalResolver.requireAuthenticatedPrincipal(),
+                                                       SubscriberId.of(subscriberId),
+                                                       AggregateType.of(aggregateType))
+                            .orElseThrow(() -> new AdminApiResourceNotFoundException(
+                                    "No statistics are collected in this instance for subscriber '" + subscriberId
+                                            + "' and aggregate type '" + aggregateType + "'."));
     }
 }
