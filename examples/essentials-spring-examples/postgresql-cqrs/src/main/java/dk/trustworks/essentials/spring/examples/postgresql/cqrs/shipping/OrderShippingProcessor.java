@@ -18,10 +18,10 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping;
 
 import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.commands.RegisterShippingOrder;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.commands.ShipOrder;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.domain.ShippingOrder;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.domain.ShippingOrders;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.ship_order.ShipOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.aggregates.ShippingOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.aggregates.ShippingOrders;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;

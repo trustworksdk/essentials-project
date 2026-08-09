@@ -17,8 +17,8 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.adapters.web;
 
 import dk.trustworks.essentials.reactive.command.CommandBus;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.commands.RegisterShippingOrder;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.commands.ShipOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.ship_order.ShipOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;

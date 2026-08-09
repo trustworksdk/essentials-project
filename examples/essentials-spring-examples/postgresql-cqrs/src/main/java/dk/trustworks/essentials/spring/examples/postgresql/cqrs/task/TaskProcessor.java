@@ -21,15 +21,16 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.pr
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.InTransactionEventProcessor;
 import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.commands.AddComment;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.commands.CreateTask;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.domain.Task;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.domain.events.TaskCreated;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.add_comment.AddComment;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.create_task.CreateTask;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates.Task;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.TaskCreated;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates.Tasks;
 
 import static java.util.Objects.nonNull;
 
@@ -38,15 +39,15 @@ public class TaskProcessor extends InTransactionEventProcessor {
     private static final Logger log = LoggerFactory.getLogger(TaskProcessor.class);
 
 
-    private final TaskEventStoreRepository taskEventStoreRepository;
+    private final Tasks taskEventStoreRepository;
 
-    protected TaskProcessor(TaskEventStoreRepository taskEventStoreRepository,
+    protected TaskProcessor(Tasks taskEventStoreRepository,
                             EventProcessorDependencies eventProcessorDependencies) {
         super(eventProcessorDependencies, true);
         this.taskEventStoreRepository = taskEventStoreRepository;
     }
 
-    public TaskEventStoreRepository getTaskEventStoreRepository() {
+    public Tasks getTaskEventStoreRepository() {
         return taskEventStoreRepository;
     }
 
@@ -57,7 +58,7 @@ public class TaskProcessor extends InTransactionEventProcessor {
 
     @Override
     protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
-        return List.of(TaskEventStoreRepository.AGGREGATE_TYPE);
+        return List.of(Tasks.AGGREGATE_TYPE);
     }
 
     @CmdHandler

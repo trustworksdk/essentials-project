@@ -26,10 +26,10 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.tr
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.Application;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.TestConfiguration;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.commands.CreateTask;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.domain.TaskId;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.domain.events.CommentAdded;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.domain.events.TaskCreated;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.create_task.CreateTask;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.CommentAdded;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.TaskCreated;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
