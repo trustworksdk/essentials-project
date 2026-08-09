@@ -18,7 +18,15 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.TransactionId;
 
-public interface IntraBankMoneyTransferEvent {
+/**
+ * The set of events an {@code IntraBankMoneyTransfer} can emit is closed, so the interface is {@code sealed}: adding a
+ * variant means updating the {@code permits} clause, which is a compile error away rather than a silent omission.
+ * Sealing does not restrict the EventStore, which deserializes the concrete records reflectively by their fully
+ * qualified class name.
+ */
+public sealed interface IntraBankMoneyTransferEvent permits IntraBankMoneyTransferRequested,
+                                                            IntraBankMoneyTransferStatusChanged,
+                                                            IntraBankMoneyTransferCompleted {
 
     TransactionId transactionId();
 }

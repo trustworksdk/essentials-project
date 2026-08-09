@@ -16,5 +16,9 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.commands;
 
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.domain.TaskId;
+
 public interface TaskCommand {
+
+    TaskId taskId();
 }

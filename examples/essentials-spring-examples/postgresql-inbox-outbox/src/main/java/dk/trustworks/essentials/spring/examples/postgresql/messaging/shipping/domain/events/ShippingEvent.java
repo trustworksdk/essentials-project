@@ -18,7 +18,11 @@ package dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.d
 
 import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.OrderId;
 
-public interface ShippingEvent {
+/**
+ * The set of shipping events published on the {@code EventBus} is closed, so the interface is {@code sealed}: adding a
+ * variant means updating the {@code permits} clause, which is a compile error away rather than a silent omission.
+ */
+public sealed interface ShippingEvent permits ShippingOrderRegistered, OrderShipped {
 
     OrderId orderId();
 }

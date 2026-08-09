@@ -21,6 +21,15 @@ import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.do
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Only shallowly immutable: {@link ShippingDestinationAddress} stays a class in this module because it is
+ * {@code @Embedded} in the {@code ShippingOrder} JPA entity, so it has non-final fields and a setter, and
+ * {@code ShippingOrder(RegisterShippingOrder)} stores the very instance held here rather than a copy. Mutating the
+ * entity's address therefore changes this command's {@code equals}/{@code hashCode} after construction.
+ * <p>
+ * That is harmless here — the command is discarded as soon as it has been handled — but a command that is retained,
+ * used as a map key, or compared after handling has to defensive-copy the address in the compact constructor.
+ */
 public record RegisterShippingOrder(OrderId orderId,
                                     ShippingDestinationAddress destinationAddress) {
     public RegisterShippingOrder {
