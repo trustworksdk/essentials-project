@@ -19,7 +19,7 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.aggreg
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.ShippingDestinationAddress;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.events.OrderShipped;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.events.ShippingEvent;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.events.ShippingOrderRegistered;
@@ -30,9 +30,10 @@ public class ShippingOrder extends AggregateRoot<OrderId, ShippingEvent, Shippin
         super(aggregateId);
     }
 
-    public ShippingOrder(RegisterShippingOrder cmd) {
-        super(cmd.orderId());
-        apply(ShippingOrderRegistered.from(cmd));
+    public ShippingOrder(OrderId orderId,
+                         ShippingDestinationAddress destinationAddress) {
+        super(orderId);
+        apply(new ShippingOrderRegistered(orderId, destinationAddress));
     }
 
     public void markOrderAsShipped() {

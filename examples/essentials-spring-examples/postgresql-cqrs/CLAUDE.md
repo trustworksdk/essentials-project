@@ -35,9 +35,23 @@ is a sanctioned lane in the law — §R5. Do **not** "modernise" them into `Deci
 - `shipping`'s inbound Kafka DTOs are typed with shipping's own `OrderId`, so the anti-corruption
   layer does not actually translate the identifier.
 - `task`'s `TaskEvent` is the one non-sealed event hierarchy of the three.
-- `banking/events/IntraBankMoneyTransferRequested` and `shipping/events/ShippingOrderRegistered`
-  import a command type from `use_cases/` for their `from(cmd)` factories — the BC's *exported*
-  surface leaking a slice package. The real fix is for the emitting slice to build the event.
+
+## Commands do not cross into `events/` or `aggregates/`
+
+Deliberate, and easy to undo by accident. Neither an event nor an aggregate references a command
+type: aggregate constructors and methods take the fields they need, and the emitting slice does the
+unpacking. So `new ShippingOrder(cmd.orderId(), cmd.destinationAddress())`, never
+`new ShippingOrder(cmd)`.
+
+The reason is §R4. `events/` and `types/` are the only packages a foreign bounded context may import,
+so a command reference inside `events/` drags a slice's internals into every consumer of that event.
+`aggregates/` is BC-private and so a lesser problem, but it is the same coupling: a convenience
+constructor taking `RegisterShippingOrder` ties the consistency boundary to one slice's wire
+contract.
+
+Passing the command *into* a slice's own handler is fine — that is the slice's own type. Issuing
+another slice's command over the command bus is also fine, and is the law's sanctioned way for an
+automation or translation to collaborate.
 
 <!-- essentials-slices-rules: v1 — from the essentials plugin; edit the plugin, not this section -->
 

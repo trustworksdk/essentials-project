@@ -49,6 +49,6 @@ public class AddCommentHandler extends AnnotatedCommandHandler {
     public void handle(AddComment cmd) {
         log.info("Adding comment '{}'", cmd);
         Task task = tasks.findTask(cmd.taskId()).orElseThrow();
-        task.addComment(cmd);
+        task.addComment(cmd.content(), cmd.createdAt());
     }
 }

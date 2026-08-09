@@ -17,26 +17,23 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.events;
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.use_cases.register_shipping_order.RegisterShippingOrder;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.ShippingDestinationAddress;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Jackson 3 derives the JSON property names of an event from its constructor parameter names, and for a record that
- * constructor is the canonical one — so the record components double as the persisted property names. Convenience
- * construction from a command therefore goes through {@link #from(RegisterShippingOrder)} rather than through a
- * second constructor.
+ * constructor is the canonical one — so the record components double as the persisted property names. The canonical
+ * constructor is deliberately the <em>only</em> one, which is what keeps that mapping unambiguous.
+ * <p>
+ * This event knows nothing about the command that causes it. {@code events/} is half of the bounded context's
+ * importable surface (§R4), so a reference to {@code use_cases/…} here would drag a slice's internals into every
+ * context that imports this type. The emitting slice constructs it.
  */
 public record ShippingOrderRegistered(OrderId orderId,
                                       ShippingDestinationAddress destinationAddress) implements ShippingEvent {
     public ShippingOrderRegistered {
         requireNonNull(orderId, "No orderId provided");
         requireNonNull(destinationAddress, "No destinationAddress provided");
-    }
-
-    public static ShippingOrderRegistered from(RegisterShippingOrder cmd) {
-        requireNonNull(cmd, "No cmd provided");
-        return new ShippingOrderRegistered(cmd.orderId(), cmd.destinationAddress());
     }
 }

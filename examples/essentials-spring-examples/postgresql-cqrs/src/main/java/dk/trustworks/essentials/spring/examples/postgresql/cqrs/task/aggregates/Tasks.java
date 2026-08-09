@@ -20,7 +20,6 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.Stat
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.create_task.CreateTask;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.TaskEvent;
 import org.springframework.stereotype.Component;
@@ -56,9 +55,9 @@ public class Tasks {
         return repository.load(taskId);
     }
 
-    public Task createTask(TaskId taskId, CreateTask cmd) {
+    public Task createTask(TaskId taskId, String comment) {
         requireNonNull(taskId, "No taskId provided");
-        var task = new Task(taskId, cmd);
+        var task = new Task(taskId, comment);
         return repository.save(task);
     }
 }

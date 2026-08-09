@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events;
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransactionId;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.use_cases.request_intra_bank_money_transfer.RequestIntraBankMoneyTransfer;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransferLifeCycleStatus;
 import dk.trustworks.essentials.types.Amount;
@@ -26,9 +25,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * Jackson 3 derives the JSON property names of an event from its constructor parameter names, and for a record that
- * constructor is the canonical one — so the record components double as the persisted property names. Convenience
- * construction from a command therefore goes through {@link #from(RequestIntraBankMoneyTransfer)} rather than through
- * a second constructor.
+ * constructor is the canonical one — so the record components double as the persisted property names. The canonical
+ * constructor is deliberately the <em>only</em> one, which is what keeps that mapping unambiguous.
+ * <p>
+ * This event knows nothing about the command that causes it. {@code events/} is half of the bounded context's
+ * importable surface (§R4), so a reference to {@code use_cases/…} here would drag a slice's internals into every
+ * context that imports this type. The emitting slice constructs it.
  */
 public record IntraBankMoneyTransferRequested(TransactionId transactionId,
                                               AccountId fromAccount,
@@ -41,14 +43,5 @@ public record IntraBankMoneyTransferRequested(TransactionId transactionId,
         requireNonNull(toAccount, "No toAccount provided");
         requireNonNull(amount, "No amount provided");
         requireNonNull(status, "No status provided");
-    }
-
-    public static IntraBankMoneyTransferRequested from(RequestIntraBankMoneyTransfer cmd) {
-        requireNonNull(cmd, "No cmd provided");
-        return new IntraBankMoneyTransferRequested(cmd.transactionId(),
-                                                   cmd.fromAccount(),
-                                                   cmd.toAccount(),
-                                                   cmd.amount(),
-                                                   TransferLifeCycleStatus.REQUESTED);
     }
 }

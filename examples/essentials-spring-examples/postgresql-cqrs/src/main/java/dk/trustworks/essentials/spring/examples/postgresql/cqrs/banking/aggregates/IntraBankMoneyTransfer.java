@@ -19,7 +19,6 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggrega
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.TransactionId;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.use_cases.request_intra_bank_money_transfer.RequestIntraBankMoneyTransfer;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.IntraBankMoneyTransferCompleted;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.IntraBankMoneyTransferEvent;
@@ -45,9 +44,16 @@ public class IntraBankMoneyTransfer extends AggregateRoot<TransactionId, IntraBa
         super(aggregateId);
     }
 
-    public IntraBankMoneyTransfer(RequestIntraBankMoneyTransfer cmd) {
-        super(cmd.transactionId());
-        apply(IntraBankMoneyTransferRequested.from(cmd));
+    public IntraBankMoneyTransfer(TransactionId transactionId,
+                                  AccountId fromAccount,
+                                  AccountId toAccount,
+                                  Amount amount) {
+        super(transactionId);
+        apply(new IntraBankMoneyTransferRequested(transactionId,
+                                                  fromAccount,
+                                                  toAccount,
+                                                  amount,
+                                                  TransferLifeCycleStatus.REQUESTED));
     }
 
     public void markFromAccountAsWithdrawn() {

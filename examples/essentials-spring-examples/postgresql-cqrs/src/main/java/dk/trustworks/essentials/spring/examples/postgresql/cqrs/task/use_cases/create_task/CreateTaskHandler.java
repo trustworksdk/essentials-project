@@ -43,6 +43,6 @@ public class CreateTaskHandler extends AnnotatedCommandHandler {
     @CmdHandler
     public void handle(CreateTask cmd) {
         log.info("Creating task with command '{}'", cmd);
-        tasks.createTask(cmd.taskId(), cmd);
+        tasks.createTask(cmd.taskId(), cmd.comment());
     }
 }

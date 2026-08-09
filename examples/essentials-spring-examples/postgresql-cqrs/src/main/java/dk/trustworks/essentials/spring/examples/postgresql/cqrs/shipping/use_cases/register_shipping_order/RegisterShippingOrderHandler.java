@@ -46,7 +46,8 @@ public class RegisterShippingOrderHandler extends AnnotatedCommandHandler {
         var existingOrder = shippingOrders.findOrder(cmd.orderId());
         if (existingOrder.isEmpty()) {
             log.debug("===> Requesting New ShippingOrder '{}'", cmd.orderId());
-            shippingOrders.registerNewOrder(new ShippingOrder(cmd));
+            shippingOrders.registerNewOrder(new ShippingOrder(cmd.orderId(),
+                                                              cmd.destinationAddress()));
         }
     }
 }

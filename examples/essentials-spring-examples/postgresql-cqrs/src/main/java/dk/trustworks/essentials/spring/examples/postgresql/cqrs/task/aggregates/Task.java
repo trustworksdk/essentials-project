@@ -18,8 +18,6 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates
 
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.modern.AggregateRoot;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.add_comment.AddComment;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.create_task.CreateTask;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.CommentAdded;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.TaskCreated;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.events.TaskEvent;
@@ -38,18 +36,18 @@ public class Task extends AggregateRoot<TaskId, TaskEvent, Task> {
         super(aggregateId);
     }
 
-    public Task(TaskId aggregateId, CreateTask cmd) {
+    public Task(TaskId aggregateId, String comment) {
         super(aggregateId);
         apply(new TaskCreated(aggregateId,
-                cmd.comment(),
+                comment,
                 LocalDateTime.now()
         ));
     }
 
-    public void addComment(AddComment cmd) {
-        Comment comment = new Comment(cmd.taskId(), cmd.content(), cmd.createdAt());
+    public void addComment(String content, LocalDateTime createdAt) {
+        Comment comment = new Comment(aggregateId(), content, createdAt);
         if (!comments.contains(comment)) {
-            apply(new CommentAdded(cmd.taskId(), cmd.content(), cmd.createdAt()));
+            apply(new CommentAdded(aggregateId(), content, createdAt));
         }
     }
 

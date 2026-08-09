@@ -158,7 +158,10 @@ public class TransferMoneyProcessorOld extends AnnotatedCommandHandler {
         var existingTransfer = intraBankMoneyTransfers.findTransfer(cmd.transactionId());
         if (existingTransfer.isEmpty()) {
             log.debug("===> Requesting New Transfer '{}'", cmd.transactionId());
-            intraBankMoneyTransfers.requestNewTransfer(new IntraBankMoneyTransfer(cmd));
+            intraBankMoneyTransfers.requestNewTransfer(new IntraBankMoneyTransfer(cmd.transactionId(),
+                                                                                 cmd.fromAccount(),
+                                                                                 cmd.toAccount(),
+                                                                                 cmd.amount()));
         }
     }
 
