@@ -32,4 +32,9 @@ Consumer-facing docs: `docs/openapi/README.md`.
 - **`required` is claimed conservatively** — primitives + verified reference properties only. Over-claiming breaks client type guards at runtime.
 - **swagger version alignment**: `swagger-models` (via openapi-diff → swagger-parser) and `swagger-models-jakarta` (generator) share package `io.swagger.v3.oas.models`. Skew shows up as `NoSuchMethodError` inside openapi-diff, not as a resolution error. `swagger-core.version` must track the pinned `openapi-diff.version`'s parser. Non-jakarta `swagger-models` is excluded from the test scope.
 - Regenerate with `-Dopenapi.regenerate=true`, then **rebaseline only at release** — and regenerate the Java client in the same change; no gate catches a stale client.
+- **Regenerate needs `-am`.** Spec reflects off `foundation` / `postgresql-event-store` / `eventsourced-aggregates`. `-pl components/admin-api-spec` alone resolves those from `~/.m2`, so an uninstalled SPI edit regenerates the *old* contract — drift gate then fails again on the next full reactor build. Loops until `-am` (or a prior `install`) is used:
+  ```
+  mvn -pl components/admin-api-spec -am test -Dtest=OpenApiSpecGenerationTest \
+      -Dsurefire.failIfNoSpecifiedTests=false -Dopenapi.regenerate=true
+  ```
 - Contract YAML is published twice: attached as `:yaml:openapi` via build-helper, and packaged into the jar at `/openapi/essentials-admin-api.yaml` so adapters/tests can read it from the classpath. The Java client instead reads it by **file path**, not as a Maven dependency, so there is no reactor ordering guarantee (harmless — the file is committed).
