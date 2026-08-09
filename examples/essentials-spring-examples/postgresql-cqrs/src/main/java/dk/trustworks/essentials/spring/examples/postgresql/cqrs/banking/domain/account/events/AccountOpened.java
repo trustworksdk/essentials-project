@@ -19,34 +19,12 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.account.AccountId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.account.AccountNumber;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class AccountOpened extends AccountEvent {
-    public final AccountNumber accountNumber;
-
-    public AccountOpened(AccountId accountId,
-                         AccountNumber accountNumber) {
-        super(accountId);
-        this.accountNumber = requireNonNull(accountNumber, "No accountNumber provided");
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!super.equals(o)) return false;
-        var that = (AccountOpened) o;
-        return Objects.equals(accountNumber, that.accountNumber);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(super.hashCode(), accountNumber);
-    }
-
-    @Override
-    public String toString() {
-        return "AccountOpened(accountId=" + accountId + ", accountNumber=" + accountNumber + ")";
+public record AccountOpened(AccountId accountId,
+                            AccountNumber accountNumber) implements AccountEvent {
+    public AccountOpened {
+        requireNonNull(accountId, "No accountId provided");
+        requireNonNull(accountNumber, "No accountNumber provided");
     }
 }

@@ -31,7 +31,7 @@ public class ShippingOrder extends AggregateRoot<OrderId, ShippingEvent, Shippin
     }
 
     public ShippingOrder(RegisterShippingOrder cmd) {
-        super(cmd.orderId);
+        super(cmd.orderId());
         apply(ShippingOrderRegistered.from(cmd));
     }
 

@@ -18,34 +18,7 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.adapte
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.OrderId;
 
-import java.util.Objects;
+public interface ExternalOrderShippingEvent {
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
-public abstract class ExternalOrderShippingEvent {
-    public final OrderId orderId;
-    public final long    eventOrder;
-
-    protected ExternalOrderShippingEvent(OrderId orderId, long eventOrder) {
-        this.orderId = requireNonNull(orderId, "No orderId provided");
-        this.eventOrder = eventOrder;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        var that = (ExternalOrderShippingEvent) o;
-        return eventOrder == that.eventOrder && Objects.equals(orderId, that.orderId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(getClass(), orderId, eventOrder);
-    }
-
-    @Override
-    public String toString() {
-        return getClass().getSimpleName() + "(orderId=" + orderId + ", eventOrder=" + eventOrder + ")";
-    }
+    OrderId orderId();
 }

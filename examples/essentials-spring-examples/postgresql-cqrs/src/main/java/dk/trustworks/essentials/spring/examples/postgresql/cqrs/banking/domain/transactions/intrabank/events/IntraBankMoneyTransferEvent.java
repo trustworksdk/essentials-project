@@ -18,32 +18,7 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.TransactionId;
 
-import java.util.Objects;
+public interface IntraBankMoneyTransferEvent {
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
-public abstract class IntraBankMoneyTransferEvent {
-    public final TransactionId transactionId;
-
-    protected IntraBankMoneyTransferEvent(TransactionId transactionId) {
-        this.transactionId = requireNonNull(transactionId, "No transactionId provided");
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        var that = (IntraBankMoneyTransferEvent) o;
-        return Objects.equals(transactionId, that.transactionId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(getClass(), transactionId);
-    }
-
-    @Override
-    public String toString() {
-        return getClass().getSimpleName() + "(transactionId=" + transactionId + ")";
-    }
+    TransactionId transactionId();
 }

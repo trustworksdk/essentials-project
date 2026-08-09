@@ -18,8 +18,10 @@ package dk.trustworks.essentials.spring.examples.mongodb.messaging.shipping.doma
 
 import dk.trustworks.essentials.spring.examples.mongodb.messaging.shipping.OrderId;
 
-public class OrderShipped extends ShippingEvent {
-    public OrderShipped(OrderId orderId) {
-        super(orderId);
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+public record OrderShipped(OrderId orderId) implements ShippingEvent {
+    public OrderShipped {
+        requireNonNull(orderId, "No orderId provided");
     }
 }

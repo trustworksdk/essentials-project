@@ -18,8 +18,10 @@ package dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.d
 
 import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.OrderId;
 
-public class OrderShipped extends ShippingEvent {
-    public OrderShipped(OrderId orderId) {
-        super(orderId);
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+public record OrderShipped(OrderId orderId) implements ShippingEvent {
+    public OrderShipped {
+        requireNonNull(orderId, "No orderId provided");
     }
 }

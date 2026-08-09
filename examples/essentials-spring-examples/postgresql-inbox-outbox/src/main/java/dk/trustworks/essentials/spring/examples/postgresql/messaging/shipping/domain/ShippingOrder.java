@@ -46,8 +46,8 @@ public class ShippingOrder {
     }
 
     public ShippingOrder(RegisterShippingOrder cmd) {
-        this.id = cmd.orderId.toString();
-        this.destinationAddress = cmd.destinationAddress;
+        this.id = cmd.orderId().toString();
+        this.destinationAddress = cmd.destinationAddress();
     }
 
     public boolean markOrderAsShipped() {

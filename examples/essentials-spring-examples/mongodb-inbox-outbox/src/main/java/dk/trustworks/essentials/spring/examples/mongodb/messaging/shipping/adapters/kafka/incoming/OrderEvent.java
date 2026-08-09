@@ -16,27 +16,9 @@
 
 package dk.trustworks.essentials.spring.examples.mongodb.messaging.shipping.adapters.kafka.incoming;
 
-
 import dk.trustworks.essentials.spring.examples.mongodb.messaging.shipping.OrderId;
 
-public abstract class OrderEvent {
-    private OrderId id;
+public interface OrderEvent {
 
-    public OrderEvent() {
-    }
-
-    public OrderEvent(OrderId id) {
-        this.id = id;
-    }
-
-    public OrderId getId() {
-        return id;
-    }
-
-    @Override
-    public String toString() {
-        return "OrderEvent{" +
-                "id=" + id +
-                '}';
-    }
+    OrderId id();
 }

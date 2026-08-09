@@ -19,34 +19,12 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.TransactionId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.transactions.intrabank.TransferLifeCycleStatus;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class IntraBankMoneyTransferStatusChanged extends IntraBankMoneyTransferEvent {
-    public final TransferLifeCycleStatus status;
-
-    public IntraBankMoneyTransferStatusChanged(TransactionId transactionId,
-                                               TransferLifeCycleStatus status) {
-        super(transactionId);
-        this.status = requireNonNull(status, "No status provided");
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!super.equals(o)) return false;
-        var that = (IntraBankMoneyTransferStatusChanged) o;
-        return status == that.status;
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(super.hashCode(), status);
-    }
-
-    @Override
-    public String toString() {
-        return "IntraBankMoneyTransferStatusChanged(transactionId=" + transactionId + ", status=" + status + ")";
+public record IntraBankMoneyTransferStatusChanged(TransactionId transactionId,
+                                                  TransferLifeCycleStatus status) implements IntraBankMoneyTransferEvent {
+    public IntraBankMoneyTransferStatusChanged {
+        requireNonNull(transactionId, "No transactionId provided");
+        requireNonNull(status, "No status provided");
     }
 }

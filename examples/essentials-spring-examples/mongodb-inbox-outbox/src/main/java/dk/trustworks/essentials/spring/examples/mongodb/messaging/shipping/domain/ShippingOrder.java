@@ -32,8 +32,8 @@ public class ShippingOrder {
     }
 
     public ShippingOrder(RegisterShippingOrder cmd) {
-        id = cmd.orderId;
-        destinationAddress = cmd.destinationAddress;
+        id = cmd.orderId();
+        destinationAddress = cmd.destinationAddress();
     }
 
     /**

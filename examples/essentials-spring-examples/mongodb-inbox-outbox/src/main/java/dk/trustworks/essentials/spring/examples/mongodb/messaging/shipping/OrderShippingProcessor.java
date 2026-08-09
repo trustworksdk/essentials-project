@@ -49,9 +49,9 @@ public class OrderShippingProcessor extends AnnotatedCommandHandler {
     // Automatically runs in a transaction as it's forwarded by the DurableLocalCommandBus
     @Handler
     void handle(RegisterShippingOrder cmd) {
-        var existingOrder = shippingOrders.findOrder(cmd.orderId);
+        var existingOrder = shippingOrders.findOrder(cmd.orderId());
         if (existingOrder.isEmpty()) {
-            log.debug("===> Requesting New ShippingOrder '{}'", cmd.orderId);
+            log.debug("===> Requesting New ShippingOrder '{}'", cmd.orderId());
             shippingOrders.registerNewOrder(new ShippingOrder(cmd));
             eventBus.publish(ShippingOrderRegistered.from(cmd));
         }
@@ -60,10 +60,10 @@ public class OrderShippingProcessor extends AnnotatedCommandHandler {
     // Automatically runs in a transaction as it's forwarded by the Inbox
     @Handler
     void handle(ShipOrder cmd) {
-        log.debug("===> Initiating Shipping of Order '{}'", cmd.orderId);
-        var existingOrder = shippingOrders.getOrder(cmd.orderId);
+        log.debug("===> Initiating Shipping of Order '{}'", cmd.orderId());
+        var existingOrder = shippingOrders.getOrder(cmd.orderId());
         if (existingOrder.markOrderAsShipped()) {
-            eventBus.publish(new OrderShipped(cmd.orderId));
+            eventBus.publish(new OrderShipped(cmd.orderId()));
         }
     }
 }

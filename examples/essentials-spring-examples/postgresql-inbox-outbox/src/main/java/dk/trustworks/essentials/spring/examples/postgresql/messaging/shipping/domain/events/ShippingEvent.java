@@ -18,32 +18,7 @@ package dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.d
 
 import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.OrderId;
 
-import java.util.Objects;
+public interface ShippingEvent {
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
-public abstract class ShippingEvent {
-    public final OrderId orderId;
-
-    protected ShippingEvent(OrderId orderId) {
-        this.orderId = requireNonNull(orderId, "No orderId provided");
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        var that = (ShippingEvent) o;
-        return Objects.equals(orderId, that.orderId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(getClass(), orderId);
-    }
-
-    @Override
-    public String toString() {
-        return getClass().getSimpleName() + "(orderId=" + orderId + ")";
-    }
+    OrderId orderId();
 }

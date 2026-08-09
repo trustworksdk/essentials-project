@@ -19,41 +19,12 @@ package dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.c
 import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.OrderId;
 import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.domain.ShippingDestinationAddress;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class RegisterShippingOrder {
-    public final OrderId                    orderId;
-    public final ShippingDestinationAddress destinationAddress;
-
-    public RegisterShippingOrder(OrderId orderId, ShippingDestinationAddress destinationAddress) {
-        this.orderId = requireNonNull(orderId, "No orderId provided");
-        this.destinationAddress = requireNonNull(destinationAddress, "No destinationAddress provided");
-    }
-
-    public OrderId getOrderId() {
-        return orderId;
-    }
-
-    public ShippingDestinationAddress getDestinationAddress() {
-        return destinationAddress;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof RegisterShippingOrder that)) return false;
-        return Objects.equals(orderId, that.orderId) && Objects.equals(destinationAddress, that.destinationAddress);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(orderId, destinationAddress);
-    }
-
-    @Override
-    public String toString() {
-        return "RegisterShippingOrder(orderId=" + orderId + ", destinationAddress=" + destinationAddress + ")";
+public record RegisterShippingOrder(OrderId orderId,
+                                    ShippingDestinationAddress destinationAddress) {
+    public RegisterShippingOrder {
+        requireNonNull(orderId, "No orderId provided");
+        requireNonNull(destinationAddress, "No destinationAddress provided");
     }
 }

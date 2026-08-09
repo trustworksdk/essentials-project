@@ -20,44 +20,23 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.OrderId
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.commands.RegisterShippingOrder;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.domain.ShippingDestinationAddress;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class ShippingOrderRegistered extends ShippingEvent {
-    public final ShippingDestinationAddress destinationAddress;
-
-    /**
-     * Jackson 3 derives the JSON property names of an event from its constructor parameter names, so the persisted
-     * form of an event has to be reachable through a constructor whose parameters are named exactly like the fields.
-     * Convenience construction from a command therefore goes through {@link #from(RegisterShippingOrder)} rather
-     * than through a second constructor.
-     */
-    public ShippingOrderRegistered(OrderId orderId, ShippingDestinationAddress destinationAddress) {
-        super(orderId);
-        this.destinationAddress = requireNonNull(destinationAddress, "No destinationAddress provided");
+/**
+ * Jackson 3 derives the JSON property names of an event from its constructor parameter names, and for a record that
+ * constructor is the canonical one — so the record components double as the persisted property names. Convenience
+ * construction from a command therefore goes through {@link #from(RegisterShippingOrder)} rather than through a
+ * second constructor.
+ */
+public record ShippingOrderRegistered(OrderId orderId,
+                                      ShippingDestinationAddress destinationAddress) implements ShippingEvent {
+    public ShippingOrderRegistered {
+        requireNonNull(orderId, "No orderId provided");
+        requireNonNull(destinationAddress, "No destinationAddress provided");
     }
 
     public static ShippingOrderRegistered from(RegisterShippingOrder cmd) {
         requireNonNull(cmd, "No cmd provided");
-        return new ShippingOrderRegistered(cmd.orderId, cmd.destinationAddress);
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!super.equals(o)) return false;
-        var that = (ShippingOrderRegistered) o;
-        return Objects.equals(destinationAddress, that.destinationAddress);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(super.hashCode(), destinationAddress);
-    }
-
-    @Override
-    public String toString() {
-        return "ShippingOrderRegistered(orderId=" + orderId + ", destinationAddress=" + destinationAddress + ")";
+        return new ShippingOrderRegistered(cmd.orderId(), cmd.destinationAddress());
     }
 }

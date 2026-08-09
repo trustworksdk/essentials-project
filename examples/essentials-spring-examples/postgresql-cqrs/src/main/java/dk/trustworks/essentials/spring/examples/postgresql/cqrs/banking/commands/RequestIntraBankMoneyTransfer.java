@@ -20,62 +20,16 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.Transact
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.account.AccountId;
 import dk.trustworks.essentials.types.Amount;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class RequestIntraBankMoneyTransfer {
-    public final TransactionId transactionId;
-    public final AccountId     fromAccount;
-    public final AccountId     toAccount;
-    public final Amount        amount;
-
-    public RequestIntraBankMoneyTransfer(TransactionId transactionId,
-                                         AccountId fromAccount,
-                                         AccountId toAccount,
-                                         Amount amount) {
-        this.transactionId = requireNonNull(transactionId, "No transactionId provided");
-        this.fromAccount = requireNonNull(fromAccount, "No fromAccount provided");
-        this.toAccount = requireNonNull(toAccount, "No toAccount provided");
-        this.amount = requireNonNull(amount, "No amount provided");
-    }
-
-    public TransactionId getTransactionId() {
-        return transactionId;
-    }
-
-    public AccountId getFromAccount() {
-        return fromAccount;
-    }
-
-    public AccountId getToAccount() {
-        return toAccount;
-    }
-
-    public Amount getAmount() {
-        return amount;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof RequestIntraBankMoneyTransfer that)) return false;
-        return Objects.equals(transactionId, that.transactionId)
-                && Objects.equals(fromAccount, that.fromAccount)
-                && Objects.equals(toAccount, that.toAccount)
-                && Objects.equals(amount, that.amount);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(transactionId, fromAccount, toAccount, amount);
-    }
-
-    @Override
-    public String toString() {
-        return "RequestIntraBankMoneyTransfer(transactionId=" + transactionId +
-                ", fromAccount=" + fromAccount +
-                ", toAccount=" + toAccount +
-                ", amount=" + amount + ")";
+public record RequestIntraBankMoneyTransfer(TransactionId transactionId,
+                                            AccountId fromAccount,
+                                            AccountId toAccount,
+                                            Amount amount) {
+    public RequestIntraBankMoneyTransfer {
+        requireNonNull(transactionId, "No transactionId provided");
+        requireNonNull(fromAccount, "No fromAccount provided");
+        requireNonNull(toAccount, "No toAccount provided");
+        requireNonNull(amount, "No amount provided");
     }
 }

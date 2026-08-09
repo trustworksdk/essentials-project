@@ -42,9 +42,9 @@ public class OrderEventsKafkaListener {
     public void handle(OrderEvent event) {
         if (event instanceof OrderAccepted) {
             log.info("*** Since Order '{}' is Accepted we can start Shipping the Order. Forwarding {} to CommandBus",
-                     event.getId(),
+                     event.id(),
                      ShipOrder.class.getSimpleName());
-            commandBus.sendAndDontWait(new ShipOrder(event.getId()));
+            commandBus.sendAndDontWait(new ShipOrder(event.id()));
         } else {
             log.debug("Ignoring {}: {}", event.getClass().getSimpleName(), event);
         }

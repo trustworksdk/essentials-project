@@ -16,65 +16,13 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.domain;
 
-import java.util.Objects;
-
-public class ShippingDestinationAddress {
-    public String recipientName;
-    public String street;
-    public String zipCode;
-    public String city;
-
-    public ShippingDestinationAddress() {
-    }
-
-    public ShippingDestinationAddress(String recipientName, String street, String zipCode, String city) {
-        this.recipientName = recipientName;
-        this.street = street;
-        this.zipCode = zipCode;
-        this.city = city;
-    }
+public record ShippingDestinationAddress(String recipientName,
+                                         String street,
+                                         String zipCode,
+                                         String city) {
 
     public static ShippingDestinationAddressBuilder builder() {
         return new ShippingDestinationAddressBuilder();
-    }
-
-    public String getRecipientName() {
-        return recipientName;
-    }
-
-    public String getStreet() {
-        return street;
-    }
-
-    public String getZipCode() {
-        return zipCode;
-    }
-
-    public String getCity() {
-        return city;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof ShippingDestinationAddress that)) return false;
-        return Objects.equals(recipientName, that.recipientName)
-                && Objects.equals(street, that.street)
-                && Objects.equals(zipCode, that.zipCode)
-                && Objects.equals(city, that.city);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(recipientName, street, zipCode, city);
-    }
-
-    @Override
-    public String toString() {
-        return "ShippingDestinationAddress(recipientName=" + recipientName +
-                ", street=" + street +
-                ", zipCode=" + zipCode +
-                ", city=" + city + ")";
     }
 
     public static final class ShippingDestinationAddressBuilder {

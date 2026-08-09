@@ -60,14 +60,14 @@ public class OrderEventsKafkaListener {
     public void handle(OrderEvent event) {
         if (event instanceof OrderAccepted) {
             log.info("*** Since Order '{}' is Accepted we can start Shipping the Order. Forwarding {} to CommandBus",
-                     event.getId(),
+                     event.id(),
                      ShipOrder.class.getSimpleName());
 
             // Since we're using the DurableLocalCommandBus we could just have issued a sendAndDontWait call:
-            //commandBus.sendAndDontWait(new ShipOrder(event.getId()));
+            //commandBus.sendAndDontWait(new ShipOrder(event.id()));
 
             // Instead we will here use the Inbox concept, to showcase how it can be used
-            shipOrdersInbox.addMessageReceived(new ShipOrder(event.getId()));
+            shipOrdersInbox.addMessageReceived(new ShipOrder(event.id()));
         } else {
             log.debug("Ignoring {}: {}", event.getClass().getSimpleName(), event);
         }

@@ -21,45 +21,16 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.ValueDat
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.account.AccountId;
 import dk.trustworks.essentials.types.Amount;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class AccountWithdrawn extends AccountEvent {
-    public final Amount        withdrawAmount;
-    public final ValueDate     valueDate;
-    public final TransactionId transactionId;
-
-    public AccountWithdrawn(AccountId accountId,
-                 Amount withdrawAmount,
-                 ValueDate valueDate,
-                 TransactionId transactionId) {
-        super(accountId);
-        this.withdrawAmount = requireNonNull(withdrawAmount, "No withdrawAmount provided");
-        this.valueDate = requireNonNull(valueDate, "No valueDate provided");
-        this.transactionId = requireNonNull(transactionId, "No transactionId provided");
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!super.equals(o)) return false;
-        var that = (AccountWithdrawn) o;
-        return Objects.equals(withdrawAmount, that.withdrawAmount)
-                && Objects.equals(valueDate, that.valueDate)
-                && Objects.equals(transactionId, that.transactionId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(super.hashCode(), withdrawAmount, valueDate, transactionId);
-    }
-
-    @Override
-    public String toString() {
-        return "AccountWithdrawn(accountId=" + accountId +
-                ", withdrawAmount=" + withdrawAmount +
-                ", valueDate=" + valueDate +
-                ", transactionId=" + transactionId + ")";
+public record AccountWithdrawn(AccountId accountId,
+                               Amount withdrawAmount,
+                               ValueDate valueDate,
+                               TransactionId transactionId) implements AccountEvent {
+    public AccountWithdrawn {
+        requireNonNull(accountId, "No accountId provided");
+        requireNonNull(withdrawAmount, "No withdrawAmount provided");
+        requireNonNull(valueDate, "No valueDate provided");
+        requireNonNull(transactionId, "No transactionId provided");
     }
 }

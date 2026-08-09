@@ -63,20 +63,20 @@ public class ShippingEventKafkaPublisher extends AnnotatedEventHandler {
                                                              .build(),
                                                  msg -> {
                                                      var e = (ExternalOrderShippingEvent) msg.getPayload();
-                                                     log.info("*** Forwarding Outbox {} message to Kafka. Order '{}'", e.getClass().getSimpleName(), e.orderId);
+                                                     log.info("*** Forwarding Outbox {} message to Kafka. Order '{}'", e.getClass().getSimpleName(), e.orderId());
                                                      var producerRecord = new ProducerRecord<String, Object>(SHIPPING_EVENTS_TOPIC_NAME,
-                                                                                                             e.orderId.toString(),
+                                                                                                             e.orderId().toString(),
                                                                                                              e);
                                                      kafkaTemplate.send(producerRecord);
-                                                     log.info("*** Completed sending event {} to Kafka. Order '{}'", e.getClass().getSimpleName(), e.orderId);
+                                                     log.info("*** Completed sending event {} to Kafka. Order '{}'", e.getClass().getSimpleName(), e.orderId());
                                                  });
     }
 
     @Handler
     private void handle(OrderShipped e) {
-        log.info("*** Received {} for Order '{}' and adding it to the Outbox as a {} message", e.getClass().getSimpleName(), e.orderId, ExternalOrderShipped.class.getSimpleName());
+        log.info("*** Received {} for Order '{}' and adding it to the Outbox as a {} message", e.getClass().getSimpleName(), e.orderId(), ExternalOrderShipped.class.getSimpleName());
         // Since we're listening to the EventBus synchronously and the Message handling is transactional then adding the message to the Outbox joins in on the same underlying transaction
-        kafkaOutbox.sendMessage(new ExternalOrderShipped(e.orderId));
+        kafkaOutbox.sendMessage(new ExternalOrderShipped(e.orderId()));
     }
 
     /**

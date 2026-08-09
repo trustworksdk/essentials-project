@@ -40,7 +40,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
@@ -105,7 +104,7 @@ public class DurableQueuesLoadIT {
             unitOfWorkFactory.usingUnitOfWork(uow -> {
                 var messages = IntStream.range(batchStart, batchEnd)
                                        .mapToObj(i -> Message.of(("Message" + i), MessageMetaData.of("correlation_id", CorrelationId.random(), "trace_id", UUID.randomUUID().toString())))
-                                       .collect(Collectors.toList());
+                                       .toList();
                 var queueEntryIds = durableQueues.queueMessages(queueName,
                                                                 messages);
                 System.out.println("TotalMessagesQueued: " + totalMessagesQueued.addAndGet(messages.size()));

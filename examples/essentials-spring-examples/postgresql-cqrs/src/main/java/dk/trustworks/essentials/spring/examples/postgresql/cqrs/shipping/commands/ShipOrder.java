@@ -18,42 +18,10 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.comman
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.OrderId;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class ShipOrder {
-    public OrderId orderId;
-
-    public ShipOrder() {
-    }
-
-    public ShipOrder(OrderId orderId) {
-        this.orderId = requireNonNull(orderId, "No orderId provided");
-    }
-
-    public OrderId getOrderId() {
-        return orderId;
-    }
-
-    public void setOrderId(OrderId orderId) {
-        this.orderId = requireNonNull(orderId, "No orderId provided");
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof ShipOrder that)) return false;
-        return Objects.equals(orderId, that.orderId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(orderId);
-    }
-
-    @Override
-    public String toString() {
-        return "ShipOrder(orderId=" + orderId + ")";
+public record ShipOrder(OrderId orderId) {
+    public ShipOrder {
+        requireNonNull(orderId, "No orderId provided");
     }
 }

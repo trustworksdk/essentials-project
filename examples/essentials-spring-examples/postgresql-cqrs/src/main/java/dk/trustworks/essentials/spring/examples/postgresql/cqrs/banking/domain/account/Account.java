@@ -110,11 +110,11 @@ public class Account extends AggregateRoot<AccountId, AccountEvent, Account> {
 
     @EventHandler
     private void on(AccountWithdrawn e) {
-        balance = balance.subtract(e.withdrawAmount);
+        balance = balance.subtract(e.withdrawAmount());
     }
 
     @EventHandler
     private void on(AccountDeposited e) {
-        balance = balance.add(e.depositedAmount);
+        balance = balance.add(e.depositedAmount());
     }
 }

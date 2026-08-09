@@ -134,7 +134,7 @@ public class OrderShippingProcessorIT {
         Awaitility.waitAtMost(Duration.ofSeconds(10))
                   .untilAsserted(() -> assertThat(shippingRecordsReceived.size()).isEqualTo(1));
         assertThat(shippingRecordsReceived.get(0).value()).isInstanceOf(ExternalOrderShipped.class);
-        assertThat((CharSequence) ((ExternalOrderShipped) shippingRecordsReceived.get(0).value()).orderId).isEqualTo(orderId);
+        assertThat((CharSequence) ((ExternalOrderShipped) shippingRecordsReceived.get(0).value()).orderId()).isEqualTo(orderId);
 
         // Verify that both the inbox and outbox'es are empty
         assertThat(orderEventsKafkaListener.getShipOrdersInbox().getNumberOfUndeliveredMessages()).isEqualTo(0);

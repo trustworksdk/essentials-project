@@ -21,45 +21,16 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.ValueDat
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.account.AccountId;
 import dk.trustworks.essentials.types.Amount;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class AccountDeposited extends AccountEvent {
-    public final Amount        depositedAmount;
-    public final ValueDate     valueDate;
-    public final TransactionId transactionId;
-
-    public AccountDeposited(AccountId accountId,
-                 Amount depositedAmount,
-                 ValueDate valueDate,
-                 TransactionId transactionId) {
-        super(accountId);
-        this.depositedAmount = requireNonNull(depositedAmount, "No depositedAmount provided");
-        this.valueDate = requireNonNull(valueDate, "No valueDate provided");
-        this.transactionId = requireNonNull(transactionId, "No transactionId provided");
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!super.equals(o)) return false;
-        var that = (AccountDeposited) o;
-        return Objects.equals(depositedAmount, that.depositedAmount)
-                && Objects.equals(valueDate, that.valueDate)
-                && Objects.equals(transactionId, that.transactionId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(super.hashCode(), depositedAmount, valueDate, transactionId);
-    }
-
-    @Override
-    public String toString() {
-        return "AccountDeposited(accountId=" + accountId +
-                ", depositedAmount=" + depositedAmount +
-                ", valueDate=" + valueDate +
-                ", transactionId=" + transactionId + ")";
+public record AccountDeposited(AccountId accountId,
+                               Amount depositedAmount,
+                               ValueDate valueDate,
+                               TransactionId transactionId) implements AccountEvent {
+    public AccountDeposited {
+        requireNonNull(accountId, "No accountId provided");
+        requireNonNull(depositedAmount, "No depositedAmount provided");
+        requireNonNull(valueDate, "No valueDate provided");
+        requireNonNull(transactionId, "No transactionId provided");
     }
 }

@@ -22,65 +22,33 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.a
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.transactions.intrabank.TransferLifeCycleStatus;
 import dk.trustworks.essentials.types.Amount;
 
-import java.util.Objects;
-
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class IntraBankMoneyTransferRequested extends IntraBankMoneyTransferEvent {
-    public final AccountId               fromAccount;
-    public final AccountId               toAccount;
-    public final Amount                  amount;
-    public final TransferLifeCycleStatus status;
-
-    /**
-     * Jackson 3 derives the JSON property names of an event from its constructor parameter names, so the persisted
-     * form of an event has to be reachable through a constructor whose parameters are named exactly like the fields.
-     * Convenience construction from a command therefore goes through
-     * {@link #from(RequestIntraBankMoneyTransfer)} rather than through a second constructor.
-     */
-    public IntraBankMoneyTransferRequested(TransactionId transactionId,
-                                           AccountId fromAccount,
-                                           AccountId toAccount,
-                                           Amount amount,
-                                           TransferLifeCycleStatus status) {
-        super(transactionId);
-        this.fromAccount = requireNonNull(fromAccount, "No fromAccount provided");
-        this.toAccount = requireNonNull(toAccount, "No toAccount provided");
-        this.amount = requireNonNull(amount, "No amount provided");
-        this.status = requireNonNull(status, "No status provided");
+/**
+ * Jackson 3 derives the JSON property names of an event from its constructor parameter names, and for a record that
+ * constructor is the canonical one — so the record components double as the persisted property names. Convenience
+ * construction from a command therefore goes through {@link #from(RequestIntraBankMoneyTransfer)} rather than through
+ * a second constructor.
+ */
+public record IntraBankMoneyTransferRequested(TransactionId transactionId,
+                                              AccountId fromAccount,
+                                              AccountId toAccount,
+                                              Amount amount,
+                                              TransferLifeCycleStatus status) implements IntraBankMoneyTransferEvent {
+    public IntraBankMoneyTransferRequested {
+        requireNonNull(transactionId, "No transactionId provided");
+        requireNonNull(fromAccount, "No fromAccount provided");
+        requireNonNull(toAccount, "No toAccount provided");
+        requireNonNull(amount, "No amount provided");
+        requireNonNull(status, "No status provided");
     }
 
     public static IntraBankMoneyTransferRequested from(RequestIntraBankMoneyTransfer cmd) {
         requireNonNull(cmd, "No cmd provided");
-        return new IntraBankMoneyTransferRequested(cmd.transactionId,
-                                                   cmd.fromAccount,
-                                                   cmd.toAccount,
-                                                   cmd.amount,
+        return new IntraBankMoneyTransferRequested(cmd.transactionId(),
+                                                   cmd.fromAccount(),
+                                                   cmd.toAccount(),
+                                                   cmd.amount(),
                                                    TransferLifeCycleStatus.REQUESTED);
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!super.equals(o)) return false;
-        var that = (IntraBankMoneyTransferRequested) o;
-        return Objects.equals(fromAccount, that.fromAccount)
-                && Objects.equals(toAccount, that.toAccount)
-                && Objects.equals(amount, that.amount)
-                && status == that.status;
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(super.hashCode(), fromAccount, toAccount, amount, status);
-    }
-
-    @Override
-    public String toString() {
-        return "IntraBankMoneyTransferRequested(transactionId=" + transactionId +
-                ", fromAccount=" + fromAccount +
-                ", toAccount=" + toAccount +
-                ", amount=" + amount +
-                ", status=" + status + ")";
     }
 }

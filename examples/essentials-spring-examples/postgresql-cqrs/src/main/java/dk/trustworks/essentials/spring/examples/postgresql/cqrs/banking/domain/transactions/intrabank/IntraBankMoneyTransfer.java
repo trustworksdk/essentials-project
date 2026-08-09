@@ -45,7 +45,7 @@ public class IntraBankMoneyTransfer extends AggregateRoot<TransactionId, IntraBa
     }
 
     public IntraBankMoneyTransfer(RequestIntraBankMoneyTransfer cmd) {
-        super(cmd.transactionId);
+        super(cmd.transactionId());
         apply(IntraBankMoneyTransferRequested.from(cmd));
     }
 
@@ -63,25 +63,25 @@ public class IntraBankMoneyTransfer extends AggregateRoot<TransactionId, IntraBa
         }
         apply(new IntraBankMoneyTransferStatusChanged(aggregateId(),
                                                       TransferLifeCycleStatus.TO_ACCOUNT_DEPOSITED));
-        apply(new IntraBankMoneyTransferCompleted(aggregateId()));
+        apply(IntraBankMoneyTransferCompleted.of(aggregateId()));
     }
 
     @EventHandler
     private void handle(IntraBankMoneyTransferRequested e) {
-        amount = e.amount;
-        fromAccount = e.fromAccount;
-        toAccount = e.toAccount;
-        status = e.status;
+        amount = e.amount();
+        fromAccount = e.fromAccount();
+        toAccount = e.toAccount();
+        status = e.status();
     }
 
     @EventHandler
     private void handle(IntraBankMoneyTransferStatusChanged e) {
-        status = e.status;
+        status = e.status();
     }
 
     @EventHandler
     private void handle(IntraBankMoneyTransferCompleted e) {
-        status = e.status;
+        status = e.status();
     }
 
     public TransferLifeCycleStatus getStatus() {

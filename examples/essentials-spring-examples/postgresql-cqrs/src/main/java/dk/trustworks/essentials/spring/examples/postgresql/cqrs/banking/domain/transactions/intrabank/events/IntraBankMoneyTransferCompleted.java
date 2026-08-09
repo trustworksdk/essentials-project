@@ -19,31 +19,22 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.TransactionId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.transactions.intrabank.TransferLifeCycleStatus;
 
-import java.util.Objects;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
-public class IntraBankMoneyTransferCompleted extends IntraBankMoneyTransferEvent {
-    public final TransferLifeCycleStatus status;
-
-    public IntraBankMoneyTransferCompleted(TransactionId transactionId) {
-        super(transactionId);
-        this.status = TransferLifeCycleStatus.COMPLETED;
+/**
+ * The {@code status} is always {@link TransferLifeCycleStatus#COMPLETED}, but it stays a record component so that it
+ * remains part of the persisted JSON. Construction therefore goes through {@link #of(TransactionId)} rather than
+ * through a second constructor — a record's canonical constructor is the one Jackson 3 binds the persisted properties
+ * to, and adding a shorter one only invites it to pick the wrong creator.
+ */
+public record IntraBankMoneyTransferCompleted(TransactionId transactionId,
+                                              TransferLifeCycleStatus status) implements IntraBankMoneyTransferEvent {
+    public IntraBankMoneyTransferCompleted {
+        requireNonNull(transactionId, "No transactionId provided");
+        requireNonNull(status, "No status provided");
     }
 
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!super.equals(o)) return false;
-        var that = (IntraBankMoneyTransferCompleted) o;
-        return status == that.status;
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(super.hashCode(), status);
-    }
-
-    @Override
-    public String toString() {
-        return "IntraBankMoneyTransferCompleted(transactionId=" + transactionId + ", status=" + status + ")";
+    public static IntraBankMoneyTransferCompleted of(TransactionId transactionId) {
+        return new IntraBankMoneyTransferCompleted(transactionId, TransferLifeCycleStatus.COMPLETED);
     }
 }

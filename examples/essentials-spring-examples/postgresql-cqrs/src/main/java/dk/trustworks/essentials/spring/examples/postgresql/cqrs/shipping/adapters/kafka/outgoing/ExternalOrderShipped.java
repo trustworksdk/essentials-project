@@ -16,20 +16,12 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.adapters.kafka.outgoing;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.OrderId;
 
-public class ExternalOrderShipped extends ExternalOrderShippingEvent {
-    /**
-     * The creator is stated explicitly because Jackson 3 reads a lone constructor as an implicit creator and treats a
-     * single-argument one as *delegating* — the JSON object would then bind nothing and {@code orderId} would
-     * deserialize to {@code null} without an error. {@code com.fasterxml.jackson.annotation} is the annotation package
-     * both Jackson majors read, so this works on either flavour.
-     */
-    @JsonCreator(mode = JsonCreator.Mode.PROPERTIES)
-    public ExternalOrderShipped(@JsonProperty("orderId") OrderId orderId,
-                                @JsonProperty("eventOrder") long eventOrder) {
-        super(orderId, eventOrder);
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+public record ExternalOrderShipped(OrderId orderId, long eventOrder) implements ExternalOrderShippingEvent {
+    public ExternalOrderShipped {
+        requireNonNull(orderId, "No orderId provided");
     }
 }

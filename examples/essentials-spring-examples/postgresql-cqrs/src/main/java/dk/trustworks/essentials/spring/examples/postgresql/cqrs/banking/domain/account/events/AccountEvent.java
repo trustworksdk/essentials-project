@@ -18,32 +18,7 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.domain.account.AccountId;
 
-import java.util.Objects;
+public interface AccountEvent {
 
-import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
-
-public abstract class AccountEvent {
-    public final AccountId accountId;
-
-    protected AccountEvent(AccountId accountId) {
-        this.accountId = requireNonNull(accountId, "No accountId provided");
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        var that = (AccountEvent) o;
-        return Objects.equals(accountId, that.accountId);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(getClass(), accountId);
-    }
-
-    @Override
-    public String toString() {
-        return getClass().getSimpleName() + "(accountId=" + accountId + ")";
-    }
+    AccountId accountId();
 }

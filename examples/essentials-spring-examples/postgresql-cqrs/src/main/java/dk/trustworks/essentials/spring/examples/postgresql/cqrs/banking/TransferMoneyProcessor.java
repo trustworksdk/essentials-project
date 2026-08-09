@@ -72,23 +72,23 @@ public class TransferMoneyProcessor extends EventProcessor {
     @CmdHandler
     public void handle(RequestIntraBankMoneyTransfer cmd) {
         requireNonNull(cmd, "No cmd provided");
-        if (accounts.isAccountMissing(cmd.fromAccount)) {
-            throw new TransactionException(msg("Couldn't find fromAccount with id '{}'", cmd.fromAccount));
+        if (accounts.isAccountMissing(cmd.fromAccount())) {
+            throw new TransactionException(msg("Couldn't find fromAccount with id '{}'", cmd.fromAccount()));
         }
-        if (accounts.isAccountMissing(cmd.toAccount)) {
-            throw new TransactionException(msg("Couldn't find toAccount with id '{}'", cmd.toAccount));
+        if (accounts.isAccountMissing(cmd.toAccount())) {
+            throw new TransactionException(msg("Couldn't find toAccount with id '{}'", cmd.toAccount()));
         }
 
-        var existingTransfer = intraBankMoneyTransfers.findTransfer(cmd.transactionId);
+        var existingTransfer = intraBankMoneyTransfers.findTransfer(cmd.transactionId());
         if (existingTransfer.isEmpty()) {
-            log.debug("===> Requesting New Transfer '{}'", cmd.transactionId);
+            log.debug("===> Requesting New Transfer '{}'", cmd.transactionId());
             intraBankMoneyTransfers.requestNewTransfer(new IntraBankMoneyTransfer(cmd));
         }
     }
 
     @MessageHandler
     void handle(IntraBankMoneyTransferRequested e) {
-        var transfer = intraBankMoneyTransfers.getTransfer(e.transactionId);
+        var transfer = intraBankMoneyTransfers.getTransfer(e.transactionId());
         log.debug("===> Transfer '{}' requested - will withdraw {} from account '{}' related to Transfer '{}'", transfer.aggregateId(), transfer.getAmount(), transfer.getFromAccount(), transfer.aggregateId());
         accounts.getAccount(transfer.getFromAccount())
                 .withdrawToday(transfer.getAmount(),
@@ -98,7 +98,7 @@ public class TransferMoneyProcessor extends EventProcessor {
 
     @MessageHandler
     void handle(IntraBankMoneyTransferStatusChanged e) {
-        var transfer = intraBankMoneyTransfers.getTransfer(e.transactionId);
+        var transfer = intraBankMoneyTransfers.getTransfer(e.transactionId());
         if (transfer.getStatus() == TransferLifeCycleStatus.FROM_ACCOUNT_WITHDRAWN) {
             log.debug("===> Will deposit {} to account '{}' related to Transfer '{}'", transfer.getAmount(), transfer.getToAccount(), transfer.aggregateId());
             accounts.getAccount(transfer.getToAccount())
@@ -109,19 +109,19 @@ public class TransferMoneyProcessor extends EventProcessor {
 
     @MessageHandler
     void handle(AccountWithdrawn e) {
-        var matchingTransfer = intraBankMoneyTransfers.findTransfer(e.transactionId);
+        var matchingTransfer = intraBankMoneyTransfers.findTransfer(e.transactionId());
 
         matchingTransfer.ifPresent(transfer -> {
-            log.debug("===> Account {} Withdrawn - updating Transfer '{}'", e.accountId, transfer.aggregateId());
+            log.debug("===> Account {} Withdrawn - updating Transfer '{}'", e.accountId(), transfer.aggregateId());
             transfer.markFromAccountAsWithdrawn();
         });
     }
 
     @MessageHandler
     void handle(AccountDeposited e) {
-        var matchingTransfer = intraBankMoneyTransfers.findTransfer(e.transactionId);
+        var matchingTransfer = intraBankMoneyTransfers.findTransfer(e.transactionId());
         matchingTransfer.ifPresent(transfer -> {
-            log.debug("===> Account {} Deposited - updating Transfer '{}'", e.accountId, transfer.aggregateId());
+            log.debug("===> Account {} Deposited - updating Transfer '{}'", e.accountId(), transfer.aggregateId());
             transfer.markToAccountAsDeposited();
         });
     }

@@ -18,26 +18,5 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.adapte
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.OrderId;
 
-public class OrderAccepted extends OrderEvent {
-    private long orderNumber;
-
-    public OrderAccepted() {
-    }
-
-    public OrderAccepted(OrderId id, long orderNumber) {
-        super(id);
-        this.orderNumber = orderNumber;
-    }
-
-    public long getOrderNumber() {
-        return orderNumber;
-    }
-
-    @Override
-    public String toString() {
-        return "OrderAccepted{" +
-                "orderId=" + getId() + ", " +
-                "orderNumber=" + orderNumber +
-                '}';
-    }
+public record OrderAccepted(OrderId id, long orderNumber) implements OrderEvent {
 }

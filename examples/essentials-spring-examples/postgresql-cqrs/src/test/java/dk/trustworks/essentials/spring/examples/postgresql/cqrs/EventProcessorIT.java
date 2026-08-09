@@ -204,63 +204,25 @@ public class EventProcessorIT {
 
     // --- Commands ---
 
-    public static class PlaceOrderCommand {
-        public final OrderId orderId;
-        public final String  orderDetails;
-
-        public PlaceOrderCommand(OrderId orderId, String orderDetails) {
-            this.orderId = orderId;
-            this.orderDetails = orderDetails;
-        }
+    public record PlaceOrderCommand(OrderId orderId, String orderDetails) {
     }
 
-    public static class ConfirmOrderCommand {
-        public final OrderId orderId;
-
-        public ConfirmOrderCommand(OrderId orderId) {
-            this.orderId = orderId;
-        }
+    public record ConfirmOrderCommand(OrderId orderId) {
     }
 
-    public static class FailingCommandSentViaInbox {
-        public final OrderId orderId;
-        public final String  reason;
-
-        public FailingCommandSentViaInbox(OrderId orderId, String reason) {
-            this.orderId = orderId;
-            this.reason = reason;
-        }
+    public record FailingCommandSentViaInbox(OrderId orderId, String reason) {
     }
 
-    public static class FailingCommandSentUsingAsyncAndDontWaitViaCommandBus {
-        public final OrderId orderId;
-        public final String  reason;
-
-        public FailingCommandSentUsingAsyncAndDontWaitViaCommandBus(OrderId orderId, String reason) {
-            this.orderId = orderId;
-            this.reason = reason;
-        }
+    public record FailingCommandSentUsingAsyncAndDontWaitViaCommandBus(OrderId orderId, String reason) {
     }
 
     // --- Events ---
 
     @Revision(1)
-    public static class OrderPlacedEvent {
-        public final OrderId orderId;
-        public final String  orderDetails;
-
-        public OrderPlacedEvent(OrderId orderId, String orderDetails) {
-            this.orderId = orderId;
-            this.orderDetails = orderDetails;
-        }
+    public record OrderPlacedEvent(OrderId orderId, String orderDetails) {
     }
 
-    public static class OrderConfirmedEvent {
-        public final OrderId orderId;
-
-        public OrderConfirmedEvent(OrderId orderId) {
-            this.orderId = orderId;
-        }
+    public record OrderConfirmedEvent(OrderId orderId) {
     }
 
     // --------------------------
@@ -315,22 +277,22 @@ public class EventProcessorIT {
         @CmdHandler
         public void handle(PlaceOrderCommand cmd) {
             // Start a new event stream for this order
-            var event = new OrderPlacedEvent(cmd.orderId, cmd.orderDetails);
-            eventStore.startStream(TEST_ORDERS, cmd.orderId, List.of(event));
+            var event = new OrderPlacedEvent(cmd.orderId(), cmd.orderDetails());
+            eventStore.startStream(TEST_ORDERS, cmd.orderId(), List.of(event));
         }
 
         @CmdHandler
         public void handle(ConfirmOrderCommand cmd) {
             // Append the confirmation event to the existing stream
-            var event = new OrderConfirmedEvent(cmd.orderId);
-            eventStore.appendToStream(TEST_ORDERS, cmd.orderId, event);
+            var event = new OrderConfirmedEvent(cmd.orderId());
+            eventStore.appendToStream(TEST_ORDERS, cmd.orderId(), event);
         }
 
 
         @CmdHandler
         public void handle(FailingCommandSentUsingAsyncAndDontWaitViaCommandBus cmd) {
-            System.out.println("*** Handling FailingCommand: " + cmd.reason);
-            throw new RuntimeException(cmd.reason);
+            System.out.println("*** Handling FailingCommand: " + cmd.reason());
+            throw new RuntimeException(cmd.reason());
         }
 
 
@@ -338,8 +300,8 @@ public class EventProcessorIT {
 
         @MessageHandler
         public void handle(FailingCommandSentViaInbox cmd) {
-            System.out.println("*** Handling FailingCommand: " + cmd.reason);
-            throw new RuntimeException(cmd.reason);
+            System.out.println("*** Handling FailingCommand: " + cmd.reason());
+            throw new RuntimeException(cmd.reason());
         }
 
         /**
@@ -347,7 +309,7 @@ public class EventProcessorIT {
          */
         @MessageHandler
         public void onOrderPlaced(OrderPlacedEvent event) {
-            getCommandBus().send(new ConfirmOrderCommand(event.orderId));
+            getCommandBus().send(new ConfirmOrderCommand(event.orderId()));
         }
     }
 }
