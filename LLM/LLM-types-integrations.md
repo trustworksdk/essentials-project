@@ -36,10 +36,10 @@
 
 | Framework | Module | Use Case | Registration | Auto-Apply |
 |-----------|--------|----------|--------------|------------|
-| **Jackson** | `types-jackson` | JSON ser/deser | `ObjectMapper.registerModule()` | ✅ All types |
+| **Jackson** | `types-jackson3` (J3, default) / `types-jackson` (J2) | JSON ser/deser | `ObjectMapper.registerModule()` | ✅ All **Java** types; Kotlin needs `jackson-module-kotlin` |
 | **JDBI** | `types-jdbi` | SQL persistence | `Jdbi.registerArgument/Mapper()` | Per-type |
 | **Avro** | `types-avro` | Binary ser/deser | Maven plugin config | Per-type |
-| **Spring Web** | `types-spring-web` | `@PathVariable`/`@RequestParam` | `FormatterRegistry.addConverter()` | ✅ All types |
+| **Spring Web** | `types-spring-web` | `@PathVariable`/`@RequestParam` | `@Import(EssentialsWebMvcConfigurer.class)` | ✅ All **Java** types; Kotlin partly — see [LLM-types-spring-web.md](LLM-types-spring-web.md#kotlin-semantic-types) |
 | **Spring Data Mongo** | `types-springdata-mongo` | MongoDB persistence | `MongoCustomConversions` | ✅ Most types |
 | **Spring Data JPA** | `types-springdata-jpa` | JPA entities | `@Converter(autoApply=true)` | Per-type |
 
@@ -59,9 +59,9 @@
 
 | Stack | Required | Optional |
 |-------|----------|----------|
-| **Spring Boot + PostgreSQL** | `types-jdbi` | `types-jackson`, `types-spring-web` |
-| **Spring Boot + MongoDB** | `types-springdata-mongo` | `types-jackson`, `types-spring-web` |
-| **Spring WebMVC/WebFlux** | `types-spring-web` | `types-jackson` (for `@RequestBody`) |
+| **Spring Boot + PostgreSQL** | `types-jdbi` | `types-jackson3`/`types-jackson`, `types-spring-web` |
+| **Spring Boot + MongoDB** | `types-springdata-mongo` | `types-jackson3`/`types-jackson`, `types-spring-web` |
+| **Spring WebMVC/WebFlux** | `types-spring-web` | `types-jackson3`/`types-jackson` (for `@RequestBody`, on the **web** mapper) |
 | **Event Sourcing** | `types-avro` OR `types-jackson` | Depends on format |
 | **Microservices** | `types-jackson` | Framework-specific modules |
 
@@ -69,7 +69,7 @@
 
 ## Jackson JSON
 
-**Module:** `types-jackson`
+**Module:** `types-jackson3` (Jackson 3 — the default) / `types-jackson` (Jackson 2). Same FQCN, pick one
 **Package:** `dk.trustworks.essentials.jackson.types`
 **Detailed Docs:** [LLM-types-jackson.md](LLM-types-jackson.md)
 
@@ -308,27 +308,24 @@ public class SingleValueTypeConverter implements GenericConverter {
 
 ### Setup
 
+Import the shipped configurer - the dependency alone registers nothing, there is no auto-configuration:
+
 **WebMVC:**
 ```java
-@Configuration
-public class WebMvcConfig implements WebMvcConfigurer {
-    @Override
-    public void addFormatters(FormatterRegistry registry) {
-        registry.addConverter(new SingleValueTypeConverter());
-    }
-}
+@SpringBootApplication
+@Import(EssentialsWebMvcConfigurer.class)
+public class Application { }
 ```
 
 **WebFlux:**
 ```java
-@Configuration
-public class WebFluxConfig implements WebFluxConfigurer {
-    @Override
-    public void addFormatters(FormatterRegistry registry) {
-        registry.addConverter(new SingleValueTypeConverter());
-    }
-}
+@SpringBootApplication
+@Import(EssentialsWebFluxConfigurer.class)
+public class Application { }
 ```
+
+Both implement `addFormatters` only. Neither touches HTTP message converters or codecs, so neither can
+change which Jackson major serialises request/response bodies.
 
 ### Usage
 

@@ -1,22 +1,28 @@
 ## types-spring-web
 
-Spring WebMvc/WebFlux `GenericConverter` enabling `SingleValueType` subtypes as `@PathVariable`/`@RequestParam`. Maven: `types-spring-web`.
+Spring WebMvc/WebFlux `GenericConverter`s enabling semantic types as `@PathVariable`/`@RequestParam`, plus the two `@Configuration` classes that register them. Maven: `types-spring-web`.
 
 ## Package Structure
 
-- `dk.trustworks.essentials.types.spring.web` — single production class (`SingleValueTypeConverter`)
-- `...spring.web` (test) — Spring Boot test app configs (`WebMvcConfig`, `WebFluxConfig`, `WebMvcSpringWebApplication`)
+- `dk.trustworks.essentials.types.spring.web` (main, Java) — `SingleValueTypeConverter`, `EssentialsWebMvcConfigurer`, `EssentialsWebFluxConfigurer`, `KotlinValueTypeConverterRegistrar`
+- `...spring.web` (main, **Kotlin** — `src/main/kotlin`) — `KotlinValueTypeConverter`
+- `...spring.web` (test) — Spring Boot test apps + Jackson-2-only body configs (`WebMvcConfig`, `WebFluxConfig`)
 - `...spring.web.controllers` (test) — `WebMvcController`, `WebFluxController` covering all supported type combos
-- `...spring.web.model` (test) — domain value types used across tests (`OrderId`, `CustomerId`, `DueDate`, etc.)
+- `...spring.web.model` (test) — Java value types used across tests (`OrderId`, `CustomerId`, `DueDate`, etc.)
+- `...spring.web.kotlin` (test, `src/test/kotlin`) — Kotlin semantic types, controller, binding tests
+- `src/test/kotlin-jackson2` / `-jackson3` — **one compiles per build**, selected by `${essentials.jackson.flavor}` in the kotlin-maven-plugin `sourceDirs`. Both name `EssentialTypesJacksonModule`, whose FQCN is shared across flavours
 
 ## Key Classes
 
 | Class | Role |
 |---|---|
-| `SingleValueTypeConverter` | `GenericConverter` — sole production class; handles all `String`/`Number` → `SingleValueType` conversion |
-| `WebMvcConfig` (test) | Registers converter via `FormatterRegistry`; template for WebMvc users |
-| `WebFluxConfig` (test) | Registers converter + wires Jackson codecs; template for WebFlux users |
-| `WebMvcSpringWebApplication` (test) | Boot entry point; registers `EssentialTypesJacksonModule` bean |
+| `SingleValueTypeConverter` | `GenericConverter` for the **Java** `SingleValueType` hierarchy |
+| `KotlinValueTypeConverter` (Kotlin) | `GenericConverter` for **Kotlin** semantic types; builds via `primaryConstructor.call()` |
+| `KotlinValueTypeConverterRegistrar` | package-private; `ClassUtils.isPresent` guard so Java-only consumers don't hit `NoClassDefFoundError` |
+| `EssentialsWebMvcConfigurer` | shipped `WebMvcConfigurer` — `addFormatters` only |
+| `EssentialsWebFluxConfigurer` | shipped `WebFluxConfigurer` — `addFormatters` only |
+| `WebMvcConfig`, `WebFluxConfig` (test) | Jackson **2** body converters/codecs for `-Pjackson2` runs. Not templates — they were documented as shipped API and were not |
+| `WebMvcSpringWebApplication` (test) | Boot entry point; registers `EssentialTypesJacksonModule` bean reflectively (FQCN shared across flavours) |
 
 ## Test Structure
 
@@ -28,13 +34,21 @@ No Docker/infrastructure needed — pure Spring Boot in-memory tests.
 
 ## Extension Points
 
-No SPI. `SingleValueTypeConverter` is `final`. Extension = registering converter in your own `WebMvcConfigurer`/`WebFluxConfigurer`.
+No SPI. `SingleValueTypeConverter` is `final`. Extension = registering extra converters in your own configurer alongside `EssentialsWebMvcConfigurer`/`EssentialsWebFluxConfigurer`.
+
+Neither configurer auto-configures — no `AutoConfiguration.imports`. Consumers `@Import`.
 
 `SingleValueType.fromObject(value, targetType)` (from `types` module) drives all instantiation — target type must have constructor accepting wrapped value.
 
 ## Gotchas
 
-- Converter scope: `@PathVariable` + `@RequestParam` only. `@RequestBody`/`@ResponseBody` → handled by `types-jackson` (`EssentialTypesJacksonModule`), not this module.
+- **Never override `configureHttpMessageCodecs` in a shipped configurer.** That replaces the app's JSON codecs; the obvious copy-paste version swaps Jackson 3 for Jackson 2 on Boot 4, silently. `EssentialsWebFluxConfigurerJackson3Test` asserts the codecs stay untouched — keep it.
+- **Kotlin coverage is narrower than it looks.** `@JvmInline value class` params are *unboxed* in the JVM signature (`byOrderId-GEJpfBY(String)`), even nullable — Spring never sees the value class and `KotlinValueTypeConverter` is unreachable. Non-inline over `String` is handled by Spring's own `ObjectToObjectConverter`. Only non-inline over non-`String` needs this module. Asserted in `KotlinValueTypeConverterRequiredTest`; do not widen the docs past it.
+- **Missing converter = HTTP 500, not 400** — `ConversionNotSupportedException` is classed as server misconfiguration.
+- **`kotlin-reflect`/`kotlin-stdlib` are `<optional>`** (as in `types`, `types-jdbi`) — not transitive. Hence the registrar guard.
+- **Java in `src/main/java` references Kotlin in `src/main/kotlin`** (`KotlinValueTypeConverterRegistrar` → `KotlinValueTypeConverter`). Fine for Maven: kotlin-maven-plugin `compile` binds to `process-sources`, before `maven-compiler-plugin`. **Not** fine for an IDE that compiles Java into the same `target/classes` without knowing the Kotlin output — it writes a stub that throws `Error: Unresolved compilation problem: KotlinValueTypeConverter cannot be resolved`, and `mvn install` will happily ship it. Symptom is a consumer's context failing in `EssentialsWebMvcConfigurer.addFormatters`. Cure: `mvn clean install -pl types-spring-web`.
+- **Failsafe needs `essentials.jackson.flavor` too**, not just surefire. Without it `WebFluxControllerIT`'s `@EnabledIfSystemProperty` can never match and the IT is silently skipped in both profiles — which it was.
+- Converter scope: `@PathVariable` + `@RequestParam` only. `@RequestBody`/`@ResponseBody` → handled by `types-jackson`/`types-jackson3` (`EssentialTypesJacksonModule`) on the **web** mapper, not this module. Kotlin bodies need `jackson-module-kotlin` on top — `EssentialTypesJacksonModule` covers the Java hierarchy only, and without the Kotlin module a value class serialises as `{"value":"…"}` instead of the bare scalar.
 - `ZonedDateTimeType` path variables must be URL-encoded by client. Converter auto-decodes via `URLDecoder.decode(source, UTF_8)`. Other temporal types do NOT need encoding.
 - `NumberType` conversion uses `NumberType.resolveNumberClass()` to pick the concrete number class (`Long`, `BigDecimal`, etc.) before parsing — target type hierarchy determines the number class, not the string content.
 - `spring-web` and `spring-webmvc`/`spring-webflux` are `provided` scope — caller's app must supply them. Only `spring-core` is `provided` at compile time.

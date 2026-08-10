@@ -4,16 +4,34 @@
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.jackson.types`
-- Purpose: Jackson serialization/deserialization for `SingleValueType` implementations
+- Purpose: Jackson serialization/deserialization for **Java** `SingleValueType` implementations
 - Dependencies: `jackson-databind` (provided), `types` module
 - Key class: `EssentialTypesJacksonModule`
 
+**Two artifacts, one FQCN.** `types-jackson3` is the Jackson 3 flavour and the repository default;
+`types-jackson` is Jackson 2. Both publish
+`dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule`, extending
+`tools.jackson.databind` and `com.fasterxml.jackson.databind` respectively, so only one may ever be on
+the classpath. Pick the one matching your application's Jackson major — Spring Boot 4 is Jackson 3.
+
 ```xml
+<!-- Spring Boot 4 / Jackson 3 -->
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>types-jackson3</artifactId>
+</dependency>
+
+<!-- Jackson 2 -->
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jackson</artifactId>
 </dependency>
 ```
+
+⚠️ **Java hierarchy only.** `EssentialTypesJacksonModule` registers serializers for `CharSequenceType`,
+`NumberType`, `Money` and `JSR310SingleValueType`. It has **no** knowledge of
+`dk.trustworks.essentials.kotlin.types` — Kotlin semantic types need `jackson-module-kotlin`'s
+`KotlinModule` registered alongside it. See [Kotlin semantic types](#kotlin-semantic-types).
 
 ## TOC
 - [Core API](#core-api)
@@ -282,6 +300,36 @@ Order restored = mapper.readValue(json, Order.class);
 
 ---
 
+## Kotlin semantic types
+
+`EssentialTypesJacksonModule` does **not** cover `dk.trustworks.essentials.kotlin.types` — neither
+flavour references that package at all. Kotlin semantic types are handled by `jackson-module-kotlin`,
+which the consumer registers:
+
+```kotlin
+// Jackson 3
+JsonMapper.builder()
+    .addModule(EssentialTypesJacksonModule())
+    .addModule(tools.jackson.module.kotlin.KotlinModule.Builder().build())
+    .build()
+
+// Jackson 2
+ObjectMapper()
+    .registerModule(EssentialTypesJacksonModule())
+    .registerModule(com.fasterxml.jackson.module.kotlin.KotlinModule.Builder().build())
+```
+
+⚠️ **Omitting `KotlinModule` fails silently, not loudly.** Jackson treats a `@JvmInline value class` as
+an ordinary bean and writes `{"value":"order-4711"}` where the wire contract is the bare scalar
+`"order-4711"`. Nothing throws on the way out; the mismatch surfaces later as unreadable persisted
+JSON. Asserted on both majors by `KotlinJacksonBodyJackson2Test` / `KotlinJacksonBodyJackson3Test` in
+`types-spring-web`.
+
+For an application that persists Kotlin documents, `components/postgresql-document-db`'s
+`TestObjectMappers.kt` is the worked example of assembling the flavour's mapper with `KotlinModule`.
+
+---
+
 ## Gotchas
 
 - ⚠️ `CharSequenceType` needs **both** `CharSequence` and `String` constructors for Jackson 2.18+
@@ -289,7 +337,8 @@ Order restored = mapper.readValue(json, Order.class);
 - ⚠️ Map key deserialization requires explicit `@JsonDeserialize(keyUsing = ...)`
 - ⚠️ `Money` serializes as `{"amount":"...","currency":"..."}` object, not single value
 - ⚠️ Factory `createObjectMapper()` disables getter/setter detection - uses fields only
-- ⚠️ All registered types are from `dk.trustworks.essentials.types` module
+- ⚠️ All registered types are from `dk.trustworks.essentials.types` — the **Java** hierarchy. Kotlin value types need `jackson-module-kotlin`
+- ⚠️ This module covers `@RequestBody`/`@ResponseBody` and persistence. `@PathVariable`/`@RequestParam` is `types-spring-web`, a separate mechanism
 
 ---
 
