@@ -89,7 +89,12 @@ Topic rules, path-scoped so they load only when relevant:
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
 Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- For codebase questions, first run `graphify query "<terms>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- **Query with 1-3 identifier tokens, never the user's sentence.** Seed selection guarantees ≥1 BFS start node per matching term, and traversal depth is fixed at 2 — so every extra word multiplies the subgraph. `SingleValueTypeConverter` → 2 seeds, 29 nodes; the same question as prose → 9 seeds (incl. junk like `PATH`, `types`, `Registration Rules`), 393 nodes, 93% truncated.
+- Truncation means **narrow the query**, not raise `--budget`. Budget is a render cap (default 2000 tokens), not a relevance knob — raising it on a bad seed set just dumps the noise.
+- `--context call` (also `import`, `field`, `parameter_type`, `return_type`, `attribute`, `generic_arg`) narrows to code structure. Caveat: ~1/3 of edges carry no context — those hold the README and `LLM/*.md` nodes, so any `--context` filter drops all docs from the traversal.
+- Class names collide across modules (`SingleValueTypeConverter` matches 5 nodes). `explain` refuses ambiguous names — pass the repo-relative path or full node id it lists.
+- The truncation banner's `context_filter=[…]` / `get_node` advice is for graphify's MCP server. CLI equivalents: `--context` and `explain`.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
