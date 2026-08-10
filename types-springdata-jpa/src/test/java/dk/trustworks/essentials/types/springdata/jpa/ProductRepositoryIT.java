@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DirtiesContext
 class ProductRepositoryIT {
     @Container
-    static PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:latest")
+    static PostgreSQLContainer postgreSQLContainer = new PostgreSQLContainer("postgres:18.4")
             .withDatabaseName("test")
             .withPassword("test")
             .withUsername("test");

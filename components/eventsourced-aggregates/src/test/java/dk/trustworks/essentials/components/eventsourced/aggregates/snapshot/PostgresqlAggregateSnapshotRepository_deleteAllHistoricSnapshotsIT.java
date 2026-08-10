@@ -50,7 +50,7 @@ class PostgresqlAggregateSnapshotRepository_deleteAllHistoricSnapshotsIT {
     public static final AggregateType ORDERS = AggregateType.of("Orders");
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest").withDatabaseName("event-store")
+    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
                                                                                                            .withUsername("test-user")
                                                                                                            .withPassword("secret-password");
 

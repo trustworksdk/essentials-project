@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.foundation.test.fencedlock.DBFencedLo
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.postgres.PostgresPlugin;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
@@ -32,10 +33,7 @@ class PostgresqlFencedLockManagerIT extends DBFencedLockManagerIT<PostgresqlFenc
     private JdbiUnitOfWorkFactory unitOfWorkFactory;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("lock-db")
-            .withUsername("test-user")
-            .withPassword("secret-password");
+    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("lock-db");
 
     @Override
     protected PostgresqlFencedLockManager createLockManagerNode2() {

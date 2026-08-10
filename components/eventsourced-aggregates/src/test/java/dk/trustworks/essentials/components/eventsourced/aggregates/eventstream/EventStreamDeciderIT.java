@@ -71,7 +71,7 @@ class EventStreamDeciderIT {
     public static final AggregateType ORDERS = AggregateType.of("Orders");
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("eventstream-decider-test")
             .withUsername("test-user")
             .withPassword("secret-password");

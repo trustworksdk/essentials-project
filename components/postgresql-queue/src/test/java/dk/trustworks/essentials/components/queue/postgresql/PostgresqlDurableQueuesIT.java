@@ -26,6 +26,7 @@ import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHa
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.types.CorrelationId;
 import dk.trustworks.essentials.components.queue.postgresql.test_data.*;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.assertj.core.api.AssertionsForClassTypes;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
@@ -47,10 +48,7 @@ abstract class PostgresqlDurableQueuesIT extends DurableQueuesIT<PostgresqlDurab
     protected DurableQueuesStatistics durableQueuesStatistics;
 
     @Container
-    protected final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("queue-db")
-            .withUsername("test-user")
-            .withPassword("secret-password");
+    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     /**
      * Determine whether to use the centralized message fetcher

@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
@@ -76,13 +77,15 @@ class BatchedFetchStrategyIT {
     };
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("queue-db")
-            .withUsername("test-user")
-            .withPassword("secret-password");
+    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
-    private JdbiUnitOfWorkFactory        unitOfWorkFactory;
+    private JdbiUnitOfWorkFactory         unitOfWorkFactory;
     private List<PostgresqlDurableQueues> createdDurableQueues;
+    /**
+     * Held so {@link #cleanup()} can close it. The container is shared by every test in this class, so a pool that is
+     * left open per test method exhausts PostgreSQL's max_connections part-way through the class.
+     */
+    private HikariDataSource              dataSource;
 
     @BeforeEach
     void setup() {
@@ -94,11 +97,17 @@ class BatchedFetchStrategyIT {
 
     @AfterEach
     void cleanup() {
-        createdDurableQueues.forEach(durableQueues -> {
-            if (durableQueues.isStarted()) {
-                durableQueues.stop();
-            }
-        });
+        if (createdDurableQueues != null) {
+            createdDurableQueues.forEach(durableQueues -> {
+                if (durableQueues.isStarted()) {
+                    durableQueues.stop();
+                }
+            });
+        }
+        if (dataSource != null) {
+            dataSource.close();
+            dataSource = null;
+        }
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -645,14 +654,14 @@ class BatchedFetchStrategyIT {
     }
 
     private JdbiUnitOfWorkFactory createUnitOfWorkFactory() {
-        var ds = new HikariDataSource();
-        ds.setJdbcUrl(postgreSQLContainer.getJdbcUrl());
-        ds.setUsername(postgreSQLContainer.getUsername());
-        ds.setPassword(postgreSQLContainer.getPassword());
-        ds.setAutoCommit(false);
-        ds.setMaximumPoolSize(20);
+        dataSource = new HikariDataSource();
+        dataSource.setJdbcUrl(postgreSQLContainer.getJdbcUrl());
+        dataSource.setUsername(postgreSQLContainer.getUsername());
+        dataSource.setPassword(postgreSQLContainer.getPassword());
+        dataSource.setAutoCommit(false);
+        dataSource.setMaximumPoolSize(20);
 
-        return new JdbiUnitOfWorkFactory(Jdbi.create(ds));
+        return new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
     }
 
     private static class RecordingHandler implements QueuedMessageHandler {

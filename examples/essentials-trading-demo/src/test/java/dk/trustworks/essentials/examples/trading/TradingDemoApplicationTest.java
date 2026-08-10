@@ -81,7 +81,7 @@ import static org.awaitility.Awaitility.await;
 @AutoConfigureTestRestTemplate
 class TradingDemoApplicationTest {
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:latest")
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("trading-demo-test-db")
             .withUsername("test")
             .withPassword("test");

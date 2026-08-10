@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.test.messaging.queue.Durab
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.reactive.LocalEventBus;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
@@ -34,10 +35,7 @@ import java.time.Duration;
 @Testcontainers
 abstract class PostgresqlDurableQueuesLoadIT extends DurableQueuesLoadIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
     @Container
-    protected final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("queue-db")
-            .withUsername("test-user")
-            .withPassword("secret-password");
+    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
     
     /**
      * Determine whether to use the centralized message fetcher

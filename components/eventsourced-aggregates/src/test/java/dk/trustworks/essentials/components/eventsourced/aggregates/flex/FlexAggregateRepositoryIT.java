@@ -57,7 +57,7 @@ public class FlexAggregateRepositoryIT {
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest").withDatabaseName("event-store")
+    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4").withDatabaseName("event-store")
                                                                                                            .withUsername("test-user")
                                                                                                            .withPassword("secret-password");
 

@@ -22,6 +22,19 @@ mvn clean install -DskipDependencyCheck=true          # skip OWASP check
 mvn clean install -P test-release                     # simulated release
 ```
 
+Integration-test speed knobs (ITs are ~99% of the build's wall clock):
+
+```bash
+mvn -T 1C verify                                      # parallel reactor; multiplies container concurrency with forkCount
+mvn verify -Dfailsafe.forkCount=1                     # serialize ITs on a constrained machine / low Docker memory
+mvn verify -Dfailsafe.forkCount=0.5C                  # more forks on a big machine — measure, don't assume
+mvn verify -Dbenchmark.run=true                       # also run the opt-in throughput/latency suites
+scripts/test-timings.sh                               # rank test classes by elapsed time from the last run
+scripts/test-timings.sh --csv > before.csv            # capture a baseline to diff against
+```
+
+`failsafe.forkCount` defaults to 2. Over-forking Docker makes things slower, not faster — use `scripts/test-timings.sh` to tune it rather than guessing.
+
 ## Module Layout
 
 ```

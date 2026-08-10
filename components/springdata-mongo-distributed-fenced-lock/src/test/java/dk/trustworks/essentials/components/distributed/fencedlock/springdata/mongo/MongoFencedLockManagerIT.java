@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.distributed.fencedlock.springdata.mo
 
 import dk.trustworks.essentials.components.foundation.test.fencedlock.DBFencedLockManagerIT;
 import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.bson.Document;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DataMongoTest
 class MongoFencedLockManagerIT extends DBFencedLockManagerIT<MongoFencedLockManager> {
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:latest");
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE);
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {

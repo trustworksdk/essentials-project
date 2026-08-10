@@ -59,7 +59,7 @@ public class BiTemporalProductPriceIT {
     public static final AggregateType PRODUCT_PRICE = AggregateType.of("ProductPrice");
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("event-store")
             .withUsername("test-user")
             .withPassword("secret-password");

@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ListenNotifyPostgresql12IT extends ListenNotifyIT {
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:12")
+    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:12")
             .withDatabaseName("listen-notify-db")
             .withUsername("test-user")
             .withPassword("secret-password");

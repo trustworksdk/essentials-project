@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.test.messaging.queue.test_
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.foundation.types.CorrelationId;
 import dk.trustworks.essentials.shared.time.*;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
@@ -43,27 +44,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 public class CentralizedFetcherDurableQueueIT_WithOrderedUnordered {
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("queue-db")
-            .withUsername("test-user")
-            .withPassword("secret-password");
+    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     private static final int NUMBER_OF_MESSAGES     = 1000;
     private static final int MAX_PARALLEL_CONSUMERS = 20;
 
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;
+    // Held so cleanup() can close it - the container is shared by every test in this class, so a pool
+    // left open per test method eventually exhausts PostgreSQL's max_connections.
+    private HikariDataSource        dataSource;
 
     @BeforeEach
     void setup() {
-        var ds = new HikariDataSource();
-        ds.setJdbcUrl(postgreSQLContainer.getJdbcUrl());
-        ds.setUsername(postgreSQLContainer.getUsername());
-        ds.setPassword(postgreSQLContainer.getPassword());
-        ds.setAutoCommit(false);
-        ds.setMaximumPoolSize(MAX_PARALLEL_CONSUMERS + 1);
+        dataSource = new HikariDataSource();
+        dataSource.setJdbcUrl(postgreSQLContainer.getJdbcUrl());
+        dataSource.setUsername(postgreSQLContainer.getUsername());
+        dataSource.setPassword(postgreSQLContainer.getPassword());
+        dataSource.setAutoCommit(false);
+        dataSource.setMaximumPoolSize(MAX_PARALLEL_CONSUMERS + 1);
 
-        unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(ds));
+        unitOfWorkFactory = new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
 
         unitOfWorkFactory.usingUnitOfWork(uow -> uow.handle().execute("DROP TABLE IF EXISTS " + PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME));
 
@@ -80,6 +81,10 @@ public class CentralizedFetcherDurableQueueIT_WithOrderedUnordered {
     void cleanup() {
         if (durableQueues != null) {
             durableQueues.stop();
+        }
+        if (dataSource != null) {
+            dataSource.close();
+            dataSource = null;
         }
     }
 

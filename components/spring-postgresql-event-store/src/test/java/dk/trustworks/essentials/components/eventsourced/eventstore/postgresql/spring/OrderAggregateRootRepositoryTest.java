@@ -66,7 +66,7 @@ abstract class OrderAggregateRootRepositoryTest {
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    static  PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    static  PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("test")
             .withPassword("test")
             .withUsername("test");

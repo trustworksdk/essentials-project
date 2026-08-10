@@ -31,7 +31,6 @@ import org.junit.jupiter.api.*;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
-import org.testcontainers.images.builder.ImageFromDockerfile;
 import org.testcontainers.junit.jupiter.*;
 
 import javax.sql.DataSource;
@@ -52,11 +51,11 @@ public class CdcModeAutoRequireIT {
     private static final String LIMITED_USER = "limited-user";
     private static final String LIMITED_PASS = "limited-password";
 
+    // Shares the stably-tagged wal2json image with the other CDC ITs so it is built once rather than rebuilt and
+    // orphaned per test method. Instance field on purpose - setup() drops and recreates the limited role, which fails
+    // once a previous test method has left objects in the database owned by that role.
     @Container
-    protected final GenericContainer<?> postgres = new GenericContainer<>(
-            new ImageFromDockerfile()
-                    .withFileFromClasspath("Dockerfile", "docker/postgresql-wal2json/Dockerfile")
-    )
+    protected final GenericContainer<?> postgres = new GenericContainer<>(AbstractLogicalReplicationPostgresIT.WAL2JSON_IMAGE)
             .withEnv("POSTGRES_DB", DB)
             .withEnv("POSTGRES_USER", ADMIN_USER)
             .withEnv("POSTGRES_PASSWORD", ADMIN_PASS)

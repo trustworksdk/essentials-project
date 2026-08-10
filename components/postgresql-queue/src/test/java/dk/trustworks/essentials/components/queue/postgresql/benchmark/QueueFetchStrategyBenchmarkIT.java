@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -53,10 +54,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 public class QueueFetchStrategyBenchmarkIT {
 
     @Container
-    static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("test")
-            .withPassword("test")
-            .withUsername("test");
+    static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("test", "test", "test");
 
     private static final QueuedMessageHandler NO_OP_HANDLER = _msg -> {
     };

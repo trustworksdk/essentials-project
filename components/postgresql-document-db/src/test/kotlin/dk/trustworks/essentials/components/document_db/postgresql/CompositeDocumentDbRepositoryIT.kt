@@ -37,7 +37,7 @@ class CompositeDocumentDbRepositoryIT {
     private lateinit var repository: DocumentDbRepository<CompositeOrder, CompositeOrderId>
 
     @Container
-    val postgresContainer: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:latest")
+    val postgresContainer: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:18.4")
         .apply {
             withDatabaseName("testdb")
             withUsername("test")
