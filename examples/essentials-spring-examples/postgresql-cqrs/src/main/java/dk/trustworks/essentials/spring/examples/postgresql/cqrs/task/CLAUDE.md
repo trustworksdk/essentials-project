@@ -25,6 +25,15 @@ behind it. Because the processor is an `InTransactionEventProcessor`, both event
 Read `create_task` → `comment_on_task_created` → `add_comment` in that order; the flow only makes sense as a
 chain.
 
+## The repository does not construct aggregates
+
+`Tasks.createNewTask(Task)` takes an already-constructed aggregate and persists it. Constructing a `Task` is
+what emits `TaskCreated`, and that decision belongs to `use_cases/create_task`, not to a repository wrapper.
+
+This was wrong until recently — `createTask(taskId, comment)` built the aggregate here, putting the decision
+somewhere no command, handler or endpoint could reach. All four repository wrappers in this module now have
+the same shape; see `banking/CLAUDE.md` for the same note.
+
 ## `routing/TaskCommand`
 
 `TaskCommand` is the BC-private marker interface every command in this context implements — the law's

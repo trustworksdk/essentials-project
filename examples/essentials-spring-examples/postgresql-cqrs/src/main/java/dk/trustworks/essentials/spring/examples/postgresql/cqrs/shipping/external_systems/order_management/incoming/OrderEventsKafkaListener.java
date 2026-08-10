@@ -26,6 +26,20 @@ import org.springframework.stereotype.Service;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The inbound half of the anti-corruption boundary to order-management.
+ *
+ * <p>It consumes the {@code order-events} topic and turns an {@code OrderAccepted} into shipping's own
+ * {@code ShipOrder} command -- translating the foreign {@code String} id into an {@code OrderId} as it goes. That
+ * conversion is the boundary's entire purpose, and this is the only place in the module allowed to know both shapes.
+ *
+ * <p>Dispatch is {@code sendAndDontWait} on the {@code DurableLocalCommandBus}, so the command is written to a queue
+ * table and handled asynchronously with retries, rather than inline on the Kafka consumer thread. It is therefore
+ * at-least-once, which is why {@code ShippingOrder.markOrderAsShipped()} is idempotent.
+ *
+ * <p>Naming another slice's command type in order to dispatch it is the sanctioned way for a translation slice to
+ * collaborate -- it decides nothing itself.
+ */
 @Service
 public class OrderEventsKafkaListener {
     private static final Logger log = LoggerFactory.getLogger(OrderEventsKafkaListener.class);

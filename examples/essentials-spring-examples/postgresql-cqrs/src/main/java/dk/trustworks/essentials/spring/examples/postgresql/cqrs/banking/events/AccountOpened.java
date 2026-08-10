@@ -21,6 +21,10 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.Ac
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * An account has been opened. The first event in every {@code Account} stream, and the one that establishes the
+ * account's existence -- {@code Accounts.hasAccount} answers by checking for it.
+ */
 public record AccountOpened(AccountId accountId,
                             AccountNumber accountNumber) implements AccountEvent {
     public AccountOpened {

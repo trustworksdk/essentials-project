@@ -21,6 +21,13 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.Tr
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * A money transfer has advanced to the next stage of its lifecycle.
+ *
+ * <p>Emitted once per completed leg -- {@code FROM_ACCOUNT_WITHDRAWN}, then {@code TO_ACCOUNT_DEPOSITED} -- so the
+ * transfer's stream records how far it got even if the process stalls partway. That is what makes the automation
+ * resumable: the status is reconstructed from these events, not held in memory.
+ */
 public record IntraBankMoneyTransferStatusChanged(TransactionId transactionId,
                                                   TransferLifeCycleStatus status) implements IntraBankMoneyTransferEvent {
     public IntraBankMoneyTransferStatusChanged {

@@ -21,6 +21,13 @@ import dk.trustworks.essentials.types.LocalDateType;
 
 import java.time.LocalDate;
 
+/**
+ * The banking date a deposit or withdrawal takes effect from, which is not necessarily the date it was recorded --
+ * hence a named type rather than a bare {@code LocalDate}, so it cannot be confused with a timestamp.
+ *
+ * <p>Never use it for ordering: events are ordered by {@code EventOrder} and {@code GlobalEventOrder}, never by a
+ * date carried in a payload.
+ */
 public class ValueDate extends LocalDateType<ValueDate> {
     @JsonCreator
     public ValueDate(LocalDate value) {

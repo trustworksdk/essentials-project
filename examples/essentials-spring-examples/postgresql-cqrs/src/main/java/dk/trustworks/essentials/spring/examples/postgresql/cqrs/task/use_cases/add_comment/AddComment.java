@@ -21,5 +21,16 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskI
 import java.time.LocalDateTime;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.routing.TaskCommand;
 
+/**
+ * Add a comment to an existing task.
+ *
+ * <p>Both the command and the request body of {@code POST /tasks/comments}. Like {@code ShipOrder} in the shipping
+ * context it has two triggers -- that endpoint, and the {@code comment_on_task_created} automation -- and the second
+ * is at-least-once, which is why {@code Task.addComment} de-duplicates.
+ *
+ * <p>{@code createdAt} is supplied by the caller rather than taken from the clock in the handler. That is what makes
+ * a redelivery carry the same timestamp as the original, and therefore be recognised as the same comment; it is part
+ * of the dedup key, not decoration.
+ */
 public record AddComment(TaskId taskId, String content, LocalDateTime createdAt) implements TaskCommand {
 }

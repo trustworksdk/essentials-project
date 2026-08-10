@@ -20,6 +20,14 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.O
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * A registered shipping order has been dispatched.
+ *
+ * <p>Appended to the order's stream, and emitted at most once per order however many times {@code ShipOrder} is
+ * redelivered -- see {@code ShippingOrder}'s idempotency guard. Two subscribers react: the {@code order_status}
+ * projection updates the read model, and the {@code order_management} translation slice publishes the external
+ * {@code ExternalOrderShipped} to Kafka.
+ */
 public record OrderShipped(OrderId orderId) implements ShippingEvent {
     public OrderShipped {
         requireNonNull(orderId, "No orderId provided");

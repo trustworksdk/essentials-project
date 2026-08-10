@@ -22,6 +22,16 @@ import dk.trustworks.essentials.types.Amount;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Ask for money to be moved between two accounts in this bank.
+ *
+ * <p>Both the command and the request body of {@code POST /transfers}. Handling it only <em>records the request</em>
+ * -- it creates the {@code IntraBankMoneyTransfer} aggregate in state {@code REQUESTED}; the withdrawal and deposit
+ * are carried out afterwards by the {@code transfer_money} automation reacting to the resulting event.
+ *
+ * <p>That split is what makes the transfer durable: once this command commits, the transfer is a fact with its own
+ * stream, and the process can resume after a crash instead of being lost mid-flight.
+ */
 public record RequestIntraBankMoneyTransfer(TransactionId transactionId,
                                             AccountId fromAccount,
                                             AccountId toAccount,

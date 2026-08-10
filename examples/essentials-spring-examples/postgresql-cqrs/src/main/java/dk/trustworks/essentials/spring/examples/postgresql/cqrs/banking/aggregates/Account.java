@@ -32,6 +32,24 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.In
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * A bank account, and the consistency boundary for every change to its balance.
+ *
+ * <p>An event-sourced {@link AggregateRoot}: its methods do not assign state, they {@code apply} an
+ * {@link AccountEvent}, and the {@code @EventHandler} methods at the bottom are the only place {@code balance} is
+ * ever written. The same handlers run when the aggregate is rehydrated from its stream, so replaying history and
+ * handling a new command follow the identical path -- which is what makes stored events the source of truth rather
+ * than a side effect.
+ *
+ * <p>The one invariant it enforces is that a withdrawal may not overdraw the balance unless the caller explicitly
+ * passes {@link AllowOverdrawingBalance#YES}; violating it throws {@link InsufficientFundsException} <em>before</em>
+ * any event is applied, so a rejected command leaves no trace in the stream. Making that permission a parameter
+ * rather than a policy read from somewhere is what lets the money-transfer process manager overdraw deliberately
+ * while an ordinary withdrawal cannot.
+ *
+ * <p>Reached through {@link Accounts}. Commands are unpacked by the slice that handles them, so this class never
+ * names a command type.
+ */
 public class Account extends AggregateRoot<AccountId, AccountEvent, Account> {
     private Amount balance;
 

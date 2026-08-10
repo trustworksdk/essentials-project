@@ -29,6 +29,18 @@ import java.util.Optional;
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The repository for {@link ShippingOrder} aggregates, and the owner of the {@code ShippingOrders}
+ * {@link AggregateType} -- the name under which their events are stored, and the one the {@code order_status}
+ * projection and the outbound Kafka publisher both subscribe to.
+ *
+ * <p>It wraps a {@link StatefulAggregateRepository}, which loads an aggregate by replaying its stream and persists
+ * the events a command produced. The thin wrapper exists so the context speaks its own language
+ * ({@code getOrder}/{@code findOrder}) rather than a generic {@code load}/{@code save}.
+ *
+ * <p>{@link #registerNewOrder} persists an already-constructed order rather than building one: constructing it is
+ * what emits {@code ShippingOrderRegistered}, and that decision belongs to the slice, not here.
+ */
 @Component
 public class ShippingOrders {
     public static final AggregateType AGGREGATE_TYPE = AggregateType.of("ShippingOrders");

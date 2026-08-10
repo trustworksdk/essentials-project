@@ -16,6 +16,13 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types;
 
+/**
+ * Where an order is to be delivered. An immutable value object with no identity of its own -- two addresses with the
+ * same fields are the same address.
+ *
+ * <p>It is carried in {@code ShippingOrderRegistered}, which means it is persisted in the event stream: renaming a
+ * component is a stored-data change, not just a refactor.
+ */
 public record ShippingDestinationAddress(String recipientName,
                                          String street,
                                          String zipCode,

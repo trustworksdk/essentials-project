@@ -20,6 +20,13 @@ import dk.trustworks.essentials.types.Amount;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
+/**
+ * Thrown when a withdrawal would overdraw an account that did not permit it.
+ *
+ * <p>{@code Account} raises this <em>before</em> applying any event, so a rejected withdrawal leaves the stream
+ * untouched. It carries the balance and the requested amount alongside the account id, so the caller can report what
+ * was short without reloading the aggregate.
+ */
 public class InsufficientFundsException extends RuntimeException {
     public final AccountId accountId;
     public final Amount    balance;

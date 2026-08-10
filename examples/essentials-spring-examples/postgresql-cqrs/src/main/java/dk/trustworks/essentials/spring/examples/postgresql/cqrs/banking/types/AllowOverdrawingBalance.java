@@ -16,6 +16,17 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types;
 
+/**
+ * Whether a withdrawal may take the account below zero.
+ *
+ * <p>An explicit parameter on {@code Account.withdraw} rather than a policy the aggregate looks up, so the decision
+ * is made -- and visible -- at the call site. The {@code transfer_money} automation passes {@code YES} because the
+ * transfer aggregate has already authorised the movement; an ordinary withdrawal passes {@code NO} and is rejected
+ * with {@link InsufficientFundsException}.
+ *
+ * <p>An enum rather than a {@code boolean}: {@code withdraw(amount, date, txId, NO)} says at a glance what
+ * {@code withdraw(amount, date, txId, false)} does not.
+ */
 public enum AllowOverdrawingBalance {
     YES,
     NO;

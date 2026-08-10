@@ -20,5 +20,11 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskI
 
 import java.time.LocalDateTime;
 
+/**
+ * A comment has been made on a task.
+ *
+ * <p>Emitted only when the comment is not already present -- {@code Task.addComment} de-duplicates on task, content
+ * and {@code createdAt} together, so this event's fields are also its identity.
+ */
 public record CommentAdded(TaskId taskId, String content, LocalDateTime createdAt) implements TaskEvent {
 }

@@ -38,6 +38,22 @@ import java.util.List;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The outbound half of the anti-corruption boundary to order-management: it publishes shipping's facts to the
+ * {@code shipping-events} Kafka topic.
+ *
+ * <p>An {@link EventProcessor} subscribed to the {@code ShippingOrders} aggregate type. The framework gives it a
+ * durable, ordered, at-least-once subscription over the event store plus an Inbox in front of the handler, so a
+ * broker outage or a restart resumes where it left off rather than dropping messages -- the same guarantee the
+ * Inbox/Outbox examples build by hand.
+ *
+ * <p>It converts {@code OrderShipped} into the external {@code ExternalOrderShipped}, turning shipping's
+ * {@code OrderId} back into a plain {@code String} on the way out. That translation is the whole point of the slice.
+ *
+ * <p>{@link #getInboxRedeliveryPolicy()} shows the other half of retry design: some failures should not be retried
+ * at all. A {@code ConstraintViolationException} or an HTTP 400 will fail identically every time, so redelivery
+ * stops on those instead of burning twenty attempts.
+ */
 @Service
 public class ShippingEventKafkaPublisher extends EventProcessor {
     private static final Logger log = LoggerFactory.getLogger(ShippingEventKafkaPublisher.class);

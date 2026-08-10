@@ -16,4 +16,11 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types;
 
+/**
+ * How far an {@code IntraBankMoneyTransfer} has got.
+ *
+ * <p>The stages are strictly ordered and each transition asserts the one it expects, so a redelivered step cannot
+ * move the transfer twice. Moving money between two aggregates cannot be a single transaction under event sourcing;
+ * this status is the record of the intermediate states that fact makes unavoidable.
+ */
 public enum TransferLifeCycleStatus {REQUESTED, FROM_ACCOUNT_WITHDRAWN, TO_ACCOUNT_DEPOSITED, COMPLETED}

@@ -29,6 +29,18 @@ import java.util.Optional;
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The repository for {@link Task} aggregates, and the owner of the {@code Task} {@link AggregateType} -- the name
+ * under which their events are stored, and the one the {@code comment_on_task_created} automation subscribes to.
+ *
+ * <p>It wraps a {@link StatefulAggregateRepository}, which loads an aggregate by replaying its stream and persists
+ * the events a command produced.
+ *
+ * <p>{@link #createNewTask} persists an already-constructed task rather than building one: constructing it is what
+ * emits {@code TaskCreated}, and that decision belongs to the slice, not here. Same shape as
+ * {@code Accounts.openNewAccount}, {@code ShippingOrders.registerNewOrder} and
+ * {@code IntraBankMoneyTransfers.requestNewTransfer}.
+ */
 @Component
 public class Tasks {
 
@@ -55,9 +67,14 @@ public class Tasks {
         return repository.load(taskId);
     }
 
-    public Task createTask(TaskId taskId, String comment) {
-        requireNonNull(taskId, "No taskId provided");
-        var task = new Task(taskId, comment);
+    /**
+     * Persists an already-constructed {@link Task}. Constructing it — which is what emits {@code TaskCreated} — is
+     * the {@code task.create_task} slice's decision, not this repository's, so it happens there. Mirrors
+     * {@code Accounts.openNewAccount}, {@code ShippingOrders.registerNewOrder} and
+     * {@code IntraBankMoneyTransfers.requestNewTransfer}.
+     */
+    public Task createNewTask(Task task) {
+        requireNonNull(task, "No task provided");
         return repository.save(task);
     }
 }

@@ -20,6 +20,16 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.O
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Mark an already-registered shipping order as shipped.
+ *
+ * <p>Both the command and the request body of {@code POST /shipping/ship-order}. It reaches its handler from two
+ * directions -- that endpoint, and the {@code order_management} translation slice when order-management accepts an
+ * order -- which is one slice with two triggers, not two slices.
+ *
+ * <p>The second path is at-least-once, so this command can be handled more than once for the same order; the guard
+ * that makes that harmless (INV-SO-1) lives on {@code ShippingOrder}.
+ */
 public record ShipOrder(OrderId orderId) {
     public ShipOrder {
         requireNonNull(orderId, "No orderId provided");

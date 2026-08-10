@@ -22,6 +22,17 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
+/**
+ * Entry point for the PostgreSQL/JPA flavour of the Inbox/Outbox example.
+ *
+ * <p>Almost everything is auto-configured: the Essentials Spring Boot starters supply the {@code DurableQueues},
+ * {@code Inboxes}/{@code Outboxes}, the {@code DurableLocalCommandBus} and the {@code EventBus}, and
+ * {@code ReactiveHandlersBeanPostProcessor} registers every {@code AnnotatedCommandHandler} and
+ * {@code AnnotatedEventHandler} bean without an explicit wiring step.
+ *
+ * <p>This class also anchors the component scan, which is why {@code config/KafkaConfiguration} derives its Kafka
+ * trusted-package prefix from this package rather than from a type inside a slice.
+ */
 @SpringBootApplication
 public class Application {
 

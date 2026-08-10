@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.views.order_status;
 
 import dk.trustworks.essentials.components.document_db.DocumentDbRepository;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.OrderId;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -53,8 +54,11 @@ public class OrderStatusAPI {
     }
 
     @GetMapping("/{orderId}")
-    public ResponseEntity<OrderStatusView> getOrderStatus(@PathVariable String orderId) {
-        var view = repository.findById(orderId);
+    public ResponseEntity<OrderStatusView> getOrderStatus(@PathVariable OrderId orderId) {
+        // The typed signature is §R2's stronger form; it binds because config/WebConfiguration imports
+        // types-spring-web's EssentialsWebMvcConfigurer. The DocumentDbRepository is keyed by String, so the id is
+        // unwrapped for the lookup - the HTTP contract stays typed, which is where it matters
+        var view = repository.findById(orderId.toString());
         return view == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(view);
     }
 

@@ -18,9 +18,12 @@ package dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping;
 
 import dk.trustworks.essentials.shared.time.StopWatch;
 import dk.trustworks.essentials.spring.examples.postgresql.messaging.AbstractIntegrationTest;
-import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.commands.RecreateShippingOrderViews;
-import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.domain.ShippingOrder;
-import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.domain.ShippingOrders;
+import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.load.RecreateShippingOrderViews;
+import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.entities.ShippingOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.load.LoadOrderShippingProcessor;
+import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.load.LoadTestShippingOrders;
+import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.types.OrderId;
+import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.types.ShippingDestinationAddress;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -41,8 +44,15 @@ public class LoadOrderShippingProcessorIT extends AbstractIntegrationTest {
 
     private static final int NUMBER_OF_INSERTS = 15000;
 
+    private static final ShippingDestinationAddress LOAD_TEST_ADDRESS = ShippingDestinationAddress.builder()
+                                                                                                  .setRecipientName("Load Tester")
+                                                                                                  .setStreet("Load Street 1")
+                                                                                                  .setZipCode("1234")
+                                                                                                  .setCity("Load City")
+                                                                                                  .build();
+
     @Autowired
-    private ShippingOrders shippingOrders;
+    private LoadTestShippingOrders shippingOrders;
 
     @Autowired
     private LoadOrderShippingProcessor loadOrderShippingProcessor;
@@ -82,9 +92,8 @@ public class LoadOrderShippingProcessorIT extends AbstractIntegrationTest {
         var                 batchSize = 100;
         List<ShippingOrder> batch     = new ArrayList<>(batchSize);
         for (int i = 0; i < NUMBER_OF_INSERTS; i++) {
-            var shippingOrder = new ShippingOrder();
-            shippingOrder.setId(OrderId.random().toString());
-            batch.add(shippingOrder);
+            // The entity has no setters any more - see entities/ShippingOrder and the BC's CLAUDE.md
+            batch.add(new ShippingOrder(OrderId.random().toString(), LOAD_TEST_ADDRESS));
 
             if (batch.size() == batchSize) {
                 try {

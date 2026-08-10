@@ -16,5 +16,9 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.incoming;
 
+/**
+ * The one inbound event this boundary acts on: order-management has accepted an order, which is shipping's cue to
+ * dispatch it. Every other {@code OrderEvent} is logged and dropped.
+ */
 public record OrderAccepted(String id, long orderNumber) implements OrderEvent {
 }

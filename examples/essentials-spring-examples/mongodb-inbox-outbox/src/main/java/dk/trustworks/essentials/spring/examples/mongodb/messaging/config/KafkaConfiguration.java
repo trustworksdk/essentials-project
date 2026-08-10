@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.spring.examples.mongodb.messaging.config;
 
-import dk.trustworks.essentials.spring.examples.mongodb.messaging.shipping.OrderShippingProcessor;
+import dk.trustworks.essentials.spring.examples.mongodb.messaging.Application;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -34,9 +34,22 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Map;
 
+/**
+ * Module-level Kafka wiring: the producer, consumer and listener-container factories that the {@code shipping}
+ * bounded context's translation slice uses in both directions.
+ *
+ * <p>This is application infrastructure and deliberately sits outside the bounded context. It knows that Kafka
+ * payloads live somewhere under the {@code shipping} package, but not which slice owns them.
+ */
 @Configuration
 @EnableKafka
 public class KafkaConfiguration {
+    /**
+     * Kafka payload types all live under the {@code shipping} bounded context. Anchoring on the application's own
+     * package rather than on a type inside a slice keeps this module-level wiring from reaching into slice internals.
+     */
+    private static final String SHIPPING_TRUSTED_PACKAGES = Application.class.getPackageName() + ".shipping.*";
+
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
 
@@ -66,7 +79,7 @@ public class KafkaConfiguration {
         return new DefaultKafkaConsumerFactory<>(config,
                                                  new StringDeserializer(),
                                                  new JacksonJsonDeserializer<>(jsonMapper)
-                                                         .trustedPackages(OrderShippingProcessor.class.getPackageName()+".*"));
+                                                         .trustedPackages(SHIPPING_TRUSTED_PACKAGES));
     }
 
     @Bean

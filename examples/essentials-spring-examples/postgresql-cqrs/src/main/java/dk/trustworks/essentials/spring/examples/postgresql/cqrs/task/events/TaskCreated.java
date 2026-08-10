@@ -20,5 +20,11 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskI
 
 import java.time.LocalDateTime;
 
+/**
+ * A task has been created, carrying the text it was opened with. The first event in every {@code Task} stream.
+ *
+ * <p>The {@code comment_on_task_created} automation reacts to it by issuing an {@code AddComment}, which is what
+ * turns that opening text into an actual comment on the task.
+ */
 public record TaskCreated(TaskId taskId, String comment, LocalDateTime createdAt) implements TaskEvent {
 }

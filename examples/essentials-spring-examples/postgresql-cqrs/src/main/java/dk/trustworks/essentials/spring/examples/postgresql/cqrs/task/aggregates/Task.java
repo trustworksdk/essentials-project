@@ -28,6 +28,20 @@ import java.util.Set;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.Comment;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
 
+/**
+ * A task and the comments made on it -- the smallest of the three example contexts, and the one that shows an
+ * aggregate holding a growing collection rather than a scalar.
+ *
+ * <p>An event-sourced {@link AggregateRoot}: {@code addComment} applies a {@link CommentAdded} and the
+ * {@code @EventHandler} below is the only place {@code comments} is written, so the set is rebuilt by replaying the
+ * stream.
+ *
+ * <p>{@code addComment} de-duplicates against the comments it already holds, which makes a redelivered
+ * {@code AddComment} harmless -- the {@code comment_on_task_created} automation issues it off an at-least-once
+ * subscription. Note what the key covers: task, content <em>and</em> timestamp, so the same text posted at a
+ * different instant is a different comment. See the slice's {@code CLAUDE.md} for what that does and does not
+ * protect against.
+ */
 public class Task extends AggregateRoot<TaskId, TaskEvent, Task> {
 
     private Set<Comment> comments;

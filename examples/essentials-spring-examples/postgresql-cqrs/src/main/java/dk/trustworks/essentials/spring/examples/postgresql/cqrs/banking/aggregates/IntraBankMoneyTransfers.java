@@ -29,6 +29,17 @@ import java.util.Optional;
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The repository for {@link IntraBankMoneyTransfer} aggregates, and the owner of the
+ * {@code IntraBankMoneyTransfer} {@link AggregateType} -- the name under which their events are stored, and the one
+ * the {@code transfer_money} automation subscribes to.
+ *
+ * <p>It wraps a {@link StatefulAggregateRepository}, which loads an aggregate by replaying its stream and persists
+ * the events a command produced.
+ *
+ * <p>{@link #requestNewTransfer} persists an already-constructed transfer rather than building one: constructing it
+ * is what emits {@code IntraBankMoneyTransferRequested}, and that decision belongs to the slice, not here.
+ */
 @Component
 public class IntraBankMoneyTransfers {
     public static final AggregateType AGGREGATE_TYPE = AggregateType.of("IntraBankMoneyTransfer");

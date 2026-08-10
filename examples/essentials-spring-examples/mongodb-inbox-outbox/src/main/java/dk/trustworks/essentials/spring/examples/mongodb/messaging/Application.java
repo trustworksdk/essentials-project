@@ -18,7 +18,7 @@ package dk.trustworks.essentials.spring.examples.mongodb.messaging;
 
 import dk.trustworks.essentials.components.boot.autoconfigure.mongodb.AdditionalCharSequenceTypesSupported;
 import dk.trustworks.essentials.components.boot.autoconfigure.mongodb.AdditionalConverters;
-import dk.trustworks.essentials.spring.examples.mongodb.messaging.shipping.OrderId;
+import dk.trustworks.essentials.spring.examples.mongodb.messaging.shipping.types.OrderId;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.observation.aop.ObservedAspect;
 import org.springframework.boot.SpringApplication;
@@ -26,6 +26,17 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.convert.Jsr310Converters;
 
+/**
+ * Entry point for the MongoDB flavour of the Inbox/Outbox example.
+ *
+ * <p>Beyond starting Spring Boot it contributes the two pieces of wiring the Essentials MongoDB auto-configuration
+ * cannot infer: {@link AdditionalCharSequenceTypesSupported} tells the document store how to read and write
+ * {@code OrderId} as a plain string rather than a nested object, and {@link AdditionalConverters} adds the JSR-310
+ * {@code Duration} converters that the durable-queue and Inbox/Outbox documents need.
+ *
+ * <p>This class also anchors the component scan, which is why {@code config/KafkaConfiguration} derives its Kafka
+ * trusted-package prefix from this package rather than from a type inside a slice.
+ */
 @SpringBootApplication
 public class Application {
     public static void main(String[] args) {

@@ -34,6 +34,18 @@ import org.springframework.web.client.HttpClientErrorException;
 
 import java.time.Duration;
 
+/**
+ * Entry point for the CQRS + event-sourcing example, covering three bounded contexts: {@code banking},
+ * {@code shipping} and {@code task}.
+ *
+ * <p>The EventStore, subscription manager, {@code DurableLocalCommandBus} and {@code EventBus} are all
+ * auto-configured by the Essentials Spring Boot starters, and {@code ReactiveHandlersBeanPostProcessor} registers
+ * every command and event handler bean, so there is no wiring to do here.
+ *
+ * <p>What this class does contribute is the two policy overrides that decide what happens when a command <em>fails</em>,
+ * which the starter cannot guess: how often to retry, and which failures are not worth retrying at all. Both are
+ * demonstrated on the beans below.
+ */
 @SpringBootApplication
 public class Application {
     private static final Logger log = LoggerFactory.getLogger(Application.class);

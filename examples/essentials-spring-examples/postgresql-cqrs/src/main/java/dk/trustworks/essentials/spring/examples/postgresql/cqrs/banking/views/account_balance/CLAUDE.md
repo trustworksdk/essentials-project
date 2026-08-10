@@ -27,6 +27,13 @@ so a balance fetched immediately after a transfer may still be the pre-transfer 
 reached through a `DocumentDbRepository<AccountBalanceView, String>`.
 **Reads:** its own read model only. The read model *is* the response body — no DTO, no mapper.
 
+## The endpoint takes the semantic type, not a `String`
+
+`@PathVariable AccountId` binds directly. That needs `types-spring-web`'s `SingleValueTypeConverter`, registered
+by `config/WebConfiguration` importing `EssentialsWebMvcConfigurer` - the dependency alone does nothing,
+it is not auto-configuration. Dropping that import turns these endpoints into HTTP **500**s
+(`ConversionNotSupportedException`), not 400s, so the symptom does not point at the cause.
+
 ## Files
 - `AccountBalanceView.java` — the read model / response body
 - `AccountBalanceProjection.java` — the `ViewEventProcessor`; also wipes the model on subscription reset

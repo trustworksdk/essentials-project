@@ -21,7 +21,11 @@ import dk.trustworks.essentials.types.CharSequenceType;
 import java.util.UUID;
 
 /**
- * End user textual identifier for an {@link Account}
+ * The end-user-facing textual identifier of an {@code Account} -- the number a customer would quote, as opposed to
+ * {@code AccountId}, which is the aggregate's internal identity.
+ *
+ * <p>Kept as its own type so the two cannot be mixed up. It is recorded in {@code AccountOpened} and is not used to
+ * look an account up.
  */
 public class AccountNumber extends CharSequenceType<AccountNumber> {
 

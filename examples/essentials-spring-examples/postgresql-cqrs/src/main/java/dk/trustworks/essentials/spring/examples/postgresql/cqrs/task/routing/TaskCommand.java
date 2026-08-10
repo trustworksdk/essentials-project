@@ -18,6 +18,16 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.routing;
 
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
 
+/**
+ * Marks a command as addressing a {@code Task}, and guarantees it can say which one.
+ *
+ * <p>It lives in {@code routing/} because that is its only job: giving every command in this context a common way to
+ * expose the aggregate id, so dispatch does not need to know each concrete type. It is not a base class and carries
+ * no behaviour -- a command slice still owns its own command record and its own handler.
+ *
+ * <p>The {@code banking} and {@code shipping} contexts have no equivalent; their commands are routed by type alone.
+ * Both shapes are fine, and having one of each is deliberate.
+ */
 public interface TaskCommand {
 
     TaskId taskId();

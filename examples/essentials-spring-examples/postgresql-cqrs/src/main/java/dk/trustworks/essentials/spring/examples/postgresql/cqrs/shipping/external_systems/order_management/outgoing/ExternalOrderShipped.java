@@ -18,6 +18,16 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.extern
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The published form of {@code OrderShipped}: what the outside world is told when an order ships.
+ *
+ * <p>It is a separate type from the internal event on purpose -- this one is a contract with consumers we do not
+ * control, so it changes on their schedule rather than the domain's.
+ *
+ * <p>{@code eventOrder} is the position of the source event within its stream, taken from the {@code OrderedMessage}
+ * the publisher received. Passing it on gives consumers a way to detect a duplicate or out-of-order delivery without
+ * relying on timestamps, which never order events here.
+ */
 public record ExternalOrderShipped(String orderId, long eventOrder) implements ExternalOrderShippingEvent {
     public ExternalOrderShipped {
         requireNonNull(orderId, "No orderId provided");

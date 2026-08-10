@@ -31,6 +31,16 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Demonstrates the {@link DurableQueuesInterceptor} extension point by tracing every queue operation the application
+ * performs.
+ *
+ * <p>It is a teaching device, not infrastructure this example depends on: an interceptor is registered simply by being
+ * a bean, sees the {@code Inbox}, {@code Outbox} and command-bus queues alike, and can observe or alter an operation
+ * before delegating with {@code interceptorChain.proceed()}. This one only logs at {@code TRACE}, which is the
+ * least intrusive thing an interceptor can do; a real one might add metrics, tenancy filtering, or a dead-letter
+ * policy.
+ */
 @Component
 public class ExampleDurableQueuesInterceptor implements DurableQueuesInterceptor {
     private static final Logger        log = LoggerFactory.getLogger(ExampleDurableQueuesInterceptor.class);

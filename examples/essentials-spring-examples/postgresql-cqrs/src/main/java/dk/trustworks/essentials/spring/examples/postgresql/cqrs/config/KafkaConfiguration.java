@@ -39,6 +39,15 @@ import tools.jackson.databind.json.JsonMapper;
 import java.util.Map;
 import java.util.concurrent.Executors;
 
+/**
+ * Module-level Kafka wiring: the producer, consumer and listener-container factories used by the {@code shipping}
+ * bounded context's {@code order_management} translation slice, plus the Micrometer observation and thread-pool
+ * settings for both.
+ *
+ * <p>This is application infrastructure and sits outside the bounded contexts. Note the deliberately narrow
+ * trusted-packages list -- only the two adapter packages, never a domain type -- and the two traps recorded beside
+ * it.
+ */
 @Configuration
 @EnableKafka
 public class KafkaConfiguration {

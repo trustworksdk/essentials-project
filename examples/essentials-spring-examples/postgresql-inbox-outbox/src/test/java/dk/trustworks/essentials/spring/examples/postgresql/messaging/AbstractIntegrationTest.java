@@ -18,8 +18,7 @@ package dk.trustworks.essentials.spring.examples.postgresql.messaging;
 
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus;
-import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.OrderShippingProcessor;
-import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.adapters.kafka.outgoing.ShippingEventKafkaPublisher;
+import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.external_systems.order_management.outgoing.ShippingEventKafkaPublisher;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -63,9 +62,6 @@ public class AbstractIntegrationTest {
     @Autowired
     protected KafkaTemplate<String, Object> kafkaTemplate;
 
-
-    @Autowired
-    protected OrderShippingProcessor orderShippingProcessor;
 
     @Autowired
     protected ShippingEventKafkaPublisher shippingEventKafkaPublisher;

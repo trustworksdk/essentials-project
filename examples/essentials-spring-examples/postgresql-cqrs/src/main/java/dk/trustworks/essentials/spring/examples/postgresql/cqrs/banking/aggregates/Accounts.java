@@ -27,11 +27,23 @@ import org.springframework.stereotype.Component;
 
 import java.util.Optional;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
-import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountNumber;
 
 import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * The repository for {@link Account} aggregates, and the owner of the {@code Accounts} {@link AggregateType} -- the
+ * name under which their events are stored, which every subscriber and projection in the banking context refers back
+ * to.
+ *
+ * <p>It wraps a {@link StatefulAggregateRepository}, which loads an aggregate by replaying its stream and persists
+ * the events a command produced. The thin wrapper exists so the context speaks its own language ({@code getAccount},
+ * {@code hasAccount}) instead of a generic {@code load}/{@code save}, and so {@link #hasAccount} can answer an
+ * existence question cheaply -- by asking the EventStore whether the stream has a first event, rather than
+ * rehydrating the whole aggregate.
+ *
+ * <p>It does not construct aggregates; see {@link #openNewAccount}.
+ */
 @Component
 public class Accounts {
     public static final AggregateType                                                             AGGREGATE_TYPE = AggregateType.of("Accounts");

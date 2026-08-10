@@ -1,8 +1,28 @@
-# Essentials components: Postgresql Event Store (CQRS) example
+# Essentials components: PostgreSQL Event Store (CQRS) example
 
-The example uses the `spring-boot-starter-postgresql-event-store` that provides Spring Boot auto-configuration for all Postgresql focused Essentials components as well as the
-Postgresql `EventStore`.  
-All `@Beans` auto-configured by this library use `@ConditionalOnMissingBean` to allow for easy overriding.
+A Spring Boot application built on `spring-boot-starter-postgresql-event-store`, which auto-configures every
+PostgreSQL-focused Essentials component plus the PostgreSQL `EventStore`. All `@Bean`s it contributes use
+`@ConditionalOnMissingBean`, so any of them can be replaced by declaring your own.
+
+This is the **event-sourced** example: every write goes through an `AggregateRoot` whose events are appended to
+the `EventStore`, and every read is served by a projection built from those events. The two sibling examples
+([`postgresql-inbox-outbox`](../postgresql-inbox-outbox/README.md), [`mongodb-inbox-outbox`](../mongodb-inbox-outbox/README.md))
+model the same `shipping` domain **without** an event store, so the two styles can be compared side by side.
+
+## What this example demonstrates
+
+| Concept | Where to look |
+|---|---|
+| Event-sourced aggregate + repository | `banking/aggregates/`, `shipping/aggregates/`, `task/aggregates/` |
+| Saga / process manager over two aggregates | `banking/automations/transfer_money/TransferMoneyProcessor` |
+| The same process written *before* `EventProcessor` existed | `banking/automations/transfer_money/TransferMoneyProcessorOld` |
+| Read-model projection (`ViewEventProcessor`) | `banking/views/account_balance/`, `shipping/views/order_status/` |
+| Reacting to an event **inside the emitting transaction** | `task/automations/comment_on_task_created/` (`InTransactionEventProcessor`) |
+| Anti-corruption boundary over Kafka | `shipping/external_systems/order_management/` |
+| `RedeliveryPolicy` + `SendAndDontWaitErrorHandler` customization | `Application.java` |
+| A per-processor `RedeliveryPolicy` | `ShippingEventKafkaPublisher.getInboxRedeliveryPolicy()` |
+| Dead-letter behaviour of `sendAndDontWait` and of an `Inbox` | `src/test/.../EventProcessorIT` |
+| `DocumentDbRepository` as projection storage | `config/DocumentDbConfiguration`, both `views/` slices |
 
 ## How the code is laid out
 
@@ -11,8 +31,8 @@ layer it belongs to. There is no `controllers/`, `services/`, `domain/` or `repo
 bounded context looks like this, and each slice directory carries its own `slice.yaml` and `CLAUDE.md`:
 
 ```
-<bc>/use_cases/<slice>/        command slices  - one command, one handler, one endpoint
-    /views/<slice>/            view slices     - a read model, its projection and its queries
+<bc>/use_cases/<slice>/        command slices   - one command, one handler, one endpoint
+    /views/<slice>/            view slices      - a read model, its projection and its queries
     /automations/<slice>/      process managers - react to events, no external API
     /external_systems/<sys>/   anti-corruption boundaries
     /events/  /types/  /aggregates/  /routing/
@@ -29,372 +49,470 @@ is a sanctioned lane — the slice law's decider style is the other. Start from 
 
 ### Endpoints
 
-| Method | Path | Slice |
-|---|---|---|
-| POST | `/banking/open-account` | `banking.open_account` |
-| POST | `/banking/transfer-money` | `banking.request_intra_bank_money_transfer` |
-| GET | `/banking/accounts`, `/banking/accounts/{accountId}` | `banking.account_balance` |
-| POST | `/shipping/register-order` | `shipping.register_shipping_order` |
-| POST | `/shipping/ship-order` | `shipping.ship_order` |
-| GET | `/shipping/orders`, `/shipping/orders/{orderId}`, `/shipping/orders?status=` | `shipping.order_status` |
-| POST | `/tasks/create`, `/tasks/add-comment` | `task.create_task`, `task.add_comment` |
+| Method | Path | Dispatch | Slice |
+|---|---|---|---|
+| POST | `/banking/open-account` | `commandBus.send` (synchronous) | `banking.open_account` |
+| POST | `/banking/transfer-money` | `commandBus.sendAndDontWait` (queued) | `banking.request_intra_bank_money_transfer` |
+| GET | `/banking/accounts`, `/banking/accounts/{accountId}` | — | `banking.account_balance` |
+| POST | `/shipping/register-order` | `commandBus.sendAndDontWait` (queued) | `shipping.register_shipping_order` |
+| POST | `/shipping/ship-order` | `commandBus.sendAndDontWait` (queued) | `shipping.ship_order` |
+| GET | `/shipping/orders`, `/shipping/orders/{orderId}`, `/shipping/orders?status=` | — | `shipping.order_status` |
+| POST | `/tasks/create`, `/tasks/add-comment` | `commandBus.send` (synchronous) | `task.create_task`, `task.add_comment` |
 
-The two `GET` families are served by projections, not by the write model, and are **eventually consistent** —
-a read taken immediately after a command may still show the previous state.
+The two `GET` families are served by **projections**, not by the write model, and are **eventually consistent** —
+a read taken immediately after a command may still show the previous state. The `sendAndDontWait` endpoints
+return as soon as the command is durably queued, so they are eventually consistent on the write side too.
 
-## Transfer Money example
+---
 
-This is a Saga like process, where a user requests an IntraBank Money Transfer, i.e. transfer of money between accounts
-that both belong to the same Bank.  
-The `TransferMoneyProcessor`, which is an [`EventProcessor`](https://github.com/trustworksdk/essentials-project/blob/main/components/postgresql-event-store/README.md#eventprocessor),
-tracks the `IntraBankMoneyTransfer` lifecycle and ensures that the **From** `Account` is withdrawn and the **To** `Account` is deposited.
+## Flow 1 — Transfer Money (`banking`)
 
-Flow:
+A Saga-like process: a user requests an intra-bank money transfer, i.e. a transfer between two accounts that
+both belong to the same bank. Three aggregate instances are involved — the two `Account`s and the
+`IntraBankMoneyTransfer` that tracks the attempt — and each is its own consistency boundary, changed by one
+command at a time. The coordination between them therefore cannot live inside any of them; it lives in
+`TransferMoneyProcessor`, an
+[`EventProcessor`](../../../components/postgresql-event-store/README.md#eventprocessor) that subscribes to both
+aggregate types and drives the transfer to completion one event at a time.
 
 ![Intra Bank Money Transfer Flow](img/TransferMoneyFlow.png)
 
-See `banking/automations/transfer_money/TransferMoneyProcessor` for the lifecycle, and
-`banking/use_cases/request_intra_bank_money_transfer/` for the command that starts it.
+```
+  POST /banking/transfer-money
+        │  RequestIntraBankMoneyTransfer
+        ▼
+  ┌──────────────────────────┐   sendAndDontWait   ┌───────────────────────┐
+  │ RequestIntraBank…API     │────────────────────▶│ DurableLocalCommandBus│
+  └──────────────────────────┘                     │  (durable_queues)     │
+                                                   └───────────┬───────────┘
+                                                               │ (async, retried)
+                                                               ▼
+                                            ┌──────────────────────────────────┐
+                                            │ RequestIntraBankMoneyTransfer    │
+                                            │ Handler                          │
+                                            │  · both accounts must exist      │
+                                            │  · skip if transfer already there│
+                                            └────────────────┬─────────────────┘
+                                                             │ new IntraBankMoneyTransfer(...)
+                                                             ▼
+                                              ═══════════ EventStore ═══════════
+                                              IntraBankMoneyTransferRequested
+                                                    (status = REQUESTED)
+                                                             │
+   ┌─────────────────────────────────────────────────────────┘
+   │  TransferMoneyProcessor  (EventProcessor — subscribes to
+   │  AggregateTypes "Accounts" and "IntraBankMoneyTransfers";
+   │  each event is delivered through the processor's own Inbox,
+   │  so a failed step is retried rather than lost)
+   │
+   ├─▶ on IntraBankMoneyTransferRequested
+   │        Account(from).withdrawToday(amount, transactionId, AllowOverdrawingBalance.NO)
+   │        └─▶ AccountWithdrawn ──────────────────────────────┐
+   │                                                           │
+   ├─▶ on AccountWithdrawn ◀───────────────────────────────────┘
+   │        transfer.markFromAccountAsWithdrawn()
+   │        └─▶ IntraBankMoneyTransferStatusChanged(FROM_ACCOUNT_WITHDRAWN) ─┐
+   │                                                                         │
+   ├─▶ on IntraBankMoneyTransferStatusChanged ◀──────────────────────────────┘
+   │        if status == FROM_ACCOUNT_WITHDRAWN:
+   │            Account(to).depositToday(amount, transactionId)
+   │            └─▶ AccountDeposited ──────────────────────────┐
+   │                                                           │
+   └─▶ on AccountDeposited ◀───────────────────────────────────┘
+            transfer.markToAccountAsDeposited()
+            ├─▶ IntraBankMoneyTransferStatusChanged(TO_ACCOUNT_DEPOSITED)
+            └─▶ IntraBankMoneyTransferCompleted          ✔ transfer done
+```
 
-Beside the processor sits `TransferMoneyProcessorOld` — deliberately unwired, and kept as the "before" half
-of a before/after pair. It implements exactly the same process the way it had to be written before
-`EventProcessor` existed: hand-rolled `EventStoreSubscriptionManager` subscriptions, a manually configured
-`Outbox`, and an explicit `UnitOfWork` in every handler. Read the two side by side.
+Three details worth noticing in the code:
 
-### Test the Transfer Money flow
-Run `TransferMoneyProcessorIT` from within your IDE or using Maven `mvn verify -pl :postgresql-cqrs` from the `examples/essentials-spring-examples` folder. 
+- **The invariants live on the aggregates, not on the processor.** `Account.withdraw` throws
+  `InsufficientFundsException` when the balance would go negative and overdrawing is disallowed;
+  `IntraBankMoneyTransfer.markFromAccountAsWithdrawn` throws unless the transfer is in `REQUESTED`. The
+  processor only decides *what happens next*, never *whether it is allowed*.
+- **The last step re-enters the same handler.** `markToAccountAsDeposited` emits a second
+  `IntraBankMoneyTransferStatusChanged`, this time with `TO_ACCOUNT_DEPOSITED`. `handle(IntraBankMoneyTransferStatusChanged)`
+  runs again and does nothing, because it only acts on `FROM_ACCOUNT_WITHDRAWN`. That guard is what stops the
+  process from looping.
+- **Redelivery is what makes this safe.** Each `@MessageHandler` invocation is its own transaction. If the
+  deposit fails, the withdrawal has already been committed and the deposit is simply retried by the
+  processor's `Inbox` — the aggregate guards make the retry idempotent.
 
-## Shipping flow example
+Balances are then projected by `AccountBalanceProjection` (a `ViewEventProcessor`) into a
+`DocumentDbRepository`-backed table, which is what `GET /banking/accounts` reads.
 
-### Test the Shipping flow
-You can either run the `OrderShippingProcessorIT` (see `Shipping flow explained` for details about the example)
-from within your IDE or using Maven `mvn verify -pl :postgresql-cqrs` from the `examples/essentials-spring-examples` folder.
+### `TransferMoneyProcessorOld` — the before/after pair
 
-### Test the Shipping flow using `curl` from the Terminal
-Alternatively you can start the Spring Boot application standalone from the `examples/essentials-spring-examples` folder using (you may need to wait 15-30 seconds for Tempo to be ready to ingest data)
+Beside the processor sits `TransferMoneyProcessorOld`, deliberately unwired and kept as the "before" half of a
+before/after pair. It implements exactly the same process the way it had to be written before `EventProcessor`
+existed: hand-rolled `EventStoreSubscriptionManager` subscriptions, a manually configured `Outbox`, and an
+explicit `UnitOfWork` in every handler. Read the two side by side.
+
+### Test it
+
+```bash
+mvn verify -pl :postgresql-cqrs -Dit.test=TransferMoneyProcessorIT
+```
+
+---
+
+## Flow 2 — Shipping (`shipping`)
+
+The shipping context is the anti-corruption-boundary example: an external **OrderService** publishes order
+events onto Kafka, this application reacts by shipping, and publishes its own event back onto Kafka. Neither
+DTO on the wire uses this application's types.
+
+```
+   POST /shipping/register-order                        ┌─────────────────────────┐
+         │ RegisterShippingOrder                        │  external OrderService  │
+         ▼                                              └────────────┬────────────┘
+  ┌────────────────────────┐                                         │ OrderAccepted
+  │ RegisterShippingOrder  │                              Kafka topic│ {"id":"…"}   ← plain String id
+  │ API                    │                            "order-events"
+  └───────────┬────────────┘                                         ▼
+              │ sendAndDontWait                    ┌────────────────────────────────┐
+              ▼                                    │ OrderEventsKafkaListener       │
+  ┌───────────────────────┐                        │  ⇦ THE TRANSLATION IN ⇨        │
+  │ DurableLocalCommandBus│                        │  OrderId.of(event.id())        │
+  │   (durable_queues)    │◀───────────────────────┤  sendAndDontWait(ShipOrder)    │
+  └───────────┬───────────┘      ShipOrder         └────────────────────────────────┘
+              │
+    ┌─────────┴──────────┐
+    ▼                    ▼
+ ┌───────────────────┐  ┌──────────────────────────────────┐
+ │ RegisterShipping  │  │ ShipOrderHandler                 │
+ │ OrderHandler      │  │  order = shippingOrders.getOrder │
+ │  skip if exists   │  │  order.markOrderAsShipped()      │
+ │  new ShippingOrder│  │   └ no-op if already shipped     │
+ └─────────┬─────────┘  └────────────────┬─────────────────┘
+           │                             │
+           ▼                             ▼
+  ══════════════════ EventStore — AggregateType "ShippingOrders" ══════════════════
+     ShippingOrderRegistered                    OrderShipped
+           │                                          │
+           ├──────────────┬───────────────────────────┤
+           ▼              ▼                           ▼
+ ┌────────────────────┐  ┌──────────────────────────────────────────────┐
+ │ OrderStatusProject │  │ ShippingEventKafkaPublisher (EventProcessor) │
+ │ ViewEventProcessor │  │  events arrive via the processor's own Inbox │
+ │  → shipping_order_ │  │  ⇦ THE TRANSLATION OUT ⇨                     │
+ │    status table    │  │  new ExternalOrderShipped(                   │
+ └─────────┬──────────┘  │        e.orderId().toString(),  ← plain      │
+           │             │        eventMessage.getOrder())   String     │
+           ▼             └───────────────────┬──────────────────────────┘
+   GET /shipping/orders                      │ kafkaTemplate.send(...)
+   (eventually consistent)                   ▼
+                                    Kafka topic "shipping-events"
+```
+
+Step by step:
+
+1. `POST /shipping/register-order` puts `RegisterShippingOrder` on the `DurableLocalCommandBus` with
+   `sendAndDontWait`, so it is persisted to `durable_queues` before the HTTP call returns.
+2. `RegisterShippingOrderHandler` runs in the command bus's transaction. It skips the command if the order
+   already exists — redelivery of a durable command must not be an error — and otherwise constructs
+   `new ShippingOrder(orderId, destinationAddress)`, whose constructor applies `ShippingOrderRegistered`.
+   `ShippingOrders.registerNewOrder` only *persists* the aggregate; it does not build it.
+3. The external OrderService publishes `OrderAccepted` to the `order-events` topic. Its `id` is a plain
+   `String` — the external contract does not know about `OrderId`.
+4. `OrderEventsKafkaListener` is the **incoming half of the anti-corruption boundary**. It is the one and only
+   place `String` becomes `OrderId`, and it forwards `ShipOrder` with `sendAndDontWait`. The command lands in
+   `durable_queues`, so if the application dies between the Kafka poll and the handler running, the command is
+   still there.
+5. `ShipOrderHandler` loads the aggregate and calls `markOrderAsShipped()`. That method is the idempotency
+   guard: messaging gives at-least-once delivery, so `ShipOrder` can arrive more than once, and a second call
+   applies no event. `OrderShipped` is appended to the same stream.
+6. `ShippingEventKafkaPublisher` extends `EventProcessor`, declaring `reactsToEventsRelatedToAggregateTypes()
+   == [ShippingOrders.AGGREGATE_TYPE]`. The `EventProcessor` base class subscribes asynchronously to that
+   aggregate type and routes each event through **its own durable `Inbox`** — that inbox, not an `Outbox`, is
+   what makes the Kafka publish survive a crash. The example overrides `getInboxRedeliveryPolicy()` to show a
+   per-processor policy that gives up immediately on `ConstraintViolationException` and
+   `HttpClientErrorException.BadRequest`.
+7. The handler is the **outgoing half of the boundary**: `OrderShipped` (which carries `OrderId`) becomes
+   `ExternalOrderShipped(String orderId, long eventOrder)`, and that is what goes onto `shipping-events`. The
+   `eventOrder` comes from the `OrderedMessage` the processor was handed: it is the event's **`EventOrder`** —
+   its position within this `ShippingOrder`'s own stream, not the `GlobalEventOrder` across all streams — so a
+   downstream consumer can order and deduplicate per order.
+
+> **The Kafka DTOs must keep their plain `String` ids.** `OrderEvent.id()` and
+> `ExternalOrderShippingEvent.orderId()` are deliberately not typed with `OrderId`. Typing them with the domain
+> type means the boundary stops translating: an upstream id-format change reaches the domain directly, and the
+> DTOs become sensitive to which Jackson flavour the application was built with. See
+> `shipping/external_systems/order_management/CLAUDE.md`.
+
+In parallel, `OrderStatusProjection` (a `ViewEventProcessor`) consumes the same two events into the
+`shipping_order_status` document table, which `GET /shipping/orders` reads. It shows the two things every
+projection needs: an **already-applied check** (`existing.getVersionValue() >= message.getOrder()`) so replays
+are harmless, and an `onSubscriptionsReset` hook that wipes the view when the subscription is reset.
+
+### Test it
+
+```bash
+mvn verify -pl :postgresql-cqrs -Dit.test=OrderShippingProcessorIT   # the full Kafka round-trip
+mvn verify -pl :postgresql-cqrs -Dit.test=OrderStatusViewIT          # the projection
+```
+
+`OrderShippingProcessorIT` starts PostgreSQL and Kafka with Testcontainers, registers an order, publishes a
+real `OrderAccepted` onto the topic, and asserts that exactly one `ExternalOrderShipped` comes back out on
+`shipping-events` — and that the command queue drained to zero.
+
+### Test it with `curl`
+
+Start the runtime stack and the application from the `examples/essentials-spring-examples` folder (you may need
+to wait 15-30 seconds for Tempo to be ready to ingest data):
+
 ```bash
 docker compose up -d
 mvn spring-boot:run -pl :postgresql-cqrs
 ```
 
-The last command will block the current terminal, so to continue you need to open a new Terminal.
+The last command blocks the terminal, so open a second one for the requests below.
 
-#### Initiate the test scenario:
-In a new Terminal enter the following command:
 ```bash
+# 1. Register the shipping order
 curl -L 'http://localhost:8080/shipping/register-order' \
--X POST \
--H 'Accept: application/json' \
--H 'Content-Type: application/json' \
--d '{
-  "orderId": "order1",
-  "destinationAddress": {
-   "recipientName": "John Doe",
-   "street": "Test Street 1",
-   "zipCode": "1234",
-   "city": "Test City"
-  }
-}'
-```
-#### Complete the test scenario:
-In the same Terminal enter the following command:
-```bash
+  -X POST \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "orderId": "order1",
+    "destinationAddress": {
+      "recipientName": "John Doe",
+      "street": "Test Street 1",
+      "zipCode": "1234",
+      "city": "Test City"
+    }
+  }'
+
+# 2. Ship it (in the real flow this command comes from the Kafka listener instead)
 curl -L 'http://localhost:8080/shipping/ship-order' \
--H 'Accept: application/json' \
--H 'Content-Type: application/json' \
--d '{
-  "orderId": "order1"
-}'
+  -X POST \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{ "orderId": "order1" }'
+
+# 3. Read the projection back
+curl 'http://localhost:8080/shipping/orders'
+curl 'http://localhost:8080/shipping/orders/order1'
+curl 'http://localhost:8080/shipping/orders?status=SHIPPED'
 ```
 
-This will trigger the Shipping process.   
-In the Spring Root terminal you should be able to see log entries similar to:
+In the Spring Boot terminal you should see log entries similar to:
 `... [postgresql-cqrs] [....] [e7754a2059013cfdff422bfeda5d3e09-4acc5a9396d96dfc]...`
 
-The second value in the example (`e7754a2059013cfdff422bfeda5d3e09`) is the `traceId`.
-If you open Grafana using `http://localhost:3000` and go to the `Logs, Traces, Metrics` Dashboard,
-then the `traceId` can be entered into the `Trace ID` text box.
+The second value (`e7754a2059013cfdff422bfeda5d3e09`) is the `traceId`. Open Grafana at
+`http://localhost:3000`, go to the `Logs, Traces, Metrics` dashboard, and paste it into the `Trace ID` box.
 
-#### Stop the test scenario:
-- Stop the Spring Boot Application by pressing `Ctrl C`
-- Stop Docker:
-  ```bash
-    docker compose down -v
-  ```
+Stop with `Ctrl-C`, then `docker compose down -v`.
 
-### Shipping flow explained
-The `OrderShippingProcessorIT` integration-test coordinates the test flow:
+---
 
-- First a `ShippingOrder` aggregate is created, by sending `RegisterShippingOrder` over the `CommandBus`
-  - The `RegisterShippingOrderHandler` is auto registered with the `CommandBus` as a `CommandHandler` because it implements the `CommandHandler` interface through the `AnnotatedCommandHandler` base class
-  - The `RegisterShippingOrderHandler.handle(RegisterShippingOrder)` command handler method reacts to the `RegisterShippingOrder` in an existing Transaction/`UnitOfWork`  since the `Inbox` is configured
-    with `TransactionalMode.FullyTransactional`.
-  - The `RegisterShippingOrderHandler.handle(RegisterShippingOrder)` ensures that the `ShippingOrder` aggregate is stored
-  - After the transaction/`UnitOfWork` the `ShippingOrderRegistered` event is published via the `EventStoreSubscriptionManager`
-- Next we simulate that the **OrderService** publishes a `OrderAccepted` event via Kafka, which the `OrderEventsKafkaListener` is listening for
-- The `OrderEventsKafkaListener` reacts to the `OrderAccepted` and converts it into a `ShipOrder` command.
-  - Afterwards the `ShipOrder` command is added to the `shipOrdersInbox` of type `Inbox`
-  - After the transaction/`UnitOfWork` the `OrderAccepted` event is published via the `EventStoreSubscriptionManager`
-- Asynchronously the `shipOrdersInbox` will forward the `ShipOrder` command to the `CommandBus`
-  - Note: the `Order` and `ShippingOrder` are correlated/linked through the `OrderId` (aggregates reference each other using id's)
-- The `ShipOrderHandler.handle(ShipOrder)` command handler method reacts to the `ShipOrder` command
-  - ![Handling a Kafka Message using an Inbox](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/images/inbox.png?raw=true)
-  - It loads the corresponding `ShippingOrder` instance and performs an idempotency check - if the order is already **marked-as-shipped**
-    - This idempotency check is necessary as we're using in Messaging we deal with At-Least-Once message delivery guarantee and delivery of the `ShipOrder` command can end up
-      being delivered by the `Inbox` multiple times
-  - If **marking** the `ShippingOrder` as **shipped** succeeds, then after the transaction/`UnitOfWork` completes, then the `OrderShipped` event is published via the `EventStoreSubscriptionManager`
-- The `ShippingEventKafkaPublisher` is auto registered with the `EventStoreSubscriptionManager` asynchronously
-  - The `ShippingEventKafkaPublisher`'s `eventStoreSubscriptionManager.subscribeToAggregateEventsAsynchronously` event handler converts the `OrderShipped` event to an external
-    event `ExternalOrderShipped`
-  - The `ExternalOrderShipped` is then added to the `kafkaOutbox` of type `Outbox`, that the `ShippingEventKafkaPublisher` has configured
-- Asynchronously the `kafkaOutbox` will call its Message consumer (in this case a lambda) which uses a `KafkaTemplate` to publish the `ExternalOrderShipped` to a Kafka Topic
-  - ![Publishing a Kafka Message using an Outbox](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/images/outbox.png?raw=true)
+## Flow 3 — Comment on task created (`task`)
+
+The smallest context, and it exists for exactly one reason: to show an `InTransactionEventProcessor` reacting to
+an event and issuing a follow-up command **inside the same unit of work that appended it**. Everywhere else in
+this module, reacting to an event happens in a later transaction.
+
+```
+  POST /tasks/create   { "taskId": "…", "comment": "…" }
+        │
+        ▼  commandBus.send  (synchronous — the caller learns the task was accepted)
+  ┌──────────────────────────────────────────────────────────────────────────────┐
+  │                        one UnitOfWork / one transaction                      │
+  │                                                                              │
+  │  CreateTaskHandler                                                           │
+  │    tasks.createNewTask(new Task(cmd.taskId(), cmd.comment()))                │
+  │        └─▶ apply(TaskCreated) ──▶ EventStore  (AggregateType "Task")         │
+  │                    │                                                         │
+  │                    ▼                                                         │
+  │  CommentOnTaskCreatedProcessor  (InTransactionEventProcessor)                │
+  │    if (event.comment() != null)                                              │
+  │        commandBus.send(new AddComment(taskId, comment, createdAt))           │
+  │                    │                                                         │
+  │                    ▼                                                         │
+  │  AddCommentHandler                                                           │
+  │    task.addComment(content, createdAt)                                       │
+  │        └─▶ apply(CommentAdded) ──▶ EventStore                                │
+  │                                                                              │
+  └──────────────────────────────────────── commit ──────────────────────────────┘
+              TaskCreated and CommentAdded become visible together
+```
+
+`CreateTask` may carry a comment. Rather than have the aggregate quietly emit two events, the automation
+observes `TaskCreated` and issues an explicit `AddComment`, so the comment lands as its own event with its own
+command behind it — while still committing atomically with the creation. `TaskProcessorIT` asserts exactly
+that, by collecting `PersistedEvents` at `CommitStage.BeforeCommit` and checking that both events were
+persisted by the single `commandBus.send`.
+
+Read the slices in the order `create_task` → `comment_on_task_created` → `add_comment`; the flow only makes
+sense as a chain.
+
+### Test it
+
+```bash
+mvn verify -pl :postgresql-cqrs -Dit.test=TaskProcessorIT
+```
+
+---
+
+## Build and run
+
+```bash
+mvn verify -pl :postgresql-cqrs                    # unit + integration tests (needs Docker)
+mvn -Pjackson2 verify -pl :postgresql-cqrs -am     # the other Jackson flavour; -am is required
+docker compose up -d && mvn spring-boot:run -pl :postgresql-cqrs
+```
+
+All commands are run from the `examples/essentials-spring-examples` folder. The `-am` is not optional on the
+non-default Jackson flavour — see [the aggregator README](../README.md#jackson-flavour).
+
+### Integration tests
+
+| Test | What it covers |
+|---|---|
+| `banking/use_cases/open_account/OpenAccountIT` | the `open_account` command slice |
+| `banking/TransferMoneyProcessorIT` | the full transfer saga |
+| `banking/AccountsIT` | the `Account` aggregate and its repository |
+| `banking/views/account_balance/AccountBalanceViewIT` | the balance projection |
+| `shipping/OrderShippingProcessorIT` | register → Kafka `OrderAccepted` → ship → Kafka `ExternalOrderShipped` |
+| `shipping/views/order_status/OrderStatusViewIT` | the order-status projection |
+| `task/TaskProcessorIT` | `InTransactionEventProcessor` — both events in one commit |
+| `EventProcessorIT` | `EventProcessor` mechanics in isolation: command handling, and dead-lettering of a failing command sent both via `sendAndDontWait` and via an `Inbox` |
+
+---
 
 ## Application Setup
-The following Essentials components are auto configured:
-`EssentialsComponentsConfiguration` auto-configures:
 
-- Jackson/FasterXML JSON modules:
-  - `EssentialTypesJacksonModule`
-  - `EssentialsImmutableJacksonModule` (if `Objenesis` is on the classpath AND `essentials.immutable-jackson-module-enabled` has value `true`)
-- `JSONSerializer` which uses an internally configured `ObjectMapper`, which provides good defaults for JSON serialization, and includes all Jackson `Module`'s defined in the `ApplicationContext`
-  - This `JSONSerializer` will only be auto-registered if the `JSONEventSerializer` is not on the classpath (see `EventStoreConfiguration`)
-- `Jdbi` to use the provided Spring `DataSource`
-- `SpringTransactionAwareJdbiUnitOfWorkFactory` configured to use the Spring provided `PlatformTransactionManager`
-  - This `UnitOfWorkFactory` will only be auto-registered if the `SpringTransactionAwareEventStoreUnitOfWorkFactory` is not on the classpath (see `EventStoreConfiguration`)
-  - `PostgresqlFencedLockManager` using the `JSONSerializer` as JSON serializer
-    - It Supports additional properties:
-    - ```
-      essentials.fenced-lock-manager.fenced-locks-table-name=fenced_locks
-      essentials.fenced-lock-manager.lock-confirmation-interval=5s
-      essentials.fenced-lock-manager.lock-time-out=12s
-      essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation=false
-      ```
-    - **Security Notice regarding `essentials.fenced-lock-manager.fenced-locks-table-name`:**
-      - This property, no matter if it's set using properties, System properties, env variables or yaml configuration, will be provided to the `PostgresqlFencedLockManager`'s `PostgresqlFencedLockStorage` as the `fencedLocksTableName` parameter.
-      - To support customization of storage table name, the `essentials.fenced-lock-manager.fenced-locks-table-name` provided through the Spring configuration to the `PostgresqlFencedLockManager`'s `PostgresqlFencedLockStorage`,
-        will be directly used in constructing SQL statements through string concatenation, which exposes the component to **SQL injection attacks**.
-      - It is the responsibility of the user of this starter component to sanitize the `essentials.fenced-lock-manager.fenced-locks-table-name` to ensure the security of all the SQL statements generated by the `PostgresqlFencedLockManager`'s `PostgresqlFencedLockStorage`.
-        - The `PostgresqlFencedLockStorage` component will call the `PostgresqlUtil#checkIsValidTableOrColumnName(String)` method to validate the table name as a first line of defense.
-        - The `PostgresqlUtil#checkIsValidTableOrColumnName(String)` provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.
-          - **However, Essentials components as well as `PostgresqlUtil#checkIsValidTableOrColumnName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.**
-        - The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-        - Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names
-        - **Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
-      - It is highly recommended that the `essentials.fenced-lock-manager.fenced-locks-table-name` value is only derived from a controlled and trusted source.
-        - To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `essentials.fenced-lock-manager.fenced-locks-table-name` value.
-        - **Failure to adequately sanitize and validate this value could expose the application to SQL injection  vulnerabilities, compromising the security and integrity of the database.**
-- `PostgresqlDurableQueues` using the `essentialComponentsObjectMapper` as JSON serializer
-    - Supports additional properties:
-  ```
-    essentials.durable-queues.shared-queue-table-name=durable_queues
-    essentials.durable-queues.use-centralized-message-fetcher=true (default)
-    essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms (default)
-    essentials.durable-queues.transactional-mode=fullytransactional or singleoperationtransaction (default)
-    essentials.durable-queues.polling-delay-interval-increment-factor=0.5
-    essentials.durable-queues.max-polling-interval=2s
-    essentials.durable-queues.verbose-tracing=false
-    # Only relevant if transactional-mode=singleoperationtransaction
-    essentials.durable-queues.message-handling-timeout=5s
-  ```
-  - **Security Notice regarding `essentials.durable-queues.shared-queue-table-name`:**
-  - This property, no matter if it's set using properties, System properties, env variables or yaml configuration, will be provided to the `PostgresqlDurableQueues` as the `sharedQueueTableName` parameter.
-  - To support customization of storage table name, the `essentials.durable-queues.shared-queue-table-name` provided through the Spring configuration to the `PostgresqlDurableQueues`,
-    will be directly used in constructing SQL statements through string concatenation, which exposes the component to **SQL injection attacks**.
-  - It is the responsibility of the user of this starter component to sanitize the `essentials.durable-queues.shared-queue-table-name` to ensure the security of all the SQL statements generated by the `PostgresqlDurableQueues`.
-    - The `PostgresqlDurableQueues` component will call the `PostgresqlUtil#checkIsValidTableOrColumnName(String)` method to validate the table name as a first line of defense.
-    - The `PostgresqlUtil#checkIsValidTableOrColumnName(String)` provides an initial layer of defense against SQL injection by applying naming conventions intended to reduce the risk of malicious input.
-      - **However, Essentials components as well as `PostgresqlUtil#checkIsValidTableOrColumnName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting SQL against SQL injection threats.**
-    - The responsibility for implementing protective measures against SQL Injection lies exclusively with the users/developers using the Essentials components and its supporting classes.
-    - Users must ensure thorough sanitization and validation of API input parameters,  column, table, and index names
-    - **Insufficient attention to these practices may leave the application vulnerable to SQL injection, potentially endangering the security and integrity of the database.**
-  - It is highly recommended that the `essentials.durable-queues.shared-queue-table-name` value is only derived from a controlled and trusted source.
-    - To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the `essentials.durable-queues.shared-queue-table-name` value.
-    - **Failure to adequately sanitize and validate this value could expose the application to SQL injection vulnerabilities, compromising the security and integrity of the database.**
-- `Inboxes`, `Outboxes` and `DurableLocalCommandBus` configured to use `PostgresqlDurableQueues`
-- `LocalEventBus` with bus-name `default` and Bean name `eventBus`
-  - Supports additional configuration properties:
-  - ```
-    essentials.reactive.event-bus-backpressure-buffer-size=1024
-    essentials.reactive.overflow-max-retries=20
-    essentials.reactive.queued-task-cap-factor=1.5
-    #essentials.reactive.event-bus-parallel-threads=4
-    #essentials.reactive.command-bus-parallel-send-and-dont-wait-consumers=4
-    ```
-- **Metrics:**
-  - **Overview:**  
-    This configuration controls the collection of performance metrics and determines the log level at which operations are reported.  
-    When metrics collection is enabled for a component (such as durable queues, command bus, or message handlers), the duration of each operation is measured.
-    If the duration exceeds certain thresholds, the operation is logged at the corresponding level:
-    - **errorThreshold:** If the duration exceeds this value, the operation is logged at **ERROR** level.
-    - **warnThreshold:** If the duration exceeds this value (but is less than the error threshold), it is logged at **WARN** level.
-    - **infoThreshold:** If the duration exceeds this value (but is less than the warn threshold), it is logged at **INFO** level.
-    - **debugThreshold:** If the duration exceeds this value (but is less than the info threshold), it is logged at **DEBUG** level.
-    - If none of the thresholds are met and metrics collection is enabled, the operation is logged at **TRACE** level.
+Everything this application needs is auto-configured by
+[`spring-boot-starter-postgresql-event-store`](../../../components/spring-boot-starter-postgresql-event-store/README.md),
+which builds on [`spring-boot-starter-postgresql`](../../../components/spring-boot-starter-postgresql/README.md).
 
-  - **How to Configure:**  
-    Each component can be configured individually. For each component, you can:
-    - Enable or disable metrics collection.
-    - Set the minimum duration (using a time unit such as `ms`) for each logging level.  
-      These settings allow you to fine-tune how sensitive the logging should be, based on the performance characteristics you expect.
+**Those two READMEs are the reference for the complete bean list and every `essentials.*` property, including
+the security notices for the configurable table names.** They are kept in step with the code; the sections
+below only record what *this example* configures on top of the defaults, and are not a substitute.
 
-  - **YAML Example:**
-    ```yaml
-    essentials:
-      metrics:
-        durable-queues:
-          enabled: true
-          thresholds:
-            debug: 25ms    # Log at DEBUG if duration ≥ 25ms (and below the INFO threshold)
-            info: 200ms    # Log at INFO if duration ≥ 200ms (and below the WARN threshold)
-            warn: 500ms    # Log at WARN if duration ≥ 500ms (and below the ERROR threshold)
-            error: 5000ms  # Log at ERROR if duration ≥ 5000ms
-        command-bus:
-          enabled: true
-          thresholds:
-            debug: 25ms
-            info: 200ms
-            warn: 500ms
-            error: 5000ms
-        message-handler:
-          enabled: true
-          thresholds:
-            debug: 25ms
-            info: 200ms
-            warn: 500ms
-            error: 5000ms
-    ```
+In short, the starters provide: `Jdbi` + `SpringTransactionAwareEventStoreUnitOfWorkFactory`,
+`PostgresqlEventStore` with `SeparateTablePerAggregateTypePersistenceStrategy`, `EventStoreEventBus`,
+`EventStoreSubscriptionManager`, `EventProcessorDependencies`, `PostgresqlDurableQueues`, `Inboxes`/`Outboxes`,
+`DurableLocalCommandBus`, `PostgresqlFencedLockManager`, `MultiTableChangeListener`,
+`ReactiveHandlersBeanPostProcessor` (which is what auto-registers every `@CmdHandler` and `@Handler` bean in
+this module), `JacksonJSONEventSerializer`, the Micrometer interceptors, and the admin API beans.
 
-  - **Properties Example:**
-    ```properties
-    essentials.metrics.durable-queues.enabled=true
-    essentials.metrics.durable-queues.thresholds.debug=25ms
-    essentials.metrics.durable-queues.thresholds.info=200ms
-    essentials.metrics.durable-queues.thresholds.warn=500ms
-    essentials.metrics.durable-queues.thresholds.error=5000ms
+> ⚠️ **Security.** `essentials.durable-queues.shared-queue-table-name` and
+> `essentials.fenced-lock-manager.fenced-locks-table-name` are concatenated into SQL. Derive them from a
+> trusted source only. The starter READMEs carry the full notice.
 
-    essentials.metrics.command-bus.enabled=true
-    essentials.metrics.command-bus.thresholds.debug=25ms
-    essentials.metrics.command-bus.thresholds.info=200ms
-    essentials.metrics.command-bus.thresholds.warn=500ms
-    essentials.metrics.command-bus.thresholds.error=5000ms
+### What this example configures — `src/main/resources/application.properties`
 
-    essentials.metrics.message-handler.enabled=true
-    essentials.metrics.message-handler.thresholds.debug=25ms
-    essentials.metrics.message-handler.thresholds.info=200ms
-    essentials.metrics.message-handler.thresholds.warn=500ms
-    essentials.metrics.message-handler.thresholds.error=5000ms
-    ```
+```properties
+essentials.immutable-jackson-module-enabled=true
 
-  - **Adjusting Log Levels:**  
-    In addition to these properties, you can control which metrics are actually written to your log files by configuring the log levels for the corresponding logger classes in your logging framework (e.g. Logback or Log4j). For example:
-    - For durable queues metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeDurableQueueInterceptor`
-    - For command bus metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeCommandBusInterceptor`
-    - For message handler metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeMessageHandlerInterceptor`
+# Reactive buses
+essentials.reactive.event-bus-backpressure-buffer-size=1024
+essentials.reactive.overflow-max-retries=20
+essentials.reactive.queued-task-cap-factor=1.5
 
-  - The underlying MeasurementTaker uses different log levels depending on how slow the processing time is:
-    - `DEBUG` is for all measurements independent of processing time
-    - `INFO` is for slightly slow processing time
-    - `WARN` is for slow processing time
-    - `ERROR` is for very slow processing time
-- `ReactiveHandlersBeanPostProcessor` (for auto-registering `EventHandler` and `CommandHandler` Beans with the `EventBus`'s and `CommandBus` beans found in the `ApplicationContext`)
-  - You can disable post-processing by setting: `essentials.reactive-bean-post-processor-enabled=false`
-- `MultiTableChangeListener` which is used for optimizing `PostgresqlDurableQueues` message polling
-  - Supports additional configuration properties:
-  - ```
-    essentials.multi-table-change-listener.filter-duplicate-notifications=true
-    essentials.multi-table-change-listener.polling-interval=100ms
-    ```
-- Automatically calling `Lifecycle.start()`/`Lifecycle.stop`, on any Beans implementing the `Lifecycle` interface, when the `ApplicationContext` is started/stopped through the `DefaultLifecycleManager`
-  - In addition, during `ContextRefreshedEvent`, it will call `JdbiConfigurationCallback#configure(Jdbi)` on all `ApplicationContext` Beans that implement the `JdbiConfigurationCallback` interface,
-    thereby providing them with an instance of the `Jdbi` instance.
-  - Notice: The `JdbiConfigurationCallback#configure(Jdbi)` will be called BEFORE any `Lifecycle` beans have been started.
-  - You can disable starting `Lifecycle` Beans by using setting this property to false:
-    - `essentials.life-cycles.start-life-cycles=false`
-- `DurableQueuesMicrometerTracingInterceptor` and `DurableQueuesMicrometerInterceptor` if property `management.tracing.enabled` has value `true`
-  - The default `DurableQueuesMicrometerTracingInterceptor` values can be overridden using Spring properties:
-  -  ```
-       essentials.durable-queues.verbose-tracing=true
-       ```
-- `DurableLocalCommandBus`
-  - The `DurableLocalCommandBus` supports two different error handling concepts for true **fire-and-forget asynchronous command processing** (i.e., when `CommandBus.sendAndDontWait` is used):
-    - `SendAndDontWaitErrorHandler` -  The `SendAndDontWaitErrorHandler` exception handler will handle errors that occur while processing Commands sent using `CommandBus.sendAndDontWait`.
-      - If this handler doesn't rethrow the exception, then the message will not be retried by the underlying `DurableQueues`,  nor will the message be marked as a dead-letter/poison message.
-      - Default it uses `SendAndDontWaitErrorHandler.RethrowingSendAndDontWaitErrorHandler`.
-      - To override this configuration, you need to register a Spring bean of type `SendAndDontWaitErrorHandler`
-    - `RedeliveryPolicy` which sets the `RedeliveryPolicy` used when handling queued commands sent using `CommandBus.sendAndDontWait`.
-      - Default it's using `DurableLocalCommandBus.DEFAULT_REDELIVERY_POLICY`.
-      - To override this, you need to register a Spring bean of type `RedeliveryPolicy`
-  - Example of custom Spring configuration:
-     ```
-     /**
-      * Custom {@link RedeliveryPolicy} used by the {@link DurableLocalCommandBus} that is autoconfigured by the springboot starter
-      * @return The {@link RedeliveryPolicy} used for {@link DurableLocalCommandBusBuilder#setCommandQueueRedeliveryPolicy(RedeliveryPolicy)}
-      */
-     @Bean
-     RedeliveryPolicy durableLocalCommandBusRedeliveryPolicy() {
-         return RedeliveryPolicy.exponentialBackoff()
-                                .setInitialRedeliveryDelay(Duration.ofMillis(200))
-                                .setFollowupRedeliveryDelay(Duration.ofMillis(200))
-                                .setFollowupRedeliveryDelayMultiplier(1.1d)
-                                .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
-                                .setMaximumNumberOfRedeliveries(20)
-                                .setDeliveryErrorHandler(
-                                        MessageDeliveryErrorHandler.stopRedeliveryOn(
-                                                ConstraintViolationException.class,
-                                                HttpClientErrorException.BadRequest.class))
-                                .build();
-     }
-     
-     
-     /**
-      * Custom {@link SendAndDontWaitErrorHandler} used by the {@link DurableLocalCommandBus} that is autoconfigured by the springboot starter
-      * @return The {@link SendAndDontWaitErrorHandler} used for {@link DurableLocalCommandBusBuilder#setSendAndDontWaitErrorHandler(SendAndDontWaitErrorHandler)}
-      */
-     @Bean
-     SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler() {
-         return (exception, commandMessage, commandHandler) -> {
-             // Example of not retrying HttpClientErrorException.Unauthorized at all -
-             // if this exception is encountered then the failure is logged, but the command is never retried
-             // nor marked as a dead-letter/poison message
-             if (exception instanceof HttpClientErrorException.Unauthorized) {
-                 log.error("Unauthorized exception", exception);
-             } else {
-                 Exceptions.sneakyThrow(exception);
-             }
-         };
-     }
-     ```
+# EventStore
+essentials.event-store.identifier-column-type=text
+essentials.event-store.json-column-type=jsonb
+essentials.event-store.use-event-stream-gap-handler=true
+essentials.event-store.verbose-tracing=false
+essentials.event-store.subscription-manager.event-store-polling-batch-size=5
+essentials.event-store.subscription-manager.snapshot-resume-points-every=2s
+essentials.event-store.subscription-manager.event-store-polling-interval=200
 
-`EventStoreConfiguration` will also auto-configure the `EventStore`:
+# DurableQueues (backs the command bus, every EventProcessor Inbox, and every Outbox)
+essentials.durable-queues.shared-queue-table-name=durable_queues
+essentials.durable-queues.transactional-mode=singleoperationtransaction
+essentials.durable-queues.use-centralized-message-fetcher=true
+essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms
+essentials.durable-queues.polling-delay-interval-increment-factor=0.5
+essentials.durable-queues.max-polling-interval=2s
+essentials.durable-queues.verbose-tracing=true
 
-- `PostgresqlEventStore` using `PostgresqlEventStreamGapHandler` (using default configuration)
-  - You can configure `NoEventStreamGapHandler` using Spring properties:
-  - `essentials.event-store.use-event-stream-gap-handler=false`
-- `SeparateTablePerAggregateTypePersistenceStrategy` using `IdentifierColumnType.TEXT` for persisting `AggregateId`'s and `JSONColumnType.JSONB` for persisting Event and EventMetadata JSON payloads
-  - ColumnTypes can be overridden by using Spring properties:
-  - ```
-       essentials.event-store.identifier-column-type=uuid
-       essentials.event-store.json-column-type=jsonb
-      ```
-- `EventStoreUnitOfWorkFactory` in the form of `SpringTransactionAwareEventStoreUnitOfWorkFactory`
-- `EventStoreEventBus` with an internal `LocalEventBus` with bus-name `EventStoreLocalBus`
-- `PersistableEventMapper` with basic setup. Override this bean if you need additional meta-data, such as event-id, event-type, event-order, event-timestamp, event-meta-data, correlation-id, tenant-id included
-- `AggregateEventStreamPersistenceStrategy` in the form of `SeparateTablePerAggregateTypePersistenceStrategy` using `SeparateTablePerAggregateTypeEventStreamConfigurationFactory.standardSingleTenantConfiguration`
-- `EventStoreSubscriptionManager` with default `EventStoreSubscriptionManagerProperties` values using `PostgresqlDurableSubscriptionRepository`
-  - The default `EventStoreSubscriptionManager` values can be overridden using Spring properties:
-  - ```
-      essentials.event-store.subscription-manager.event-store-polling-batch-size=5
-      essentials.event-store.subscription-manager.snapshot-resume-points-every=2s
-      essentials.event-store.subscription-manager.event-store-polling-interval=200
-     ```
-- `MicrometerTracingEventStoreInterceptor` if property `management.tracing.enabled` has value `true`
-  - The default `MicrometerTracingEventStoreInterceptor` values can be overridden using Spring properties:
-  - ```
-    essentials.event-store.verbose-tracing=true
-    ```
-- `EventProcessorDependencies` to simplify configuring `EventProcessor`'s
-- `JacksonJSONEventSerializer` which uses an internally configured `ObjectMapper`, which provides good defaults for JSON serialization, and includes all Jackson `Module`'s defined in the `ApplicationContext`
+essentials.fenced-lock-manager.fenced-locks-table-name=fenced_locks
+essentials.fenced-lock-manager.lock-confirmation-interval=5s
+essentials.fenced-lock-manager.lock-time-out=12s
+essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation=false
+
+essentials.multi-table-change-listener.filter-duplicate-notifications=true
+essentials.multi-table-change-listener.polling-interval=100ms
+
+# Metrics — operations slower than a threshold are logged at that level; see the starter README
+essentials.event-store.metrics.enabled=true
+essentials.event-store.subscription-manager.metrics.enabled=true
+essentials.metrics.durable-queues.enabled=true
+essentials.metrics.command-bus.enabled=true
+essentials.metrics.message-handler.enabled=true
+# … each with .thresholds.{debug,info,warn,error} = 25ms / 200ms / 500ms / 5000ms
+```
+
+Notes on the values this example picks:
+
+- **`transactional-mode=singleoperationtransaction`** is the recommended mode and the starter default.
+  `fullytransactional` makes queue operations join the caller's transaction, which breaks retry counting and
+  dead-lettering, because a failure marks the whole transaction for rollback.
+- **CDC (logical replication) is left at its default**, i.e. enabled with `CdcMode.AUTO`. This example does not
+  showcase CDC — [`essentials-performance-lab`](../../essentials-performance-lab/README.md) does — but leaving
+  the default in place keeps it honest about what an application gets out of the box: `AUTO` falls back to
+  polling when the database is not configured for logical replication, which is the case for the plain
+  `postgres:latest` image the integration tests run against.
+- **The fenced-lock and multi-table-change-listener values differ from the starter defaults** (`15s`/`4s` and
+  `50ms` respectively). They are set explicitly here so the file doubles as a worked example of the properties;
+  neither choice is a recommendation.
+
+### What this example overrides in code
+
+`Application.java` declares the two `DurableLocalCommandBus` extension points, both of which apply only to
+**fire-and-forget** commands sent with `CommandBus.sendAndDontWait`:
+
+```java
+/**
+ * Custom {@link RedeliveryPolicy} for the auto-configured {@link DurableLocalCommandBus}.
+ * Overrides DurableLocalCommandBus.DEFAULT_REDELIVERY_POLICY simply by being a bean of this type.
+ */
+@Bean
+RedeliveryPolicy durableLocalCommandBusRedeliveryPolicy() {
+    return RedeliveryPolicy.exponentialBackoff()
+                           .setInitialRedeliveryDelay(Duration.ofMillis(200))
+                           .setFollowupRedeliveryDelay(Duration.ofMillis(200))
+                           .setFollowupRedeliveryDelayMultiplier(1.1d)
+                           .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
+                           .setMaximumNumberOfRedeliveries(20)
+                           // Some failures will never succeed on retry - fail them straight to a dead-letter
+                           .setDeliveryErrorHandler(
+                                   MessageDeliveryErrorHandler.stopRedeliveryOn(
+                                           ConstraintViolationException.class,
+                                           HttpClientErrorException.BadRequest.class))
+                           .build();
+}
+
+/**
+ * Custom {@link SendAndDontWaitErrorHandler} for the auto-configured {@link DurableLocalCommandBus}.
+ * If this handler does not rethrow, the command is neither retried nor dead-lettered.
+ * The default is SendAndDontWaitErrorHandler.RethrowingSendAndDontWaitErrorHandler.
+ */
+@Bean
+SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler() {
+    return (exception, commandMessage, commandHandler) -> {
+        // Example of never retrying HttpClientErrorException.Unauthorized -
+        // the failure is logged, but the command is never retried nor marked as a dead-letter/poison message
+        if (exception instanceof HttpClientErrorException.Unauthorized) {
+            log.error("Unauthorized exception", exception);
+        } else {
+            Exceptions.sneakyThrow(exception);
+        }
+    };
+}
+```
+
+`EventProcessorIT` exercises both paths end to end: a command that always throws is dead-lettered when sent with
+`sendAndDontWait`, and likewise when delivered through an `EventProcessor`'s `Inbox`.
+
+Two more configuration classes carry example-specific wiring:
+
+| Class | Role |
+|---|---|
+| `config/DocumentDbConfiguration` | the `DocumentDbRepositoryFactory` both projections build their repositories from |
+| `config/KafkaConfiguration` | Kafka producer/consumer factories and the trusted-packages prefix for the `shipping` boundary |
+| `banking/views/account_balance/AccountBalanceRepositoryConfiguration`, `shipping/views/order_status/OrderStatusRepositoryConfiguration` | one `DocumentDbRepository` bean per view slice, including its indexes |

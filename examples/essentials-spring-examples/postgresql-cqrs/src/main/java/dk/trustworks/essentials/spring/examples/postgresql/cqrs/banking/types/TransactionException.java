@@ -16,6 +16,12 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types;
 
+/**
+ * Signals that a money transfer cannot proceed -- for instance because an account it names does not exist.
+ *
+ * <p>Raised by the {@code transfer_money} automation. Unlike {@link InsufficientFundsException}, which reports a
+ * specific and recoverable business condition, this is the general "this transfer is not viable" failure.
+ */
 public class TransactionException extends RuntimeException {
     public TransactionException() {
     }

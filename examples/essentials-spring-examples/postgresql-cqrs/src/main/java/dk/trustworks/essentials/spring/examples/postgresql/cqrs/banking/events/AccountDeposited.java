@@ -23,6 +23,14 @@ import dk.trustworks.essentials.types.Amount;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Money has been paid into an account.
+ *
+ * <p>Carries a {@code valueDate} -- the banking date the money counts from, which need not be the day the event was
+ * recorded -- and the {@code transactionId} of the operation that caused it. That id is what lets the
+ * {@code transfer_money} automation recognise a deposit as the second leg of a transfer it is driving, rather than an
+ * unrelated payment into the same account.
+ */
 public record AccountDeposited(AccountId accountId,
                                Amount depositedAmount,
                                ValueDate valueDate,

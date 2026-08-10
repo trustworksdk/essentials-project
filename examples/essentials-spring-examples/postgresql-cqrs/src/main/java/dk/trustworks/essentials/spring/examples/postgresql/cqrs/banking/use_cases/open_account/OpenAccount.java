@@ -21,6 +21,13 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.Ac
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Open a new account under the given account number.
+ *
+ * <p>Both the command dispatched on the {@code CommandBus} and the request body of {@code POST /accounts} -- there is
+ * no separate DTO to keep in step. The caller supplies the {@code AccountId}, which makes the command idempotent to
+ * retry from the client's side.
+ */
 public record OpenAccount(AccountId accountId,
                           AccountNumber accountNumber) {
     public OpenAccount {

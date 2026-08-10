@@ -16,10 +16,22 @@
 
 package dk.trustworks.essentials.spring.examples.postgresql.messaging.config.converters;
 
-import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.OrderId;
+import dk.trustworks.essentials.spring.examples.postgresql.messaging.shipping.types.OrderId;
 import dk.trustworks.essentials.types.springdata.jpa.converters.BaseCharSequenceTypeAttributeConverter;
 import jakarta.persistence.Converter;
 
+/**
+ * Maps {@code OrderId} to and from its {@code String} column form, so an entity could declare a field of that type
+ * directly instead of a raw {@code String}.
+ *
+ * <p><strong>It currently applies to no field.</strong> {@code ShippingOrder}'s {@code @Id} is a plain {@code String}
+ * because typing it as {@code OrderId} failed on an earlier JPA version -- see the bounded context's
+ * {@code CLAUDE.md}. This converter is the machinery from that attempt, kept against a retry rather than deleted;
+ * being {@code autoApply}, it will take effect the moment such a field appears.
+ *
+ * <p>The MongoDB sibling has no equivalent: Spring Data MongoDB handles the same job through
+ * {@code AdditionalCharSequenceTypesSupported}, registered in its {@code Application}.
+ */
 @Converter(autoApply = true)
 public class OrderIdAttributeConverter extends BaseCharSequenceTypeAttributeConverter<OrderId> {
     @Override

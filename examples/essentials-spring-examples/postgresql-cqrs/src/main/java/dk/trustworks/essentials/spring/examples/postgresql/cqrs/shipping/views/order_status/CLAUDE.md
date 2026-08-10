@@ -33,6 +33,13 @@ Every `@MessageHandler` takes `OrderedMessage` and compares `message.getOrder()`
 version before writing, because `OrderShipped` redelivery is expected rather than exceptional.
 `onSubscriptionsReset` wipes the model so a subscription reset replays cleanly.
 
+## The endpoint takes the semantic type, not a `String`
+
+`@PathVariable OrderId` binds directly. That needs `types-spring-web`'s `SingleValueTypeConverter`, registered
+by `config/WebConfiguration` importing `EssentialsWebMvcConfigurer` - the dependency alone does nothing,
+it is not auto-configuration. Dropping that import turns these endpoints into HTTP **500**s
+(`ConversionNotSupportedException`), not 400s, so the symptom does not point at the cause.
+
 ## Files
 - `OrderStatusView.java` — the read model; also the HTTP response body (§R2, no DTO)
 - `OrderStatusProjection.java` — `ViewEventProcessor` building it

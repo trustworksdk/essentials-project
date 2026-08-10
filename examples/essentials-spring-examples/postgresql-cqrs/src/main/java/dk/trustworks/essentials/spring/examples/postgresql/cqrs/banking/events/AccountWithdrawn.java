@@ -23,6 +23,13 @@ import dk.trustworks.essentials.types.Amount;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Money has been taken out of an account.
+ *
+ * <p>The mirror of {@code AccountDeposited}, and carries the same {@code valueDate} and {@code transactionId} for the
+ * same reasons. Its existence in the stream means the withdrawal passed {@code Account}'s overdraft check -- a
+ * rejected one throws before any event is applied, so it leaves no record here.
+ */
 public record AccountWithdrawn(AccountId accountId,
                                Amount withdrawAmount,
                                ValueDate valueDate,

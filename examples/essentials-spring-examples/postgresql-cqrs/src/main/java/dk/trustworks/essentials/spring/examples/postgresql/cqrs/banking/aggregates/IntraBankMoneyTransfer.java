@@ -29,6 +29,21 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.Tr
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
+/**
+ * A transfer of money between two accounts in the same bank -- modelled as an aggregate in its own right, so that the
+ * transfer has an identity, a lifecycle and a stream of its own rather than being an implicit consequence of two
+ * account changes.
+ *
+ * <p>It is the state machine the {@code transfer_money} automation drives: {@code REQUESTED} →
+ * {@code FROM_ACCOUNT_WITHDRAWN} → {@code TO_ACCOUNT_DEPOSITED}, ending in
+ * {@code IntraBankMoneyTransferCompleted}. Each transition asserts the status it expects and throws otherwise, which
+ * is what makes the automation's at-least-once redeliveries safe: replaying a step that already happened fails loudly
+ * instead of withdrawing the money twice.
+ *
+ * <p>Two accounts cannot be changed in one transaction under event sourcing without giving up the aggregate as the
+ * consistency boundary. This aggregate is the alternative: the transfer is eventually consistent, and its status is
+ * the record of how far it has got.
+ */
 public class IntraBankMoneyTransfer extends AggregateRoot<TransactionId, IntraBankMoneyTransferEvent, IntraBankMoneyTransfer> {
     private TransferLifeCycleStatus status;
     private Amount                  amount;

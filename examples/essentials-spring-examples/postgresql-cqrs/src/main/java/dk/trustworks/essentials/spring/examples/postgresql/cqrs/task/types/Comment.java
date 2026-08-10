@@ -18,5 +18,14 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types;
 
 import java.time.LocalDateTime;
 
+/**
+ * A single comment on a task: an immutable value object with no identity beyond its own fields.
+ *
+ * <p>That matters, because {@code Task} holds its comments in a {@code Set} and relies on the record's generated
+ * {@code equals} to decide whether a comment is already there. All three components take part, so two comments with
+ * the same text on the same task are distinct if their timestamps differ.
+ *
+ * <p>It is the in-memory shape only -- what is stored is the {@code CommentAdded} event.
+ */
 public record Comment(TaskId taskId, String content, LocalDateTime createdAt) {
 }

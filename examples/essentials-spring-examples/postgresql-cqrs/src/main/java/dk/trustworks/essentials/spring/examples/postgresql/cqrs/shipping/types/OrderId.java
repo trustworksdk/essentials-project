@@ -19,6 +19,18 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types;
 import dk.trustworks.essentials.components.foundation.types.RandomIdGenerator;
 import dk.trustworks.essentials.types.CharSequenceType;
 
+/**
+ * Identifies a shipping order, and is the aggregate id of {@code ShippingOrder} -- so it is also the stream id its
+ * events are written under.
+ *
+ * <p>A semantic type rather than a bare {@code String}, so it cannot be swapped with any other identifier by
+ * mistake.
+ *
+ * <p>Strictly internal to this bounded context. An <em>order</em> belongs to the order-management system, not to
+ * shipping, so the Kafka contracts on either side of {@code external_systems/order_management} carry a plain
+ * {@code String} and the two adapters convert. Typing those contracts with this class would mean the
+ * anti-corruption layer no longer translates.
+ */
 public class OrderId extends CharSequenceType<OrderId> {
 
     public OrderId(String value) {

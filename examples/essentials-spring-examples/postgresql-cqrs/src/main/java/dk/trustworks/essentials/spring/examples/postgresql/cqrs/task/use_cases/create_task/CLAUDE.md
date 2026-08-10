@@ -4,8 +4,8 @@
 **Purpose:** Create a task, optionally carrying an initial comment.
 
 ## Invariants
-- None enforced here. `new Task(taskId, cmd)` applies `TaskCreated` unconditionally — there is no
-  rule to record, so `slice.yaml` carries no `invariants[]` rather than an invented one. The
+- None enforced here. `new Task(cmd.taskId(), cmd.comment())` applies `TaskCreated` unconditionally —
+  there is no rule to record, so `slice.yaml` carries no `invariants[]` rather than an invented one. The
   comment carried by `CreateTask` is optional; `null` simply means no follow-up command.
 
 ## Boundaries
@@ -27,7 +27,8 @@ that the task was accepted — there is no view slice in this BC to poll.
 
 ## Files
 - `CreateTask.java` — the command; also the HTTP request body (§R2, no DTO)
-- `CreateTaskHandler.java` — `@CmdHandler`, loads/creates via `Tasks`, runs in the bus transaction
+- `CreateTaskHandler.java` — `@CmdHandler`; constructs the `Task` and hands it to `Tasks.createNewTask`
+  for persistence, runs in the bus transaction
 - `CreateTaskAPI.java` — `POST /tasks/create`, the slice's single endpoint
 
 ## Tests

@@ -18,6 +18,7 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.
 
 import dk.trustworks.essentials.reactive.command.AnnotatedCommandHandler;
 import dk.trustworks.essentials.reactive.command.CmdHandler;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates.Task;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.aggregates.Tasks;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +44,7 @@ public class CreateTaskHandler extends AnnotatedCommandHandler {
     @CmdHandler
     public void handle(CreateTask cmd) {
         log.info("Creating task with command '{}'", cmd);
-        tasks.createTask(cmd.taskId(), cmd.comment());
+        // The slice unpacks its own command and constructs the aggregate; the repository only persists it
+        tasks.createNewTask(new Task(cmd.taskId(), cmd.comment()));
     }
 }

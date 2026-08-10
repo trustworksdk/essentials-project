@@ -21,6 +21,16 @@ import dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.types.S
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
+/**
+ * Register a shipping order for an order that is to be delivered to the given address.
+ *
+ * <p>Both the command dispatched on the {@code CommandBus} and the request body of
+ * {@code POST /shipping/register-order} -- there is no separate DTO to keep in step.
+ *
+ * <p>Handling it creates the {@code ShippingOrder} aggregate, which is what emits
+ * {@code ShippingOrderRegistered}; the slice's handler unpacks this command's components, because neither an event
+ * nor an aggregate may name a command type.
+ */
 public record RegisterShippingOrder(OrderId orderId,
                                     ShippingDestinationAddress destinationAddress) {
     public RegisterShippingOrder {

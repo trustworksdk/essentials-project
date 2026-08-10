@@ -19,5 +19,14 @@ package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.types.TaskId;
 import dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.routing.TaskCommand;
 
+/**
+ * Create a task, opening it with the given text.
+ *
+ * <p>Both the command dispatched on the {@code CommandBus} and the request body of {@code POST /tasks}. The caller
+ * supplies the {@code TaskId}, which makes the command idempotent to retry from the client's side.
+ *
+ * <p>The opening text does not become a comment here -- {@code TaskCreated} carries it, and the
+ * {@code comment_on_task_created} automation turns it into one by issuing {@code AddComment}.
+ */
 public record CreateTask(TaskId taskId, String comment) implements TaskCommand {
 }

@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.views.account_balance;
 
 import dk.trustworks.essentials.components.document_db.DocumentDbRepository;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -55,8 +56,11 @@ public class AccountBalanceAPI {
     }
 
     @GetMapping("/{accountId}")
-    public ResponseEntity<AccountBalanceView> getAccountBalance(@PathVariable String accountId) {
-        var view = repository.findById(accountId);
+    public ResponseEntity<AccountBalanceView> getAccountBalance(@PathVariable AccountId accountId) {
+        // The typed signature is §R2's stronger form; it binds because config/WebConfiguration imports
+        // types-spring-web's EssentialsWebMvcConfigurer. The DocumentDbRepository is keyed by String, so the id is
+        // unwrapped for the lookup - the HTTP contract stays typed, which is where it matters
+        var view = repository.findById(accountId.toString());
         return view == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(view);
     }
 }

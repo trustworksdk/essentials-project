@@ -1,292 +1,369 @@
 # Essentials components: MongoDB Inbox-Outbox example
 
-The example uses the `spring-boot-starter-mongodb` that provides Spring Boot auto-configuration for all MongoDB focused Essentials components.
-All `@Beans` auto-configured by this library use `@ConditionalOnMissingBean` to allow for easy overriding.
+A Spring Boot application built on `spring-boot-starter-mongodb`, which auto-configures every MongoDB-focused
+Essentials component. All `@Bean`s it contributes use `@ConditionalOnMissingBean`, so any of them can be
+replaced by declaring your own.
+
+**There is no event store in this module.** State lives in a single `@Document` per order, and the
+`Inbox`/`Outbox` store-and-forward patterns are what make integration with Kafka reliable. That is the point of
+the example: `MongoDurableQueues` gives you at-least-once messaging with retries, dead-lettering and
+crash-safety **without** adopting event sourcing.
+
+Its two siblings:
+
+- [`postgresql-inbox-outbox`](../postgresql-inbox-outbox/README.md) — the same application on PostgreSQL/JPA.
+  Same slices, same flow; the differences are called out below.
+- [`postgresql-cqrs`](../postgresql-cqrs/README.md) — the same `shipping` domain modelled the *other* way, with
+  CQRS + event sourcing. Compare the two to see what a stream buys and what it costs.
+
+## What this example demonstrates
+
+| Concept | Where to look |
+|---|---|
+| `Inbox` — durably accept an incoming Kafka message before acting on it | `shipping/external_systems/order_management/incoming/OrderEventsKafkaListener` |
+| `Outbox` — publish to Kafka only if the local transaction commits | `shipping/external_systems/order_management/outgoing/ShippingEventKafkaPublisher` |
+| Service-entity write style (no aggregate, no event store) | `shipping/entities/ShippingOrder`, `ShippingOrders` |
+| Idempotency without a stream | `ShippingOrder.markOrderAsShipped()` |
+| A **strongly consistent** read slice using closed interface projections | `shipping/views/order_status/` |
+| Synchronous `EventBus` handler joining the writer's transaction | `ShippingEventKafkaPublisher` (`AnnotatedEventHandler`) |
+| Registering an application's own `CharSequenceType` with Spring Data MongoDB | `Application.additionalCharSequenceTypesSupported()` |
+| Adding extra Spring Data converters | `Application.additionalGenericConverters()` |
+| A custom `DurableQueuesInterceptor` | `config/ExampleDurableQueuesInterceptor` |
+
+## How the code is laid out
+
+One bounded context, `shipping`, packaged by vertical slice rather than by layer — there is no `controllers/`,
+`services/`, `domain/` or `repositories/` package:
+
+```
+messaging/
+  Application.java
+  config/                             app-level wiring — Kafka factories, DurableQueues interceptor
+  shipping/
+    entities/                         ShippingOrder (@Document) + ShippingOrders (write repository)
+    events/                           ShippingEvent (sealed) → ShippingOrderRegistered, OrderShipped
+    types/                            OrderId, ShippingDestinationAddress
+    use_cases/register_shipping_order/   command + handler + endpoint
+    use_cases/ship_order/                command + handler + endpoint
+    views/order_status/                  read model, its queries and its endpoint
+    external_systems/order_management/   the Kafka anti-corruption boundary (incoming/ + outgoing/)
+```
+
+`shipping/CLAUDE.md` records why this context is on the **service-entity** write style: it has no need to
+reconstruct state from history, so a stream would be cost without benefit.
+
+### Endpoints
+
+| Method | Path | Dispatch | Slice |
+|---|---|---|---|
+| POST | `/shipping/register-order` | `commandBus.send` (synchronous) | `shipping.register_shipping_order` |
+| POST | `/shipping/ship-order` | `commandBus.send` (synchronous) | `shipping.ship_order` |
+| GET | `/shipping/orders`, `/shipping/orders/{orderId}`, `/shipping/orders?shipped=true` | — | `shipping.order_status` |
+
+Unlike the `postgresql-cqrs` sibling's `GET`s, these reads are **strongly consistent**: the view queries the
+same collection the command just wrote. That is the thing this write style is better at.
+
+---
 
 ## Shipping flow
 
-### Test the Shipping flow
-You can either run the `OrderShippingProcessorIT` (see `Shipping flow explained` for details about the example)
-from within your IDE or using Maven `mvn verify -pl :mongodb-inbox-outbox` from the `examples/essentials-spring-examples` folder.
+An external **OrderService** publishes order events onto Kafka; this application ships the order and publishes
+its own event back onto Kafka. Neither DTO on the wire uses this application's types.
 
-### Test the Shipping flow using `curl` from the Terminal
-Alternatively you can start the Spring Boot application standalone from the `examples/essentials-spring-examples` folder using
+```
+   POST /shipping/register-order                  ┌─────────────────────────┐
+         │ RegisterShippingOrder                  │  external OrderService  │
+         ▼ commandBus.send (synchronous)          └────────────┬────────────┘
+  ┌─ RegisterShippingOrderHandler ──────                       │ OrderAccepted
+  │    already registered? → no-op                             │ {"id":"…"}
+  │    save the document                    Kafka topic        │   ↑ plain String id
+  │    eventBus.publish(ShippingOrderRegistered)               │
+  └───────────┬─────────────────────────      "order-events"   ▼
+              │                            ┌─ OrderEventsKafkaListener  @Transactional ─
+              ▼                            │    ⇦ THE TRANSLATION IN ⇨
+      ┌───────────────┐                    │    shipOrdersInbox.addMessageReceived(
+      │ shippingOrder │                    │        new ShipOrder(OrderId.of(event.id())))
+      │  collection   │                    └────────────────────┬──────────────────────
+      └───────┬───────┘                                         │
+              │                            ┌────────────────────▼─────────────────────┐
+              │                            │ Inbox "OrderService:OrderEvents"         │
+              │                            │  → durable_queues collection             │
+              │                            │  fixedBackoff 100ms ×10                  │
+              │                            │  SingleGlobalConsumer, 5 parallel        │
+              │                            └────────────────────┬─────────────────────┘
+              │                                                 │ forwards to the CommandBus
+              │                                                 ▼
+              │             ┌─ ONE TRANSACTION ────────────────────────────────
+              │             │ ShipOrderHandler
+              │             │   order = shippingOrders.getOrder(cmd.orderId())
+              │             │   if (order.markOrderAsShipped()) {    ← idempotency
+              │             │       shippingOrders.save(order);      ← REQUIRED
+              │             │       eventBus.publish(new OrderShipped(orderId));
+              │             │   }
+              │             │                    │
+              │             │                    ▼  LocalEventBus, synchronous
+              │             │ ShippingEventKafkaPublisher (AnnotatedEventHandler)
+              │             │   ⇦ THE TRANSLATION OUT ⇨
+              │             │   kafkaOutbox.sendMessage(
+              │             │       new ExternalOrderShipped(orderId.toString()))
+              │             │                    │
+              │             │                    ▼
+              │             │            a durable_queues document
+              │             └─ commit ────────────┬──────────────
+              │                                   │ async, retried (fixedBackoff 100ms ×10)
+              │                                   ▼
+              │                        ┌──────────────────────┐
+              │                        │ Outbox consumer      │
+              │                        │  kafkaTemplate.send  │
+              │                        └──────────┬───────────┘
+              ▼                                   ▼
+   GET /shipping/orders                Kafka topic "shipping-events"
+   (strongly consistent — same collection)
+```
+
+Step by step:
+
+1. `POST /shipping/register-order` sends `RegisterShippingOrder` with `commandBus.send`, so the caller learns
+   synchronously that the order was accepted. `RegisterShippingOrderHandler` runs in that transaction: it treats
+   an already-existing order as a no-op rather than an error (the command may be redelivered), writes the
+   `ShippingOrder` document, and publishes `ShippingOrderRegistered` on the `LocalEventBus`.
+2. The external OrderService publishes `OrderAccepted` to the `order-events` topic. Its `id` is a plain
+   `String` — the external contract does not know about `OrderId`.
+3. `OrderEventsKafkaListener` is the **incoming half of the anti-corruption boundary** and the one and only
+   place `String` becomes `OrderId`. Rather than call the command bus directly, it hands `ShipOrder` to an
+   `Inbox` it created in its constructor and which is configured to forward onto the `CommandBus`. Because the
+   listener method is `@Transactional`, the message is committed to `durable_queues` before Kafka's offset is
+   acknowledged — which is exactly what the Inbox pattern is for.
+
+   > The listener keeps `commandBus.sendAndDontWait(...)` in a comment right beside the `Inbox` call. Both are
+   > durable; the `Inbox` is shown here because it lets you name the queue, size its consumer pool and give it
+   > its own `RedeliveryPolicy` independently of the command bus's. The `postgresql-inbox-outbox` sibling takes
+   > the `sendAndDontWait` route, so the two can be read against each other.
+
+4. The `Inbox`'s consumers (5 of them, `SingleGlobalConsumer` mode so only one application instance consumes)
+   forward `ShipOrder` to the `CommandBus`, retrying with a fixed 100 ms backoff up to 10 times before
+   dead-lettering.
+5. `ShipOrderHandler` loads the document and calls `markOrderAsShipped()`, which returns `false` if the order
+   was already shipped. That boolean **is** the idempotency guard: messaging gives at-least-once delivery, so
+   `ShipOrder` can arrive more than once, and only the first arrival changes anything.
+
+   > **The explicit `save()` is not optional here.** Spring Data MongoDB does no dirty checking — a loaded
+   > document is not tracked, so a mutation that is not written back is silently lost, and the idempotency guard
+   > would then never survive a redelivery. The JPA sibling would flush a managed entity anyway; that hidden
+   > dependency is what made the identical handler body wrong when it was first ported to MongoDB.
+
+6. `ShippingEventKafkaPublisher` is an `AnnotatedEventHandler` registered **synchronously** on the
+   `LocalEventBus`, so its `@Handler` runs on the same thread and in the same transaction as the handler that
+   published `OrderShipped`. It is the **outgoing half of the boundary**: `OrderShipped` (which carries
+   `OrderId`) becomes `ExternalOrderShipped(String orderId)`, appended to the `Outbox`.
+7. Because the `Outbox` is backed by `MongoDurableQueues`, that append is just another document in the same
+   transaction. **Either the order is marked shipped and the Kafka message is queued, or neither happens** —
+   which is the whole point of the pattern. A separate consumer thread then forwards it with `KafkaTemplate`,
+   retrying on failure.
+
+> **The Kafka DTOs must keep their plain `String` ids.** `OrderEvent.id()` and
+> `ExternalOrderShippingEvent.orderId()` are deliberately not typed with `OrderId`. Typing them with the domain
+> type means the boundary stops translating — and it broke the `-Pjackson2` build, because the Kafka mapper and
+> the Essentials types module can end up on different Jackson majors. See the module's `CLAUDE.md`.
+
+### One thing the diagram does not show
+
+`ShippingOrderRegistered` is published, but **nothing subscribes to it today**. It is part of the context's
+public surface (`events/` is importable by other contexts) and exists so that registration is observable the
+same way shipping is; the example simply has no consumer for it yet.
+
+### Differences from the PostgreSQL sibling
+
+| | `mongodb-inbox-outbox` | `postgresql-inbox-outbox` |
+|---|---|---|
+| Kafka listener → command | an explicit `Inbox` (`OrderService:OrderEvents`) forwarding to the command bus | `commandBus.sendAndDontWait` |
+| Entity `@Id` | `OrderId` — needs `AdditionalCharSequenceTypesSupported` in `Application` | plain `String` |
+| Persistence on mutation | `save()` is **required** — no dirty checking | `save()` is explicit, though JPA would flush anyway |
+| View read shape | closed interface projection read straight from the `Document`, so the entity needs no getters | closed interface projection over the JPA entity |
+| Extra load harness | no | yes (`shipping/load/`, test scope) |
+
+---
+
+## Build, test and run
+
+All commands are run from the `examples/essentials-spring-examples` folder.
+
+```bash
+mvn verify -pl :mongodb-inbox-outbox                 # unit + integration tests (needs Docker)
+mvn -Pjackson2 verify -pl :mongodb-inbox-outbox -am  # the other Jackson flavour; -am is required
+docker compose up -d && mvn spring-boot:run -pl :mongodb-inbox-outbox
+```
+
+The `-am` is not optional on the non-default Jackson flavour — see
+[the aggregator README](../README.md#jackson-flavour).
+
+### Tests
+
+| Test | What it covers |
+|---|---|
+| `shipping/entities/ShippingOrderTest` | the context's only invariant — `markOrderAsShipped()` returns `true` then `false`. No Spring, no container |
+| `shipping/ShippingFlowIT` | the whole flow: register → Kafka `OrderAccepted` → `Inbox` → ship → `Outbox` → Kafka. Also asserts that shipping twice publishes exactly **one** `ExternalOrderShipped` |
+| `shipping/views/order_status/OrderStatusIT` | the view slice, asserting strong consistency — no `Awaitility` anywhere |
+
+`AbstractIntegrationTest` holds the shared MongoDB + Kafka Testcontainers. Kafka starts even for tests that do
+not use it, because `KafkaConfiguration` needs `spring.kafka.bootstrap-servers` to build the context.
+
+### Drive it with `curl`
+
+Start the runtime stack and the application:
+
 ```bash
 docker compose up -d
 mvn spring-boot:run -pl :mongodb-inbox-outbox
 ```
 
-The last command will block the current terminal, so to continue you need to open a new Terminal.
+The last command blocks the terminal, so open a second one for the requests below.
 
-#### Initiate the test scenario:
-In a new Terminal enter the following command:
 ```bash
+# 1. Register the shipping order
 curl -L 'http://localhost:8080/shipping/register-order' \
--X POST \
--H 'Accept: application/json' \
--H 'Content-Type: application/json' \
--d '{
-  "orderId": "order1",
-  "destinationAddress": {
-   "recipientName": "John Doe",
-   "street": "Test Street 1",
-   "zipCode": "1234",
-   "city": "Test City"
-  }
-}'
-```
-#### Complete the test scenario:
-In the same Terminal enter the following command:
-```bash
+  -X POST \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "orderId": "order1",
+    "destinationAddress": {
+      "recipientName": "John Doe",
+      "street": "Test Street 1",
+      "zipCode": "1234",
+      "city": "Test City"
+    }
+  }'
+
+# 2. Ship it (in the real flow this command comes from the Kafka listener instead)
 curl -L 'http://localhost:8080/shipping/ship-order' \
--H 'Accept: application/json' \
--H 'Content-Type: application/json' \
--d '{
-  "orderId": "order1"
-}'
+  -X POST \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  -d '{ "orderId": "order1" }'
+
+# 3. Read it back - immediately, because the view is strongly consistent
+curl 'http://localhost:8080/shipping/orders'
+curl 'http://localhost:8080/shipping/orders/order1'
+curl 'http://localhost:8080/shipping/orders?shipped=true'
 ```
 
-This will trigger the Shipping process.   
-In the Spring Root terminal you should be able to see log entries similar to:
+In the Spring Boot terminal you should see log entries similar to:
 `... [mongodb-inbox-outbox] [....] [e7754a2059013cfdff422bfeda5d3e09-4acc5a9396d96dfc]...`
 
-The second value in the example (`e7754a2059013cfdff422bfeda5d3e09`) is the `traceId`.
-If you open Grafana using `http://localhost:3000` and go to the `Logs, Traces, Metrics` Dashboard,
-then the `traceId` can be entered into the `Trace ID` text box.
+The second value (`e7754a2059013cfdff422bfeda5d3e09`) is the `traceId`. Open Grafana at
+`http://localhost:3000`, go to the `Logs, Traces, Metrics` dashboard, and paste it into the `Trace ID` box.
 
-#### Stop the test scenario:
-- Stop the Spring Boot Application by pressing `Ctrl C`
-- Stop Docker:
-  ```bash
-    docker compose down -v
-  ```
-## Shipping flow explained
-The `OrderShippingProcessorIT` integration-test coordinates the test flow:
-- First a `ShippingOrder` aggregate is created, by sending `RegisterShippingOrder` over the `CommandBus`
-  - The `OrderShippingProcessor` is auto registered with the `CommandBus` as a `CommandHandler` because it implements the `CommandHandler` interface through the `AnnotatedCommandHandler` base class
-  - The `OrderShippingProcessor.handle(RegisterShippingOrder)` command handler method reacts to the `RegisterShippingOrder` in an existing Transaction/`UnitOfWork`  since the `Inbox` is configured
-    with `TransactionalMode.FullyTransactional`.
-  - The `OrderShippingProcessor.handle(RegisterShippingOrder)` ensures that the `ShippingOrder` aggregate is stored
-  - And afterward it published the `ShippingOrderRegistered` event is published via the `EventBus`
-- Next we simulate that the **OrderService** publishes a `OrderAccepted` event via Kafka, which the `OrderEventsKafkaListener` is listening for
-- The `OrderEventsKafkaListener` reacts to the `OrderAccepted` and converts it into a `ShipOrder` command.
-  - Afterwards the `ShipOrder` command is added to the `shipOrdersInbox` of type `Inbox`
-  - When this is completed the handling of the `OrderAccepted` event is completed
-- Asynchronously the `shipOrdersInbox` will forward the `ShipOrder` command to the `CommandBus`
-  - Note: the `Order` and `ShippingOrder` are correlated/linked through the `OrderId` (aggregates reference each other using id's)
-- The `OrderShippingProcessor.handle(ShipOrder)` command handler method reacts to the `ShipOrder` command
-  - ![Handling a Kafka Message using an Inbox](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/images/inbox.png?raw=true)
-  - It loads the corresponding `ShippingOrder` instance and performs an idempotency check - if the order is already **marked-as-shipped**
-    - This idempotency check is necessary as we're using in Messaging we deal with At-Least-Once message delivery guarantee and delivery of the `ShipOrder` command can end up
-      being delivered by the `Inbox` multiple times
-  - If **marking** the `ShippingOrder` as **shipped** succeeds it next publishes the `OrderShipped` event via the `EventBus`
-- The `ShippingEventKafkaPublisher` is auto registered with the `EventBus` as a synchronous `EventHandler` because it implements the `EventHandler` interface through the `AnnotatedEventHandler` base class
-  - Since the `ShippingEventKafkaPublisher` is a synchronous `EventHandler`, then it reacts to the `OrderShipped` event on the same thread and in the same transaction/`UnitOfWork` as the `OrderShippingProcessor.handle(ShipOrder)` method
-  - The `ShippingEventKafkaPublisher.handle(OrderShipped)` method converts the `OrderShipped` event to an external event `ExternalOrderShipped`
-  - The `ExternalOrderShipped` is then added to the `kafkaOutbox` of type `Outbox`, that the `ShippingEventKafkaPublisher` has configured
-- Asynchronously the `kafkaOutbox` will call its Message consumer (in this case a lambda) which uses a `KafkaTemplate` to publish the `ExternalOrderShipped` to a Kafka Topic
-  - ![Publishing a Kafka Message using an Outbox](https://github.com/trustworksdk/essentials-project/blob/main/components/foundation/images/outbox.png?raw=true)
+Stop with `Ctrl-C`, then `docker compose down -v`.
 
+---
 
 ## Application Setup
-The following Essentials components are auto configured by the `EssentialsComponentsConfiguration`:
-- Jackson/FasterXML JSON modules:
-  - `EssentialTypesJacksonModule`
-  - `EssentialsImmutableJacksonModule` (if `Objenesis` is on the classpath AND `essentials.immutable-jackson-module-enabled` has value `true`)
-- `JacksonJSONSerializer` which uses an internally configured `ObjectMapper`, which provides good defaults for JSON serialization, and includes all Jackson `Module`'s defined in the `ApplicationContext`
-- `SingleValueTypeRandomIdGenerator` to support server generated Id creations for SpringData Mongo classes with @Id fields of type `SingleValueType`
-- `MongoCustomConversions` with a `SingleValueTypeConverter` covering `LockName`, `QueueEntryId` and `QueueName`
-- `MongoTransactionManager` as it is needed by the `SpringMongoTransactionAwareUnitOfWorkFactory`
-- `SpringMongoTransactionAwareUnitOfWorkFactory` configured to use the `MongoTransactionManager`
-- `MongoFencedLockManager` using the `JSONSerializer` as JSON serializer
-  - Supports additional properties:
-  - ```
-    essentials.fenced-lock-manager.fenced-locks-collection-name=fenced_locks
-    essentials.fenced-lock-manager.lock-confirmation-interval=5s
-    essentials.fenced-lock-manager.lock-time-out=12s
-    essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation=false
-    ```
-  - **Security Notice regarding `essentials.fenced-lock-manager.fenced-locks-collection-name`:**
-    - This property, no matter if it's set using properties, System properties, env variables or yaml configuration, will be provided to the `MongoFencedLockStorage` component, used by `MongoFencedLockManager`,  as the `fencedLocksCollectionName` parameter.
-    - To support customization of storage table name, the `essentials.fenced-lock-manager.fenced-locks-collection-name` provided through the Spring configuration to the `MongoFencedLockStorage`, through the `MongoFencedLockManager`,
-      and will be directly used as Collection name, which exposes the component to the risk of malicious input.
-    - **It is the responsibility of the user of this component to sanitize the `fencedLocksCollectionName` to avoid the risk of malicious input and that can compromise the security and integrity of the database**
-    - The `MongoFencedLockStorage` component,  will call the `MongoUtil.checkIsValidCollectionName(String)` method to validate the collection name as a first line of defense.
-      - The method provided is designed as an initial layer of defense against users providing unsafe collection names, by applying naming conventions intended to reduce the risk of malicious input.
-        - **However, Essentials components as well as `MongoUtil.checkIsValidCollectionName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting MongoDB configuration and associated Queries/Updates/etc.**
-    - **The responsibility for implementing protective measures against malicious input lies exclusively with the users/developers using the Essentials components and its supporting classes.**
-    - Users must ensure thorough sanitization and validation of API input parameters,  collection names.
-    - Insufficient attention to these practices may leave the application vulnerable to attacks, potentially
-      endangering the security and integrity of the database. It is highly recommended that the `fencedLocksCollectionName` value is only derived from a controlled and trusted source.
-    - To mitigate the risk of malicious input attacks, external or untrusted inputs should never directly provide the `fencedLocksCollectionName` value.
-    - **Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.**
-- `MongoDurableQueues` using the `JSONSerializer` as JSON serializer
-  - Supports additional properties:
-  - ```
-    essentials.durable-queues.shared-queue-collection-name=durable_queues
-    essentials.durable-queues.transactional-mode=fullytransactional or singleoperationtransaction (default)
-    essentials.durable-queues.polling-delay-interval-increment-factor=0.5
-    essentials.durable-queues.max-polling-interval=2s
-    essentials.durable-queues.verbose-tracing=false
-    # Only relevant if transactional-mode=singleoperationtransaction
-    essentials.durable-queues.message-handling-timeout=5s
-    ```
-  - **Security Notice regarding `essentials.durable-queues.shared-queue-collection-name`:**
-    - This property, no matter if it's set using properties, System properties, env variables or yaml configuration, will be provided to the `MongoDurableQueues` as the `sharedQueueCollectionName` parameter.
-    - To support customization of storage table name, the `essentials.durable-queues.shared-queue-collection-name` provided through the Spring configuration to the `MongoDurableQueues`,
-      will be directly used as Collection name, which exposes the component to the risk of malicious input.
-      To support customization of storage collection name, the `sharedQueueCollectionName` will be directly used as Collection name, which exposes the component to the risk of malicious input.
-    - **It is the responsibility of the user of this component to sanitize the `sharedQueueCollectionName` to avoid the risk of malicious input and that can compromise the security and integrity of the database**
-    - The `MongoDurableQueues` component,  will call the `MongoUtil.checkIsValidCollectionName(String)` method to validate the collection name as a first line of defense.
-      - The method provided is designed as an initial layer of defense against users providing unsafe collection names, by applying naming conventions intended to reduce the risk of malicious input.
-        - **However, Essentials components as well as `MongoUtil.checkIsValidCollectionName(String)` does not offer exhaustive protection, nor does it assure the complete security of the resulting MongoDB configuration and associated Queries/Updates/etc.**
-    - **The responsibility for implementing protective measures against malicious input lies exclusively with the users/developers using the Essentials components and its supporting classes.**
-    - Users must ensure thorough sanitization and validation of API input parameters,  collection names.
-    - Insufficient attention to these practices may leave the application vulnerable to attacks, potentially
-      endangering the security and integrity of the database. It is highly recommended that the `sharedQueueCollectionName` value is only derived from a controlled and trusted source.
-    - To mitigate the risk of malicious input attacks, external or untrusted inputs should never directly provide the `sharedQueueCollectionName` value.
-    - **Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.**
-- `Inboxes`, `Outboxes` and `DurableLocalCommandBus` configured to use `MongoDurableQueues`
-- `LocalEventBus` with bus-name `default` and Bean name `eventBus`
-  - Supports additional configuration properties:
-  - ```
-    essentials.reactive.event-bus-backpressure-buffer-size=1024
-    essentials.reactive.overflow-max-retries=20
-    essentials.reactive.queued-task-cap-factor=1.5
-    #essentials.reactive.event-bus-parallel-threads=4
-    #essentials.reactive.command-bus-parallel-send-and-dont-wait-consumers=4
-    ```
-- **Metrics:**
-  - **Overview:**  
-    This configuration controls the collection of performance metrics and determines the log level at which operations are reported.    
-    When metrics collection is enabled for a component (such as durable queues, command bus, or message handlers), the duration of each operation is measured.   
-    If the duration exceeds certain thresholds, the operation is logged at the corresponding level:
-    - **errorThreshold:** If the duration exceeds this value, the operation is logged at **ERROR** level.
-    - **warnThreshold:** If the duration exceeds this value (but is less than the error threshold), it is logged at **WARN** level.
-    - **infoThreshold:** If the duration exceeds this value (but is less than the warn threshold), it is logged at **INFO** level.
-    - **debugThreshold:** If the duration exceeds this value (but is less than the info threshold), it is logged at **DEBUG** level.
-    - If none of the thresholds are met and metrics collection is enabled, the operation is logged at **TRACE** level.
 
-  - **How to Configure:**  
-    Each component can be configured individually. For each component, you can:
-    - Enable or disable metrics collection.
-    - Set the minimum duration (using a time unit such as `ms`) for each logging level.  
-      These settings allow you to fine-tune how sensitive the logging should be, based on the performance characteristics you expect.
+Everything this application needs is auto-configured by
+[`spring-boot-starter-mongodb`](../../../components/spring-boot-starter-mongodb/README.md).
 
-  - **YAML Example:**
-    ```yaml
-    essentials:
-      metrics:
-        durable-queues:
-          enabled: true
-          thresholds:
-            debug: 25ms    # Log at DEBUG if duration ≥ 25ms (and below the INFO threshold)
-            info: 200ms    # Log at INFO if duration ≥ 200ms (and below the WARN threshold)
-            warn: 500ms    # Log at WARN if duration ≥ 500ms (and below the ERROR threshold)
-            error: 5000ms  # Log at ERROR if duration ≥ 5000ms
-        command-bus:
-          enabled: true
-          thresholds:
-            debug: 25ms
-            info: 200ms
-            warn: 500ms
-            error: 5000ms
-        message-handler:
-          enabled: true
-          thresholds:
-            debug: 25ms
-            info: 200ms
-            warn: 500ms
-            error: 5000ms
-    ```
+**That README is the reference for the complete bean list and every `essentials.*` property, including the
+security notices for the configurable collection names.** It is kept in step with the code; the sections below
+only record what *this example* configures on top of the defaults, and are not a substitute.
 
-  - **Properties Example:**
-    ```properties
-    essentials.metrics.durable-queues.enabled=true
-    essentials.metrics.durable-queues.thresholds.debug=25ms
-    essentials.metrics.durable-queues.thresholds.info=200ms
-    essentials.metrics.durable-queues.thresholds.warn=500ms
-    essentials.metrics.durable-queues.thresholds.error=5000ms
+In short, the starter provides: `MongoTransactionManager` +
+`SpringMongoTransactionAwareUnitOfWorkFactory`, `MongoDurableQueues`, `Inboxes`/`Outboxes`,
+`DurableLocalCommandBus`, `LocalEventBus`, `MongoFencedLockManager`, `ReactiveHandlersBeanPostProcessor` (which
+is what auto-registers every `@CmdHandler` and `@Handler` bean in this module), `JacksonJSONSerializer`,
+`SingleValueTypeRandomIdGenerator`, a `MongoCustomConversions` carrying `SingleValueTypeConverter`, and the
+Micrometer interceptors.
 
-    essentials.metrics.command-bus.enabled=true
-    essentials.metrics.command-bus.thresholds.debug=25ms
-    essentials.metrics.command-bus.thresholds.info=200ms
-    essentials.metrics.command-bus.thresholds.warn=500ms
-    essentials.metrics.command-bus.thresholds.error=5000ms
+> ⚠️ **Security.** `essentials.durable-queues.shared-queue-collection-name` and
+> `essentials.fenced-lock-manager.fenced-locks-collection-name` are used directly as collection names. Derive
+> them from a trusted source only. The starter README carries the full notice.
 
-    essentials.metrics.message-handler.enabled=true
-    essentials.metrics.message-handler.thresholds.debug=25ms
-    essentials.metrics.message-handler.thresholds.info=200ms
-    essentials.metrics.message-handler.thresholds.warn=500ms
-    essentials.metrics.message-handler.thresholds.error=5000ms
-    ```
+### What this example configures — `src/main/resources/application.properties`
 
-  - **Adjusting Log Levels:**  
-    In addition to these properties, you can control which metrics are actually written to your log files by configuring the log levels for the corresponding logger classes in your logging framework (e.g. Logback or Log4j). For example:
-    - For durable queues metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeDurableQueueInterceptor`
-    - For command bus metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeCommandBusInterceptor`
-    - For message handler metrics, adjust the log level for:  
-      `dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeMessageHandlerInterceptor`
+```properties
+essentials.immutable-jackson-module-enabled=true
 
-- `ReactiveHandlersBeanPostProcessor` (for auto-registering `EventHandler` and `CommandHandler` Beans with the `EventBus`'s and `CommandBus` beans found in the `ApplicationContext`)
-  - You can disable post-processing by setting: `essentials.reactive-bean-post-processor-enabled=false`
-- Automatically calling `Lifecycle.start()`/`Lifecycle.stop`, on any Beans implementing the `Lifecycle` interface, when the `ApplicationContext` is started/stopped through the `DefaultLifecycleManager`
-  - You can disable starting `Lifecycle` Beans by using setting this property to false:
-    - `essentials.life-cycles.start-life-cycles=false`
-- `DurableQueuesMicrometerTracingInterceptor` and `DurableQueuesMicrometerInterceptor` if property `management.tracing.enabled` has value `true`
-  - The default `DurableQueuesMicrometerTracingInterceptor` values can be overridden using Spring properties:
-  -  ```
-       essentials.durable-queues.verbose-tracing=true
-       ```
-- `DurableLocalCommandBus`
-  - The `DurableLocalCommandBus` supports two different error handling concepts for true **fire-and-forget asynchronous command processing** (i.e., when `CommandBus.sendAndDontWait` is used):
-    - `SendAndDontWaitErrorHandler` -  The `SendAndDontWaitErrorHandler` exception handler will handle errors that occur while processing Commands sent using `CommandBus.sendAndDontWait`.
-      - If this handler doesn't rethrow the exception, then the message will not be retried by the underlying `DurableQueues`,  nor will the message be marked as a dead-letter/poison message.
-      - Default it uses `SendAndDontWaitErrorHandler.RethrowingSendAndDontWaitErrorHandler`.
-      - To override this configuration, you need to register a Spring bean of type `SendAndDontWaitErrorHandler`
-    - `RedeliveryPolicy` which sets the `RedeliveryPolicy` used when handling queued commands sent using `CommandBus.sendAndDontWait`.
-      - Default it's using `DurableLocalCommandBus.DEFAULT_REDELIVERY_POLICY`.
-      - To override this, you need to register a Spring bean of type `RedeliveryPolicy`
-  - Example of custom Spring configuration:
-     ```
-     /**
-      * Custom {@link RedeliveryPolicy} used by the {@link DurableLocalCommandBus} that is autoconfigured by the springboot starter
-      * @return The {@link RedeliveryPolicy} used for {@link DurableLocalCommandBusBuilder#setCommandQueueRedeliveryPolicy(RedeliveryPolicy)}
-      */
-     @Bean
-     RedeliveryPolicy durableLocalCommandBusRedeliveryPolicy() {
-         return RedeliveryPolicy.exponentialBackoff()
-                                .setInitialRedeliveryDelay(Duration.ofMillis(200))
-                                .setFollowupRedeliveryDelay(Duration.ofMillis(200))
-                                .setFollowupRedeliveryDelayMultiplier(1.1d)
-                                .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
-                                .setMaximumNumberOfRedeliveries(20)
-                                .setDeliveryErrorHandler(
-                                        MessageDeliveryErrorHandler.stopRedeliveryOn(
-                                                ConstraintViolationException.class,
-                                                HttpClientErrorException.BadRequest.class))
-                                .build();
-     }
-     
-     
-     /**
-      * Custom {@link SendAndDontWaitErrorHandler} used by the {@link DurableLocalCommandBus} that is autoconfigured by the springboot starter
-      * @return The {@link SendAndDontWaitErrorHandler} used for {@link DurableLocalCommandBusBuilder#setSendAndDontWaitErrorHandler(SendAndDontWaitErrorHandler)}
-      */
-     @Bean
-     SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler() {
-         return (exception, commandMessage, commandHandler) -> {
-             // Example of not retrying HttpClientErrorException.Unauthorized at all -
-             // if this exception is encountered then the failure is logged, but the command is never retried
-             // nor marked as a dead-letter/poison message
-             if (exception instanceof HttpClientErrorException.Unauthorized) {
-                 log.error("Unauthorized exception", exception);
-             } else {
-                 Exceptions.sneakyThrow(exception);
-             }
-         };
-     }
-     ```
+# Reactive buses
+essentials.reactive.event-bus-backpressure-buffer-size=1024
+essentials.reactive.overflow-max-retries=20
+essentials.reactive.queued-task-cap-factor=1.5
 
+# DurableQueues — backs the command bus, the Inbox and the Outbox
+essentials.durable-queues.shared-queue-collection-name=durable_queues
+essentials.durable-queues.transactional-mode=singleoperationtransaction
+essentials.durable-queues.message-handling-timeout=5s
+essentials.durable-queues.polling-delay-interval-increment-factor=0.5
+essentials.durable-queues.max-polling-interval=2s
+essentials.durable-queues.verbose-tracing=false
+
+essentials.fenced-lock-manager.fenced-locks-collection-name=fenced_locks
+essentials.fenced-lock-manager.lock-confirmation-interval=5s
+essentials.fenced-lock-manager.lock-time-out=12s
+essentials.fenced-lock-manager.release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation=false
+
+# Metrics — operations slower than a threshold are logged at that level; see the starter README
+essentials.metrics.durable-queues.enabled=true
+essentials.metrics.command-bus.enabled=true
+essentials.metrics.message-handler.enabled=true
+# … each with .thresholds.{debug,info,warn,error} = 25ms / 200ms / 500ms / 5000ms
+
+spring.data.mongodb.auto-index-creation=true
+```
+
+Notes on the values this example picks:
+
+- **`transactional-mode=singleoperationtransaction`** is the recommended mode and the starter default.
+  `fullytransactional` makes queue operations join the caller's transaction, which breaks retry counting and
+  dead-lettering, because a failure marks the whole transaction for rollback.
+- **`message-handling-timeout=5s`** is shorter than the starter default (`30s`). It only applies in
+  `singleoperationtransaction` mode, where it is how long an unacknowledged in-flight message waits before
+  being redelivered — a short value makes the retry behaviour visible in a demo, and is too aggressive for a
+  real workload whose handlers can legitimately take seconds.
+- **The fenced-lock values restate the starter defaults** (`12s` timeout / `5s` confirmation) rather than
+  changing them, so the file doubles as a worked example of the properties. Note that the PostgreSQL starter's
+  defaults are different (`15s` / `4s`) — these are per-starter, not global. `lock-confirmation-interval` must
+  stay well below `lock-time-out`, and nothing validates that.
+
+### Extension points this example uses
+
+`Application.java` registers two Spring Data MongoDB extension points that the starter exposes:
+
+```java
+/**
+ * The starter's SingleValueTypeConverter covers Essentials' own types (LockName, QueueEntryId, QueueName).
+ * An application's own CharSequenceType - here OrderId, used as ShippingOrder's @Id - must be declared.
+ */
+@Bean
+AdditionalCharSequenceTypesSupported additionalCharSequenceTypesSupported() {
+    return new AdditionalCharSequenceTypesSupported(OrderId.class);
+}
+
+/**
+ * Any additional Spring Data converters the application needs, merged into MongoCustomConversions.
+ */
+@Bean
+AdditionalConverters additionalGenericConverters() {
+    return new AdditionalConverters(Jsr310Converters.StringToDurationConverter.INSTANCE,
+                                    Jsr310Converters.DurationToStringConverter.INSTANCE);
+}
+```
+
+Both `DurableLocalCommandBus` extension points are also available, and apply only to **fire-and-forget**
+commands sent with `CommandBus.sendAndDontWait`:
+
+| Bean type | Effect | Default |
+|---|---|---|
+| `RedeliveryPolicy` | retry schedule for queued commands, and which exceptions skip straight to a dead-letter | `DurableLocalCommandBus.DEFAULT_REDELIVERY_POLICY` |
+| `SendAndDontWaitErrorHandler` | if it does not rethrow, the command is neither retried nor dead-lettered | `RethrowingSendAndDontWaitErrorHandler` |
+
+This module leaves both at their defaults — its incoming path goes through an `Inbox`, which carries its own
+`RedeliveryPolicy`, set inline in `OrderEventsKafkaListener`'s constructor.
+[`postgresql-cqrs`'s `Application.java`](../postgresql-cqrs/README.md#what-this-example-overrides-in-code) has a
+worked example of overriding the command-bus pair.
+
+Two more classes carry example-specific wiring:
+
+| Class | Role |
+|---|---|
+| `config/KafkaConfiguration` | Kafka producer/consumer factories and the trusted-packages prefix, derived from `Application`'s package rather than from a type inside a slice |
+| `config/ExampleDurableQueuesInterceptor` | a `DurableQueuesInterceptor` bean, collected automatically by the starter — here it only trace-logs queue operations, but the same hook is where you would add auditing or filtering |

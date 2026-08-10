@@ -19,6 +19,14 @@ package dk.trustworks.essentials.spring.examples.postgresql.messaging.config;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * Pulls the Essentials JPA attribute converters into the context.
+ *
+ * <p>{@code types-springdata-jpa} ships ready-made {@code AttributeConverter}s for the {@code SingleValueType}
+ * families -- {@code CharSequenceType}, the numeric types, the JSR-310 types -- but they live in a package outside
+ * this application's own scan root, so Hibernate would never see them. Scanning that package registers them all,
+ * including the {@code autoApply} ones.
+ */
 @Configuration
 @ComponentScan("dk.trustworks.essentials.types.springdata.jpa.converters")
 public class JpaConfig {
