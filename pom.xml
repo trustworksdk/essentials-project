@@ -70,16 +70,16 @@
         <java.release.version>21</java.release.version>
         <java.version>${java.release.version}</java.version>
         <maven.compiler.release>${java.release.version}</maven.compiler.release>
-        <kotlin.version>2.1.21</kotlin.version>
+        <kotlin.version>2.2.21</kotlin.version>
         <!-- Language/API level artifacts are compiled against, kept independent of the compiler
-             (kotlin.version) so a newer compiler still emits Kotlin 2.1-compatible binaries/metadata
-             for consumers on Kotlin 2.1. -->
-        <kotlinLanguage.version>2.1</kotlinLanguage.version>
+             (kotlin.version) so a newer compiler still emits Kotlin 2.2-compatible binaries/metadata
+             for consumers on Kotlin 2.2. -->
+        <kotlinLanguage.version>2.2</kotlinLanguage.version>
         <kotlinApi.version>2.1</kotlinApi.version>
         <revision>DEV-SNAPSHOT</revision>
         <skipDependencyCheck>false</skipDependencyCheck>
 
-        <spring-boot.version>4.0.3</spring-boot.version>
+        <spring-boot.version>4.0.7</spring-boot.version>
         <!-- The default Jackson flavour. Jackson 3 is the default because that is what Spring Boot 4 ships with; build
              or depend with -Pjackson2 to stay on Jackson 2. Both flavours publish the same class names, so exactly one
              is ever on the classpath, and both write byte-identical JSON — see EssentialsObjectMappers. -->
@@ -97,7 +97,7 @@
         <junit-bom.version>6.0.3</junit-bom.version>
         <testcontainers-bom.version>2.0.5</testcontainers-bom.version>
         <jdbi3-bom.version>3.54.0</jdbi3-bom.version>
-        <jackson3-bom.version>3.0.4</jackson3-bom.version>
+        <jackson3-bom.version>3.1.4</jackson3-bom.version>
         <jackson-bom.version>2.22.1</jackson-bom.version>
         <mockito-bom.version>5.23.0</mockito-bom.version>
         <avro.version>1.12.1</avro.version>
@@ -106,7 +106,7 @@
         <xmlunit-core.version>2.10.4</xmlunit-core.version>
         <archunit-junit5.version>1.4.2</archunit-junit5.version>
 
-        <dokka.version>2.1.0</dokka.version>
+        <dokka.version>2.2.0</dokka.version>
         <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
         <maven-project-info-reports-plugin.version>3.9.0</maven-project-info-reports-plugin.version>
         <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
@@ -114,7 +114,7 @@
         <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
         <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
         <maven-site-plugin.version>3.22.0</maven-site-plugin.version>
-        <maven-jar-plugin.version>3.5.0</maven-jar-plugin.version>
+        <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
         <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
         <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
         <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
@@ -124,7 +124,7 @@
         <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
         <minimum-maven-version>3.8.8</minimum-maven-version>
         <dependency-check-maven.version>12.2.2</dependency-check-maven.version>
-        <flatten-maven-plugin.version>1.7.3</flatten-maven-plugin.version>
+        <flatten-maven-plugin.version>1.8.0</flatten-maven-plugin.version>
         <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
         <maven.docker.plugin.version>0.48.1</maven.docker.plugin.version>
         <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
