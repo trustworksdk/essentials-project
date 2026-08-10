@@ -121,6 +121,16 @@
         "GRAPHIFY_FORCE": "1",
         "HEADROOM_UPDATE_CHECK": "off",
         "HEADROOM_WORKSPACE_DIR": "/home/vscode/.headroom",
+        // Expose headroom's 4th MCP tool, headroom_read (default "off" — see
+        // _READ_ENABLED in headroom/ccr/mcp_server.py). It is the only headroom
+        // feature that actually reduces context: it caches a file on first read
+        // and returns a ~20-token marker on re-reads of the unchanged file,
+        // i.e. it intercepts BEFORE content lands in context. headroom_compress
+        // cannot do that — content must already be in context to be passed as a
+        // parameter, so compressing costs more than it saves. Works standalone;
+        // no proxy and no ML extras needed (compression + retrieval are local —
+        // mcp_server.py:365). Upstream still flags it, so treat as experimental.
+        "HEADROOM_MCP_READ": "on",
         "RTK_TELEMETRY_DISABLED": "1",
         // Native LSP layer: enable Claude Code's built-in LSP tool (semantic
         // go-to-definition / find-references / diagnostics). Auto-on for recent

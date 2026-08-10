@@ -3,6 +3,9 @@
 Java 17+ building blocks for strongly-typed, event-sourced distributed systems.
 Multi-module Maven. GroupId: `dk.trustworks.essentials` / `dk.trustworks.essentials.components`.
 
+- `examples/` — demo projects, not part of the release
+- `components/foundation-test/` — internal test utilities, not a consumer API
+
 ## LLM Docs
 
 Consumer-facing module docs: `LLM/LLM.md` (entry point), `LLM/LLM-*.md` (per-module).
@@ -22,50 +25,6 @@ mvn clean install -DskipDependencyCheck=true          # skip OWASP check
 mvn clean install -P test-release                     # simulated release
 ```
 
-## Module Layout
-
-```
-shared/                          # Tuples, collections, reflection, exceptions — zero deps
-types/                           # SingleValueType pattern
-immutable/                       # Immutable value objects
-reactive/                        # EventBus, CommandBus
-types-{jackson,jackson3}/        # Jackson/Jackson3 serialization for types
-types-{jdbi,avro}/               # JDBI and Avro integration for types
-types-{spring-web,springdata-jpa,springdata-mongo}/
-immutable-{jackson,jackson3}/    # Jackson/Jackson3 deserialization for immutables
-components/
-  foundation-types/              # CorrelationId, EventId, AggregateType, …
-  foundation/                    # UnitOfWork, FencedLock, DurableQueues, Inbox/Outbox
-  foundation-test/               # Internal test utilities
-  jdbc-queue-base/               # JDBC queue abstraction — shared by postgresql-queue + mssql-queue
-  mssql-queue/
-  postgresql-event-store/        # EventStore, subscriptions, EventProcessor, CDC
-  eventsourced-aggregates/       # StatefulAggregate, Aggregate, Decider, Repository
-  spring-postgresql-event-store/ # Spring TX integration for EventStore
-  postgresql-{distributed-fenced-lock,queue,document-db}/
-  springdata-mongo-{distributed-fenced-lock,queue}/
-  kotlin-eventsourcing/          # Kotlin DSL for event sourcing
-  admin-api-spec/                # Code-first OpenAPI contract for the admin *Api SPIs
-  admin-api-client-java/         # Java client generated from that contract
-  spring-boot-starter-admin-api/ # HTTP adapter serving the contract
-  spring-boot-starter-admin-ui/  # Optional default UI — Thymeleaf + vanilla JS, no Node
-  spring-boot-starter-*/         # Auto-configuration starters
-examples/                        # Demo projects — not part of release
-  essentials-performance-lab/    # CDC/EventStore/DurableQueues performance scenarios
-  essentials-spring-examples/    # Spring Boot apps: postgresql-cqrs, postgresql-inbox-outbox, mongodb-inbox-outbox
-LLM/                             # Consumer-facing LLM doc tree
-```
-
-## Rules (`.claude/rules/`)
-
-Topic rules, path-scoped so they load only when relevant:
-
-| File | Loads when editing | Covers |
-|------|--------------------|--------|
-| `code-style.md` | `**/*.{java,kt}` | License header, formatter, imports, guards, builders, semantic types |
-| `testing.md` | `*Test.*` / `*IT.*` | Unit-vs-IT suffix, JUnit5/AssertJ/Awaitility, Testcontainers, base ITs, fixtures, naming |
-| `maintaining-claude-md.md` | `**/CLAUDE.md` | When/what/how to update CLAUDE.md files |
-
 ## Critical Gotchas
 
 - **`provided` scope** — all third-party integrations NOT transitive; consumers declare own deps
@@ -84,17 +43,27 @@ Topic rules, path-scoped so they load only when relevant:
 - **Map keys keyed by a value type need no annotation under Jackson 3** — `types-jackson3` registers `SingleValueTypeKeyDeserializers`. Under Jackson 2 they need `@JsonDeserialize(keyUsing=…)`, and that annotation is in J2's `com.fasterxml.jackson.databind.annotation` package which J3 does not read — so on upgrade it silently stops applying. It surfaced as aggregate snapshots deserializing into `BrokenSnapshot`
 - **Admin surface = one contract** — an admin operation lives in 3 synced places: the `*Api` SPI, the `EssentialsAdminApiSpec` mapping table, and a controller in `spring-boot-starter-admin-api`
 
+## Knowledge graph queries
+
+Hand-curated `graphify query` rules. Keep them here — `## graphify` below is overwritten on every devcontainer rebuild (mechanism: post-create.sh).
+
+- Query with **1-3 identifier tokens, never the user's sentence** — overrides the stock `"<question>"` phrasing below. Seed selection guarantees ≥1 BFS start node per matching term, and traversal depth is fixed at 2, so every extra word multiplies the subgraph. `SingleValueTypeConverter` → 2 seeds, 29 nodes; same question as prose → 9 seeds (incl. junk like `PATH`, `types`, `Registration Rules`), 393 nodes, 93% truncated.
+- Truncation means **narrow the query**, not raise `--budget`. Budget is a render cap (default 2000 tokens), not a relevance knob — raising it on a bad seed set just dumps the noise.
+- `--context call` (also `import`, `field`, `parameter_type`, `return_type`, `attribute`, `generic_arg`) narrows to code structure. Caveat: ~1/3 of edges carry no context — those hold the README and `LLM/*.md` nodes, so any `--context` filter drops all docs from the traversal.
+- Class names collide across modules (`SingleValueTypeConverter` matches 5 nodes). `explain` refuses ambiguous names — pass the repo-relative path or full node id it lists.
+- The truncation banner's `context_filter=[…]` / `get_node` advice is for graphify's MCP server. CLI equivalents: `--context` and `explain`.
+- Graph covers the Java/Kotlin tree plus README/`LLM/*.md` only — not `.devcontainer/` scripts or installed tool sources. Grep those directly; a query about them returns unrelated seeds.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
 Rules:
-- For codebase questions, first run `graphify query "<terms>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- **Query with 1-3 identifier tokens, never the user's sentence.** Seed selection guarantees ≥1 BFS start node per matching term, and traversal depth is fixed at 2 — so every extra word multiplies the subgraph. `SingleValueTypeConverter` → 2 seeds, 29 nodes; the same question as prose → 9 seeds (incl. junk like `PATH`, `types`, `Registration Rules`), 393 nodes, 93% truncated.
-- Truncation means **narrow the query**, not raise `--budget`. Budget is a render cap (default 2000 tokens), not a relevance knob — raising it on a bad seed set just dumps the noise.
-- `--context call` (also `import`, `field`, `parameter_type`, `return_type`, `attribute`, `generic_arg`) narrows to code structure. Caveat: ~1/3 of edges carry no context — those hold the README and `LLM/*.md` nodes, so any `--context` filter drops all docs from the traversal.
-- Class names collide across modules (`SingleValueTypeConverter` matches 5 nodes). `explain` refuses ambiguous names — pass the repo-relative path or full node id it lists.
-- The truncation banner's `context_filter=[…]` / `get_node` advice is for graphify's MCP server. CLI equivalents: `--context` and `explain`.
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## headroom_read
+
+Use `mcp__headroom__headroom_read` instead of `Read` for files likely to be read more than once (module poms, module `CLAUDE.md`, `LLM/*.md`): the first read costs full price, re-reads of an unchanged file return a ~20-token cache marker. Pass `fresh: true` after a compaction and in subagents. Skip it for one-shot reads — there is no gain. `headroom_compress` is NOT a context saver (content must already be in context to pass it as a parameter); use it only to stash output that is expensive to regenerate, then `headroom_retrieve` by hash.
