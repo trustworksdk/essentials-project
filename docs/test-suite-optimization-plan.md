@@ -483,6 +483,24 @@ Sharing a container per class exposed bugs that a fresh-container-per-method was
   **twice** per test to simulate two nodes, so its Postgres subclass tracks a `List<HikariDataSource>` — a single
   field would silently leak the first pool.
 
+### `postgresql-document-db` — an intermittent failure that forking made more likely
+
+The three Kotlin ITs in this module (`QueryIT`, `PostgresqlDocumentDbRepositoryIT`,
+`CompositeDocumentDbRepositoryIT`) declared `@Container` on a Kotlin `val`, i.e. an *instance* property — 42
+PostgreSQL container start/stops for 42 test methods. The first pass over the codebase missed them because the
+conversion script only matched Java declarations.
+
+That was pre-existing, but `failsafe.forkCount=2` doubled the concurrent container churn on top of it, and on a
+7 GB machine it started failing intermittently with
+`PSQLException: The connection attempt failed` in `setup()`. It is load-dependent: the module passed the full clean
+verify and two consecutive standalone runs before the failure was reported.
+
+Fixed properly rather than by lowering the fork count, because the module turned out to tolerate a shared database:
+all of its DDL is `CREATE TABLE/INDEX IF NOT EXISTS`, and every repository exposes `deleteAll()`. The containers are
+now `companion object { @Container @JvmStatic val … }` and each `setup()` wipes every repository before
+repopulating. Container starts went 42 → 3 and the module went **46 s → 28 s**, verified over three consecutive
+runs.
+
 ## Out of scope
 
 - `components/mssql-queue` (1833 s) and `components/jdbc-queue-base` — untracked. They are the single largest
