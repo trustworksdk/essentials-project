@@ -16,9 +16,12 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+
 /**
  * Load testing with centralized message fetcher
  */
+@DisabledIfSystemProperty(named = "loadtest.skip", matches = "true")
 class CentralizedPostgresqlDurableQueuesLoadIT extends PostgresqlDurableQueuesLoadIT {
     @Override
     protected boolean useCentralizedMessageFetcher() {

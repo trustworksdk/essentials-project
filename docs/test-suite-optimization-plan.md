@@ -379,10 +379,26 @@ What was built differs from the plan above in several places. Each deviation and
    detection, which the plan's own framing ruled out. Only the 9 runaway
    `atMost(Duration.ofSeconds(2000 | 5000))` waits were capped at 60 s — pure hang-protection, no happy-path change.
 
-6. **Benchmark suites were left running.** `*PerformanceIT` and `QueueFetchStrategyBenchmarkIT` turned out to be
-   *already* gated behind `@Disabled` / `@EnabledIfSystemProperty("benchmark.run")`. `*LatencyIT` and `*LoadIT`
-   (~138 s) are not, despite `postgresql-queue/CLAUDE.md` documenting them as "not part of normal CI". Gating them
-   would silently drop coverage, which was outside the approved scope — left as an open decision.
+6. **Latency and load suites were split rather than gated together.** `*PerformanceIT` and
+   `QueueFetchStrategyBenchmarkIT` turned out to be *already* gated behind `@Disabled` /
+   `@EnabledIfSystemProperty("benchmark.run")`. `*LatencyIT` and `*LoadIT` were not, and inspecting them showed they
+   are very different propositions, so they got separate switches:
+
+   | Suite | Cost | What it asserts | Default | Switch |
+   |---|---|---|---|---|
+   | `*LatencyIT` | 92.8 s / 7 tests | Nothing about latency — results go to `System.out`; the only assertions check that `queueMessages` returned as many ids as it was given | **off** | `-Dbenchmark.run=true` to run |
+   | `*LoadIT` | 7.1 s / 2 tests | Real behaviour: 20 000 messages queued, count, batch fetch, and that a consumer drains them | **on** | `-Dloadtest.skip=true` to skip |
+
+   Gating the latency suite loses no assertion that can fail, and removes four unbounded
+   `while (totalFetched < targetQueriesToMeasure())` loops from the default build. Its incidental coverage of the
+   ordered/unordered SQL builders is also obtained through the public API by `BatchedFetchStrategyIT`,
+   `CentralizedFetcherDurableQueueIT_WithOrderedUnordered` and `PostgresqlDuplicateConsumptionDurableQueuesIT`.
+   `postgresql-queue` drops from 5:37 to 4:50 as a result.
+
+   **Gotcha worth knowing:** JUnit's condition annotations are not meta-annotated `@Inherited`. Placing
+   `@EnabledIfSystemProperty` on the abstract base had no effect and failed silently — the suite kept running. They
+   have to go on the concrete class, which is why the existing `*PerformanceIT` concrete classes each carry their own
+   `@Disabled`.
 
 7. **No `-Pjackson2` CI job was added.** It remains the open recommendation in Phase 4.
 

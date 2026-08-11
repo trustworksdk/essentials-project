@@ -28,7 +28,8 @@ Integration-test speed knobs (ITs are ~99% of the build's wall clock):
 mvn -T 1C verify                                      # parallel reactor; multiplies container concurrency with forkCount
 mvn verify -Dfailsafe.forkCount=1                     # serialize ITs on a constrained machine / low Docker memory
 mvn verify -Dfailsafe.forkCount=0.5C                  # more forks on a big machine — measure, don't assume
-mvn verify -Dbenchmark.run=true                       # also run the opt-in throughput/latency suites
+mvn verify -Dbenchmark.run=true                       # also run the opt-in latency/throughput suites (off by default)
+mvn verify -Dloadtest.skip=true                       # skip the bulk-load suites (on by default) for a faster loop
 scripts/test-timings.sh                               # rank test classes by elapsed time from the last run
 scripts/test-timings.sh --csv > before.csv            # capture a baseline to diff against
 ```

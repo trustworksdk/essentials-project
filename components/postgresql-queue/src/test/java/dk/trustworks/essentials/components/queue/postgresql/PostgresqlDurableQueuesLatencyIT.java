@@ -36,6 +36,26 @@ import java.util.stream.*;
 import static dk.trustworks.essentials.shared.collections.Lists.partition;
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Latency measurement for the queue-fetch SQL, opt-in via {@code -Dbenchmark.run=true}.
+ * <p>
+ * Off by default because it <b>measures rather than asserts</b>: every result ends up on {@code System.out}, and no
+ * threshold is checked, so it cannot fail on a performance regression - someone has to read the output. It costs
+ * ~90 s of every build for assertions that only verify that {@code queueMessages} returned as many ids as it was
+ * given. Its incidental coverage of the ordered/unordered SQL builders is also obtained through the public API by
+ * {@code BatchedFetchStrategyIT}, {@code CentralizedFetcherDurableQueueIT_WithOrderedUnordered} and
+ * {@code PostgresqlDuplicateConsumptionDurableQueuesIT}.
+ * <p>
+ * Same switch as the {@code benchmark} package, so one flag runs every performance suite:
+ * {@code mvn verify -pl components/postgresql-queue -Dbenchmark.run=true}.
+ * <p>
+ * Note the measurement loops are unbounded ({@code while (totalFetched < targetQueriesToMeasure())}) - if a query
+ * stops returning rows they spin forever. Another reason not to run this unattended in CI.
+ * <p>
+ * <b>Every concrete subclass must carry {@code @EnabledIfSystemProperty(named = "benchmark.run", matches = "true")}
+ * itself.</b> JUnit's condition annotations are not meta-annotated {@code @Inherited}, so putting it here has no
+ * effect on subclasses - the suite would silently keep running in every build.
+ */
 @Testcontainers
 public abstract class PostgresqlDurableQueuesLatencyIT extends DurableQueuesLoadIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
 
