@@ -330,6 +330,17 @@ public final class PostgresqlUtil {
     public static final Pattern VALID_SQL_IDENTIFIER_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0," + (MAX_IDENTIFIER_LENGTH - 1) + "}$");
 
     /**
+     * The character-class half of {@link #VALID_SQL_IDENTIFIER_PATTERN}, without its {@link #MAX_IDENTIFIER_LENGTH} bound.
+     * <p>
+     * Use it - via {@link #isValidSqlIdentifier(String, int)} - only where the value is <b>not</b> a PostgreSQL identifier
+     * and {@link #MAX_IDENTIFIER_LENGTH} therefore doesn't apply, but the identifier character class is still the right
+     * restriction: a JDBI named bind parameter, for instance, is rewritten to a {@code ?} placeholder before the statement
+     * reaches PostgreSQL. For anything PostgreSQL parses as an identifier, keep using {@link #VALID_SQL_IDENTIFIER_PATTERN} -
+     * PostgreSQL silently truncates identifiers past {@link #MAX_IDENTIFIER_LENGTH}, so a longer one is a bug, not a nicety.
+     */
+    public static final Pattern VALID_SQL_IDENTIFIER_CHARACTERS_PATTERN = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
+
+    /**
      * This list incorporates a broad range of reserved names, including those specific to PostgreSQL as well as standard SQL keywords, that cannot
      * be used as COLUMN, TABLE, FUNCTION and INDEX names.
      * Developers should use this list cautiously and always cross-reference against the current version of PostgreSQL they are working with,
@@ -538,17 +549,37 @@ public final class PostgresqlUtil {
      * @return {@code true} if valid, {@code false} otherwise
      */
     public static boolean isValidSqlIdentifier(String identifier) {
+        return isValidSqlIdentifier(identifier, MAX_IDENTIFIER_LENGTH);
+    }
+
+    /**
+     * Same validation as {@link #isValidSqlIdentifier(String)} - character class and {@link #RESERVED_NAMES} - but with a
+     * caller-supplied maximum length.
+     *
+     * <h3>Security Notice</h3>
+     * <p>See {@link #isValidSqlIdentifier(String)}: validation is a defense layer, not a security guarantee.</p>
+     *
+     * <p><b>Only use a {@code maxLength} above {@link #MAX_IDENTIFIER_LENGTH} for values PostgreSQL does not parse as an
+     * identifier</b>, such as a JDBI named bind parameter, which is rewritten to a {@code ?} placeholder before the
+     * statement is sent. PostgreSQL silently truncates a real identifier past {@link #MAX_IDENTIFIER_LENGTH}, so accepting
+     * a longer one would trade a clear error for two names that collide at runtime.</p>
+     *
+     * @param identifier the SQL identifier to validate
+     * @param maxLength  the maximum accepted length
+     * @return {@code true} if valid, {@code false} otherwise
+     */
+    public static boolean isValidSqlIdentifier(String identifier, int maxLength) {
         if (identifier == null || identifier.trim().isEmpty()) {
             return false;
         }
 
         // Check total length
-        if (identifier.length() > MAX_IDENTIFIER_LENGTH) {
+        if (identifier.length() > maxLength) {
             return false;
         }
 
         // Check pattern
-        if (!VALID_SQL_IDENTIFIER_PATTERN.matcher(identifier).matches()) {
+        if (!VALID_SQL_IDENTIFIER_CHARACTERS_PATTERN.matcher(identifier).matches()) {
             return false;
         }
 

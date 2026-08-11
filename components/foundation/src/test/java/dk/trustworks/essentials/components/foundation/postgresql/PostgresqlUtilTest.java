@@ -165,6 +165,23 @@ class PostgresqlUtilTest {
     }
 
     @Test
+    public void testIsValidSqlIdentifier_ExplicitMaxLength() {
+        // The explicit maximum replaces MAX_IDENTIFIER_LENGTH, in both directions
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("a".repeat(200), 256)).isTrue();
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("a".repeat(256), 256)).isTrue();
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("a".repeat(257), 256)).isFalse();
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("a".repeat(10), 5)).isFalse();
+
+        // Everything else is validated exactly as isValidSqlIdentifier(String) does
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("123invalid", 256)).isFalse();
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("invalid-name", 256)).isFalse();
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("invalid.name", 256)).isFalse();
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("SELECT", 256)).isFalse();
+        assertThat(PostgresqlUtil.isValidSqlIdentifier(null, 256)).isFalse();
+        assertThat(PostgresqlUtil.isValidSqlIdentifier("   ", 256)).isFalse();
+    }
+
+    @Test
     public void testIsValidQualifiedSqlIdentifier_ValidQualifiedIdentifiers() {
         // Valid qualified SQL identifiers
         assertThat(PostgresqlUtil.isValidQualifiedSqlIdentifier("schema.entity")).isTrue();
