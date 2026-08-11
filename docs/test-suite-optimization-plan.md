@@ -3,6 +3,64 @@
 > **Status: implemented.** Deviations from the plan as written, and why, are recorded in
 > [Implementation notes](#implementation-notes) at the end.
 
+## Gains
+
+Every figure below is measured, not estimated. `scripts/test-timings.sh` produced the per-class numbers; the
+build totals come from a clean `mvn clean verify -DskipDependencyCheck=true` over the full reactor.
+
+### Build time
+
+| | Before | After |
+|---|---|---|
+| Full `mvn clean verify` (35 modules) | — *(never measured; contained 62.8 min of sequential test execution)* | **17:29 min**, 1673 tests, 0 failures |
+| `postgresql-queue` | 756 s | **290 s** (−62%) |
+| `postgresql-event-store` | 316 s | **168 s** (−47%) |
+| `foundation` | 44 s | **19 s** (−57%) |
+| Summed class execution time, addressable modules | 1934 s | **1626 s** (−16%) |
+
+The two numbers move by different amounts on purpose. *Summed class time* only captures work removed — fewer
+container starts and the gated latency suite. *Wall clock* captures that plus Failsafe now forking, which is where
+most of the improvement comes from.
+
+### CI
+
+| | Before | After |
+|---|---|---|
+| Legs running the full integration suite | 5 (JDK 21, 22, 23, 24, 25) | 2 (JDK 21, 25) |
+| Interim JDKs | full `verify` | unit only, ~1 min each |
+| Jackson 2 flavor | **never run** | `mvn -Pjackson2 test`, 3:27 min, 1157 tests |
+| Rough total compute | 5 × ≥62.8 min of test execution | **≈ 41 min** |
+
+The Jackson 2 leg is a coverage *increase*: `CLAUDE.md` has always required both flavors when serialization
+changes, and no job enforced it.
+
+### Correctness and hygiene
+
+- **CDC image leak closed.** Previously every CDC test method built and orphaned a ~640 MB image; one machine had
+  accumulated 1906 of them. A full run now leaves the count unchanged and reuses a single tagged image.
+- **Images pinned** (`postgres:18.4`, `mongo:8.2`), so an upstream release can no longer change the database major
+  version underneath the suite.
+- **Twelve integration tests** leaked a `HikariDataSource` per test method; all now release it. One
+  (`BatchedFetchStrategyIT`) was already failing once its container was shared — the rest were latent.
+- **Two tests** created tables without dropping them first; both now reset explicitly.
+- **Nine Awaitility waits** of 2000–5000 s capped at 60 s, and four unbounded latency loops removed from the
+  default build. A hang now fails fast instead of burning half an hour of CI.
+- **Conventions recorded** in `.claude/rules/testing.md`, including the non-obvious trap that JUnit condition
+  annotations are not `@Inherited`.
+
+### What did not improve
+
+Stated explicitly so the numbers are not read as universal:
+
+- `postgresql-event-store` and `eventsourced-aggregates` keep per-test-method containers — their suites assert on
+  absolute `GlobalEventOrder` values, so a shared database breaks them. They gain only from forking and the pin.
+- A few small modules got *slower* on first run (`examples/essentials-performance-lab` +19 s,
+  `types-springdata-jpa` +8 s, `types-springdata-mongo` +5 s) — the one-off cost of pulling the newly pinned
+  images. It does not recur, and CI pre-pulls them.
+- `*LatencyIT` no longer runs by default. It asserted nothing about latency, but the ~93 s of exercise it gave the
+  queue-fetch SQL is gone from the default build unless `-Dbenchmark.run=true` is passed.
+- `components/mssql-queue` (1833 s, the single largest cost) was out of scope — see [Out of scope](#out-of-scope).
+
 ## Context
 
 The integration test suite has become the dominant cost in this repository's feedback loop. Measured from the
@@ -280,16 +338,16 @@ five ~62 min ones. Phase 1c additionally stops an unbounded 640 MB-per-test-meth
 
 Two different numbers matter, and they move by different amounts:
 
-- **Summed class execution time** (what `scripts/test-timings.sh` totals) fell from **1934 s to 1681 s (−13%)**
+- **Summed class execution time** (what `scripts/test-timings.sh` totals) fell from **1934 s to 1626 s (−16%)**
   across the addressable modules. This measures work done, not elapsed time, so it only reflects the container-start
-  savings — not the parallelism.
+  savings and the gated latency suite — not the parallelism.
 - **Wall clock** is where the win is, because Failsafe now forks. Verified per module:
 
   | Module | Before | After | |
   |---|---|---|---|
-  | `postgresql-queue` | 756 s | **336 s** | −55% |
+  | `postgresql-queue` | 756 s | **290 s** | −62% |
   | `postgresql-event-store` | 316 s | **168 s** | −47% |
-  | `foundation` | 44 s | **19 s** | −58% |
+  | `foundation` | 44 s | **19 s** | −57% |
 
   The ten remaining modules (including `springdata-mongo-queue`, 514 s of summed class time) complete in **382 s**
   wall clock together.
@@ -299,10 +357,10 @@ A few small modules got *slower* — `examples/essentials-performance-lab` +19 s
 images on a machine that only had `:latest` cached; it does not recur, and CI pre-pulls both.
 
 **Verification status:** a single clean `mvn clean verify -DskipDependencyCheck=true` over the full reactor passes:
-**BUILD SUCCESS, 35/35 modules, 0 skipped modules, 1673 tests, 0 failures, 0 errors, 27 skipped, 18:23 min.** The 27
-skipped are the pre-existing `@Disabled` / `benchmark.run`-gated performance classes — the same set as the baseline,
-nothing newly skipped. Note this is a `clean` build, so it includes full recompilation; the per-module wall-clock
-figures above are the like-for-like test comparisons.
+**BUILD SUCCESS, 35/35 modules, 0 skipped modules, 1673 tests, 0 failures, 0 errors, 34 skipped, 17:29 min.** Of the
+34 skipped, 27 are the pre-existing `@Disabled` / `benchmark.run`-gated performance classes — the same set as the
+baseline — and 7 are the newly gated `*LatencyIT` tests. Note this is a `clean` build, so it includes full
+recompilation; the per-module wall-clock figures above are the like-for-like test comparisons.
 
 The image leak is confirmed closed: a full CDC run left the orphan `localhost/testcontainers/*` count unchanged at
 1906 and produced exactly one `essentials-test/postgres-wal2json:1` image, where previously every CDC test method
