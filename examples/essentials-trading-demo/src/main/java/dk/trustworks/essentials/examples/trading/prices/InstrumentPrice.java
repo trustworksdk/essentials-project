@@ -28,9 +28,18 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 /**
  * Latest price aggregate for one instrument.
  */
+/*
+ * everyNEvents is deliberately well below the demo's own price-stress run sizes. The admin console's
+ * "Max Throughput" button issues 1000 updates and `trading-demo.simulation.instrument-count` is 2, so each
+ * instrument stream only reaches ~500 events — a threshold of 1000 meant a full stress run never crossed it and
+ * the snapshot metrics stayed empty. 100 matches the TradingAccount cadence and snapshots several times per run.
+ *
+ * The mode stays ASYNC_DURABLE as the intended contrast to TradingAccount's SYNC policy: the write path is not
+ * charged for the snapshot, at the cost of the snapshot landing slightly behind the stream.
+ */
 @AggregateSnapshotPolicy(aggregateType = "InstrumentPrices",
                          mode = SnapshotExecutionMode.ASYNC_DURABLE,
-                         everyNEvents = 1000)
+                         everyNEvents = 100)
 public class InstrumentPrice extends AggregateRoot<InstrumentId, InstrumentPriceEvent, InstrumentPrice> {
     public BigDecimal latestPrice;
 

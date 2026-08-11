@@ -486,6 +486,7 @@
             <table class="table">
                 <thead>
                 <tr>
+                    <th>Aggregate type</th>
                     <th>Metric</th>
                     <th>Count</th>
                     <th>Total ms</th>
@@ -653,6 +654,7 @@
     function renderMetrics(summary) {
         document.getElementById("metricsBody").innerHTML = summary.snapshotMetrics.map(metric => `
             <tr>
+                <td>${metric.aggregateType}</td>
                 <td>${metric.name}</td>
                 <td>${metric.count}</td>
                 <td>${metric.totalTimeMs.toFixed(2)}</td>
@@ -724,7 +726,7 @@
         document.getElementById("timeBoundaryIntervalDays").value = summary.closingBooks.intervalDays || "";
         statusLine.textContent =
             `Generator started: ${summary.loadGenerator.started}. ` +
-            `${summary.snapshotStats.aggregateType} snapshot saves: ${summary.snapshotStats.saveCount}. ` +
+            `${summary.snapshotStats.aggregateTypes} snapshot saves: ${summary.snapshotStats.saveCount}. ` +
             `Snapshot loads: ${summary.snapshotStats.loadCount}. ` +
             `Avg generations/account: ${summary.closingBooks.averageGenerationsPerAccount.toFixed(2)}. ` +
             `Closing books policy: ${summary.closingBooks.policyDescription}. ` +

@@ -240,13 +240,29 @@ public class TradingDemoAggregateConfiguration {
                 Instrument.class);
     }
 
+    /**
+     * InstrumentPrice declares an {@link AggregateSnapshotPolicy}, and
+     * {@link #tradingAccountPolicyRegistrations} publishes it so the admin console reports it. The policy only
+     * takes effect on the load path when the repository is built with the snapshot repository provider, so this
+     * bean has to resolve it the same way {@link #tradingAccountStreamRepository} does — a plain
+     * {@code StatefulAggregateRepository.from(...)} passes a null snapshot repository and every load replays the
+     * whole stream, which is quadratic under the price-stress runs this aggregate exists to demonstrate.
+     */
     @Bean
     public StatefulAggregateRepository<InstrumentId, InstrumentPriceEvent, InstrumentPrice> instrumentPriceRepository(
-            ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
-        return StatefulAggregateRepository.from(
-                eventStore,
-                INSTRUMENT_PRICES,
-                StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                InstrumentPrice.class);
+            ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+            Optional<AggregateSnapshotRepositoryProvider> aggregateSnapshotRepositoryProvider) {
+        return aggregateSnapshotRepositoryProvider
+                .map(provider -> StatefulAggregateRepository.fromUsingSnapshotRepositoryProvider(
+                        eventStore,
+                        INSTRUMENT_PRICES,
+                        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
+                        InstrumentPrice.class,
+                        provider))
+                .orElseGet(() -> StatefulAggregateRepository.from(
+                        eventStore,
+                        INSTRUMENT_PRICES,
+                        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
+                        InstrumentPrice.class));
     }
 }

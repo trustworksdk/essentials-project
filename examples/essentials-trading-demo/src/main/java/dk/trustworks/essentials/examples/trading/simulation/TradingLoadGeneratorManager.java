@@ -216,7 +216,7 @@ public class TradingLoadGeneratorManager implements Lifecycle {
     }
 
     public TradingLoadGeneratorStatusView generateTradeLifecycleBurst(int count) {
-        return withSimulationLockResult(() -> {
+        var statusAfterBurst = withSimulationLockResult(() -> {
             var safeCount = normalizeBurstCount(count);
             ensureSeedDataAvailableForBurst();
             for (int i = 0; i < safeCount; i++) {
@@ -225,10 +225,12 @@ public class TradingLoadGeneratorManager implements Lifecycle {
             log.info("Trading runtime load generator completed a trade lifecycle burst of {} items", safeCount);
             return status();
         });
+        publishStatus();
+        return statusAfterBurst;
     }
 
     public TradingLoadGeneratorStatusView generatePendingTradeBurst(int count) {
-        return withSimulationLock(() -> {
+        var statusAfterBurst = withSimulationLock(() -> {
             var safeCount = normalizeBurstCount(count);
             ensureSeedDataAvailableForBurst();
             for (int i = 0; i < safeCount; i++) {
@@ -237,10 +239,12 @@ public class TradingLoadGeneratorManager implements Lifecycle {
             log.info("Trading runtime load generator completed a pending trade burst of {} items", safeCount);
             return status();
         });
+        publishStatus();
+        return statusAfterBurst;
     }
 
     public TradingLoadGeneratorStatusView settlePendingTradeBurst(int count) {
-        return withSimulationLock(() -> {
+        var statusAfterBurst = withSimulationLock(() -> {
             var safeCount = normalizeBurstCount(count);
             ensureSeedDataAvailableForBurst();
             for (int i = 0; i < safeCount; i++) {
@@ -252,10 +256,12 @@ public class TradingLoadGeneratorManager implements Lifecycle {
             log.info("Trading runtime load generator completed a settlement burst of {} items", safeCount);
             return status();
         });
+        publishStatus();
+        return statusAfterBurst;
     }
 
     public TradingLoadGeneratorStatusView generatePriceUpdateBurst(int count) {
-        return withSimulationLock(() -> {
+        var statusAfterBurst = withSimulationLock(() -> {
             var safeCount = normalizeBurstCount(count);
             ensureSeedDataAvailableForBurst();
             for (int i = 0; i < safeCount; i++) {
@@ -264,6 +270,8 @@ public class TradingLoadGeneratorManager implements Lifecycle {
             log.info("Trading runtime load generator completed a price update burst of {} items", safeCount);
             return status();
         });
+        publishStatus();
+        return statusAfterBurst;
     }
 
     public TradingLoadGeneratorStatusView startAsyncPriceStress(int count, long intervalMillis, PriceStressMode mode) {
@@ -396,6 +404,7 @@ public class TradingLoadGeneratorManager implements Lifecycle {
                 log.warn("Trading runtime load generator failed to generate a trade lifecycle", e);
             }
         });
+        publishStatus();
     }
 
     private void safeGeneratePriceUpdate() {
@@ -406,6 +415,7 @@ public class TradingLoadGeneratorManager implements Lifecycle {
                 log.warn("Trading runtime load generator failed to generate a price update", e);
             }
         });
+        publishStatus();
     }
 
     private void generateTradeLifecycle() {
@@ -446,11 +456,16 @@ public class TradingLoadGeneratorManager implements Lifecycle {
 
     private void doGeneratePriceUpdate() {
         var nextSequence = sequence.incrementAndGet();
-        var instrumentId = InstrumentId.of(demoInstrumentIds().get((int) (nextSequence % demoInstrumentIds().size())));
+        var instrumentIds = demoInstrumentIds();
+        var instrumentId = InstrumentId.of(instrumentIds.get((int) (nextSequence % instrumentIds.size())));
         var currentPrice = currentPrice(instrumentId);
         var jitter = BigDecimal.valueOf(loadProperties.getPriceJitter().getMin()
                                         + (nextSequence % Math.max(1, loadProperties.getPriceJitter().getMax() - loadProperties.getPriceJitter().getMin() + 1)));
-        var direction = nextSequence % 2 == 0 ? BigDecimal.ONE : BigDecimal.ONE.negate();
+        // The direction alternates per instrument, not per sequence value. Both the instrument index and a
+        // sequence-parity direction are driven by the same counter, so with the default instrument-count of 2 they
+        // were perfectly correlated: one instrument only ever rose and the other only ever fell until it hit the
+        // reset below. Dividing out the instrument index first gives each instrument its own alternating walk.
+        var direction = (nextSequence / instrumentIds.size()) % 2 == 0 ? BigDecimal.ONE : BigDecimal.ONE.negate();
         var nextPrice = currentPrice.add(jitter.multiply(direction));
         if (nextPrice.signum() <= 0) {
             nextPrice = BigDecimal.valueOf(50);
@@ -467,7 +482,11 @@ public class TradingLoadGeneratorManager implements Lifecycle {
         latestPriceTickers.put(instrumentId.toString(),
                                new InstrumentPriceTickerView(instrumentId.toString(), nextPrice.toPlainString()));
         generatedPriceUpdateCount.incrementAndGet();
-        publishStatus();
+        // Deliberately does not publish status. Callers publish once they have released simulationLock, because a
+        // status listener fans out to the dashboard SSE broadcast, and that renders the full summary (an account
+        // view plus a generation-snapshot query per demo account). Publishing from here charged that work to every
+        // single update while holding the lock, and it also landed inside the timed section of
+        // runPricePathScenario, inflating the price-path comparison with dashboard cost.
     }
 
     private boolean seedDataIsAvailable() {
@@ -533,7 +552,8 @@ public class TradingLoadGeneratorManager implements Lifecycle {
         latestSettlementId = settlementId.toString();
         generatedTradeCount.incrementAndGet();
         pendingSettlements.add(new PendingSettlement(tradeId, settlementId, accountId, executionPrice, side));
-        publishStatus();
+        // See doGeneratePriceUpdate: status is published by the caller after simulationLock is released, so a burst
+        // pays for one dashboard render instead of one per item, and none of them while holding the lock.
     }
 
     private TradeId nextLiveTradeId() {
@@ -555,7 +575,7 @@ public class TradingLoadGeneratorManager implements Lifecycle {
                                                    pendingSettlement.executionPrice().negate(),
                                                    BigDecimal.valueOf("BUY".equals(pendingSettlement.side()) ? 4 : 6));
         generatedSettlementCount.incrementAndGet();
-        publishStatus();
+        // Status is published by the caller once simulationLock is released — see createPendingTradeAndSettlement.
     }
 
     private void logWaitingForSeedData() {
