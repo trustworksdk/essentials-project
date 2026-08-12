@@ -118,6 +118,11 @@
         <jackson-bom.version>2.21.5</jackson-bom.version>
         <jackson-annotations.version>2.21</jackson-annotations.version>
         <mockito-bom.version>5.23.0</mockito-bom.version>
+        <!-- Newest release; the floor is assertj-core's own 1.18.3, which is what Spring Boot's management
+             was pulling back down. Take the plain version, never the `-jdk5` line Central reports as
+             <latest> — that is the legacy Java 5 build, not a newer release. -->
+        <byte-buddy.version>1.18.11</byte-buddy.version>
+        <snakeyaml.version>2.6</snakeyaml.version>
         <avro.version>1.12.1</avro.version>
         <commons-compress.version>1.28.0</commons-compress.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
@@ -345,6 +350,32 @@
                 <groupId>org.apache.logging.log4j</groupId>
                 <artifactId>log4j-api</artifactId>
                 <version>${log4j.version}</version>
+            </dependency>
+            <!-- Raised above the version the Spring Boot BOM manages (1.17.8) because assertj-core
+                 ${assertj.version} is built against 1.18.3 and Spring Boot's management silently pulls it back
+                 down — requireUpperBoundDeps below is what surfaced that. mockito-core asks for less
+                 (1.17.7), so one pin satisfies both. Both artifacts move together: mockito loads the agent
+                 and the core from the same generation, and splitting them breaks inline mocking.
+                 Test-scope everywhere (foundation-test carries it at compile, and that module is internal
+                 test tooling), so this never reaches a consumer's classpath. -->
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy-agent</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
+            <!-- One release ahead of the Spring Boot BOM (2.5), because swagger-core-jakarta in
+                 admin-api-spec is built against 2.6 and management was pulling it back down —
+                 requireUpperBoundDeps below is what surfaced that. 2.6 is the current release, so this
+                 satisfies every asker rather than picking a midpoint. -->
+            <dependency>
+                <groupId>org.yaml</groupId>
+                <artifactId>snakeyaml</artifactId>
+                <version>${snakeyaml.version}</version>
             </dependency>
             <!-- Due to CVE-2023-42503, CVE-2024-26308, CVE-2024-25710 -->
             <dependency>
@@ -642,6 +673,66 @@
                                 <requireJavaVersion>
                                     <version>[${java.release.version},26)</version>
                                 </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                    <!--
+                      Guards the failure mode that a POM cannot show you: a version that is declared here but
+                      is not the one that resolves. dependencyManagement above pins several artifacts ahead of
+                      the Spring Boot BOM, and nothing in the file itself proves those pins bind — an imported
+                      BOM in the wrong position, or a transitive dependency asking for more than we manage,
+                      both read as fine and resolve to something else.
+
+                      requireUpperBoundDeps fails when management pulls an artifact *below* what something in
+                      the graph asked for. That is the direction that breaks at runtime (a library compiled
+                      against a newer API), and it is the direction plain `dependency:tree` hides, because the
+                      tree only prints the winner. It found both downgrades pinned above, byte-buddy and
+                      snakeyaml, neither of which anything else in the build was complaining about.
+
+                      banDuplicatePomDependencyVersions fails on the same groupId:artifactId declared twice in
+                      one POM, where the second silently wins.
+
+                      Neither rule looks at the *plugin* graph, and neither can tell you a pin is inert when
+                      nothing else in the build asks for a higher version — for that, still read the resolved
+                      tree.
+                    -->
+                    <execution>
+                        <id>enforce-dependency-hygiene</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireUpperBoundDeps>
+                                    <!--
+                                      Listed one artifact at a time on purpose: a new violation should fail
+                                      the build and force a decision rather than land inside a wildcard.
+
+                                      Both entries exist because swagger-project-jakarta:2.2.52 (parent of the
+                                      swagger-core-jakarta admin-api-spec compiles against) declares a Jackson 2
+                                      set that does not agree with itself: jackson-databind-version=2.21.1 and
+                                      jackson-annotations-version=2.21, but jackson-version=2.22.0 for these
+                                      two. Jackson requires one version across the set, so *no* resolution can
+                                      honour that upper bound without splitting Jackson — including swagger's
+                                      own. Our 2.21.5-for-everything is the coherent reading of it, and it is
+                                      already above the databind swagger asks for.
+                                      Re-check when swagger-core.version moves: if a release lines those three
+                                      properties up, drop these and let the rule speak.
+                                    -->
+                                    <excludes>
+                                        <exclude>com.fasterxml.jackson.datatype:jackson-datatype-jsr310</exclude>
+                                        <exclude>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</exclude>
+                                    </excludes>
+                                </requireUpperBoundDeps>
+                                <banDuplicatePomDependencyVersions/>
+                                <!-- allowSnapshots is not a loophole: the rule counts a SNAPSHOT as dynamic,
+                                     and ${revision} is DEV-SNAPSHOT on every local and CI build, so without
+                                     it every module that depends on a sibling fails. What stays banned is the
+                                     thing actually worth banning — a version range or LATEST/RELEASE, which
+                                     would make the resolved tree depend on when you built. -->
+                                <banDynamicVersions>
+                                    <allowSnapshots>true</allowSnapshots>
+                                </banDynamicVersions>
                             </rules>
                         </configuration>
                     </execution>
