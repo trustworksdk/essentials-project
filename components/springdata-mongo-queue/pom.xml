@@ -161,10 +161,6 @@
             <scope>test</scope>
             <exclusions>
                 <exclusion>
-                    <groupId>org.apache.logging.log4j</groupId>
-                    <artifactId>log4j-to-slf4j</artifactId>
-                </exclusion>
-                <exclusion>
                     <groupId>org.slf4j</groupId>
                     <artifactId>jul-to-slf4j</artifactId>
                 </exclusion>
@@ -181,17 +177,10 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-to-slf4j</artifactId>
-            <version>${log4j-to-slf4j.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-mongodb</artifactId>
             <scope>test</scope>
         </dependency>
-
     </dependencies>
 
     <build>

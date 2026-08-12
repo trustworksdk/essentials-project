@@ -36,6 +36,14 @@
         Spring Boot trading demo used for validating snapshots, closing books, and aggregate lifecycle configuration.
     </description>
 
+    <properties>
+        <!-- Demo module: it builds and tests with the rest of the reactor, but it is not a published artifact.
+             `mvn deploy -P release` runs over the whole reactor, so the exclusion has to live here. This module
+             parents straight off the root POM rather than the examples aggregator, so it does not inherit the
+             aggregator's copy of this property. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>dk.trustworks.essentials.components</groupId>
@@ -200,10 +208,6 @@
             <scope>test</scope>
             <exclusions>
                 <exclusion>
-                    <groupId>org.apache.logging.log4j</groupId>
-                    <artifactId>log4j-to-slf4j</artifactId>
-                </exclusion>
-                <exclusion>
                     <groupId>org.slf4j</groupId>
                     <artifactId>jul-to-slf4j</artifactId>
                 </exclusion>
@@ -241,12 +245,6 @@
             <groupId>net.minidev</groupId>
             <artifactId>json-smart</artifactId>
             <version>${json-smart.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-to-slf4j</artifactId>
-            <version>${log4j-to-slf4j.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

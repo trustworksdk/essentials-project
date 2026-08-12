@@ -39,11 +39,19 @@
     <packaging>jar</packaging>
 
     <properties>
-        <!-- Keep swagger-core aligned with the swagger-parser that openapi-diff parses with (parser 2.1.31 →
-             swagger-core 2.2.34). swagger-models and swagger-models-jakarta share the io.swagger.v3.oas.models
-             package, so a version skew between the two shows up as a NoSuchMethodError inside openapi-diff. -->
-        <swagger-core.version>2.2.34</swagger-core.version>
-        <swagger-parser.version>2.1.31</swagger-parser.version>
+        <!-- swagger-core.version is NOT independent: it must be the swagger-core that swagger-parser.version
+             itself builds against, which is the <swagger-core-version> property of the matching
+             io.swagger.parser.v3:swagger-parser-project POM (2.1.46 -> 2.2.52). Read it there when bumping;
+             do not just take the newest swagger-core on Central.
+             The reason is a split package: swagger-models (pulled in non-jakarta by the parser) and
+             swagger-models-jakarta (pinned here) both ship io.swagger.v3.oas.models, and only one wins at
+             runtime. Equal versions make that harmless; unequal versions surface as a NoSuchMethodError
+             inside openapi-diff. Taking 2.2.53 here instead of 2.2.52 is exactly enough to skew them.
+             These also run ahead of the parser openapi-diff ${openapi-diff.version} declares — deliberate,
+             and safe only while OpenApiContractCompatibilityTest passes, since that test is what actually
+             drives openapi-diff. Treat a failure there as "revert the bump", not "fix the test". -->
+        <swagger-core.version>2.2.52</swagger-core.version>
+        <swagger-parser.version>2.1.46</swagger-parser.version>
         <openapi-diff.version>2.1.7</openapi-diff.version>
         <build-helper-maven-plugin.version>3.6.1</build-helper-maven-plugin.version>
     </properties>

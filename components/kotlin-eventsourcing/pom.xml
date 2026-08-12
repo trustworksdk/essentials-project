@@ -159,8 +159,11 @@
                     </args>
                     <jvmTarget>${java.version}</jvmTarget>
                     <!-- Pin language/API level (root pom properties) so artifacts compiled with a
-                         newer Kotlin compiler remain binary- and metadata-compatible for consumers on
-                         Kotlin 2.1. apiVersion prevents binding to newer stdlib APIs (stdlib is
+                         newer Kotlin compiler remain binary- and metadata-compatible for consumers on the
+                         level the root POM declares. The numbers live only in kotlinLanguage.version /
+                         kotlinApi.version there, and deliberately differ — see the comment beside them. Don't
+                         restate them here: that is how these comments drifted out of date once already.
+                         apiVersion prevents binding to newer stdlib APIs (stdlib is
                          'provided', so the consumer supplies their own). -->
                     <languageVersion>${kotlinLanguage.version}</languageVersion>
                     <apiVersion>${kotlinApi.version}</apiVersion>
