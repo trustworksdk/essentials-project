@@ -29,6 +29,7 @@ import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.context.annotation.Bean;
 
 import java.util.Optional;
+import java.util.stream.Stream;
 
 @AutoConfiguration(after = ClosingBooksConfiguration.class)
 @ConditionalOnClass(AggregateLifecycleApi.class)
@@ -63,10 +64,23 @@ public class AggregateLifecycleApiConfiguration {
                                                           meterRegistry);
     }
 
+    /**
+     * Collects generation access from both sources: accessors registered directly, and the ones
+     * {@link ClosingBooksSetup#generationAccess() derived} from every {@link ClosingBooksSetup} bean - so an application
+     * that uses the builder gets working admin-API lifecycle endpoints without also hand-writing an accessor.
+     *
+     * @param accessors directly registered accessors
+     * @param setups    every {@link ClosingBooksSetup} bean in the context
+     * @return the provider over both sets
+     */
     @Bean
     @ConditionalOnMissingBean
     public AggregateClosingBooksGenerationAccessProvider aggregateClosingBooksGenerationAccessProvider(
-            org.springframework.beans.factory.ObjectProvider<TypedAggregateClosingBooksGenerationAccess<?>> accessors) {
-        return new CachingAggregateClosingBooksGenerationAccessProvider(accessors.orderedStream().toList());
+            org.springframework.beans.factory.ObjectProvider<TypedAggregateClosingBooksGenerationAccess<?>> accessors,
+            org.springframework.beans.factory.ObjectProvider<ClosingBooksSetup<?, ?>> setups) {
+        var allAccessors = Stream.<TypedAggregateClosingBooksGenerationAccess<?>>concat(accessors.orderedStream(),
+                                                                                       setups.orderedStream().map(ClosingBooksSetup::generationAccess))
+                                 .toList();
+        return new CachingAggregateClosingBooksGenerationAccessProvider(allAccessors);
     }
 }

@@ -28,13 +28,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public interface TypedAggregateClosingBooksGenerationAccess<ID> extends AggregateClosingBooksGenerationAccess {
     ClosingBooksGenerationRepository<ID> generationRepository();
 
-    ClosingBooksLogicalAggregateIdSerializer<ID> logicalAggregateIdSerializer();
+    ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer();
 
     @Override
     default Optional<AggregateGeneration<String>> resolveCurrentGeneration(String logicalAggregateId) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
         return generationRepository().resolveCurrentGeneration(aggregateType(),
-                                                               logicalAggregateIdSerializer().deserialize(logicalAggregateId))
+                                                               logicalAggregateIdSerializer().deserializeLogicalAggregateId(logicalAggregateId))
                                      .map(this::toStringBasedGeneration);
     }
 
@@ -42,7 +42,7 @@ public interface TypedAggregateClosingBooksGenerationAccess<ID> extends Aggregat
     default List<AggregateGeneration<String>> loadGenerations(String logicalAggregateId) {
         requireNonNull(logicalAggregateId, "No logicalAggregateId provided");
         return generationRepository().loadGenerations(aggregateType(),
-                                                      logicalAggregateIdSerializer().deserialize(logicalAggregateId))
+                                                      logicalAggregateIdSerializer().deserializeLogicalAggregateId(logicalAggregateId))
                                      .stream()
                                      .map(this::toStringBasedGeneration)
                                      .toList();

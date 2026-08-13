@@ -16,19 +16,15 @@
 
 package dk.trustworks.essentials.examples.trading.config;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
-import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicyRegistry;
-import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.AggregateClosingBooksPolicyDescriptor;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.core.annotation.AnnotationUtils;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccount;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountEvent;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountGenerationId;
@@ -44,12 +40,10 @@ import dk.trustworks.essentials.examples.trading.settlements.SettlementId;
 import dk.trustworks.essentials.examples.trading.trades.Trade;
 import dk.trustworks.essentials.examples.trading.trades.TradeEvent;
 import dk.trustworks.essentials.examples.trading.trades.TradeId;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import io.micrometer.core.instrument.MeterRegistry;
-
-import java.time.Clock;
 import java.util.Optional;
 
 /**
@@ -63,206 +57,115 @@ public class TradingDemoAggregateConfiguration {
     public static final AggregateType TRADES = AggregateType.of("Trades");
     public static final AggregateType INSTRUMENT_PRICES = AggregateType.of("InstrumentPrices");
 
-
     /**
-     * Publishes the policies {@link TradingAccount} declares to the policy registries, which is what the admin API's
-     * lifecycle endpoints report.
+     * Tells the framework which aggregate implementation class serves which {@link AggregateType}.
      * <p>
-     * The framework only registers these from its two bean post-processors, so the annotations reach a registry only
-     * when the annotated class is itself a Spring bean. An aggregate root is not — a singleton instance of one would be
-     * meaningless — so the annotations on TradingAccount would otherwise be inert and the console would show no
-     * policies. The annotation stays the single source of the values; this only carries them across.
+     * This is what makes the {@link AggregateSnapshotPolicy} and {@link AggregateClosingBooksPolicy} annotations on
+     * {@link TradingAccount} and {@link InstrumentPrice} take effect: an aggregate root is not a Spring bean — a
+     * singleton instance of one would be meaningless — so the framework's policy bean post-processors never see it.
+     * Without this bean the annotations would reach no registry and the admin console would report no policies, with
+     * nothing to explain why.
      */
     @Bean
-    public InitializingBean tradingAccountPolicyRegistrations(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
-                                                              AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry) {
-        return () -> {
-            var snapshotPolicy = AnnotationUtils.findAnnotation(TradingAccount.class,
-                                                               AggregateSnapshotPolicy.class);
-            if (snapshotPolicy != null) {
-                snapshotPolicyRegistry.register(new AggregateSnapshotPolicyDescriptor(TradingAccount.class,
-                                                                                     Optional.of(TRADING_ACCOUNTS.toString()),
-                                                                                     snapshotPolicy));
-            }
-            var closingBooksPolicy = AnnotationUtils.findAnnotation(TradingAccount.class,
-                                                                   AggregateClosingBooksPolicy.class);
-            if (closingBooksPolicy != null) {
-                closingBooksPolicyRegistry.register(new AggregateClosingBooksPolicyDescriptor(TradingAccount.class,
-                                                                                              Optional.of(TRADING_ACCOUNTS.toString()),
-                                                                                              closingBooksPolicy));
-            }
-
-            snapshotPolicy = AnnotationUtils.findAnnotation(InstrumentPrice.class,
-                                                            AggregateSnapshotPolicy.class);
-            if (snapshotPolicy != null) {
-                snapshotPolicyRegistry.register(new AggregateSnapshotPolicyDescriptor(InstrumentPrice.class,
-                                                                                      Optional.of(INSTRUMENT_PRICES.toString()),
-                                                                                      snapshotPolicy));
-            }
-        };
+    public EssentialsAggregateDeclarations tradingAggregates() {
+        return EssentialsAggregateDeclarations.builder()
+                                              .declare(TRADING_ACCOUNTS, TradingAccount.class)
+                                              .declare(INSTRUMENT_PRICES, InstrumentPrice.class)
+                                              .declare(SETTLEMENTS, Settlement.class)
+                                              .declare(TRADES, Trade.class)
+                                              .declare(INSTRUMENTS, Instrument.class)
+                                              .build();
     }
 
+    /**
+     * Everything closing books needs for {@link TradingAccount}: the generation repository, the coordinator and the
+     * admin API's generation access, assembled from the two id types.
+     * <p>
+     * The meter registry matters here because TradingAccounts roll over via {@code ON_ACCESS}, which never runs a
+     * scheduled scan — the coordinator is the only place the rollover can be measured, so the registry has to reach it
+     * for the admin UI's closing-books statistics to show anything.
+     */
     @Bean
-    public PostgresqlClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository(
-            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
-        return new PostgresqlClosingBooksGenerationRepository<TradingAccountId>(unitOfWorkFactory,
-                                                                                Optional.empty(),
-                                                                                new ClosingBooksLogicalAggregateIdSerializer<TradingAccountId>() {
-                                                                    @Override
-                                                                    public String serialize(LogicalAggregateId<TradingAccountId> logicalAggregateId) {
-                                                                        return logicalAggregateId.value().toString();
-                                                                    }
-
-                                                                    @Override
-                                                                    public LogicalAggregateId<TradingAccountId> deserialize(String persistedValue) {
-                                                                        return new LogicalAggregateId<>(TradingAccountId.of(persistedValue));
-                                                                    }
-                                                                });
-    }
-
-    @Bean
-    public TypedAggregateClosingBooksGenerationAccess<TradingAccountId> tradingAccountClosingBooksGenerationAccess(
-            ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository) {
-        return new TypedAggregateClosingBooksGenerationAccess<>() {
-            @Override
-            public AggregateType aggregateType() {
-                return TRADING_ACCOUNTS;
-            }
-
-            @Override
-            public Class<?> aggregateImplementationType() {
-                return TradingAccount.class;
-            }
-
-            @Override
-            public ClosingBooksGenerationRepository<TradingAccountId> generationRepository() {
-                return tradingAccountGenerationRepository;
-            }
-
-            @Override
-            public ClosingBooksLogicalAggregateIdSerializer<TradingAccountId> logicalAggregateIdSerializer() {
-                return new ClosingBooksLogicalAggregateIdSerializer<>() {
-                    @Override
-                    public String serialize(LogicalAggregateId<TradingAccountId> logicalAggregateId) {
-                        return logicalAggregateId.value().toString();
-                    }
-
-                    @Override
-                    public LogicalAggregateId<TradingAccountId> deserialize(String persistedValue) {
-                        return new LogicalAggregateId<>(TradingAccountId.of(persistedValue));
-                    }
-                };
-            }
-        };
-    }
-
-    @Bean
-    public ClosingBooksCoordinator<TradingAccountId> tradingAccountClosingBooksCoordinator(
-            ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository,
+    public ClosingBooksSetup<TradingAccountId, TradingAccountGenerationId> tradingAccountClosingBooks(
             HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
             Optional<MeterRegistry> meterRegistry) {
-        // TradingAccounts roll over via ON_ACCESS, which never runs a scheduled scan - the coordinator is the
-        // only place the rollover can be measured, so the registry has to reach it for the admin UI's
-        // closing-books statistics to show anything.
-        return new ClosingBooksCoordinator<>(TRADING_ACCOUNTS,
-                                             tradingAccountGenerationRepository,
-                                             (aggregateType, logicalAggregateId, generation) -> logicalAggregateId.value() + "#" + generation,
-                                             unitOfWorkFactory,
-                                             Clock.systemUTC(),
-                                             meterRegistry);
+        return ClosingBooksSetup.<TradingAccountId, TradingAccountGenerationId>builder(TRADING_ACCOUNTS, TradingAccount.class)
+                                .setLogicalAggregateIdType(TradingAccountId.class)
+                                .setStreamIdType(TradingAccountGenerationId.class)
+                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                .setMeterRegistry(meterRegistry)
+                                .build();
+    }
+
+    /**
+     * The setup's generation repository, published as its own bean because the load generator and the startup runner
+     * read generation metadata directly.
+     */
+    @Bean
+    public ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository(
+            ClosingBooksSetup<TradingAccountId, TradingAccountGenerationId> tradingAccountClosingBooks) {
+        return tradingAccountClosingBooks.generationRepository();
     }
 
     @Bean
     public StatefulAggregateRepository<TradingAccountGenerationId, TradingAccountEvent, TradingAccount> tradingAccountStreamRepository(
             ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
             Optional<AggregateSnapshotRepositoryProvider> aggregateSnapshotRepositoryProvider) {
-        return aggregateSnapshotRepositoryProvider
-                .map(provider -> StatefulAggregateRepository.fromUsingSnapshotRepositoryProvider(
-                        eventStore,
-                        TRADING_ACCOUNTS,
-                        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                        TradingAccount.class,
-                        provider))
-                .orElseGet(() -> StatefulAggregateRepository.from(
-                        eventStore,
-                        TRADING_ACCOUNTS,
-                        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                        TradingAccount.class));
+        return StatefulAggregateRepository.builder(eventStore)
+                                          .setAggregateType(TRADING_ACCOUNTS)
+                                          .setAggregateImplementationType(TradingAccount.class)
+                                          .setAggregateSnapshotRepositoryProvider(aggregateSnapshotRepositoryProvider)
+                                          .build();
     }
 
     @Bean
     public ClosingBooksLogicalAggregateRepository<TradingAccountId, TradingAccountGenerationId, TradingAccountEvent, TradingAccount> tradingAccountRepository(
-            StatefulAggregateRepository<TradingAccountGenerationId, TradingAccountEvent, TradingAccount> tradingAccountStreamRepository,
-            ClosingBooksCoordinator<TradingAccountId> tradingAccountClosingBooksCoordinator) {
-        return new ClosingBooksLogicalAggregateRepository<>(TRADING_ACCOUNTS,
-                                                            tradingAccountStreamRepository,
-                                                            tradingAccountClosingBooksCoordinator,
-                                                            new ClosingBooksStreamIdSerializer<>() {
-                                                                @Override
-                                                                public String serialize(TradingAccountGenerationId streamId) {
-                                                                    return streamId.toString();
-                                                                }
-
-                                                                @Override
-                                                                public TradingAccountGenerationId deserialize(String persistedStreamId) {
-                                                                    return TradingAccountGenerationId.of(persistedStreamId);
-                                                                }
-                                                            });
+            ClosingBooksSetup<TradingAccountId, TradingAccountGenerationId> tradingAccountClosingBooks,
+            StatefulAggregateRepository<TradingAccountGenerationId, TradingAccountEvent, TradingAccount> tradingAccountStreamRepository) {
+        return tradingAccountClosingBooks.logicalAggregateRepository(tradingAccountStreamRepository);
     }
 
     @Bean
     public StatefulAggregateRepository<SettlementId, SettlementEvent, Settlement> settlementRepository(
             ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
-        return StatefulAggregateRepository.from(
-                eventStore,
-                SETTLEMENTS,
-                StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                Settlement.class);
+        return StatefulAggregateRepository.builder(eventStore)
+                                          .setAggregateType(SETTLEMENTS)
+                                          .setAggregateImplementationType(Settlement.class)
+                                          .build();
     }
 
     @Bean
     public StatefulAggregateRepository<TradeId, TradeEvent, Trade> tradeRepository(
             ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
-        return StatefulAggregateRepository.from(
-                eventStore,
-                TRADES,
-                StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                Trade.class);
+        return StatefulAggregateRepository.builder(eventStore)
+                                          .setAggregateType(TRADES)
+                                          .setAggregateImplementationType(Trade.class)
+                                          .build();
     }
 
     @Bean
     public StatefulAggregateRepository<InstrumentId, InstrumentEvent, Instrument> instrumentRepository(
             ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
-        return StatefulAggregateRepository.from(
-                eventStore,
-                INSTRUMENTS,
-                StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                Instrument.class);
+        return StatefulAggregateRepository.builder(eventStore)
+                                          .setAggregateType(INSTRUMENTS)
+                                          .setAggregateImplementationType(Instrument.class)
+                                          .build();
     }
 
     /**
-     * InstrumentPrice declares an {@link AggregateSnapshotPolicy}, and
-     * {@link #tradingAccountPolicyRegistrations} publishes it so the admin console reports it. The policy only
-     * takes effect on the load path when the repository is built with the snapshot repository provider, so this
-     * bean has to resolve it the same way {@link #tradingAccountStreamRepository} does — a plain
-     * {@code StatefulAggregateRepository.from(...)} passes a null snapshot repository and every load replays the
-     * whole stream, which is quadratic under the price-stress runs this aggregate exists to demonstrate.
+     * InstrumentPrice declares an {@link AggregateSnapshotPolicy}, which {@link #tradingAggregates()} publishes so the
+     * admin console reports it. The policy only takes effect on the load path when the repository is built with the
+     * snapshot repository provider — a repository built without it passes a null snapshot repository and every load
+     * replays the whole stream, which is quadratic under the price-stress runs this aggregate exists to demonstrate.
      */
     @Bean
     public StatefulAggregateRepository<InstrumentId, InstrumentPriceEvent, InstrumentPrice> instrumentPriceRepository(
             ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
             Optional<AggregateSnapshotRepositoryProvider> aggregateSnapshotRepositoryProvider) {
-        return aggregateSnapshotRepositoryProvider
-                .map(provider -> StatefulAggregateRepository.fromUsingSnapshotRepositoryProvider(
-                        eventStore,
-                        INSTRUMENT_PRICES,
-                        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                        InstrumentPrice.class,
-                        provider))
-                .orElseGet(() -> StatefulAggregateRepository.from(
-                        eventStore,
-                        INSTRUMENT_PRICES,
-                        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                        InstrumentPrice.class));
+        return StatefulAggregateRepository.builder(eventStore)
+                                          .setAggregateType(INSTRUMENT_PRICES)
+                                          .setAggregateImplementationType(InstrumentPrice.class)
+                                          .setAggregateSnapshotRepositoryProvider(aggregateSnapshotRepositoryProvider)
+                                          .build();
     }
 }

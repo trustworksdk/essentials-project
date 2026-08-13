@@ -44,7 +44,7 @@ class ClosingBooksLogicalAggregateRepositoryTest {
         var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
                                                                                                                delegate,
                                                                                                                coordinator,
-                                                                                                               ClosingBooksStreamIdSerializer.stringBased());
+                                                                                                               ClosingBooksIdSerializer.stringBased());
 
         when(delegate.tryLoad("account-1#1")).thenReturn(Optional.empty());
         when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -69,7 +69,7 @@ class ClosingBooksLogicalAggregateRepositoryTest {
         var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
                                                                                                                delegate,
                                                                                                                coordinator,
-                                                                                                               ClosingBooksStreamIdSerializer.stringBased());
+                                                                                                               ClosingBooksIdSerializer.stringBased());
 
         when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -99,7 +99,7 @@ class ClosingBooksLogicalAggregateRepositoryTest {
         var repository = new ClosingBooksLogicalAggregateRepository<String, String, TestEvent, TestAggregate>(aggregateType,
                                                                                                                delegate,
                                                                                                                coordinator,
-                                                                                                               ClosingBooksStreamIdSerializer.stringBased());
+                                                                                                               ClosingBooksIdSerializer.stringBased());
 
         when(delegate.save(any(TestAggregate.class))).thenAnswer(invocation -> invocation.getArgument(0));
 

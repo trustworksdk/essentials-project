@@ -177,8 +177,8 @@ class DefaultAggregateLifecycleApiTest {
         }
 
         @Override
-        public ClosingBooksLogicalAggregateIdSerializer<String> logicalAggregateIdSerializer() {
-            return ClosingBooksLogicalAggregateIdSerializer.stringBased();
+        public ClosingBooksIdSerializer<String> logicalAggregateIdSerializer() {
+            return ClosingBooksIdSerializer.stringBased();
         }
     }
 }

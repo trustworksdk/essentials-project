@@ -16,9 +16,11 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.*;
 import org.springframework.boot.autoconfigure.*;
 import org.springframework.boot.autoconfigure.condition.*;
@@ -122,6 +124,31 @@ public class ClosingBooksConfiguration {
     }
 
     /**
+     * Provides a bean definition for {@link AggregateDeclarationPolicyRegistrar}, which copies the
+     * {@code @AggregateSnapshotPolicy} / {@link AggregateClosingBooksPolicy} annotations off every
+     * {@link EssentialsAggregateDeclarations declared} aggregate implementation class into the two policy registries.
+     * <p>
+     * Aggregate roots are not Spring beans, so the policy {@code BeanPostProcessor}s never see them; without a
+     * declaration the annotations reach no registry at all. See {@link AggregateDeclarationPolicyRegistrar} for why the
+     * registrar is an {@link org.springframework.beans.factory.InitializingBean} injected into
+     * {@link #aggregateLifecycleConfigurationValidator} rather than a {@code SmartInitializingSingleton}.
+     *
+     * @param declarations               every {@link EssentialsAggregateDeclarations} bean in the context; may be empty
+     * @param snapshotPolicyRegistry     the snapshot policy registry
+     * @param closingBooksPolicyRegistry the closing-books policy registry
+     * @return the registrar
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public AggregateDeclarationPolicyRegistrar aggregateDeclarationPolicyRegistrar(ObjectProvider<EssentialsAggregateDeclarations> declarations,
+                                                                                  AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
+                                                                                  AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry) {
+        return new AggregateDeclarationPolicyRegistrar(declarations.orderedStream().toList(),
+                                                      snapshotPolicyRegistry,
+                                                      closingBooksPolicyRegistry);
+    }
+
+    /**
      * Provides a bean definition for {@link AggregateLifecycleConfigurationValidator}.
      * This method creates and returns an instance of {@link DefaultAggregateLifecycleConfigurationValidator}
      * if no other {@link AggregateLifecycleConfigurationValidator} bean is configured in the application context.
@@ -143,6 +170,12 @@ public class ClosingBooksConfiguration {
      * @param nextGenerationFactories an {@link org.springframework.beans.factory.ObjectProvider} for obtaining
      *                                factories of type {@link TypedClosingBooksNextGenerationFactory} to support
      *                                next-generation closing books functionality.
+     * @param declarationPolicyRegistrar the {@link AggregateDeclarationPolicyRegistrar}, taken as a parameter purely to
+     *                                   make the initialization-order dependency explicit and to keep it correct if
+     *                                   this validator ever moves its checks into its constructor. The ordering itself
+     *                                   is already guaranteed by the registrar being an
+     *                                   {@link org.springframework.beans.factory.InitializingBean} while the validator
+     *                                   validates from {@code afterSingletonsInstantiated()}. Not otherwise used.
      * @return an instance of {@link AggregateLifecycleConfigurationValidator}, specifically a
      *         {@link DefaultAggregateLifecycleConfigurationValidator}, used for validating the configuration
      *         of aggregate lifecycles within the application.
@@ -155,7 +188,8 @@ public class ClosingBooksConfiguration {
                                                                                             AggregateClosingBooksConfigurationResolver closingBooksConfigurationResolver,
                                                                                             EssentialsEventStoreProperties properties,
                                                                                             Optional<FencedLockManager> fencedLockManagerOptional,
-                                                                                            org.springframework.beans.factory.ObjectProvider<TypedClosingBooksNextGenerationFactory<?, ?, ?, ?>> nextGenerationFactories) {
+                                                                                            org.springframework.beans.factory.ObjectProvider<TypedClosingBooksNextGenerationFactory<?, ?, ?, ?>> nextGenerationFactories,
+                                                                                            AggregateDeclarationPolicyRegistrar declarationPolicyRegistrar) {
         return new DefaultAggregateLifecycleConfigurationValidator(snapshotPolicyRegistry,
                                                                   closingBooksPolicyRegistry,
                                                                   snapshotConfigurationResolver,

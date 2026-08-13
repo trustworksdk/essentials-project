@@ -145,15 +145,15 @@ class PostgresqlClosingBooksGenerationRepositoryIT {
     void can_use_an_explicit_logical_aggregate_id_serializer_for_non_string_ids() {
         var typedRepository = new PostgresqlClosingBooksGenerationRepository<>(unitOfWorkFactory,
                                                                                java.util.Optional.empty(),
-                                                                               new ClosingBooksLogicalAggregateIdSerializer<Integer>() {
+                                                                               new ClosingBooksIdSerializer<Integer>() {
                                                                                    @Override
-                                                                                   public String serialize(LogicalAggregateId<Integer> logicalAggregateId) {
-                                                                                       return logicalAggregateId.value().toString();
+                                                                                   public String serialize(Integer id) {
+                                                                                       return id.toString();
                                                                                    }
 
                                                                                    @Override
-                                                                                   public LogicalAggregateId<Integer> deserialize(String serializedLogicalAggregateId) {
-                                                                                       return new LogicalAggregateId<>(Integer.parseInt(serializedLogicalAggregateId));
+                                                                                   public Integer deserialize(String persistedId) {
+                                                                                       return Integer.parseInt(persistedId);
                                                                                    }
                                                                                });
         var logicalAggregateId = new LogicalAggregateId<>(123);

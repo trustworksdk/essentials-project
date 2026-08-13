@@ -1678,6 +1678,34 @@ var combined = ClosingBooksDecisionPolicies.anyOf(policy, scanOnly);
 | `ClosingBooksCoordinator<ID>` | Generation lifecycle for one `AggregateType` — resolve current, open first on demand, close-and-open-next atomically, evaluate a policy |
 | `ClosingBooksStatefulAggregateRepository` | Thin wrapper over a `StatefulAggregateRepository` that translates a `LogicalAggregateId` to the open generation's stream id |
 | `ClosingBooksLogicalAggregateRepository` | The main ergonomic seam — application code stays on logical business ids while the repository resolves and manages generation stream ids |
+| `ClosingBooksIdSerializer<ID>` | The `ID ↔ String` mapping used for every id closing books persists as text — see below |
+
+Closing books persists two ids as text: the **logical aggregate id** (the `logical_aggregate_id` column of
+`PostgresqlClosingBooksGenerationRepository`) and the **generation stream id** (the event stream backing one
+generation). Both use the same `ClosingBooksIdSerializer<ID>`, so an id type is described once — and usually not at all,
+because `forType(...)` derives it:
+
+```java
+// Derived from the id type - String, UUID, enum, any SingleValueType, or a type with a
+// (String) constructor / static of(String) / static from(String)
+ClosingBooksIdSerializer.forType(AccountId.class);
+
+// Raw String ids
+ClosingBooksIdSerializer.stringBased();
+
+// Anything forType(...) cannot derive
+ClosingBooksIdSerializer.of(AccountId::toString, AccountId::of);
+```
+
+`forType(...)` resolves the strategy once, when called, and throws immediately with a message naming the type and the
+creator shapes it searched for. That matters because the first deserialize happens during a generation resolve,
+potentially long after startup. For a number-backed `SingleValueType` it parses the persisted string into the declared
+value type before constructing the id — handing `SingleValueType.fromObject` a `String` for a `LongType`-backed id would
+find no matching creator.
+
+Where a `LogicalAggregateId<ID>` wrapper is involved, the framework calls the `serializeLogicalAggregateId(...)` /
+`deserializeLogicalAggregateId(...)` default methods, which wrap and unwrap around the two methods above. Application
+code never implements them.
 
 ```java
 var coordinator = new ClosingBooksCoordinator<String>(
@@ -1691,7 +1719,7 @@ var repository = new ClosingBooksLogicalAggregateRepository<String, String, Acco
         AggregateType.of("Accounts"),
         delegateStatefulAggregateRepository,
         coordinator,
-        ClosingBooksStreamIdSerializer.stringBased());
+        ClosingBooksIdSerializer.stringBased());
 
 unitOfWorkFactory.usingUnitOfWork(uow -> {
     var account = repository.load(new LogicalAggregateId<>("Account-123"));

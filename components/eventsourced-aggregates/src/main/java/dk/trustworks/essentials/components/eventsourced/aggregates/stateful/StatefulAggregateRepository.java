@@ -226,6 +226,67 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
                                                       .orElse(null));
     }
 
+    /**
+     * Create an {@link StatefulAggregateRepository} that uses snapshots <b>when a provider is configured</b> - i.e. the
+     * common Spring shape where the application injects an {@code Optional<AggregateSnapshotRepositoryProvider>} and
+     * would otherwise have to branch on it itself.
+     * <p>
+     * A present provider delegates to
+     * {@link #fromUsingSnapshotRepositoryProvider(ConfigurableEventStore, AggregateType, StatefulAggregateInstanceFactory, Class, AggregateSnapshotRepositoryProvider)},
+     * an empty one to
+     * {@link #from(ConfigurableEventStore, AggregateType, StatefulAggregateInstanceFactory, Class)}.
+     * <p>
+     * <b>Note:</b> because this overload differs from
+     * {@link #from(ConfigurableEventStore, AggregateType, StatefulAggregateInstanceFactory, Class, AggregateSnapshotRepository)}
+     * only in the last parameter's type, passing a bare {@code null} literal there is ambiguous. Pass
+     * {@link Optional#empty()}, or cast the {@code null}.
+     *
+     * @param <CONFIG>                            the aggregate type configuration
+     * @param <ID>                                the aggregate ID type
+     * @param <EVENT_TYPE>                        the type of event
+     * @param <AGGREGATE_IMPL_TYPE>               the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
+     * @param eventStore                          the {@link EventStore} instance to use
+     * @param aggregateType                       the aggregate type being handled by this repository
+     * @param aggregateRootInstanceFactory        the factory responsible for instantiating your {@link StatefulAggregate}'s when loading them from the {@link EventStore}
+     * @param aggregateImplementationType         the concrete aggregate implementation type (MUST be a subtype of {@link StatefulAggregate})
+     * @param aggregateSnapshotRepositoryProvider the snapshot repository provider to use if present; must not be null,
+     *                                            but may be {@link Optional#empty()}
+     * @return a repository instance, with snapshots attached only if the provider was present
+     */
+    static <CONFIG extends AggregateEventStreamConfiguration,
+            ID,
+            EVENT_TYPE,
+            AGGREGATE_IMPL_TYPE extends StatefulAggregate<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>>
+    StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> from(ConfigurableEventStore<CONFIG> eventStore,
+                                                                          AggregateType aggregateType,
+                                                                          StatefulAggregateInstanceFactory aggregateRootInstanceFactory,
+                                                                          Class<AGGREGATE_IMPL_TYPE> aggregateImplementationType,
+                                                                          Optional<AggregateSnapshotRepositoryProvider> aggregateSnapshotRepositoryProvider) {
+        requireNonNull(aggregateSnapshotRepositoryProvider, "No aggregateSnapshotRepositoryProvider Optional provided");
+        return aggregateSnapshotRepositoryProvider
+                .map(provider -> StatefulAggregateRepository.<CONFIG, ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>fromUsingSnapshotRepositoryProvider(eventStore,
+                                                                                                                                             aggregateType,
+                                                                                                                                             aggregateRootInstanceFactory,
+                                                                                                                                             aggregateImplementationType,
+                                                                                                                                             provider))
+                .orElseGet(() -> StatefulAggregateRepository.<CONFIG, ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>from(eventStore,
+                                                                                                              aggregateType,
+                                                                                                              aggregateRootInstanceFactory,
+                                                                                                              aggregateImplementationType));
+    }
+
+    /**
+     * @return a builder for a {@link StatefulAggregateRepository} over the given {@link EventStore} - an alternative to
+     * picking one of the {@code from(…)} overloads by argument list
+     *
+     * @param <CONFIG>   the aggregate type configuration
+     * @param eventStore the {@link EventStore} instance to use; must not be null
+     * @see StatefulAggregateRepositoryBuilder
+     */
+    static <CONFIG extends AggregateEventStreamConfiguration> StatefulAggregateRepositoryBuilder<CONFIG> builder(ConfigurableEventStore<CONFIG> eventStore) {
+        return new StatefulAggregateRepositoryBuilder<>(eventStore);
+    }
+
     @SuppressWarnings("unchecked")
     static <CONFIG extends AggregateEventStreamConfiguration,
             ID,
