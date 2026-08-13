@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.archive_generation
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Move one sealed books generation of a trading account out of the event store and into the archive.
+generator: essentials
+language: java
+
+handles: [ArchiveGeneration]
+publishes: []
+writes: [AggregateArchiveEntry]
+reads:
+  - { name: AggregateArchiveEntry }
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts/{accountId}/generations/{generation}/archive, auth: anonymous }
+invariants:
+  - id: INV-AG-1
+    text: "Archiving being disabled is reported with the property that enables it, never faked as an empty archive"
+    enforcedBy: ArchiveGenerationHandler
+  - id: INV-AG-2
+    text: "The response is the entry reloaded from the archive, not the archiver's own return value"
+    enforcedBy: ArchiveGenerationHandler
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

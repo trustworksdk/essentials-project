@@ -511,28 +511,28 @@
             <div class="panel fill">
                 <label for="closingBooksMode"><strong>Closing-Books Mode</strong></label>
                 <select id="closingBooksMode" class="control-field">
-                    <option value="manual-only">manual-only</option>
-                    <option value="event-count">event-count</option>
-                    <option value="time-boundary">time-boundary</option>
-                    <option value="event-count-or-time-boundary">event-count-or-time-boundary</option>
+                    <option value="MANUAL_ONLY">manual-only</option>
+                    <option value="EVENT_COUNT">event-count</option>
+                    <option value="TIME_BOUNDARY">time-boundary</option>
+                    <option value="EVENT_COUNT_OR_TIME_BOUNDARY">event-count-or-time-boundary</option>
                 </select>
                 <button class="secondary" id="updateClosingBooksMode" style="margin-top: 12px;">Apply Closing-Books Mode</button>
-                <div class="button-note">POST `/api/admin/trading-accounts/closing-books/mode?value=time-boundary`</div>
+                <div class="button-note">POST `/api/admin/trading-accounts/closing-books` with `{"mode":"TIME_BOUNDARY"}`</div>
             </div>
             <div class="panel fill">
                 <label for="timeBoundary"><strong>Time Boundary</strong></label>
                 <select id="timeBoundary" class="control-field">
-                    <option value="none">none</option>
-                    <option value="end-of-day">end-of-day</option>
-                    <option value="end-of-week">end-of-week</option>
-                    <option value="end-of-month">end-of-month</option>
-                    <option value="end-of-year">end-of-year</option>
-                    <option value="every-n-days">every-n-days</option>
+                    <option value="NONE">none</option>
+                    <option value="END_OF_DAY">end-of-day</option>
+                    <option value="END_OF_WEEK">end-of-week</option>
+                    <option value="END_OF_MONTH">end-of-month</option>
+                    <option value="END_OF_YEAR">end-of-year</option>
+                    <option value="EVERY_N_DAYS">every-n-days</option>
                 </select>
                 <input id="timeBoundaryZoneId" type="text" placeholder="Europe/Copenhagen" class="control-field" style="margin-top: 10px;">
                 <input id="timeBoundaryIntervalDays" type="number" min="1" placeholder="Interval days (for every-n-days)" class="control-field" style="margin-top: 10px;">
                 <button class="secondary" id="updateTimeBoundary" style="margin-top: 12px;">Apply Time Boundary</button>
-                <div class="button-note">POST `/api/admin/trading-accounts/closing-books/time-boundary`, `/zone-id`, `/interval-days`</div>
+                <div class="button-note">POST `/api/admin/trading-accounts/closing-books` — boundary, zone and interval travel in one body, applied as a single atomic settings swap</div>
             </div>
         </div>
 
@@ -571,7 +571,7 @@
 <script>
     const statusLine = document.getElementById("statusLine");
 
-    async function postAndRefresh(endpoint) {
+    async function postAndRefresh(endpoint, body) {
         setBusy(true);
         statusLine.textContent = `Running ${endpoint} ...`;
         try {
@@ -579,7 +579,9 @@
                 const selectedMode = encodeURIComponent(document.getElementById("priceStressMode").value);
                 endpoint = `${endpoint}&mode=${selectedMode}`;
             }
-            const response = await fetch(endpoint, { method: "POST" });
+            const response = await fetch(endpoint, body === undefined
+                ? { method: "POST" }
+                : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
             if (!response.ok) {
                 const text = await response.text();
                 throw new Error(text || `Request failed with ${response.status}`);
@@ -718,8 +720,11 @@
     }
 
     function renderSummaryText(summary) {
-        document.getElementById("closingBooksMode").value = summary.closingBooks.mode || "event-count-or-time-boundary";
-        document.getElementById("timeBoundary").value = summary.closingBooks.timeBoundary || "none";
+        // The dashboard reports these hyphenated for display; the selects carry the enum constants the
+        // command expects, so convert on the way in.
+        const asEnumConstant = value => String(value).toUpperCase().replace(/-/g, "_");
+        document.getElementById("closingBooksMode").value = asEnumConstant(summary.closingBooks.mode || "event-count-or-time-boundary");
+        document.getElementById("timeBoundary").value = asEnumConstant(summary.closingBooks.timeBoundary || "none");
         document.getElementById("timeBoundaryZoneId").value = summary.closingBooks.zoneId || "";
         document.getElementById("timeBoundaryIntervalDays").value = summary.closingBooks.intervalDays || "";
         statusLine.textContent =
@@ -769,22 +774,22 @@
     document.getElementById("startGenerator").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/start"));
     document.getElementById("stopGenerator").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/stop"));
     document.getElementById("stopPriceStress").addEventListener("click", () => postAndRefresh("/api/admin/load-generator/price-stress/stop"));
+    // One request per click, carrying only the fields that click owns; a null field means "leave unchanged".
+    // This used to be up to three sequential POSTs against three endpoints, which is what let a benchmark
+    // scenario's restore-on-finish silently overwrite a change made while it was running.
+    const CLOSING_BOOKS_ENDPOINT = "/api/admin/trading-accounts/closing-books";
+
     document.getElementById("updateClosingBooksMode").addEventListener("click", async () => {
-        const select = document.getElementById("closingBooksMode");
-        const value = select.value;
-        await postAndRefresh(`/api/admin/trading-accounts/closing-books/mode?value=${encodeURIComponent(value)}`);
+        await postAndRefresh(CLOSING_BOOKS_ENDPOINT, { mode: document.getElementById("closingBooksMode").value });
     });
     document.getElementById("updateTimeBoundary").addEventListener("click", async () => {
-        const boundary = document.getElementById("timeBoundary").value;
         const zoneId = document.getElementById("timeBoundaryZoneId").value.trim();
         const intervalDays = document.getElementById("timeBoundaryIntervalDays").value.trim();
-        await postAndRefresh(`/api/admin/trading-accounts/closing-books/time-boundary?value=${encodeURIComponent(boundary)}`);
-        if (zoneId) {
-            await postAndRefresh(`/api/admin/trading-accounts/closing-books/zone-id?value=${encodeURIComponent(zoneId)}`);
-        }
-        if (intervalDays) {
-            await postAndRefresh(`/api/admin/trading-accounts/closing-books/interval-days?value=${encodeURIComponent(intervalDays)}`);
-        }
+        await postAndRefresh(CLOSING_BOOKS_ENDPOINT, {
+            timeBoundary: document.getElementById("timeBoundary").value,
+            zoneId: zoneId || null,
+            intervalDays: intervalDays ? Number(intervalDays) : null
+        });
     });
     document.querySelectorAll("[data-endpoint]").forEach(button => {
         button.addEventListener("click", () => postAndRefresh(button.dataset.endpoint));

@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: brokerage.place_trade
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Place a new trade against a trading account.
+generator: essentials
+language: java
+
+handles: [PlaceTrade]
+publishes: [TradePlaced]
+writes: [Trade]
+reads: []
+endpoints:
+  - { method: POST, path: /api/admin/trades }
+invariants:
+  - id: INV-PT-1
+    text: "A trade's gross amount is always quantity x price - it is computed by the aggregate, never supplied by the caller"
+    enforcedBy: Trade
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

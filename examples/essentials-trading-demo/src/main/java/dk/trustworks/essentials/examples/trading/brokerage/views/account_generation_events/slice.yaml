@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: brokerage.account_generation_events
+kind: view
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Serve the raw event stream of one books generation of a trading account, straight from the event store.
+generator: essentials
+language: java
+
+serves: [GetAccountGenerationEvents]
+endpoints:
+  - { method: GET, path: "/api/admin/trading-accounts/{accountId}/generations/{generation}/events", auth: anonymous }
+reads:
+  - { name: ApiClosingBooksGenerationEventStream }
+projections: []
+invariants:
+  - id: INV-AGE-1
+    text: "An unknown generation fails with 'Couldn't resolve generation <n> for trading account <id>', never as an empty stream"
+    enforcedBy: AccountGenerationEventsQuery
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: brokerage.execute_trade
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Mark an already-placed trade as executed.
+generator: essentials
+language: java
+
+handles: [ExecuteTrade]
+publishes: [TradeExecuted]
+writes: [Trade]
+reads:
+  - { name: Trade }
+endpoints:
+  - { method: POST, path: "/api/admin/trades/{tradeId}/execution" }
+invariants:
+  - id: INV-ET-1
+    text: "Executing an already-executed trade is an idempotent no-op, not a second TradeExecuted"
+    enforcedBy: Trade
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

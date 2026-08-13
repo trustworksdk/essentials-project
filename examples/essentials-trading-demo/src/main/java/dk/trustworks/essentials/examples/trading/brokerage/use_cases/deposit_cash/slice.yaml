@@ -1,0 +1,32 @@
+schemaVersion: "1.1"
+slice: brokerage.deposit_cash
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Book cash into a trading account's currently open books generation.
+generator: essentials
+language: java
+
+handles: [DepositCash]
+# AccountBooksClosed/TradingAccountOpened are emitted when the ON_ACCESS closing-books policy rolls the
+# account while it is being loaded for this command.
+publishes: [CashDeposited, AccountBooksClosed, TradingAccountOpened]
+writes: [TradingAccount]
+reads:
+  - { name: TradingAccount }
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts/{accountId}/deposits, auth: anonymous }
+invariants:
+  - id: INV-DC-1
+    text: "Nothing may be booked once the books are closed"
+    enforcedBy: TradingAccount
+  - id: INV-DC-2
+    text: "A deposit is strictly positive"
+    enforcedBy: CashDeposited
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

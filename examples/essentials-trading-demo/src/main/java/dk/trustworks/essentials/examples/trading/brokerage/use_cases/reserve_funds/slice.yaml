@@ -1,0 +1,35 @@
+schemaVersion: "1.1"
+slice: brokerage.reserve_funds
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Set cash aside on a trading account so a trade in flight cannot be outspent by another.
+generator: essentials
+language: java
+
+handles: [ReserveFunds]
+# AccountBooksClosed/TradingAccountOpened are emitted when the ON_ACCESS closing-books policy rolls the
+# account while it is being loaded for this command.
+publishes: [FundsReserved, AccountBooksClosed, TradingAccountOpened]
+writes: [TradingAccount]
+reads:
+  - { name: TradingAccount }
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts/{accountId}/fund-reservations, auth: anonymous }
+invariants:
+  - id: INV-RSF-1
+    text: "Funds may not be reserved beyond the cash that is not already reserved"
+    enforcedBy: TradingAccount
+  - id: INV-RSF-2
+    text: "Nothing may be booked once the books are closed"
+    enforcedBy: TradingAccount
+  - id: INV-RSF-3
+    text: "A reservation is strictly positive"
+    enforcedBy: FundsReserved
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

@@ -1,0 +1,40 @@
+schemaVersion: "1.1"
+slice: brokerage.trade_settlement_status
+kind: view
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Join each trade to its settlement's lifecycle state in one projected read model, and serve one settlement from it.
+generator: essentials
+language: java
+
+serves: [ListTradeSettlements, GetSettlementStatus]
+endpoints:
+  - { method: GET, path: /api/admin/projections/trade-settlements, auth: anonymous }
+  - { method: GET, path: "/api/admin/settlements/{settlementId}", auth: anonymous }
+reads:
+  - { name: TradeSettlementStatus }
+projections:
+  - name: TradeSettlementStatusProjection
+    from: [TradePlaced, TradeExecuted, SettlementRequested, TradeSettled, SettlementCreated, ClearingRequested, ClearingConfirmed, SettlementMarkedSettled, SettlementReconciled, SettlementClosed]
+    consistency: eventual
+    store: jdbc
+invariants:
+  - id: INV-TSS-1
+    text: "Either stream may arrive first, so both entry points upsert and the settlement side sets only the columns a settlement knows"
+    enforcedBy: TradeSettlementStatusProjection
+  - id: INV-TSS-2
+    text: "settlement_id is unique when present and absent for a trade with no settlement - a partial unique index, not a second key"
+    enforcedBy: TradeSettlementStatusProjection
+  - id: INV-TSS-3
+    text: "settlement_status round-trips through the SettlementStatus enum: written as name(), read with valueOf"
+    enforcedBy: TradeSettlementStatusProjection
+  - id: INV-TSS-4
+    text: "The five settlement booleans are derived from the status by lifecycle order, never stored"
+    enforcedBy: SettlementStatusView
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

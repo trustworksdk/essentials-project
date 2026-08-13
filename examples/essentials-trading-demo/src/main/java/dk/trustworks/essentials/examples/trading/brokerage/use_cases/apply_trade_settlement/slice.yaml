@@ -1,0 +1,32 @@
+schemaVersion: "1.1"
+slice: brokerage.apply_trade_settlement
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Book the cash and realized-P&L result of a settled trade onto the trading account.
+generator: essentials
+language: java
+
+handles: [ApplyTradeSettlement]
+# AccountBooksClosed/TradingAccountOpened are emitted when the ON_ACCESS closing-books policy rolls the
+# account while it is being loaded for this command.
+publishes: [TradeSettlementApplied, AccountBooksClosed, TradingAccountOpened]
+writes: [TradingAccount]
+reads:
+  - { name: TradingAccount }
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts/{accountId}/trade-settlements, auth: anonymous }
+invariants:
+  - id: INV-ATS-1
+    text: "Nothing may be booked once the books are closed"
+    enforcedBy: TradingAccount
+  - id: INV-ATS-2
+    text: "Cash and realized P&L only ever move through on(TradeSettlementApplied)"
+    enforcedBy: TradingAccount
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

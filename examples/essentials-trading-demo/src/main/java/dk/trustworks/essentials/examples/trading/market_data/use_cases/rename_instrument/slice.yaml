@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: market_data.rename_instrument
+kind: command
+bc: market_data
+owner: market-data-team
+status: live
+summary: Change the display name of an already-registered instrument.
+generator: essentials
+language: java
+
+handles: [RenameInstrument]
+publishes: [InstrumentRenamed]
+writes: [Instrument]
+reads:
+  - { name: Instrument }
+endpoints:
+  - { method: POST, path: /api/admin/instruments/{instrumentId}/name, auth: anonymous }
+invariants:
+  - id: INV-RN-1
+    text: "Renaming to the display name already held is an idempotent no-op, not a second InstrumentRenamed"
+    enforcedBy: Instrument
+  - id: INV-RN-2
+    text: "Renaming an instrument that was never registered fails - the handler loads via getInstrument, never creating one"
+    enforcedBy: RenameInstrumentHandler
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

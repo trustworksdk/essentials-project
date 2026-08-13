@@ -1,0 +1,33 @@
+schemaVersion: "1.1"
+slice: brokerage.update_closing_books_settings
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Retune the trading-account closing-books policy in one atomic change.
+generator: essentials
+language: java
+
+handles: [UpdateClosingBooksSettings]
+publishes: []
+writes: [ClosingBooksSettings]
+reads:
+  - { name: ClosingBooksSettings }
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts/closing-books, auth: anonymous }
+invariants:
+  - id: INV-UCBS-1
+    text: "The whole change is one reference swap under one lock - it replaced four endpoints that could interleave"
+    enforcedBy: TradingAccountClosingBooksPolicy
+  - id: INV-UCBS-2
+    text: "eventThreshold > 0 and intervalDays > 0"
+    enforcedBy: ClosingBooksSettings
+  - id: INV-UCBS-3
+    text: "A null component means leave unchanged, so no component is requireNonNull-ed"
+    enforcedBy: UpdateClosingBooksSettings
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }
