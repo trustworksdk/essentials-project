@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+
 /**
  * Integration test class for measuring the latency of traditional durable queue sql
  * <p>
@@ -24,6 +26,7 @@ package dk.trustworks.essentials.components.queue.postgresql;
  * - Measuring latency (average, 95th percentile) during queue operations.
  * - Execution of load tests with a configurable number of queues, messages per test, and batch size.
  */
+@EnabledIfSystemProperty(named = "benchmark.run", matches = "true")
 public class TraditionalPostgresqlDurableQueuesLatencyIT extends PostgresqlDurableQueuesLatencyIT {
 
     @Override

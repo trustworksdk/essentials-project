@@ -36,13 +36,21 @@ class CompositeDocumentDbRepositoryIT {
     private lateinit var jdbi: Jdbi
     private lateinit var repository: DocumentDbRepository<CompositeOrder, CompositeOrderId>
 
-    @Container
-    val postgresContainer: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:latest")
-        .apply {
-            withDatabaseName("testdb")
-            withUsername("test")
-            withPassword("test")
-        }
+    companion object {
+        /**
+         * Static, so the container starts once per class rather than once per test method. All DDL here is
+         * `CREATE TABLE/INDEX IF NOT EXISTS`, and [setup] wipes every repository before repopulating, so sharing one
+         * database across the methods of this class is safe.
+         */
+        @Container
+        @JvmStatic
+        val postgresContainer: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:18.4")
+            .apply {
+                withDatabaseName("testdb")
+                withUsername("test")
+                withPassword("test")
+            }
+    }
 
     @BeforeEach
     fun setup() {
@@ -65,6 +73,9 @@ class CompositeDocumentDbRepositoryIT {
 
         repository = repositoryFactory.createForCompositeId(CompositeOrder::class) { "${it.orderId.value}:${it.shippingOrderId.value}" }
         repository.addIndex(Index(name = "city", listOf(CompositeOrder::shippingAddress then ShippingAddress::city)))
+
+        // The container is shared by every test in this class - clear what the previous test left behind.
+        repository.deleteAll()
     }
 
     @Test

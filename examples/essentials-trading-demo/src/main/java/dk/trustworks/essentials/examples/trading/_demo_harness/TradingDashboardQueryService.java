@@ -25,6 +25,8 @@ import dk.trustworks.essentials.examples.trading.brokerage.types.TradeId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.brokerage.views.account_statement.AccountStatement;
 import dk.trustworks.essentials.examples.trading.brokerage.views.account_statement.AccountStatementQuery;
+import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrice;
+import dk.trustworks.essentials.examples.trading.market_data.types.MarketDataAggregateTypes;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Service;
@@ -63,15 +65,23 @@ public class TradingDashboardQueryService {
      * The principal the demo's admin surface acts as. The demo has no authentication; a real deployment would pass
      * the authenticated caller.
      */
-    private static final String       DEMO_ADMIN_PRINCIPAL         = "demo-admin";
-    private static final String       SNAPSHOT_AGGREGATE_TYPE      = TradingAccounts.AGGREGATE_TYPE.toString();
+    private static final String                  DEMO_ADMIN_PRINCIPAL = "demo-admin";
     /**
-     * The Micrometer {@code aggregate_impl_type} tag value. Derived from the class rather than written out as a
-     * string literal -- the literal silently stopped matching the moment the class moved package, which is exactly
-     * what this refactor did to it.
+     * The snapshot timers are tagged per aggregate type, so the dashboard has to name every snapshotting aggregate it
+     * wants counted. Reporting only {@code TradingAccounts} meant a price-stress run -- the workload the
+     * {@code InstrumentPrices} aggregate exists to demonstrate -- could never move any number on the Snapshots tab.
+     * <p>
+     * Each context is named through the surface it publishes: {@code brokerage} exposes its stream name on the
+     * repository wrapper, {@code market_data} on {@link MarketDataAggregateTypes}. The {@code aggregate_impl_type} tag
+     * is derived from the class rather than written out as a string literal -- the literal silently stopped matching
+     * the moment the class moved package, which is exactly what the slice refactor did to it. That is also the only
+     * reason this harness names two BC-private aggregate classes: it reads {@code getName()} off them and nothing else.
      */
-    private static final String       SNAPSHOT_AGGREGATE_IMPL_TYPE = TradingAccount.class.getName();
-    private static final List<String> SNAPSHOT_METRIC_NAMES        = List.of(
+    private static final List<SnapshotAggregate> SNAPSHOT_AGGREGATES  = List.of(
+            new SnapshotAggregate(TradingAccounts.AGGREGATE_TYPE.toString(), TradingAccount.class.getName()),
+            new SnapshotAggregate(MarketDataAggregateTypes.INSTRUMENT_PRICES.toString(), InstrumentPrice.class.getName())
+    );
+    private static final List<String>            SNAPSHOT_METRIC_NAMES = List.of(
             "essentials.aggregate_snapshot.load_snapshot",
             "essentials.aggregate_snapshot.save_snapshot",
             "essentials.aggregate_snapshot.serialize_snapshot",
@@ -222,19 +232,22 @@ public class TradingDashboardQueryService {
     }
 
     private List<DashboardMetricSummaryView> snapshotMetrics() {
-        return meterRegistry.map(registry -> SNAPSHOT_METRIC_NAMES.stream()
-                                                                  .map(metricName -> toMetricSummary(registry, metricName))
-                                                                  .toList())
+        return meterRegistry.map(registry -> SNAPSHOT_AGGREGATES.stream()
+                                                                .flatMap(snapshotAggregate -> SNAPSHOT_METRIC_NAMES.stream()
+                                                                                                                   .map(metricName -> toMetricSummary(registry,
+                                                                                                                                                      snapshotAggregate,
+                                                                                                                                                      metricName)))
+                                                                .toList())
                             .orElseGet(List::of);
     }
 
-    private DashboardMetricSummaryView toMetricSummary(MeterRegistry registry, String metricName) {
+    private DashboardMetricSummaryView toMetricSummary(MeterRegistry registry, SnapshotAggregate snapshotAggregate, String metricName) {
         var timers = registry.find(metricName)
-                             .tag("aggregate_type", SNAPSHOT_AGGREGATE_TYPE)
-                             .tag("aggregate_impl_type", SNAPSHOT_AGGREGATE_IMPL_TYPE)
+                             .tag("aggregate_type", snapshotAggregate.aggregateType())
+                             .tag("aggregate_impl_type", snapshotAggregate.aggregateImplType())
                              .timers();
         if (timers.isEmpty()) {
-            return new DashboardMetricSummaryView(metricName, 0, 0, 0);
+            return new DashboardMetricSummaryView(snapshotAggregate.aggregateType(), metricName, 0, 0, 0);
         }
         long count = timers.stream()
                            .mapToLong(Timer::count)
@@ -246,7 +259,8 @@ public class TradingDashboardQueryService {
                              .mapToDouble(timer -> timer.max(TimeUnit.MILLISECONDS))
                              .max()
                              .orElse(0);
-        return new DashboardMetricSummaryView(metricName,
+        return new DashboardMetricSummaryView(snapshotAggregate.aggregateType(),
+                                              metricName,
                                               count,
                                               totalTimeMs,
                                               maxMs);
@@ -260,7 +274,9 @@ public class TradingDashboardQueryService {
         double totalObservedTimeMs = metricSummaries.stream()
                                                     .mapToDouble(DashboardMetricSummaryView::totalTimeMs)
                                                     .sum();
-        return new DashboardSnapshotStatsView(SNAPSHOT_AGGREGATE_TYPE,
+        return new DashboardSnapshotStatsView(SNAPSHOT_AGGREGATES.stream()
+                                                                 .map(SnapshotAggregate::aggregateType)
+                                                                 .collect(Collectors.joining(", ")),
                                               loadCount,
                                               saveCount,
                                               serializeCount,
@@ -271,8 +287,10 @@ public class TradingDashboardQueryService {
     private long countFor(List<DashboardMetricSummaryView> metricSummaries, String name) {
         return metricSummaries.stream()
                               .filter(metric -> metric.name().equals(name))
-                              .findFirst()
-                              .map(DashboardMetricSummaryView::count)
-                              .orElse(0L);
+                              .mapToLong(DashboardMetricSummaryView::count)
+                              .sum();
+    }
+
+    private record SnapshotAggregate(String aggregateType, String aggregateImplType) {
     }
 }

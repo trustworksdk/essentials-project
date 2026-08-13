@@ -356,13 +356,14 @@ Written down rather than guessed at. None of these blocks the refactor.
 5. **The `#` stream-id convention is written in two places** — the coordinator lambda in the BC's
    config builds `<logicalId>#<generation>`, and the statement projection parses it back out with
    `lastIndexOf('#')`. Now a shared constant in `trading/types/`, but the parse is still positional.
-6. **`InstrumentPrice`'s `@AggregateSnapshotPolicy` does not actually take snapshots**, and did not before
-   this refactor either. The annotation is read reflectively and published to the admin console's policy
-   registry, but `InstrumentPrices` builds a plain `StatefulAggregateRepository.from(…)` — only
-   `TradingAccount` uses `fromUsingSnapshotRepositoryProvider`. Behaviour was preserved exactly rather
-   than "fixed", because a snapshotting price aggregate changes what the price-path benchmark measures,
-   which is the one thing that comparison exists to show. If the annotation was meant to be live, this is
-   a one-line change in `market_data/aggregates/InstrumentPrices`.
+6. ~~**`InstrumentPrice`'s `@AggregateSnapshotPolicy` does not actually take snapshots.**~~ **Resolved on
+   `main`, and merged in:** the annotation was meant to be live. `InstrumentPrices` now resolves the
+   `AggregateSnapshotRepositoryProvider` the same way `BrokerageConfiguration` does for `TradingAccount`,
+   and `everyNEvents` dropped 1000 → 100 so a stress run actually crosses the threshold (1000 updates over
+   2 instruments is only ~500 events per stream, so 1000 never fired and the console's snapshot metrics
+   stayed empty). Note the consequence this entry originally warned about still holds and is now accepted:
+   the price path benchmarks a *snapshotting* aggregate, so its numbers are not comparable to runs taken
+   before this change.
 7. **`reserveFunds` / `releaseFunds` have no caller outside bootstrap and one test.** Kept as slices
    because they carry real invariants (available-cash check, over-release check) and are the most
    interesting thing `TradingAccount` does. They are not dead code, but they are demo-only.

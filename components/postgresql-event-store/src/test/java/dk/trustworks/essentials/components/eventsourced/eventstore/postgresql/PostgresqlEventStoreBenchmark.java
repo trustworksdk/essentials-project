@@ -69,7 +69,7 @@ public class PostgresqlEventStoreBenchmark {
         @Setup(Level.Trial)
         public void trialSetUp() {
             System.out.println("Trial setup");
-            postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+            postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
                     .withDatabaseName("event-store")
                     .withUsername("test-user")
                     .withPassword("secret-password");

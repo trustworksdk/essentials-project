@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class StarterAutoConfigurationIT {
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("starter-test-db")
             .withUsername("test-user")
             .withPassword("secret-password");

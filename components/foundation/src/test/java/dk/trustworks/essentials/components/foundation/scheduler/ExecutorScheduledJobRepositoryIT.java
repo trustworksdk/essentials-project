@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class ExecutorScheduledJobRepositoryIT {
 
     @Container
-    private static final PostgreSQLContainer<?> postgresContainer = new PostgreSQLContainer<>("postgres:latest")
+    private static final PostgreSQLContainer<?> postgresContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("test")
             .withUsername("test")
             .withPassword("test");

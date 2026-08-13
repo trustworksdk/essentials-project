@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.ClosingBooksTimeBoundary;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.GenerationState;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.LogicalAggregateId;
+import dk.trustworks.essentials.examples.trading._demo_harness.DashboardMetricSummaryView;
 import dk.trustworks.essentials.examples.trading._demo_harness.DashboardSummaryView;
 import dk.trustworks.essentials.examples.trading._demo_harness.PricePathScenarioResultView;
 import dk.trustworks.essentials.examples.trading._demo_harness.TradingAccountScenarioResultView;
@@ -64,6 +65,7 @@ import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlemen
 import dk.trustworks.essentials.examples.trading.brokerage.views.trade_settlement_status.TradeSettlementStatusQuery;
 import dk.trustworks.essentials.examples.trading.brokerage.views.trade_valuation.TradeValuation;
 import dk.trustworks.essentials.examples.trading.market_data.types.InstrumentId;
+import dk.trustworks.essentials.examples.trading.market_data.types.MarketDataAggregateTypes;
 import dk.trustworks.essentials.examples.trading.market_data.types.Symbol;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.initialize_price.InitializePrice;
 import dk.trustworks.essentials.examples.trading.market_data.use_cases.register_instrument.RegisterInstrument;
@@ -131,7 +133,7 @@ class TradingDemoApplicationTest {
     private static final Duration PROJECTION_TIMEOUT = Duration.ofSeconds(60);
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:latest")
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("trading-demo-test-db")
             .withUsername("test")
             .withPassword("test");
@@ -646,8 +648,13 @@ class TradingDemoApplicationTest {
             assertThat(summaryResponse.getBody().accountsPresent()).isGreaterThanOrEqualTo(1);
             assertThat(summaryResponse.getBody().closingBooks().totalGenerations()).isGreaterThanOrEqualTo(1);
             assertThat(summaryResponse.getBody().pricePathComparison().performances()).hasSizeGreaterThanOrEqualTo(2);
-            assertThat(summaryResponse.getBody().snapshotStats().aggregateType()).isEqualTo(TradingAccounts.AGGREGATE_TYPE.toString());
+            assertThat(summaryResponse.getBody().snapshotStats().aggregateTypes()).contains(TradingAccounts.AGGREGATE_TYPE.toString(),
+                                                                                            MarketDataAggregateTypes.INSTRUMENT_PRICES.toString());
             assertThat(summaryResponse.getBody().snapshotStats().saveCount()).isGreaterThanOrEqualTo(0);
+            assertThat(summaryResponse.getBody().snapshotMetrics())
+                    .as("snapshot metrics are reported per snapshotting aggregate type, not just for TradingAccounts")
+                    .extracting(DashboardMetricSummaryView::aggregateType)
+                    .contains(MarketDataAggregateTypes.INSTRUMENT_PRICES.toString());
         });
 
         var htmlResponse = restTemplate.getForEntity("/admin", String.class);

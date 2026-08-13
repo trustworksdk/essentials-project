@@ -74,11 +74,25 @@ public class AbstractLogicalReplicationPostgresIT {
 
     public static final AggregateType ORDERS = AggregateType.of("Orders");
 
+    /**
+     * Built from {@code docker/postgresql-wal2json/Dockerfile}.
+     * <p>
+     * The image name and {@code deleteOnExit=false} are load-bearing: an anonymous {@link ImageFromDockerfile} is
+     * rebuilt and then orphaned on every use, which left thousands of dangling ~640 MB images behind on developer
+     * machines. With a stable tag the image is built once and reused. <b>Bump the tag whenever the Dockerfile
+     * changes</b>, otherwise the stale image is reused.
+     */
+    protected static final ImageFromDockerfile WAL2JSON_IMAGE = new ImageFromDockerfile("essentials-test/postgres-wal2json:1", false)
+            .withFileFromClasspath("Dockerfile", "docker/postgresql-wal2json/Dockerfile");
+
+    /**
+     * Deliberately an <b>instance</b> field - one container per test method - against the general rule in
+     * {@code .claude/rules/testing.md} that {@code @Container} fields are static. These suites assert on absolute
+     * {@code GlobalEventOrder} values and own replication slots, so events left behind by an earlier test method make a
+     * later one fail. The expensive part, rebuilding the image, is solved by {@link #WAL2JSON_IMAGE} instead.
+     */
     @Container
-    protected final GenericContainer<?> postgres = new GenericContainer<>(
-            new ImageFromDockerfile()
-                    .withFileFromClasspath("Dockerfile", "docker/postgresql-wal2json/Dockerfile")
-    )
+    protected final GenericContainer<?> postgres = new GenericContainer<>(WAL2JSON_IMAGE)
             .withEnv("POSTGRES_DB", "event-store")
             .withEnv("POSTGRES_USER", "test-user")
             .withEnv("POSTGRES_PASSWORD", "secret-password")

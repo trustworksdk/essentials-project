@@ -43,10 +43,9 @@ public class MarketDataConfiguration {
      * Same reason as the brokerage context's equivalent: the framework registers these from a bean post-processor, and
      * an aggregate root is not a Spring bean, so the annotation would otherwise be inert.
      * <p>
-     * Note that this publishes the policy to the console but does not by itself cause snapshots to be written —
-     * {@code InstrumentPrices} builds a plain repository rather than one backed by an
-     * {@code AggregateSnapshotRepositoryProvider}. That is the behaviour this module has always had; see
-     * {@code REFACTORING_PLAN.md} § Open questions.
+     * Note that this only publishes the policy to the console. What causes snapshots to actually be written and read
+     * is {@code InstrumentPrices} building its repository through the {@code AggregateSnapshotRepositoryProvider} —
+     * the two are separate wiring steps and registering here without doing that leaves the policy inert.
      */
     @Bean
     public InitializingBean instrumentPricePolicyRegistrations(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry) {

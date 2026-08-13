@@ -38,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OrderRepositoryIT {
 
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:latest");
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:8.2");
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {

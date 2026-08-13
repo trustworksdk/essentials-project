@@ -43,10 +43,18 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * <p>This is the demo's high-write-rate aggregate, which is why it declares a snapshot policy and
  * {@code Instrument} does not. A repeated tick at the price already held emits nothing, so an unchanged market does
  * not lengthen the stream.
+ *
+ * <p>Both numbers on that policy are load-bearing. {@code everyNEvents} sits well below the demo's own price-stress
+ * run sizes: the admin console's "Max Throughput" button issues 1000 updates across an
+ * {@code trading-demo.simulation.instrument-count} of 2, so each stream only reaches ~500 events -- at a threshold of
+ * 1000 a full stress run never crossed it and the snapshot metrics stayed empty. 100 matches {@code TradingAccount}'s
+ * cadence and snapshots several times per run. The mode stays {@link SnapshotExecutionMode#ASYNC_DURABLE} as the
+ * intended contrast to {@code TradingAccount}'s synchronous policy: the write path is not charged for the snapshot,
+ * at the cost of the snapshot landing slightly behind the stream.
  */
 @AggregateSnapshotPolicy(aggregateType = "InstrumentPrices",
                          mode = SnapshotExecutionMode.ASYNC_DURABLE,
-                         everyNEvents = 1000)
+                         everyNEvents = 100)
 public class InstrumentPrice extends AggregateRoot<InstrumentId, InstrumentPriceEvent, InstrumentPrice> {
     private Amount latestPrice;
 

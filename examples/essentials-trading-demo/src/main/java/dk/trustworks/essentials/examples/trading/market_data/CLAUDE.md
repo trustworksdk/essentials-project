@@ -34,7 +34,7 @@ reachable without a lookup table. Do not "fix" it by inventing an `InstrumentPri
 | Aggregate | `AggregateType` | Id | Snapshots |
 |---|---|---|---|
 | `Instrument` | `Instruments` | `InstrumentId` | no — baseline aggregate, short streams |
-| `InstrumentPrice` | `InstrumentPrices` | `InstrumentId` | `@AggregateSnapshotPolicy`, ASYNC_DURABLE, every 1000 events |
+| `InstrumentPrice` | `InstrumentPrices` | `InstrumentId` | `@AggregateSnapshotPolicy`, ASYNC_DURABLE, every 100 events |
 
 `Instrument` is the demo's baseline: neither snapshots nor closing books, so it is what the other aggregates
 in the demo are compared against.

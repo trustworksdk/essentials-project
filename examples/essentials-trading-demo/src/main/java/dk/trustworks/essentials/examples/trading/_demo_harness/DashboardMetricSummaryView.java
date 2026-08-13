@@ -17,9 +17,10 @@
 package dk.trustworks.essentials.examples.trading._demo_harness;
 
 /**
- * Selected metric summary used by the lightweight admin dashboard.
+ * Selected metric summary used by the lightweight admin dashboard, reported per snapshotting aggregate type.
  */
-public record DashboardMetricSummaryView(String name,
+public record DashboardMetricSummaryView(String aggregateType,
+                                         String name,
                                          long count,
                                          double totalTimeMs,
                                          double maxMs) {

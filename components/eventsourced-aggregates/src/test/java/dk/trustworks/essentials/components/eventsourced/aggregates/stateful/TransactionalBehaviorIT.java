@@ -152,7 +152,7 @@ public class TransactionalBehaviorIT {
     public static final  AggregateType ORDERS = AggregateType.of("TestOrders");
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("event-store")
             .withUsername("test-user")
             .withPassword("secret-password");

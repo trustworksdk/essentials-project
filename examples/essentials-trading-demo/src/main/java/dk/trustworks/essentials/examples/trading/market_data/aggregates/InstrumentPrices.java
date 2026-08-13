@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.aggregates;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotRepositoryProvider;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
@@ -46,12 +47,31 @@ public class InstrumentPrices {
     public static final AggregateType                                                                   AGGREGATE_TYPE = MarketDataAggregateTypes.INSTRUMENT_PRICES;
     private final       StatefulAggregateRepository<InstrumentId, InstrumentPriceEvent, InstrumentPrice> repository;
 
-    public InstrumentPrices(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+    /**
+     * {@link InstrumentPrice} declares an {@link dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicy},
+     * and {@code MarketDataConfiguration.instrumentPricePolicyRegistrations} publishes it so the admin console reports
+     * it. The policy only takes effect on the <em>load</em> path when the repository is built with the snapshot
+     * repository provider, so this wrapper has to resolve it -- a plain
+     * {@link StatefulAggregateRepository#from} passes a null snapshot repository and every load replays the whole
+     * stream, which is quadratic under the price-stress runs this aggregate exists to demonstrate.
+     *
+     * <p>The provider is {@link Optional} because it is only present when snapshot support is configured; without it
+     * the repository degrades to the plain form rather than failing to start.
+     */
+    public InstrumentPrices(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
+                            Optional<AggregateSnapshotRepositoryProvider> aggregateSnapshotRepositoryProvider) {
         requireNonNull(eventStore, "No eventStore provided");
-        repository = StatefulAggregateRepository.from(eventStore,
-                                                      AGGREGATE_TYPE,
-                                                      reflectionBasedAggregateRootFactory(),
-                                                      InstrumentPrice.class);
+        requireNonNull(aggregateSnapshotRepositoryProvider, "No aggregateSnapshotRepositoryProvider provided");
+        repository = aggregateSnapshotRepositoryProvider
+                .map(provider -> StatefulAggregateRepository.fromUsingSnapshotRepositoryProvider(eventStore,
+                                                                                                 AGGREGATE_TYPE,
+                                                                                                 reflectionBasedAggregateRootFactory(),
+                                                                                                 InstrumentPrice.class,
+                                                                                                 provider))
+                .orElseGet(() -> StatefulAggregateRepository.from(eventStore,
+                                                                  AGGREGATE_TYPE,
+                                                                  reflectionBasedAggregateRootFactory(),
+                                                                  InstrumentPrice.class));
     }
 
     public InstrumentPrice getPrice(InstrumentId instrumentId) {

@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.queue.springdata.mongodb;
 
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.LocalCompetingConsumersDurableQueueIT;
 import dk.trustworks.essentials.components.foundation.transaction.spring.mongo.SpringMongoTransactionAwareUnitOfWorkFactory;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -33,7 +34,7 @@ import java.time.Duration;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class SingleOperationTransactionMongoLocalCompetingConsumersDurableQueueIT extends LocalCompetingConsumersDurableQueueIT<MongoDurableQueues, SpringMongoTransactionAwareUnitOfWorkFactory.SpringMongoTransactionAwareUnitOfWork, SpringMongoTransactionAwareUnitOfWorkFactory> {
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:latest");
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE);
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {

@@ -57,6 +57,18 @@ public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUE
         if (durableQueues2 != null) {
             durableQueues2.stop();
         }
+        releaseTestResources();
+    }
+
+    /**
+     * Hook for subclasses to release per-test resources - typically a JDBC connection pool created in
+     * {@code createUnitOfWorkFactory()}. Called after the queues have been stopped, so it is safe to close the
+     * pool here.
+     * <p>
+     * Subclasses that create a pool per test method <b>must</b> override this: the Testcontainers database is
+     * shared by every test in the class, so a pool left open per method eventually exhausts its max_connections.
+     */
+    protected void releaseTestResources() {
     }
 
     protected abstract void disruptDatabaseConnection();
@@ -163,7 +175,7 @@ public abstract class DistributedCompetingConsumersDurableQueuesIT<DURABLE_QUEUE
         // Check no messages are delivered after our assertions
         Awaitility.await()
                   .during(Duration.ofMillis(1990))
-                  .atMost(Duration.ofSeconds(2000))
+                  .atMost(Duration.ofSeconds(60))
                   .until(() -> recordingQueueMessageHandler1.messages.size() + recordingQueueMessageHandler2.messages.size() == NUMBER_OF_MESSAGES);
         consumer1.cancel();
         consumer2.cancel();

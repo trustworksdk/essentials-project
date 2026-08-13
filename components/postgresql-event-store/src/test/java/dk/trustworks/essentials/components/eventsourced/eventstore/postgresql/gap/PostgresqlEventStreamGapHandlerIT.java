@@ -65,7 +65,7 @@ class PostgresqlEventStreamGapHandlerIT {
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("event-store")
             .withUsername("test-user")
             .withPassword("secret-password");

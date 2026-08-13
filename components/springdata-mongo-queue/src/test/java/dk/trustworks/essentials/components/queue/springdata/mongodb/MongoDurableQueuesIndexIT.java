@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.springdata.mongodb;
 
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.mongodb.test.autoconfigure.DataMongoTest;
@@ -38,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 public class MongoDurableQueuesIndexIT {
     @Container
-    static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:latest");
+    static MongoDBContainer mongoDBContainer = new MongoDBContainer(EssentialsTestContainers.MONGO_IMAGE);
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {
