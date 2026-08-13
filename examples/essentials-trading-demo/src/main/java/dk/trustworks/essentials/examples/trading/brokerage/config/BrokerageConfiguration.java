@@ -16,28 +16,29 @@
 
 package dk.trustworks.essentials.examples.trading.brokerage.config;
 
+import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
 import dk.trustworks.essentials.components.eventsourced.aggregates.closingbooks.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.*;
-import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory;
 import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.HandleAwareUnitOfWorkFactory;
+import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Settlement;
+import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Settlements;
+import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Trade;
+import dk.trustworks.essentials.examples.trading.brokerage.aggregates.Trades;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccount;
 import dk.trustworks.essentials.examples.trading.brokerage.aggregates.TradingAccounts;
 import dk.trustworks.essentials.examples.trading.brokerage.events.TradingAccountEvent;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountGenerationId;
 import dk.trustworks.essentials.examples.trading.brokerage.types.TradingAccountId;
 import io.micrometer.core.instrument.MeterRegistry;
-import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.annotation.AnnotationUtils;
 
-import java.time.Clock;
 import java.util.Optional;
 
 /**
@@ -57,142 +58,77 @@ import java.util.Optional;
 public class BrokerageConfiguration {
 
     /**
-     * Publishes the policies {@link TradingAccount} declares to the policy registries, which is what the admin API's
-     * lifecycle endpoints report.
+     * Declares this context's aggregates, which is what makes the {@code @AggregateSnapshotPolicy} and
+     * {@code @AggregateClosingBooksPolicy} on {@link TradingAccount} take effect.
      * <p>
-     * The framework only registers these from its two bean post-processors, so the annotations reach a registry only
-     * when the annotated class is itself a Spring bean. An aggregate root is not — a singleton instance of one would be
-     * meaningless — so the annotations on TradingAccount would otherwise be inert and the console would show no
-     * policies. The annotation stays the single source of the values; this only carries them across.
+     * The framework registers those annotations from bean post-processors, which only observe Spring beans. An
+     * aggregate root is not one — a singleton instance of one would be meaningless — so without a declaration the
+     * annotations reach no registry, the admin console shows no policies, and nothing says why. Each bounded context
+     * declares its own aggregates; every {@code EssentialsAggregateDeclarations} bean in the context is merged.
+     * <p>
+     * {@code Trade} and {@code Settlement} carry no policy today and are declared anyway, so that adding one later is
+     * enough on its own.
      */
     @Bean
-    public InitializingBean tradingAccountPolicyRegistrations(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
-                                                              AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry) {
-        return () -> {
-            var snapshotPolicy = AnnotationUtils.findAnnotation(TradingAccount.class,
-                                                                AggregateSnapshotPolicy.class);
-            if (snapshotPolicy != null) {
-                snapshotPolicyRegistry.register(new AggregateSnapshotPolicyDescriptor(TradingAccount.class,
-                                                                                      Optional.of(TradingAccounts.AGGREGATE_TYPE.toString()),
-                                                                                      snapshotPolicy));
-            }
-            var closingBooksPolicy = AnnotationUtils.findAnnotation(TradingAccount.class,
-                                                                    AggregateClosingBooksPolicy.class);
-            if (closingBooksPolicy != null) {
-                closingBooksPolicyRegistry.register(new AggregateClosingBooksPolicyDescriptor(TradingAccount.class,
-                                                                                              Optional.of(TradingAccounts.AGGREGATE_TYPE.toString()),
-                                                                                              closingBooksPolicy));
-            }
-        };
+    public EssentialsAggregateDeclarations brokerageAggregates() {
+        return EssentialsAggregateDeclarations.builder()
+                                             .declare(TradingAccounts.AGGREGATE_TYPE, TradingAccount.class)
+                                             .declare(Trades.AGGREGATE_TYPE, Trade.class)
+                                             .declare(Settlements.AGGREGATE_TYPE, Settlement.class)
+                                             .build();
     }
 
+    /**
+     * The generation repository, the coordinator and the admin API's generation access for {@link TradingAccount},
+     * assembled from the two id types.
+     * <p>
+     * The meter registry matters because TradingAccounts roll over via {@code ON_ACCESS}, which never runs a scheduled
+     * scan — the coordinator is the only place the rollover can be measured, so the registry has to reach it for the
+     * admin UI's closing-books statistics to show anything.
+     */
     @Bean
-    public PostgresqlClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository(
-            HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
-        return new PostgresqlClosingBooksGenerationRepository<>(unitOfWorkFactory,
-                                                                Optional.empty(),
-                                                                logicalAggregateIdSerializer());
-    }
-
-    @Bean
-    public TypedAggregateClosingBooksGenerationAccess<TradingAccountId> tradingAccountClosingBooksGenerationAccess(
-            ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository) {
-        return new TypedAggregateClosingBooksGenerationAccess<>() {
-            @Override
-            public AggregateType aggregateType() {
-                return TradingAccounts.AGGREGATE_TYPE;
-            }
-
-            @Override
-            public Class<?> aggregateImplementationType() {
-                return TradingAccount.class;
-            }
-
-            @Override
-            public ClosingBooksGenerationRepository<TradingAccountId> generationRepository() {
-                return tradingAccountGenerationRepository;
-            }
-
-            @Override
-            public ClosingBooksLogicalAggregateIdSerializer<TradingAccountId> logicalAggregateIdSerializer() {
-                return BrokerageConfiguration.logicalAggregateIdSerializer();
-            }
-        };
-    }
-
-    @Bean
-    public ClosingBooksCoordinator<TradingAccountId> tradingAccountClosingBooksCoordinator(
-            ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository,
+    public ClosingBooksSetup<TradingAccountId, TradingAccountGenerationId> tradingAccountClosingBooks(
             HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
             Optional<MeterRegistry> meterRegistry) {
-        // TradingAccounts roll over via ON_ACCESS, which never runs a scheduled scan - the coordinator is the
-        // only place the rollover can be measured, so the registry has to reach it for the admin UI's
-        // closing-books statistics to show anything.
-        return new ClosingBooksCoordinator<>(TradingAccounts.AGGREGATE_TYPE,
-                                             tradingAccountGenerationRepository,
-                                             // The <logicalId>#<generation> convention lives on the id type, which is
-                                             // also what the account_statement view parses it back out with. It used to
-                                             // be written here and re-derived there, with nothing tying the two together.
-                                             (aggregateType, logicalAggregateId, generation) ->
-                                                     TradingAccountGenerationId.of(logicalAggregateId.value(), generation).toString(),
-                                             unitOfWorkFactory,
-                                             Clock.systemUTC(),
-                                             meterRegistry);
+        return ClosingBooksSetup.<TradingAccountId, TradingAccountGenerationId>builder(TradingAccounts.AGGREGATE_TYPE,
+                                                                                      TradingAccount.class)
+                                .setLogicalAggregateIdType(TradingAccountId.class)
+                                .setStreamIdType(TradingAccountGenerationId.class)
+                                // NOT the framework default, which concatenates '#' itself: the <logicalId>#<generation>
+                                // convention lives on the id type, which is also what the account_statement view parses
+                                // it back out with. Keeping it here is what stops the two drifting apart.
+                                .setStreamIdGenerator((aggregateType, logicalAggregateId, generation) ->
+                                                              TradingAccountGenerationId.of(logicalAggregateId.value(), generation).toString())
+                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                .setMeterRegistry(meterRegistry)
+                                .build();
+    }
+
+    /**
+     * The setup's generation repository, published as its own bean because the load generator, the startup runner and
+     * the application test read generation metadata directly.
+     */
+    @Bean
+    public ClosingBooksGenerationRepository<TradingAccountId> tradingAccountGenerationRepository(
+            ClosingBooksSetup<TradingAccountId, TradingAccountGenerationId> tradingAccountClosingBooks) {
+        return tradingAccountClosingBooks.generationRepository();
     }
 
     @Bean
     public StatefulAggregateRepository<TradingAccountGenerationId, TradingAccountEvent, TradingAccount> tradingAccountStreamRepository(
             ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
             Optional<AggregateSnapshotRepositoryProvider> aggregateSnapshotRepositoryProvider) {
-        return aggregateSnapshotRepositoryProvider
-                .map(provider -> StatefulAggregateRepository.fromUsingSnapshotRepositoryProvider(
-                        eventStore,
-                        TradingAccounts.AGGREGATE_TYPE,
-                        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                        TradingAccount.class,
-                        provider))
-                .orElseGet(() -> StatefulAggregateRepository.from(
-                        eventStore,
-                        TradingAccounts.AGGREGATE_TYPE,
-                        StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
-                        TradingAccount.class));
+        return StatefulAggregateRepository.builder(eventStore)
+                                         .setAggregateType(TradingAccounts.AGGREGATE_TYPE)
+                                         .setAggregateImplementationType(TradingAccount.class)
+                                         .setAggregateSnapshotRepositoryProvider(aggregateSnapshotRepositoryProvider)
+                                         .build();
     }
 
     @Bean
     public ClosingBooksLogicalAggregateRepository<TradingAccountId, TradingAccountGenerationId, TradingAccountEvent, TradingAccount> tradingAccountRepository(
-            StatefulAggregateRepository<TradingAccountGenerationId, TradingAccountEvent, TradingAccount> tradingAccountStreamRepository,
-            ClosingBooksCoordinator<TradingAccountId> tradingAccountClosingBooksCoordinator) {
-        return new ClosingBooksLogicalAggregateRepository<>(TradingAccounts.AGGREGATE_TYPE,
-                                                           tradingAccountStreamRepository,
-                                                           tradingAccountClosingBooksCoordinator,
-                                                           new ClosingBooksStreamIdSerializer<>() {
-                                                               @Override
-                                                               public String serialize(TradingAccountGenerationId streamId) {
-                                                                   return streamId.toString();
-                                                               }
-
-                                                               @Override
-                                                               public TradingAccountGenerationId deserialize(String persistedStreamId) {
-                                                                   return TradingAccountGenerationId.of(persistedStreamId);
-                                                               }
-                                                           });
-    }
-
-    /**
-     * One definition, used by both the generation repository and the generation-access bean. These were two identical
-     * anonymous classes before.
-     */
-    private static ClosingBooksLogicalAggregateIdSerializer<TradingAccountId> logicalAggregateIdSerializer() {
-        return new ClosingBooksLogicalAggregateIdSerializer<>() {
-            @Override
-            public String serialize(LogicalAggregateId<TradingAccountId> logicalAggregateId) {
-                return logicalAggregateId.value().toString();
-            }
-
-            @Override
-            public LogicalAggregateId<TradingAccountId> deserialize(String persistedValue) {
-                return new LogicalAggregateId<>(TradingAccountId.of(persistedValue));
-            }
-        };
+            ClosingBooksSetup<TradingAccountId, TradingAccountGenerationId> tradingAccountClosingBooks,
+            StatefulAggregateRepository<TradingAccountGenerationId, TradingAccountEvent, TradingAccount> tradingAccountStreamRepository) {
+        return tradingAccountClosingBooks.logicalAggregateRepository(tradingAccountStreamRepository);
     }
 }

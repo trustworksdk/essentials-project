@@ -30,10 +30,19 @@ Two ITs in `...boot.autoconfigure.postgresql.eventstore`:
 
 Both ITs use `ApplicationContextRunner` (not `@SpringBootTest`) — context starts/stops per test case, allowing property variation without container restart.
 
+## Aggregate Lifecycle Wiring
+
+| Bean | Role |
+|---|---|
+| `AggregateDeclarationPolicyRegistrar` | Copies `@AggregateSnapshotPolicy` / `@AggregateClosingBooksPolicy` off every `EssentialsAggregateDeclarations`-declared aggregate class into the two policy registries. Without it those annotations reach nothing, because the framework's policy `BeanPostProcessor`s only see Spring beans and an aggregate root is not one |
+| `aggregateLifecycleConfigurationValidator` | Takes the registrar as an unused parameter to keep the ordering dependency visible. The ordering itself holds because the registrar is an `InitializingBean` and the validator validates from `afterSingletonsInstantiated()` |
+| `aggregateClosingBooksGenerationAccessProvider` | Concatenates directly-registered `TypedAggregateClosingBooksGenerationAccess` beans with `ClosingBooksSetup::generationAccess` from every `ClosingBooksSetup` bean, so builder-based apps get working admin-API generation endpoints for free |
+
 ## Extension Points
 
 Override any `@ConditionalOnMissingBean` to replace defaults:
 
+- `EssentialsAggregateDeclarations` (any number of beans) — declare `(AggregateType, impl class)` pairs so policy annotations take effect
 - `PersistableEventMapper` — custom event→`PersistableEvent` mapping (enrich meta, correlation, tenant)
 - `PersistableEventEnricher` (list) — post-mapper enrichment chain; discovered automatically
 - `EventStoreInterceptor` (list) — interceptors added to event store; all discovered beans are added

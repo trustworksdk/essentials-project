@@ -28,7 +28,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.Optional;
 
-import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
@@ -49,29 +48,25 @@ public class InstrumentPrices {
 
     /**
      * {@link InstrumentPrice} declares an {@link dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicy},
-     * and {@code MarketDataConfiguration.instrumentPricePolicyRegistrations} publishes it so the admin console reports
-     * it. The policy only takes effect on the <em>load</em> path when the repository is built with the snapshot
-     * repository provider, so this wrapper has to resolve it -- a plain
-     * {@link StatefulAggregateRepository#from} passes a null snapshot repository and every load replays the whole
-     * stream, which is quadratic under the price-stress runs this aggregate exists to demonstrate.
+     * and {@code MarketDataConfiguration.marketDataAggregates} declares the aggregate so that policy reaches the
+     * registry the admin console reads. The policy only takes effect on the <em>load</em> path when the repository is
+     * built with the snapshot repository provider, so this wrapper has to resolve it -- a repository built without one
+     * passes a null snapshot repository and every load replays the whole stream, which is quadratic under the
+     * price-stress runs this aggregate exists to demonstrate.
      *
-     * <p>The provider is {@link Optional} because it is only present when snapshot support is configured; without it
-     * the repository degrades to the plain form rather than failing to start.
+     * <p>The provider is {@link Optional} because it is only present when snapshot support is configured. Passing the
+     * {@code Optional} straight to the builder is what keeps that a single expression: an empty one yields the plain
+     * repository rather than failing to start.
      */
     public InstrumentPrices(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                             Optional<AggregateSnapshotRepositoryProvider> aggregateSnapshotRepositoryProvider) {
         requireNonNull(eventStore, "No eventStore provided");
         requireNonNull(aggregateSnapshotRepositoryProvider, "No aggregateSnapshotRepositoryProvider provided");
-        repository = aggregateSnapshotRepositoryProvider
-                .map(provider -> StatefulAggregateRepository.fromUsingSnapshotRepositoryProvider(eventStore,
-                                                                                                 AGGREGATE_TYPE,
-                                                                                                 reflectionBasedAggregateRootFactory(),
-                                                                                                 InstrumentPrice.class,
-                                                                                                 provider))
-                .orElseGet(() -> StatefulAggregateRepository.from(eventStore,
-                                                                  AGGREGATE_TYPE,
-                                                                  reflectionBasedAggregateRootFactory(),
-                                                                  InstrumentPrice.class));
+        repository = StatefulAggregateRepository.builder(eventStore)
+                                               .setAggregateType(AGGREGATE_TYPE)
+                                               .setAggregateImplementationType(InstrumentPrice.class)
+                                               .setAggregateSnapshotRepositoryProvider(aggregateSnapshotRepositoryProvider)
+                                               .build();
     }
 
     public InstrumentPrice getPrice(InstrumentId instrumentId) {

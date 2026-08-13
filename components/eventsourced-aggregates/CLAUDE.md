@@ -47,6 +47,10 @@ Aggregate patterns (stateful, flex, decider, event-stream) layered on top of the
 | `PostgresqlAggregateSnapshotJobProcessor` / `DurableAsyncSnapshotManager` | Batch processor + polling `Lifecycle`. delete + save + markCompleted run in ONE UoW; `PROCESSING` rows past `processingTimeout` are reclaimed |
 | `AggregateSnapshotStateAdapter` | Aggregate ↔ serialized state. `DefaultAggregateSnapshotStateAdapter` uses Objenesis directly, with a Jackson empty-JSON fallback |
 | `LogicalAggregateId<ID>` / `AggregateGeneration<ID>` | Stable business id vs. one `(generation, streamAggregateId, state)` row per generation |
+| `AggregateDeclaration` / `EssentialsAggregateDeclarations` | The `(AggregateType, impl class)` pair an application declares; the only thing that makes the policy annotations on an aggregate root reach a registry. Spring-free by design so non-Spring users get the same path |
+| `ClosingBooksIdSerializer<ID>` | One `ID ↔ String` mapping serving both closing-books id roles — logical aggregate id and generation stream id. `serializeLogicalAggregateId` / `deserializeLogicalAggregateId` are `default` methods derived from the raw pair, so implementers write only `serialize`/`deserialize`. `forType(...)` derives both from the id type via `ClosingBooksIdSerializers` |
+| `ClosingBooksSetup` / `ClosingBooksSetupBuilder` | Assembles generation repository + coordinator + derived `generationAccess()` for one aggregate type. `logicalAggregateRepository(delegate)` stays a caller-supplied step because only the app has the delegate |
+| `StatefulAggregateRepositoryBuilder` | Named alternative to the twelve `from(...)` overloads; `Optional`-aware snapshot provider |
 | `ClosingBooksCoordinator<ID>` | Generation lifecycle for one `AggregateType`; `closeAndOpenNextGeneration` runs close+open in a single UoW |
 | `ClosingBooksLogicalAggregateRepository` | The consumer-facing seam — 4 type params `<LOGICAL_ID, STREAM_ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>`; keeps callers on logical ids |
 | `ClosingBooksStatefulAggregateRepository` | Thinner variant: resolves the open generation's stream id and delegates |
@@ -68,6 +72,7 @@ Aggregate patterns (stateful, flex, decider, event-stream) layered on top of the
 
 ## Extension Points
 
+- `EssentialsAggregateDeclarations` — declare `(AggregateType, impl class)` pairs; **required** for `@AggregateSnapshotPolicy` / `@AggregateClosingBooksPolicy` to take effect
 - `StatefulAggregateInstanceFactory` — plug in custom aggregate construction (e.g. CDI/Spring injection at instantiation time)
 - `AggregateSnapshotRepository` — implement alternative snapshot backends
 - `AggregateSnapshotStore` — alternative storage under the policy-driven repositories
@@ -77,7 +82,7 @@ Aggregate patterns (stateful, flex, decider, event-stream) layered on top of the
 - `AggregateSnapshotDeletionStrategy` — custom retention policy
 - `ClosingBooksDecisionPolicy<ID,AGGREGATE>` — custom rollover rule; compose via `ClosingBooksDecisionPolicies`
 - `ClosingBooksGenerationResolver` / `ClosingBooksOpenGenerationRepository` — alternative generation storage
-- `ClosingBooksStreamIdGenerator` / `ClosingBooksStreamIdSerializer` — how a generation names its event stream
+- `ClosingBooksStreamIdGenerator` / `ClosingBooksIdSerializer` — how a generation names its event stream
 - `TypedClosingBooksNextGenerationFactory` — carry-forward state into the newly opened generation
 - `HasClosingBooksPeriodId` — aggregate contract for time-boundary policies
 - `AggregateArchiveExporter` / `AggregateArchiveDestination` / `AggregateArchiveRegistry` — archive format, sink and bookkeeping
@@ -88,6 +93,9 @@ Aggregate patterns (stateful, flex, decider, event-stream) layered on top of the
 
 ## Gotchas
 
+- **A policy annotation on an aggregate root does nothing until the aggregate is declared** — `AggregateSnapshotPolicyBeanPostProcessor` / `AggregateClosingBooksPolicyBeanPostProcessor` only observe **Spring beans**, and an aggregate root is not one (a singleton `Order` is meaningless). The fix is an `EssentialsAggregateDeclarations` bean; the starter's `AggregateDeclarationPolicyRegistrar` then copies the annotations into the registries. Undeclared → no registry entry, no admin-API lifecycle data, **no error**. Registering the aggregate as a bean also works but is the older workaround
+- **Registration must precede validation** — the registrar is an `InitializingBean` precisely because `DefaultAggregateLifecycleConfigurationValidator` validates from `afterSingletonsInstantiated()`; every `InitializingBean` has run by then. Moving registration into a `SmartInitializingSingleton` would put both in the same phase, ordered only by bean-registration order, and a registrar running second would let validation pass over empty registries. `AggregateDeclarationPolicyRegistrarTest` asserts the *failure* of an invalid declared policy for exactly this reason — asserting success would go green-on-broken
+- **`ClosingBooksSetupBuilder`'s default stream-id generator is `id#generation`** — framework-owned since Phase 3 of the aggregate-configuration-ergonomics work. An application with persisted stream ids in another format must keep calling `setStreamIdGenerator(...)`; the default is documented, not silent
 - **UoW required for load/save** — `DefaultStatefulAggregateRepository` calls `eventStore.getUnitOfWorkFactory().getRequiredUnitOfWork()`; no UoW → exception. Load inside UoW scope always.
 - **Second load of same ID in same UoW returns cached instance** — repository checks `unitOfWorkCallback` resources first. Mutations on the first-loaded instance are reflected; don't expect two independent copies.
 - **Objenesis factory skips constructors/field init** — `ObjenesisAggregateInstanceFactory` calls no constructors. Classic `AggregateRoot` lazy-initialises its invoker in `applyRehydratedEventToTheAggregate`; custom aggregates must do same. Modern `AggregateRoot` requires ID constructor → use `reflectionBasedAggregateRootFactory()` instead.

@@ -43,7 +43,7 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
     private final AggregateType                                                           aggregateType;
     private final StatefulAggregateRepository<STREAM_ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> delegate;
     private final ClosingBooksCoordinator<LOGICAL_ID>                                     coordinator;
-    private final ClosingBooksStreamIdSerializer<STREAM_ID>                               streamIdSerializer;
+    private final ClosingBooksIdSerializer<STREAM_ID>                               streamIdSerializer;
 
     /**
      * Constructs an instance of ClosingBooksLogicalAggregateRepository.
@@ -56,7 +56,7 @@ public class ClosingBooksLogicalAggregateRepository<LOGICAL_ID,
     public ClosingBooksLogicalAggregateRepository(AggregateType aggregateType,
                                                   StatefulAggregateRepository<STREAM_ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE> delegate,
                                                   ClosingBooksCoordinator<LOGICAL_ID> coordinator,
-                                                  ClosingBooksStreamIdSerializer<STREAM_ID> streamIdSerializer) {
+                                                  ClosingBooksIdSerializer<STREAM_ID> streamIdSerializer) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.delegate = requireNonNull(delegate, "No delegate provided");
         this.coordinator = requireNonNull(coordinator, "No coordinator provided");

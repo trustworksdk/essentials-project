@@ -59,7 +59,7 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private final String                                                        tableName;
-    private final ClosingBooksLogicalAggregateIdSerializer<ID>                  logicalAggregateIdSerializer;
+    private final ClosingBooksIdSerializer<ID>                                  logicalAggregateIdSerializer;
     private final String                                                        oneOpenGenerationIndexName;
     /** Postgres' default name for the unnamed PRIMARY KEY declared by {@link #initializeStorage()}. */
     private final String                                                        primaryKeyName;
@@ -110,7 +110,7 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
      */
     public PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                       Optional<String> tableName,
-                                                      ClosingBooksLogicalAggregateIdSerializer<ID> logicalAggregateIdSerializer) {
+                                                      ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.tableName = requireNonNull(tableName, "No tableName provided").orElse(DEFAULT_TABLE_NAME).toLowerCase();
         this.logicalAggregateIdSerializer = requireNonNull(logicalAggregateIdSerializer, "No logicalAggregateIdSerializer provided");
@@ -265,7 +265,7 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
             }
             return query.map((rs, ctx) -> mapAggregateGeneration(rs,
                                                                  aggregateType,
-                                                                 logicalAggregateIdSerializer.deserialize(rs.getString("logical_aggregate_id"))))
+                                                                 logicalAggregateIdSerializer.deserializeLogicalAggregateId(rs.getString("logical_aggregate_id"))))
                         .list();
         });
     }
@@ -428,7 +428,7 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
     }
 
     private String serializeLogicalAggregateId(LogicalAggregateId<ID> logicalAggregateId) {
-        return logicalAggregateIdSerializer.serialize(logicalAggregateId);
+        return logicalAggregateIdSerializer.serializeLogicalAggregateId(logicalAggregateId);
     }
 
     private AggregateGeneration<ID> mapAggregateGeneration(ResultSet rs,
@@ -444,7 +444,7 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
     }
 
     @SuppressWarnings("unchecked")
-    private static <ID> ClosingBooksLogicalAggregateIdSerializer<ID> defaultLogicalAggregateIdSerializer() {
-        return (ClosingBooksLogicalAggregateIdSerializer<ID>) ClosingBooksLogicalAggregateIdSerializer.stringBased();
+    private static <ID> ClosingBooksIdSerializer<ID> defaultLogicalAggregateIdSerializer() {
+        return (ClosingBooksIdSerializer<ID>) ClosingBooksIdSerializer.stringBased();
     }
 }

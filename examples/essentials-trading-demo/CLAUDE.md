@@ -30,6 +30,13 @@ lane. Do **not** convert to `Decider`s.
 
 - **Event-type FQCNs changed in the slice refactor.** Essentials persists the concrete class name; no
   upcasting is provided. An existing demo database is unreadable — `docker compose down -v` first.
+- **A policy annotation only takes effect if the aggregate is declared.** Each context has one
+  `EssentialsAggregateDeclarations` bean (`brokerageAggregates`, `marketDataAggregates`); the starter's registrar reads
+  `@AggregateSnapshotPolicy` / `@AggregateClosingBooksPolicy` off the declared classes. Undeclared → the annotation is
+  inert, the admin console shows no policy, and nothing errors. This replaced two hand-written `InitializingBean`s.
+- **`BrokerageConfiguration` sets an explicit `setStreamIdGenerator(...)` on purpose.** `ClosingBooksSetup`'s default
+  would concatenate `#` itself and produce the same string, but the convention lives on
+  `TradingAccountGenerationId` so the projection that parses it back cannot drift from the writer.
 - **`TradingAccount` has two ids.** `TradingAccountGenerationId` is the *stream* id and the aggregate id;
   `TradingAccountId` is the logical business id spanning generations. Reached through
   `ClosingBooksLogicalAggregateRepository`, not a plain `StatefulAggregateRepository`.

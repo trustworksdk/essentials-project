@@ -16,17 +16,13 @@
 
 package dk.trustworks.essentials.examples.trading.market_data.config;
 
-import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicy;
-import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicyDescriptor;
-import dk.trustworks.essentials.components.eventsourced.aggregates.snapshot.AggregateSnapshotPolicyRegistry;
+import dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations;
+import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instrument;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrice;
 import dk.trustworks.essentials.examples.trading.market_data.aggregates.InstrumentPrices;
-import org.springframework.beans.factory.InitializingBean;
+import dk.trustworks.essentials.examples.trading.market_data.aggregates.Instruments;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.annotation.AnnotationUtils;
-
-import java.util.Optional;
 
 /**
  * Spring wiring for the {@code market_data} bounded context.
@@ -38,25 +34,22 @@ import java.util.Optional;
 public class MarketDataConfiguration {
 
     /**
-     * Carries {@link InstrumentPrice}'s declared snapshot policy into the registry the admin console reads.
+     * Declares this context's aggregates, which is what carries {@link InstrumentPrice}'s declared snapshot policy into
+     * the registry the admin console reads.
      * <p>
-     * Same reason as the brokerage context's equivalent: the framework registers these from a bean post-processor, and
-     * an aggregate root is not a Spring bean, so the annotation would otherwise be inert.
+     * Same reason as the brokerage context's equivalent: the framework registers these annotations from a bean
+     * post-processor, and an aggregate root is not a Spring bean, so without a declaration the annotation is inert and
+     * nothing says so. Each context declares its own aggregates; the declarations from every context are merged.
      * <p>
-     * Note that this only publishes the policy to the console. What causes snapshots to actually be written and read
-     * is {@code InstrumentPrices} building its repository through the {@code AggregateSnapshotRepositoryProvider} —
-     * the two are separate wiring steps and registering here without doing that leaves the policy inert.
+     * Note that declaring only publishes the policy. What causes snapshots to actually be written and read is
+     * {@code InstrumentPrices} building its repository through the {@code AggregateSnapshotRepositoryProvider} — the two
+     * are separate wiring steps, and declaring without doing that leaves the policy inert.
      */
     @Bean
-    public InitializingBean instrumentPricePolicyRegistrations(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry) {
-        return () -> {
-            var snapshotPolicy = AnnotationUtils.findAnnotation(InstrumentPrice.class,
-                                                                AggregateSnapshotPolicy.class);
-            if (snapshotPolicy != null) {
-                snapshotPolicyRegistry.register(new AggregateSnapshotPolicyDescriptor(InstrumentPrice.class,
-                                                                                      Optional.of(InstrumentPrices.AGGREGATE_TYPE.toString()),
-                                                                                      snapshotPolicy));
-            }
-        };
+    public EssentialsAggregateDeclarations marketDataAggregates() {
+        return EssentialsAggregateDeclarations.builder()
+                                            .declare(InstrumentPrices.AGGREGATE_TYPE, InstrumentPrice.class)
+                                            .declare(Instruments.AGGREGATE_TYPE, Instrument.class)
+                                            .build();
     }
 }

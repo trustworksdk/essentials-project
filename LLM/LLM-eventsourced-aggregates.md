@@ -22,6 +22,7 @@
 - [Modern AggregateRoot (OOP)](#modern-aggregateroot-oop)
 - [FlexAggregate (Explicit Control)](#flexaggregate-explicit-control)
 - [StatefulAggregateRepository](#statefulaggregaterepository)
+- [Declaring Aggregates](#declaring-aggregates)
 - [Aggregate Snapshots](#aggregate-snapshots)
 - [Closing the Books](#closing-the-books)
 - [In-Memory Projections](#in-memory-projections)
@@ -605,7 +606,37 @@ var ordersRepository = StatefulAggregateRepository.from(
     Order.class,
     snapshotRepository
 );
+
+// With snapshots ONLY when a provider is configured - the common Spring shape.
+// Pass the injected Optional straight through instead of branching on it.
+var ordersRepository = StatefulAggregateRepository.from(
+    eventStore,
+    AggregateType.of("Orders"),
+    StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory(),
+    Order.class,
+    optionalSnapshotRepositoryProvider     // Optional<AggregateSnapshotRepositoryProvider>
+);
 ```
+
+**Builder** — preferred over picking one of the twelve `from(…)` overloads by argument list:
+
+```java
+var ordersRepository = StatefulAggregateRepository.builder(eventStore)
+                                                  .setAggregateType(AggregateType.of("Orders"))
+                                                  .setAggregateImplementationType(Order.class)
+                                                  .setAggregateSnapshotRepositoryProvider(optionalProvider)  // Optional-aware
+                                                  .build();
+```
+
+| Setter | Required | Default |
+|--------|----------|---------|
+| `setAggregateType` / `setEventStreamConfiguration` | one of the two | — |
+| `setAggregateImplementationType` | yes | — |
+| `setAggregateRootInstanceFactory` | no | `reflectionBasedAggregateRootFactory()` |
+| `setAggregateIdType` | no | resolved from the implementation type's generic parameters |
+| `setAggregateSnapshotRepositoryProvider` / `setAggregateSnapshotRepository` | no | no snapshots |
+
+`setAggregateSnapshotRepositoryProvider` accepts either the value or an `Optional`; an empty `Optional` yields a repository with no snapshot repository attached.
 
 ### Usage
 ```java
@@ -630,6 +661,38 @@ var maybeOrder = unitOfWorkFactory.withUnitOfWork(
 ```
 
 **Test refs**: `StatefulAggregateRepositoryIT`, `TransactionalBehaviorIT`
+
+---
+
+## Declaring Aggregates
+
+**Type**: `dk.trustworks.essentials.components.eventsourced.aggregates.EssentialsAggregateDeclarations`
+
+**Declare every aggregate whose class carries `@AggregateSnapshotPolicy` or `@AggregateClosingBooksPolicy`.** Without a
+declaration those annotations do nothing at all: the framework registers them from bean post-processors, which only
+observe **Spring beans**, and an aggregate root is not one — a singleton `Order` is meaningless. An undeclared aggregate
+therefore reaches no policy registry, the admin API's lifecycle endpoints report nothing, and **no error is raised**.
+
+```java
+@Bean
+EssentialsAggregateDeclarations tradingAggregates() {
+    return EssentialsAggregateDeclarations.builder()
+                                          .declare(TRADING_ACCOUNTS,  TradingAccount.class)
+                                          .declare(INSTRUMENT_PRICES, InstrumentPrice.class)
+                                          .declare(SETTLEMENTS,       Settlement.class)
+                                          .build();
+}
+```
+
+Any number of `EssentialsAggregateDeclarations` beans may exist; all are merged. Declaring one implementation class for
+two different `AggregateType`s is rejected — the policy registries are keyed by implementation class, so the second
+declaration would silently displace the first.
+
+The Spring Boot starter's `AggregateDeclarationPolicyRegistrar` reads the annotations off each declared class and
+registers the descriptors before configuration validation runs. The aggregate type is taken from the annotation's own
+`aggregateType()` attribute when set, otherwise from the declaration.
+
+**Test refs**: `EssentialsAggregateDeclarationsTest`, `AggregateDeclarationPolicyRegistrarTest`
 
 ---
 
@@ -755,6 +818,7 @@ Snapshots make a long stream cheaper to load; closing the books stops it growing
 | `AggregateGeneration<ID>` | `aggregateType`, `logicalAggregateId`, `generation`, `streamAggregateId`, `state`, `openedAt`, `closedAt` |
 | `GenerationState` | `OPEN` / `CLOSED` — exactly one `OPEN` at a time |
 | `ClosingBooksStreamIdGenerator` | logical id + generation → stream id, e.g. `Account-123#2` |
+| `ClosingBooksIdSerializer<ID>` | One `ID ↔ String` mapping, used for **both** closing-books id roles: the logical aggregate id (persisted in `logical_aggregate_id`) and the generation stream id. Use `forType(AccountId.class)` — it derives the strategy for `String`, `UUID`, `enum`, any `SingleValueType` (string- or number-backed), or a type with a `(String)` constructor / static `of(String)` / static `from(String)`, and fails immediately if it cannot. `of(serialize, deserialize)` for anything else, `stringBased()` for raw `String` ids. The `LogicalAggregateId` wrapping is handled by the `serializeLogicalAggregateId` / `deserializeLogicalAggregateId` default methods — never implement those |
 | `ClosingBooksGenerationResolver` → `ClosingBooksGenerationRepository` → `ClosingBooksOpenGenerationRepository` | Impls: `InMemoryClosingBooksGenerationResolver` (tests), `PostgresqlClosingBooksGenerationRepository` (table `aggregate_generations`) |
 
 ### Declaring a Policy
@@ -788,7 +852,51 @@ ClosingBooksDecisionPolicies.<String, Account>closeOnlyOnScheduledScan(Account::
 ClosingBooksDecisionPolicies.anyOf(a, b);   // also allOf, when, whenTriggeredBy, keepOpen, closeOnly, closeAndOpenNext
 ```
 
-### Repositories
+### Setup (preferred)
+`ClosingBooksSetup` assembles the generation repository, the coordinator and the admin API's generation access from the
+two id types. **`generationAccess()` is derived — never write one by hand.**
+
+```java
+@Bean
+ClosingBooksSetup<AccountId, AccountGenerationId> accountClosingBooks(
+        HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+        Optional<MeterRegistry> meterRegistry) {
+    return ClosingBooksSetup.<AccountId, AccountGenerationId>builder(ACCOUNTS, Account.class)
+                            .setLogicalAggregateIdType(AccountId.class)      // → ClosingBooksIdSerializer.forType(...)
+                            .setStreamIdType(AccountGenerationId.class)
+                            .setUnitOfWorkFactory(unitOfWorkFactory)
+                            .setMeterRegistry(meterRegistry)
+                            .build();
+}
+
+// The one part the framework cannot derive - it needs your StatefulAggregateRepository
+@Bean
+ClosingBooksLogicalAggregateRepository<AccountId, AccountGenerationId, AccountEvent, Account> accountRepository(
+        ClosingBooksSetup<AccountId, AccountGenerationId> setup,
+        StatefulAggregateRepository<AccountGenerationId, AccountEvent, Account> delegate) {
+    return setup.logicalAggregateRepository(delegate);
+}
+```
+
+| Setter | Required | Default |
+|--------|----------|---------|
+| `setLogicalAggregateIdType` / `setLogicalAggregateIdSerializer` | one of the two | — |
+| `setStreamIdType` / `setStreamIdSerializer` | one of the two | — |
+| `setUnitOfWorkFactory` | yes | — |
+| `setGenerationRepository` | no | `PostgresqlClosingBooksGenerationRepository` |
+| `setGenerationRepositoryTableName` | no | `aggregate_generations` |
+| `setStreamIdGenerator` | no | `logicalAggregateId + "#" + generation` |
+| `setClock` | no | `Clock.systemUTC()` |
+| `setMeterRegistry` | no | `Optional.empty()` — no metrics |
+
+⚠️ **The default stream-id generator is `id#generation`.** An application with existing persisted stream ids in another
+format MUST keep calling `setStreamIdGenerator(...)`.
+
+The Spring Boot starter feeds every `ClosingBooksSetup` bean's `generationAccess()` into
+`AggregateClosingBooksGenerationAccessProvider`, so the admin API's generation endpoints work with no extra wiring.
+Expose `setup.generationRepository()` or `setup.coordinator()` as beans if your own code needs them.
+
+### Repositories (manual assembly)
 ```java
 var coordinator = new ClosingBooksCoordinator<String>(AggregateType.of("Accounts"),
                                                       new PostgresqlClosingBooksGenerationRepository(unitOfWorkFactory),
@@ -797,7 +905,7 @@ var coordinator = new ClosingBooksCoordinator<String>(AggregateType.of("Accounts
 
 // <LOGICAL_ID, STREAM_ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE>
 var repository = new ClosingBooksLogicalAggregateRepository<String, String, AccountEvent, Account>(
-        AggregateType.of("Accounts"), delegateRepository, coordinator, ClosingBooksStreamIdSerializer.stringBased());
+        AggregateType.of("Accounts"), delegateRepository, coordinator, ClosingBooksIdSerializer.stringBased());
 
 unitOfWorkFactory.usingUnitOfWork(uow -> repository.load(new LogicalAggregateId<>("Account-123")).deposit(amount));
 ```
