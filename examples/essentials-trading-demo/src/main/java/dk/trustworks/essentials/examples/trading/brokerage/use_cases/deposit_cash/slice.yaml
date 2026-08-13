@@ -16,7 +16,7 @@ writes: [TradingAccount]
 reads:
   - { name: TradingAccount }
 endpoints:
-  - { method: POST, path: /api/admin/trading-accounts/{accountId}/deposits, auth: anonymous }
+  - { method: POST, path: "/api/admin/trading-accounts/{accountId}/deposits", auth: anonymous }
 invariants:
   - id: INV-DC-1
     text: "Nothing may be booked once the books are closed"

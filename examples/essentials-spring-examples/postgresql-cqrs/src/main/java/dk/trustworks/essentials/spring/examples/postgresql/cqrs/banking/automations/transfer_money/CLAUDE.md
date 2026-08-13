@@ -15,11 +15,15 @@
 **Reacts to / reads:** `IntraBankMoneyTransferRequested`, `IntraBankMoneyTransferStatusChanged`,
 `AccountWithdrawn`, `AccountDeposited` — the four states of one process, which is why they are four
 `@MessageHandler` methods on one processor rather than four slices.
-**Publishes:** nothing directly, and it **dispatches no commands**: each handler loads an aggregate
-through `Accounts` / `IntraBankMoneyTransfers` and calls a method on it, so events reach the store as a
-side effect of the aggregate. `dispatches` is absent from `slice.yaml` rather than filled with invented
-command types. Each handler writes exactly **one** aggregate, never two in the same transaction — which
-is why this is an automation rather than a command slice.
+**Publishes:** `AccountWithdrawn`, `AccountDeposited`, `IntraBankMoneyTransferStatusChanged` — not by the
+processor itself but by the aggregates it drives, which is the same indirection every command slice in
+these examples has and declares anyway. Three of them are also in `consumes`: this saga feeds itself, and
+`publishes` is what makes that loop visible instead of leaving the slice looking like it reacts to four
+events and does nothing.
+It **dispatches no commands**: each handler loads an aggregate through `Accounts` /
+`IntraBankMoneyTransfers` and calls a method on it, so `dispatches` stays absent from `slice.yaml` rather
+than being filled with invented command types. Each handler writes exactly **one** aggregate, never two in
+the same transaction — which is why this is an automation rather than a command slice.
 **Forbidden:**
   - Never import another slice's internals — only `banking/events/` and `banking/types/`.
   - An automation has no external API. Do not add a controller here.

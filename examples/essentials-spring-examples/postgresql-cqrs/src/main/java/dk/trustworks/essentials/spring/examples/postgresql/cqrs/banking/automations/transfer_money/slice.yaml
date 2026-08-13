@@ -13,6 +13,13 @@ consumes:
   - IntraBankMoneyTransferStatusChanged
   - AccountWithdrawn
   - AccountDeposited
+# Emitted by the aggregates this slice drives, not by the processor itself - declared here because this
+# slice is what causes them, and three of the four events it consumes are its own. Without them the
+# saga's loop is invisible on the slice map and account_balance's projection reads as a dangling consume.
+publishes:
+  - AccountWithdrawn
+  - AccountDeposited
+  - IntraBankMoneyTransferStatusChanged
 writes: [Account, IntraBankMoneyTransfer]
 reads:
   - { name: Account }

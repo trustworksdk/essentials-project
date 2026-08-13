@@ -16,7 +16,7 @@ writes: [TradingAccount]
 reads:
   - { name: TradingAccount }
 endpoints:
-  - { method: POST, path: /api/admin/trading-accounts/{accountId}/fund-reservations, auth: anonymous }
+  - { method: POST, path: "/api/admin/trading-accounts/{accountId}/fund-reservations", auth: anonymous }
 invariants:
   - id: INV-RSF-1
     text: "Funds may not be reserved beyond the cash that is not already reserved"
