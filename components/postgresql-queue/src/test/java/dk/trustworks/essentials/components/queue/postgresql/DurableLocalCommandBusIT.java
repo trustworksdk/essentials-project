@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.test.reactive.command.AbstractDurableLocalCommandBusIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
@@ -28,10 +29,7 @@ import org.testcontainers.junit.jupiter.*;
 @Testcontainers
 public abstract class DurableLocalCommandBusIT extends AbstractDurableLocalCommandBusIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
     @Container
-    protected final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("queue-db")
-            .withUsername("test-user")
-            .withPassword("secret-password");
+    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     /**
      * Determine whether to use the centralized message fetcher

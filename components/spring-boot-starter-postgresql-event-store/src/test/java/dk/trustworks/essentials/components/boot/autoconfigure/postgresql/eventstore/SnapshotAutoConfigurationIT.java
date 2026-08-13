@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SnapshotAutoConfigurationIT {
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("snapshot-starter-test-db")
             .withUsername("test-user")
             .withPassword("secret-password");

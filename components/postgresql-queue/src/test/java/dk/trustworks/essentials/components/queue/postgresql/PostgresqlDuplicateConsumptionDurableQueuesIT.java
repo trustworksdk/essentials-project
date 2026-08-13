@@ -24,7 +24,10 @@ import dk.trustworks.essentials.components.foundation.test.messaging.queue.Dupli
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.reactive.LocalEventBus;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
+
+import java.util.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
@@ -40,10 +43,11 @@ import java.time.Duration;
 abstract class PostgresqlDuplicateConsumptionDurableQueuesIT extends DuplicateConsumptionDurableQueuesIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
 
     @Container
-    protected final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("queue-db")
-            .withUsername("test-user")
-            .withPassword("secret-password");
+    protected static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
+
+    // This suite creates TWO unit-of-work factories per test (it simulates two nodes), so a single field
+    // would overwrite - and leak - the first pool. Track every pool created for the current test.
+    private final List<HikariDataSource> dataSources = new ArrayList<>();
 
     /**
      * Determine whether to use the centralized message fetcher.
@@ -103,14 +107,15 @@ abstract class PostgresqlDuplicateConsumptionDurableQueuesIT extends DuplicateCo
 
     @Override
     protected JdbiUnitOfWorkFactory createUnitOfWorkFactory() {
-        var ds = new HikariDataSource();
-        ds.setJdbcUrl(postgreSQLContainer.getJdbcUrl());
-        ds.setUsername(postgreSQLContainer.getUsername());
-        ds.setPassword(postgreSQLContainer.getPassword());
-        ds.setAutoCommit(false);
-        ds.setMaximumPoolSize(PARALLEL_CONSUMERS * 2 + 10); // Extra connections for both instances
+        var dataSource = new HikariDataSource();
+        dataSource.setJdbcUrl(postgreSQLContainer.getJdbcUrl());
+        dataSource.setUsername(postgreSQLContainer.getUsername());
+        dataSource.setPassword(postgreSQLContainer.getPassword());
+        dataSource.setAutoCommit(false);
+        dataSource.setMaximumPoolSize(PARALLEL_CONSUMERS * 2 + 10); // Extra connections for both instances
+        dataSources.add(dataSource);
 
-        return new JdbiUnitOfWorkFactory(Jdbi.create(ds));
+        return new JdbiUnitOfWorkFactory(Jdbi.create(dataSource));
     }
 
     @Override
@@ -118,4 +123,15 @@ abstract class PostgresqlDuplicateConsumptionDurableQueuesIT extends DuplicateCo
         unitOfWorkFactory.usingUnitOfWork(uow ->
                                                   uow.handle().execute("DROP TABLE IF EXISTS " + PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME));
     }
+
+    /**
+     * The container is shared by every test in this class, so the pool created per test method has to be closed
+     * again - otherwise PostgreSQL runs out of connections part-way through the class.
+     */
+    @Override
+    protected void releaseTestResources() {
+        dataSources.forEach(HikariDataSource::close);
+        dataSources.clear();
+    }
+
 }

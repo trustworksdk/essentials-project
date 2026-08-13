@@ -39,13 +39,21 @@ class DocumentDbRepositoryImplIT {
     private lateinit var visitRepository: DocumentDbRepository<Visit, VisitId>
     private lateinit var shippingOrderRepository: DocumentDbRepository<ShippingOrder, ShippingOrderId>
 
-    @Container
-    val postgresContainer: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:latest")
-        .apply {
-            withDatabaseName("testdb")
-            withUsername("test")
-            withPassword("test")
-        }
+    companion object {
+        /**
+         * Static, so the container starts once per class rather than once per test method. All DDL here is
+         * `CREATE TABLE/INDEX IF NOT EXISTS`, and [setup] wipes every repository before repopulating, so sharing one
+         * database across the methods of this class is safe.
+         */
+        @Container
+        @JvmStatic
+        val postgresContainer: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:18.4")
+            .apply {
+                withDatabaseName("testdb")
+                withUsername("test")
+                withPassword("test")
+            }
+    }
 
     @BeforeEach
     fun setup() {
@@ -77,6 +85,13 @@ class DocumentDbRepositoryImplIT {
 
         orderRepository.addIndex(Index(name = "city", listOf(Order::contactDetails then ContactDetails::address then Address::city)))
         orderRepository.addIndex(Index(name = "orderdate_amount", listOf(Order::orderDate.asProperty(), Order::amount.asProperty())))
+
+        // The container is shared by every test in this class, so clear what the previous test left behind before
+        // repopulating - otherwise rows accumulate and the count assertions drift.
+        orderRepository.deleteAll()
+        productRepository.deleteAll()
+        visitRepository.deleteAll()
+        shippingOrderRepository.deleteAll()
 
         populateTestData()
     }

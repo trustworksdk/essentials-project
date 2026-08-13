@@ -61,6 +61,18 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         if (durableQueues != null) {
             durableQueues.stop();
         }
+        releaseTestResources();
+    }
+
+    /**
+     * Hook for subclasses to release per-test resources - typically a JDBC connection pool created in
+     * {@code createUnitOfWorkFactory()}. Called after the queues have been stopped, so it is safe to close the
+     * pool here.
+     * <p>
+     * Subclasses that create a pool per test method <b>must</b> override this: the Testcontainers database is
+     * shared by every test in the class, so a pool left open per method eventually exhausts its max_connections.
+     */
+    protected void releaseTestResources() {
     }
 
     /**
@@ -273,7 +285,7 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         // When
         Awaitility.await()
                   .during(Duration.ofMillis(1990))
-                  .atMost(Duration.ofSeconds(2000))
+                  .atMost(Duration.ofSeconds(60))
                   .until(() -> recordingQueueMessageHandler.messages.size() == 0);
 
         consumer.cancel();
@@ -333,7 +345,7 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         var consumer                     = durableQueues.consumeFromQueue(queueName, RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), 1), 2, recordingQueueMessageHandler);
 
         // Then all key2 messages are delivered, but only messages with key_order < Key1Msg3 are delivered for key1
-        Awaitility.waitAtMost(Duration.ofSeconds(5000))
+        Awaitility.waitAtMost(Duration.ofSeconds(60))
                   .untilAsserted(() -> {
                       assertThat(recordingQueueMessageHandler.messages).hasSize(key2Messages.size() + 2); // + 2 for Key1Msg1 and Key1Msg2
                   });
@@ -346,7 +358,7 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         usingDurableQueue(() -> durableQueues.resurrectDeadLetterMessage(key1Msg3EntryId, Duration.ofMillis(10)));
 
         // Then the remaining key1 messages are delivered
-        Awaitility.waitAtMost(Duration.ofSeconds(2000))
+        Awaitility.waitAtMost(Duration.ofSeconds(60))
                   .untilAsserted(() -> {
                       // Some DurableQueues implementations may choose to mark messages as dead letter messages in case a message with the same key and a lower order is already marked as a dead letter message
                       // So in this case let's resurrect these messages

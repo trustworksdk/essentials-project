@@ -34,6 +34,18 @@ import java.util.stream.IntStream;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Bulk-path load suite: queues 20 000 messages and asserts the queued count, the batch fetch and that a consumer
+ * actually drains them.
+ * <p>
+ * <b>On by default</b>, unlike the latency and performance suites. It asserts real behaviour rather than printing
+ * measurements, and costs only a few seconds per implementation, so skipping it would be a genuine loss of coverage.
+ * Turn it off for a faster inner loop with {@code -Dloadtest.skip=true}.
+ * <p>
+ * <b>Every concrete subclass must carry {@code @DisabledIfSystemProperty(named = "loadtest.skip", matches = "true")}
+ * itself.</b> JUnit's condition annotations are not meta-annotated {@code @Inherited}, so putting it here would have
+ * no effect on subclasses.
+ */
 public abstract class DurableQueuesLoadIT<DURABLE_QUEUES extends DurableQueues, UOW extends UnitOfWork, UOW_FACTORY extends UnitOfWorkFactory<UOW>> {
     protected UOW_FACTORY          unitOfWorkFactory;
     protected DURABLE_QUEUES       durableQueues;
@@ -55,6 +67,18 @@ public abstract class DurableQueuesLoadIT<DURABLE_QUEUES extends DurableQueues, 
         if (durableQueues != null) {
             durableQueues.stop();
         }
+        releaseTestResources();
+    }
+
+    /**
+     * Hook for subclasses to release per-test resources - typically a JDBC connection pool created in
+     * {@code createUnitOfWorkFactory()}. Called after the queues have been stopped, so it is safe to close the
+     * pool here.
+     * <p>
+     * Subclasses that create a pool per test method <b>must</b> override this: the Testcontainers database is
+     * shared by every test in the class, so a pool left open per method eventually exhausts its max_connections.
+     */
+    protected void releaseTestResources() {
     }
 
     protected abstract DURABLE_QUEUES createDurableQueues(UOW_FACTORY unitOfWorkFactory);

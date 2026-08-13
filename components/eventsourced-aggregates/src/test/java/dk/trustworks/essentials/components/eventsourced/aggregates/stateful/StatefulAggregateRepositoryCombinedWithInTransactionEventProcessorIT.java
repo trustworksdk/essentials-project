@@ -58,7 +58,7 @@ public class StatefulAggregateRepositoryCombinedWithInTransactionEventProcessorI
     public static final  ProductId     AUTO_ADDED_PRODUCT_ID = ProductId.random();
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("event-store")
             .withUsername("test-user")
             .withPassword("secret-password");

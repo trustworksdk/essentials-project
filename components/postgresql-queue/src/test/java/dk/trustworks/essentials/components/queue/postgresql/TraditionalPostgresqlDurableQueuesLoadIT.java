@@ -16,9 +16,12 @@
 
 package dk.trustworks.essentials.components.queue.postgresql;
 
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+
 /**
  * Load testing with traditional queue consumers
  */
+@DisabledIfSystemProperty(named = "loadtest.skip", matches = "true")
 class TraditionalPostgresqlDurableQueuesLoadIT extends PostgresqlDurableQueuesLoadIT {
     @Override
     protected boolean useCentralizedMessageFetcher() {

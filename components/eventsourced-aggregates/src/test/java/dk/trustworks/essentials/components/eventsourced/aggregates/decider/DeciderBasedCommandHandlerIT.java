@@ -103,7 +103,7 @@ class DeciderBasedCommandHandlerIT {
     private             PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
 
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("event-store")
             .withUsername("test-user")
             .withPassword("secret-password");
@@ -315,7 +315,7 @@ class DeciderBasedCommandHandlerIT {
         assertThat(recordingLocalEventBusConsumer.afterCommitPersistedEvents.size()).isEqualTo(0);
         Awaitility.await()
                   .during(Duration.ofMillis(1990))
-                  .atMost(Duration.ofSeconds(2000))
+                  .atMost(Duration.ofSeconds(60))
                   .until(() -> asynchronousGameEventsReceived.isEmpty());
     }
 }

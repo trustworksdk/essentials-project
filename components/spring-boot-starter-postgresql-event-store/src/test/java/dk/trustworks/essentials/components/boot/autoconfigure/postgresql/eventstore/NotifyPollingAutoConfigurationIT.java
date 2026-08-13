@@ -63,7 +63,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class NotifyPollingAutoConfigurationIT {
 
     @Container
-    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    private static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("notify-polling-autoconfig-it")
             .withUsername("test-user")
             .withPassword("secret-password");

@@ -17,9 +17,11 @@
 package dk.trustworks.essentials.examples.trading.dashboard;
 
 /**
- * Snapshot summary for the dashboard.
+ * Snapshot summary for the dashboard, totalled across every snapshotting aggregate type the demo tracks.
+ *
+ * @param aggregateTypes comma-separated list of the aggregate types the counts below are summed over
  */
-public record DashboardSnapshotStatsView(String aggregateType,
+public record DashboardSnapshotStatsView(String aggregateTypes,
                                          long loadCount,
                                          long saveCount,
                                          long serializeCount,

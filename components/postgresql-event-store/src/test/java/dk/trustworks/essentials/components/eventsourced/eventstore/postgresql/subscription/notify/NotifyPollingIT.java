@@ -90,7 +90,7 @@ class NotifyPollingIT {
     private static final EventMetaData META_DATA = EventMetaData.of("k", "v");
 
     @Container
-    private final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:latest")
+    private final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("notify-polling-it")
             .withUsername("test-user")
             .withPassword("secret-password");

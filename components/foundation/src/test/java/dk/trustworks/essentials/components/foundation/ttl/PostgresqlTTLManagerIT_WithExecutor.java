@@ -35,7 +35,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 public class PostgresqlTTLManagerIT_WithExecutor extends AbstractTTLManagerTest {
 
     @Container
-    PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    static final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("test-db")
             .withUsername("postgres")
             .withPassword("postgres");

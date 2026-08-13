@@ -22,6 +22,7 @@ import dk.trustworks.essentials.examples.trading.accounts.TradingAccountAdminQue
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountClosingBooksPolicy;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoAggregateConfiguration;
+import dk.trustworks.essentials.examples.trading.prices.InstrumentPrice;
 import dk.trustworks.essentials.examples.trading.simulation.TradingDemoSimulationProperties;
 import dk.trustworks.essentials.examples.trading.simulation.TradingLoadGeneratorManager;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -32,14 +33,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * Read-only aggregation service for the lightweight demo dashboard.
  */
 @Service
 public class TradingDashboardQueryService {
-    private static final String SNAPSHOT_AGGREGATE_TYPE = TradingDemoAggregateConfiguration.TRADING_ACCOUNTS.toString();
-    private static final String SNAPSHOT_AGGREGATE_IMPL_TYPE = TradingAccount.class.getName();
+    /**
+     * The snapshot timers are tagged per aggregate type, so the dashboard has to name every snapshotting aggregate
+     * it wants counted. Reporting only TradingAccounts meant a price-stress run — the workload the InstrumentPrices
+     * aggregate exists to demonstrate — could never move any number on the Snapshots tab.
+     */
+    private static final List<SnapshotAggregate> SNAPSHOT_AGGREGATES = List.of(
+            new SnapshotAggregate(TradingDemoAggregateConfiguration.TRADING_ACCOUNTS.toString(), TradingAccount.class.getName()),
+            new SnapshotAggregate(TradingDemoAggregateConfiguration.INSTRUMENT_PRICES.toString(), InstrumentPrice.class.getName())
+    );
     private static final List<String> SNAPSHOT_METRIC_NAMES = List.of(
             "essentials.aggregate_snapshot.load_snapshot",
             "essentials.aggregate_snapshot.save_snapshot",
@@ -145,19 +154,22 @@ public class TradingDashboardQueryService {
     }
 
     private List<DashboardMetricSummaryView> snapshotMetrics() {
-        return meterRegistry.map(registry -> SNAPSHOT_METRIC_NAMES.stream()
-                                                                  .map(metricName -> toMetricSummary(registry, metricName))
-                                                                  .toList())
+        return meterRegistry.map(registry -> SNAPSHOT_AGGREGATES.stream()
+                                                                .flatMap(snapshotAggregate -> SNAPSHOT_METRIC_NAMES.stream()
+                                                                                                                   .map(metricName -> toMetricSummary(registry,
+                                                                                                                                                      snapshotAggregate,
+                                                                                                                                                      metricName)))
+                                                                .toList())
                             .orElseGet(List::of);
     }
 
-    private DashboardMetricSummaryView toMetricSummary(MeterRegistry registry, String metricName) {
+    private DashboardMetricSummaryView toMetricSummary(MeterRegistry registry, SnapshotAggregate snapshotAggregate, String metricName) {
         var timers = registry.find(metricName)
-                             .tag("aggregate_type", SNAPSHOT_AGGREGATE_TYPE)
-                             .tag("aggregate_impl_type", SNAPSHOT_AGGREGATE_IMPL_TYPE)
+                             .tag("aggregate_type", snapshotAggregate.aggregateType())
+                             .tag("aggregate_impl_type", snapshotAggregate.aggregateImplType())
                              .timers();
         if (timers.isEmpty()) {
-            return new DashboardMetricSummaryView(metricName, 0, 0, 0);
+            return new DashboardMetricSummaryView(snapshotAggregate.aggregateType(), metricName, 0, 0, 0);
         }
         long count = timers.stream()
                            .mapToLong(Timer::count)
@@ -169,7 +181,8 @@ public class TradingDashboardQueryService {
                              .mapToDouble(timer -> timer.max(TimeUnit.MILLISECONDS))
                              .max()
                              .orElse(0);
-        return new DashboardMetricSummaryView(metricName,
+        return new DashboardMetricSummaryView(snapshotAggregate.aggregateType(),
+                                              metricName,
                                               count,
                                               totalTimeMs,
                                               maxMs);
@@ -183,7 +196,9 @@ public class TradingDashboardQueryService {
         double totalObservedTimeMs = metricSummaries.stream()
                                                     .mapToDouble(DashboardMetricSummaryView::totalTimeMs)
                                                     .sum();
-        return new DashboardSnapshotStatsView(SNAPSHOT_AGGREGATE_TYPE,
+        return new DashboardSnapshotStatsView(SNAPSHOT_AGGREGATES.stream()
+                                                                 .map(SnapshotAggregate::aggregateType)
+                                                                 .collect(Collectors.joining(", ")),
                                               loadCount,
                                               saveCount,
                                               serializeCount,
@@ -194,8 +209,10 @@ public class TradingDashboardQueryService {
     private long countFor(List<DashboardMetricSummaryView> metricSummaries, String name) {
         return metricSummaries.stream()
                               .filter(metric -> metric.name().equals(name))
-                              .findFirst()
-                              .map(DashboardMetricSummaryView::count)
-                              .orElse(0L);
+                              .mapToLong(DashboardMetricSummaryView::count)
+                              .sum();
+    }
+
+    private record SnapshotAggregate(String aggregateType, String aggregateImplType) {
     }
 }

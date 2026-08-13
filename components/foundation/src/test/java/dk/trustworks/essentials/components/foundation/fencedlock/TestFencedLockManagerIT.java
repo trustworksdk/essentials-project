@@ -31,7 +31,7 @@ public class TestFencedLockManagerIT {
 
     @Container
     private static final PostgreSQLContainer<?> postgresContainer =
-            new PostgreSQLContainer<>("postgres:latest")
+            new PostgreSQLContainer<>("postgres:18.4")
                     .withDatabaseName("testdb")
                     .withUsername("user")
                     .withPassword("password");

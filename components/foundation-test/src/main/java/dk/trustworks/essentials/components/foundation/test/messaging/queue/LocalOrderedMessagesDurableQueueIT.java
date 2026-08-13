@@ -55,6 +55,18 @@ public abstract class LocalOrderedMessagesDurableQueueIT<DURABLE_QUEUES extends 
         if (durableQueues != null) {
             durableQueues.stop();
         }
+        releaseTestResources();
+    }
+
+    /**
+     * Hook for subclasses to release per-test resources - typically a JDBC connection pool created in
+     * {@code createUnitOfWorkFactory()}. Called after the queues have been stopped, so it is safe to close the
+     * pool here.
+     * <p>
+     * Subclasses that create a pool per test method <b>must</b> override this: the Testcontainers database is
+     * shared by every test in the class, so a pool left open per method eventually exhausts its max_connections.
+     */
+    protected void releaseTestResources() {
     }
 
     protected abstract DURABLE_QUEUES createDurableQueues(UOW_FACTORY unitOfWorkFactory);
@@ -187,7 +199,7 @@ public abstract class LocalOrderedMessagesDurableQueueIT<DURABLE_QUEUES extends 
         // Check no messages are delivered after our assertions
         Awaitility.await()
                   .during(Duration.ofMillis(1990))
-                  .atMost(Duration.ofSeconds(2000))
+                  .atMost(Duration.ofSeconds(60))
                   .until(() -> recordingQueueMessageHandler.messages.size() == NUMBER_OF_MESSAGES);
         consumer.cancel();
 

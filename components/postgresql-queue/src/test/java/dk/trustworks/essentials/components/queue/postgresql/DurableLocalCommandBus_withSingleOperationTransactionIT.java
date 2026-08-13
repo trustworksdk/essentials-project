@@ -19,6 +19,7 @@ package dk.trustworks.essentials.components.queue.postgresql;
 import dk.trustworks.essentials.components.foundation.messaging.queue.TransactionalMode;
 import dk.trustworks.essentials.components.foundation.test.reactive.command.AbstractDurableLocalCommandBusIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import org.jdbi.v3.core.Jdbi;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
@@ -28,10 +29,7 @@ import java.time.Duration;
 @Testcontainers
 public class DurableLocalCommandBus_withSingleOperationTransactionIT extends AbstractDurableLocalCommandBusIT<PostgresqlDurableQueues, GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork, JdbiUnitOfWorkFactory> {
     @Container
-    private final PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
-            .withDatabaseName("queue-db")
-            .withUsername("test-user")
-            .withPassword("secret-password");
+    private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("queue-db");
 
     @Override
     protected PostgresqlDurableQueues createDurableQueues(JdbiUnitOfWorkFactory unitOfWorkFactory) {

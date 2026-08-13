@@ -28,6 +28,7 @@ import dk.trustworks.essentials.examples.trading.accounts.TradingAccountId;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountClosingBooksPolicy;
 import dk.trustworks.essentials.examples.trading.accounts.TradingAccountService;
 import dk.trustworks.essentials.examples.trading.config.TradingDemoAggregateConfiguration;
+import dk.trustworks.essentials.examples.trading.dashboard.DashboardMetricSummaryView;
 import dk.trustworks.essentials.examples.trading.dashboard.DashboardSummaryView;
 import dk.trustworks.essentials.examples.trading.instruments.Instrument;
 import dk.trustworks.essentials.examples.trading.instruments.InstrumentId;
@@ -81,7 +82,7 @@ import static org.awaitility.Awaitility.await;
 @AutoConfigureTestRestTemplate
 class TradingDemoApplicationTest {
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:latest")
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18.4")
             .withDatabaseName("trading-demo-test-db")
             .withUsername("test")
             .withPassword("test");
@@ -503,8 +504,13 @@ class TradingDemoApplicationTest {
         assertThat(summaryResponse.getBody().accountsPresent()).isGreaterThanOrEqualTo(1);
         assertThat(summaryResponse.getBody().closingBooks().totalGenerations()).isGreaterThanOrEqualTo(1);
         assertThat(summaryResponse.getBody().pricePathComparison().performances()).hasSizeGreaterThanOrEqualTo(2);
-        assertThat(summaryResponse.getBody().snapshotStats().aggregateType()).isEqualTo(TradingDemoAggregateConfiguration.TRADING_ACCOUNTS.toString());
+        assertThat(summaryResponse.getBody().snapshotStats().aggregateTypes()).contains(TradingDemoAggregateConfiguration.TRADING_ACCOUNTS.toString(),
+                                                                                        TradingDemoAggregateConfiguration.INSTRUMENT_PRICES.toString());
         assertThat(summaryResponse.getBody().snapshotStats().saveCount()).isGreaterThanOrEqualTo(0);
+        assertThat(summaryResponse.getBody().snapshotMetrics())
+                .as("snapshot metrics are reported per snapshotting aggregate type, not just for TradingAccounts")
+                .extracting(DashboardMetricSummaryView::aggregateType)
+                .contains(TradingDemoAggregateConfiguration.INSTRUMENT_PRICES.toString());
 
         assertThat(htmlResponse.getStatusCode()).isEqualTo(HttpStatusCode.valueOf(200));
         assertThat(htmlResponse.getHeaders().getContentType()).isNotNull();

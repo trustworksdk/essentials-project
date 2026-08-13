@@ -1,5 +1,11 @@
 # This workflow will build a Java project with Maven, and cache/restore any dependencies to improve the workflow execution time
 # For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-maven
+#
+# The matrix is deliberately split in two. Integration tests are ~99% of this build's wall clock, so running the full
+# `verify` on every supported JDK multiplied that cost by five for very little extra signal — the integration suite
+# exercises Testcontainers and JDBC, not JDK-version-specific behaviour. The Java 21 LTS baseline and the newest
+# supported JDK run everything; the interim JDKs compile and run the unit tests, which is what actually catches a
+# JDK-specific regression.
 
 name: Java CI with Maven
 
@@ -13,58 +19,137 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  # Full build including Testcontainers-backed integration tests.
+  verify:
+    name: verify (JDK ${{ matrix.java-version }})
     strategy:
       fail-fast: false
       matrix:
-        java-version: ['21', '22', '23', '24', '25']
+        java-version: [ '21', '25' ]
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up JDK ${{ matrix.java-version }}
-      uses: actions/setup-java@v4
-      with:
-        java-version: ${{ matrix.java-version }}
-        distribution: 'temurin'
-        cache: maven
-    # Pre-pull Postgres so Testcontainers sees it locally
-    - name: Pre-pull Postgres image
-      run: |
-         docker pull postgres:latest
-    - name: Build with Maven
-      run: mvn -B verify --file pom.xml -DskipDependencyCheck=true
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: 'temurin'
+          cache: maven
 
-    - name: Upload JUnit test results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: junit-results
-        path: |
-          **/target/surefire-reports/
-          **/target/failsafe-reports/
-        retention-days: 2
+      # Pre-pull so Testcontainers does not pay the pull inside a test's startup timeout.
+      # Keep these tags in sync with EssentialsTestContainers.POSTGRES_IMAGE / MONGO_IMAGE.
+      - name: Pre-pull database images
+        run: |
+          docker pull postgres:18.4
+          docker pull mongo:8.2
 
-    - name: Test Summary · Unit
-      if: always()
-      uses: test-summary/action@v2
-      with:
-        paths: '**/target/surefire-reports/TEST-*.xml'
-      env:
-        NODE_OPTIONS: --max-old-space-size=4096
+      - name: Build with Maven
+        run: mvn -B verify --file pom.xml -DskipDependencyCheck=true
 
-    - name: Test Summary · Integration
-      if: always()
-      uses: test-summary/action@v2
-      with:
-        paths: '**/target/failsafe-reports/TEST-*.xml'
-      env:
-        NODE_OPTIONS: --max-old-space-size=8192
+      - name: Upload JUnit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-results-jdk${{ matrix.java-version }}
+          path: |
+            **/target/surefire-reports/
+            **/target/failsafe-reports/
+          retention-days: 2
 
-    #- name: Report JUnit Test Results
-    #  if: always()
-    #  uses: dorny/test-reporter@v1
-    #  with:
-    #    name: JUnit Tests
-    #    path:  '**/target/surefire-reports/*.xml'
-    #    reporter: java-junit
+      - name: Test Summary · Unit
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: '**/target/surefire-reports/TEST-*.xml'
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Test Summary · Integration
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: '**/target/failsafe-reports/TEST-*.xml'
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+
+  # The Jackson 2 flavor. Unit tests only, deliberately: the contract worth protecting is the *wire format* - that a
+  # payload persisted by one Jackson major still deserializes under the other - and that is asserted by
+  # EssentialsObjectMappersWireFormatTest, ActiveJacksonFlavorTest and WalMessageFilterFlavorParityTest, all of which
+  # are unit tests. A full `verify` under this profile costs ~17 min instead of ~3.5 and only adds detection of a
+  # flavor-mismatch crash, which EssentialsJacksonModules already fails loudly on.
+  #
+  # Must run the whole reactor, NOT `-pl <module>`: the flavor profile does not survive transitivity, so a module
+  # selection can put both flavors on the classpath at once (see the gotcha in CLAUDE.md).
+  #
+  # This job can be deleted when Jackson 2 support is dropped. Do NOT delete
+  # EssentialsObjectMappersWireFormatTest with it - once the profile is gone, its golden document is the only thing
+  # still guaranteeing that data persisted by Jackson 2 remains readable.
+  jackson2:
+    name: jackson2 (unit, JDK 21)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build with Maven (Jackson 2 flavor, unit tests only)
+        run: mvn -B -Pjackson2 test --file pom.xml -DskipDependencyCheck=true
+
+      - name: Upload JUnit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-results-jackson2
+          path: '**/target/surefire-reports/'
+          retention-days: 2
+
+      - name: Test Summary · Unit (Jackson 2)
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: '**/target/surefire-reports/TEST-*.xml'
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+  # Compile + unit tests only on the interim JDKs. No Docker, so these finish in a couple of minutes.
+  unit:
+    name: unit (JDK ${{ matrix.java-version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        java-version: [ '22', '23', '24' ]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build with Maven (unit tests only)
+        run: mvn -B test --file pom.xml -DskipDependencyCheck=true
+
+      - name: Upload JUnit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-results-unit-jdk${{ matrix.java-version }}
+          path: '**/target/surefire-reports/'
+          retention-days: 2
+
+      - name: Test Summary · Unit
+        if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: '**/target/surefire-reports/TEST-*.xml'
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
