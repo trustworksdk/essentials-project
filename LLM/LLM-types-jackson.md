@@ -169,6 +169,61 @@ public class OrderId extends CharSequenceType<OrderId> {
 
 ⚠️ Missing `String` constructor → deserialization fails in Jackson 2.18+
 
+### NumberType deserialization
+
+**No extra constructor is required — the module deserializes the whole family:**
+
+```java
+import dk.trustworks.essentials.types.BigDecimalType;
+
+public class Quantity extends BigDecimalType<Quantity> {
+    public Quantity(BigDecimal value) { super(value); }   // the only constructor Jackson needs
+
+    public static Quantity of(BigDecimal value) { return new Quantity(value); }
+}
+```
+
+`NumberTypeJsonDeserializers` (a `Deserializers` SPI) resolves a `NumberTypeJsonDeserializer` for every concrete
+`NumberType` subclass, reads the JSON number at the width the type wraps (via `NumberType.resolveNumberClass`), and
+constructs through `SingleValueType.from(...)` so the type's own validation still runs.
+
+⚠️ Registered through the SPI, **not** `addDeserializer(NumberType.class, …)`. The two sides of Jackson are not
+symmetric: serializer lookup walks supertypes, so one serializer on the base covers every subclass, but deserializer
+lookup is an exact-type match and a registration on the base would never fire.
+
+**Coercion rules it enforces**, which are as load-bearing as the fix — quietly truncating on replay would be worse
+than the crash it replaces:
+
+| JSON | `BigDecimalType` | `LongType` / `IntegerType` / `BigIntegerType` | `DoubleType` |
+|---|---|---|---|
+| `2` | ✅ | ✅ | ✅ |
+| `9007199254740993` | ✅ | ✅ (`IntegerType` ❌ — overflow) | ✅ |
+| `2.5` | ✅ | ❌ **refused, never truncated to `2`** | ✅ |
+| `"2"` (quoted) | ✅ | ✅ | ✅ |
+| `"2.5"` (quoted) | ✅ | ❌ refused | ✅ |
+| `null` | `null` | `null` | `null` |
+
+Quoted numbers stay readable on purpose — anything persisted with `WRITE_NUMBERS_AS_STRINGS`, or written by a
+producer that quotes large numbers, depends on it.
+
+A type extending `NumberType` directly, outside the eight known bases, is left to Jackson's default handling rather
+than guessed at.
+
+#### The trap this removed
+
+Before the deserializer existed, concrete subclasses fell through to Jackson's own creator detection, which selects
+a creator **by the incoming JSON token's own type** and does not widen. A `BigDecimalType` declaring only the natural
+`(BigDecimal)` constructor could not be read from an integral number at all — `"quantity":2` failed with *"no
+int/Int-argument constructor/factory method to deserialize from Number value"*. It serialized fine, so the breakage
+surfaced only on replay of existing events.
+
+Adding a `(double)` constructor cleared that error and was the obvious workaround — but Jackson then routed every
+floating-point token through it, narrowing to a `double` before the `BigDecimal` was built, so
+`1234.5678901234567890123` came back as `1234.567890123457`. `Amount` carries such a constructor and did lose
+precision this way. Both problems are gone: the deserializer never consults those overloads.
+
+Pinned by `NumberTypeCreatorRequirementTest` (both flavors) and `NumberTypeCreatorPrecisionTest` (`types-jackson3`).
+
 ### JSR310SingleValueType
 
 **@JsonCreator required:**
@@ -333,6 +388,7 @@ For an application that persists Kotlin documents, `components/postgresql-docume
 ## Gotchas
 
 - ⚠️ `CharSequenceType` needs **both** `CharSequence` and `String` constructors for Jackson 2.18+
+- ⚠️ `NumberType` subclasses need only the value-typed constructor — `NumberTypeJsonDeserializers` handles the family. A fraction is **refused** by the integral bases rather than truncated, and quoted numbers still read
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
 - ⚠️ Map key deserialization requires explicit `@JsonDeserialize(keyUsing = ...)`
 - ⚠️ `Money` serializes as `{"amount":"...","currency":"..."}` object, not single value

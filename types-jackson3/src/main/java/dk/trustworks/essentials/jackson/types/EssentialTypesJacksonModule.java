@@ -50,6 +50,11 @@ public final class EssentialTypesJacksonModule extends SimpleModule {
         // After super, so this sits ahead of the introspector chain super installed.
         context.insertAnnotationIntrospector(new SingleValueTypeCreatorIntrospector());
         context.addKeyDeserializers(new SingleValueTypeKeyDeserializers());
+        // Counterpart to the NumberType serializer above. Registered through the Deserializers SPI rather than
+        // addDeserializer, because deserializer lookup matches the exact type instead of walking supertypes.
+        // Takes precedence over SingleValueTypeCreatorIntrospector's DELEGATING pin for NumberType subclasses:
+        // both produce the bare scalar, but only this one reads the value at the width the type actually wraps.
+        context.addDeserializers(new NumberTypeJsonDeserializers());
     }
 
     private interface JSR310SingleValueTypeMixIn<VALUE_TYPE> {

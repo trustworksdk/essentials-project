@@ -47,6 +47,9 @@ public final class EssentialTypesJacksonModule extends SimpleModule {
                            JSR310SingleValueTypeMixIn.class);
 
         super.setupModule(context);
+        // Counterpart to the NumberType serializer above. Registered through the Deserializers SPI rather than
+        // addDeserializer, because deserializer lookup matches the exact type instead of walking supertypes.
+        context.addDeserializers(new NumberTypeJsonDeserializers());
     }
 
     private interface JSR310SingleValueTypeMixIn<VALUE_TYPE> {

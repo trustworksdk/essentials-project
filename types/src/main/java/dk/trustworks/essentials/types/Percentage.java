@@ -34,6 +34,21 @@ public final class Percentage extends BigDecimalType<Percentage> {
         super(validate(BigDecimal.valueOf(value.doubleValue())));
     }
 
+    /**
+     * Accepts an integral value directly, without the narrowing through {@code double} that the {@link Number}
+     * constructor above performs.
+     * <br>
+     * Also defensive: until {@code types-jackson}/{@code types-jackson3} registered a {@code NumberType} deserializer,
+     * Jackson selected a creator by the incoming JSON token's own type and would not widen, so neither the
+     * {@link BigDecimal} nor the {@link Number} constructor was reachable from an integral token and
+     * {@code "vatRate":25} failed outright. That is fixed in the module rather than here, but this constructor keeps
+     * the type readable on its own. Deliberately <b>not</b> a {@code double} overload — see
+     * {@code NumberTypeCreatorPrecisionTest}.
+     */
+    public Percentage(long value) {
+        super(validate(BigDecimal.valueOf(value)));
+    }
+
     private static BigDecimal validate(BigDecimal value) {
         requireNonNull(value, "value is null");
         return value.scale() < 2 ? value.setScale(2) : value;
