@@ -403,17 +403,15 @@ that an empty `Optional` provider yields a repository with no snapshot repositor
 
 ## Effect on the demo
 
-`TradingDemoAggregateConfiguration` was 268 lines; it is **161** after all the phases, with no anonymous classes and no
-`InitializingBean`. The estimate of ~90 was optimistic: it counted the bean bodies but not the ~30 lines of imports, the
-license header, or the javadoc explaining the two non-obvious beans. The functional shrink is the real number — five
-repository beans, one declarations bean, one closing-books setup, and two beans that publish parts of that setup.
+The demo was migrated twice: first against the flat `TradingDemoAggregateConfiguration` this document was written
+about, then again after merging main's slice refactor (PR #38), which split that one class into per-bounded-context
+configuration and deleted it. The second migration is the one in the tree.
 
-The three simple repositories also moved to `StatefulAggregateRepository.builder(...)`, which is line-neutral against
-`from(...)` but drops the explicit `reflectionBasedAggregateRootFactory()` argument, since that is the builder's default.
+**Before the merge.** `TradingDemoAggregateConfiguration` went from 268 lines to 161, with no anonymous classes and no
+`InitializingBean`. The estimate of ~90 was optimistic: it counted the bean bodies but not the ~30 lines of imports,
+the licence header, or the javadoc explaining the two non-obvious beans.
 
-Original line spans:
-
-| Removed | Replaced by |
+| Removed (original line spans) | Replaced by |
 |---|---|
 | `tradingAccountPolicyRegistrations`, L76–103 | one `EssentialsAggregateDeclarations` bean (Phase 2) |
 | `tradingAccountGenerationRepository`, L105–121 | derived by `ClosingBooksSetup` (Phase 3) |
@@ -423,6 +421,27 @@ Original line spans:
 | three anonymous serializers, L110–120, L144–154, L200–210 | one shared helper (Phase 0), then `forType(...)` (Phase 1) |
 
 The serializer spans sit *inside* the bean spans above them, so the rows overlap and do not sum.
+
+**After the merge.** Main's refactor relocated the same boilerplate into two bounded contexts, and duplicated part of
+it, because none of this API existed on main yet: one `InitializingBean` became two, and a third
+`Optional.map(...).orElseGet(...)` block appeared. That makes the same three sites shorter:
+
+| Site | Was | Now |
+|---|---|---|
+| `brokerage/config/BrokerageConfiguration` | 198 lines: policy-registration `InitializingBean`, generation-repository bean, 24-line anonymous generation access, coordinator, `Optional.map/orElseGet`, logical repository with an anonymous stream-id serializer, static `logicalAggregateIdSerializer()` | 134 lines: a declarations bean, one `ClosingBooksSetup`, one bean republishing its generation repository, the repository builder, one delegating call |
+| `market_data/config/MarketDataConfiguration` | `instrumentPricePolicyRegistrations` `InitializingBean` | a declarations bean |
+| `market_data/aggregates/InstrumentPrices` | `Optional.map/orElseGet` in the constructor | `StatefulAggregateRepository.builder(...)`, `Optional`-aware |
+
+Two things the merge changed about the design's own choices:
+
+- **Declarations are per bounded context**, one bean each, which is a better fit than the single flat bean written
+  first — each context declares the aggregates it owns, and the registrar merges them. `Trade`, `Settlement` and
+  `Instrument` are declared despite carrying no policy today, so that adding one later is enough on its own.
+- **The default stream-id generator is deliberately not used.** Main moved the `<logicalId>#<generation>` convention
+  onto `TradingAccountGenerationId`, because a projection parses it back out and the two used to be able to drift.
+  `BrokerageConfiguration` therefore keeps an explicit `setStreamIdGenerator(...)` routing through
+  `TradingAccountGenerationId.of(id, generation)`. It produces the same string the framework default would — the point
+  is where the convention lives, which is exactly the case the default was documented rather than silent for.
 
 That the demo shrinks is the point, but it is also the honest test of the design: if a builder cannot express what the
 demo does today, it is not ready.

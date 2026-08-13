@@ -331,4 +331,53 @@
         <packageUrl regex="true">^pkg:maven/org\.jetbrains\.kotlin/.*$</packageUrl>
         <vulnerabilityName>CVE-2026-53914</vulnerabilityName>
     </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: spring-boot-starter-mongodb-?.?.?.jar
+   Same class as the springdata-mongo-* suppressions above: one of our own artifacts matched against
+   cpe:/a:mongodb:mongodb purely on the name. Already covered for springdata-mongo-queue and
+   springdata-mongo-distributed-fenced-lock; the starter was missed, so CVE-2014-8180 (a Red Hat
+   Satellite 6 MongoDB auth bypass, nothing to do with a Java library) still surfaces wherever the
+   starter is consumed rather than built - it shows up in the mongodb-inbox-outbox example.
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/dk\.trustworks\.essentials\.components/spring-boot-starter-mongodb@.*$</packageUrl>
+        <cpe>cpe:/a:mongodb:mongodb</cpe>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: spring-boot-data-mongodb-4.?.?.jar
+   Wrong artifact, not a stale version. These two CVEs are against org.springframework.data:spring-data-mongodb
+   ("4.0.0 through 4.0.15" among other lines); the scanner matches them onto Spring Boot's own
+   org.springframework.boot:spring-boot-data-mongodb, whose 4.0.x version numbers coincidentally fall in
+   that range. The actual spring-data-mongodb we resolve is 5.0.6, which is outside the affected
+   "5.0.0 through 5.0.5" range and therefore already patched - verify with `mvn dependency:tree` before
+   removing this. Drop the suppression if the scanner ever learns to tell the two artifacts apart.
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.springframework\.boot/spring-boot-data-mongodb(-test)?@.*$</packageUrl>
+        <cve>CVE-2026-41696</cve>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: spring-boot-data-mongodb-4.?.?.jar
+   See the note on CVE-2026-41696 above - same artifact confusion, same reasoning.
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.springframework\.boot/spring-boot-data-mongodb(-test)?@.*$</packageUrl>
+        <cve>CVE-2026-41717</cve>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: tomcat-embed-*-11.0.??.jar
+   CVE-2026-66299 is uncontrolled resource consumption in Tomcat's WebSocket *chat example*, and the
+   advisory itself says users who removed the examples web application are not affected. tomcat-embed-core
+   is the embedded distribution and ships no examples webapp at all, so the vulnerable code is not present
+   - the scanner matches purely on the apache:tomcat CPE version range. Scoped to the whole
+   org.apache.tomcat.embed group, not just -core: the CPE matches every artifact in it, so naming one
+   only moves the finding to the next sibling (it surfaced on tomcat-embed-websocket).
+   There is also no fix to take: the advisory names 11.0.25, which is not published (11.0.24 is current).
+   Re-check when 11.0.25 lands - if the range still covers what we resolve, keep this; the reasoning above
+   holds regardless of version, so this is not a "wait for the bump" suppression.
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/.*$</packageUrl>
+        <vulnerabilityName>CVE-2026-66299</vulnerabilityName>
+    </suppress>
 </suppressions>

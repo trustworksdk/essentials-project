@@ -1,0 +1,235 @@
+networks:
+  default:
+    name: essentials-spring-boot-examples
+
+services:
+  postgresql:
+    container_name: postgresql
+    image: postgres:latest
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: essentials
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: essentials
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"  # Faster startup
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U essentials -d essentials"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # persistent data
+
+  mongodb:
+    container_name: mongodb
+    image: mongo:latest
+    volumes:
+      - mongo_data:/data/db                     # persistent data
+      - ./docker/mongo:/docker-entrypoint-initdb.d/:ro  # init scripts 
+    restart: always
+    ports:
+      - "27017:27017"
+    command: [--replSet, "rs0"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --eval 'db.runCommand(\"ping\").ok' --quiet"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  kafka:
+    image: apache/kafka-native:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+    volumes:
+      - kafka_data:/opt/kafka/logs
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  # Tracing, Latency and Metric setup is inspired by https://spring.io/blog/2022/10/12/observability-with-spring-boot-3 / https://github.com/marcingrzejszczak/observability-boot-blog-post
+  # Inspired by https://github.com/marcingrzejszczak/observability-boot-blog-post/blob/main/docker-compose.yml
+  collector:
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    container_name: collector
+    image: otel/opentelemetry-collector-contrib:0.127.0 # https://hub.docker.com/r/otel/opentelemetry-collector-contrib
+    extra_hosts: ['host.docker.internal:host-gateway']
+    volumes:
+      - ./docker/otel-collector/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - 1888:1888 # pprof extension
+      - 8888:8888 # Prometheus metrics exposed by the collector
+      - 8889:8889 # Prometheus exporter metrics
+      - 13133:13133 # health_check extension
+      - 4317:4317 # OTLP gRPC receiver
+      - 4318:4318 # OTLP http receiver (for metrics and spans)
+      - 55679:55679 # zpages extension
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v2.55.1 # https://hub.docker.com/r/prom/prometheus
+    extra_hosts: [ 'host.docker.internal:host-gateway' ]
+    command:
+      - --enable-feature=exemplar-storage
+      - --enable-feature=otlp-write-receiver
+      - --web.enable-remote-write-receiver
+      - --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - prometheus:/prometheus
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "echo -e 'GET /-/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' | nc localhost 9090 | grep -q 'Prometheus Server is Ready'"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  grafana:
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    container_name: grafana
+    image: grafana/grafana:10.4.18 # https://hub.docker.com/r/grafana/grafana/tags
+    extra_hosts: [ 'host.docker.internal:host-gateway' ]
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./docker/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ./docker/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./docker/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    ports:
+      - "3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "echo -e 'GET /api/health HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' | nc localhost 3000 | grep -q 'ok'"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  tempo:
+    container_name: tempo
+    image: grafana/tempo:2.7.2 # https://hub.docker.com/r/grafana/tempo/tags and https://github.com/grafana/tempo/releases
+    extra_hosts: [ 'host.docker.internal:host-gateway' ]
+    command: [ '-config.file=/etc/tempo.yml' ]
+    volumes:
+      - tempo:/var/tempo
+      - ./docker/grafana/tempo.yml:/etc/tempo.yml:ro
+    ports:
+      - "3200:3200"  # HTTP query UI & API
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "echo -e 'GET /ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' | nc localhost 3200 | grep -q 'ready'"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  loki:
+    container_name: loki
+    image: grafana/loki:3.5.0 # https://hub.docker.com/r/grafana/loki/tags and https://github.com/grafana/loki/releases
+    extra_hosts: [ 'host.docker.internal:host-gateway' ]
+    command: [ '-config.file=/etc/loki/local-config.yaml' ]
+    ports:
+      - "3100:3100"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "echo -e 'GET /ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' | nc localhost 3100 | grep -q 'ready'"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  prometheus:
+    driver: local
+  tempo:
+    driver: local
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
+  kafka_data:
+    driver: local
+
+## Prometheus: http://localhost:9090/
+## Grafana: http://localhost:3000/

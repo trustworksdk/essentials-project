@@ -100,7 +100,7 @@ internal class SingleValueTypeArgumentsTest {
                 CountryCode.of("DK")
 //            val currency = CurrencyCode.of("DKK")
 //            val email =
-//                EmailAddress.of("john@nonexistingdomain.com")
+//                EmailAddress.of("john@example.com")
 //            val percentage =
 //                Percentage.from("40.5%")
             val created =

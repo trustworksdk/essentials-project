@@ -48,6 +48,51 @@
             <artifactId>spring-core</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- spring-context/-web/-webmvc/-webflux back EssentialsWebMvcConfigurer and EssentialsWebFluxConfigurer.
+             All provided: a consumer brings its own web stack, and only one of WebMvc/WebFlux is ever on it -
+             each configurer only loads when its own WebXxxConfigurer type resolves. -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webmvc</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-webflux</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Kotlin, for KotlinValueTypeConverter. Optional and non-transitive, exactly as in `types` and
+             `types-jdbi`: a Java-only consumer must not be forced to carry kotlin-reflect, which is why both
+             configurers register the Kotlin converter behind a ClassUtils.isPresent() guard. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-reflect</artifactId>
+            <version>${kotlin.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib-jdk8</artifactId>
+            <version>${kotlin.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-test-junit</artifactId>
+            <version>${kotlin.version}</version>
+            <scope>test</scope>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -55,10 +100,6 @@
             <version>${spring-boot.version}</version>
             <scope>test</scope>
             <exclusions>
-                <exclusion>
-                    <groupId>org.slf4j</groupId>
-                    <artifactId>jul-to-slf4j</artifactId>
-                </exclusion>
                 <exclusion>
                     <groupId>org.apache.tomcat.embed</groupId>
                     <artifactId>tomcat-embed-core</artifactId>
@@ -109,28 +150,27 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Both flavours of jackson-module-kotlin, for KotlinJacksonBodyJackson2Test/KotlinJacksonBodyJackson3Test.
+             Those tests pin down what EssentialTypesJacksonModule does NOT cover - Kotlin value classes in a request
+             or response body - so that the boundary is asserted rather than inferred. Jackson 3 moved the module to
+             the tools.jackson.module group, so the two can sit side by side; each test is guarded by the active
+             flavour. -->
         <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-web</artifactId>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-webmvc</artifactId>
+            <groupId>tools.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+            <version>${jackson3-bom.version}</version>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
             <version>${spring-boot.version}</version>
             <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.slf4j</groupId>
-                    <artifactId>jul-to-slf4j</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
 
         <dependency>
@@ -138,37 +178,11 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <version>${spring-boot.version}</version>
             <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.logging.log4j</groupId>
-                    <artifactId>log4j-to-slf4j</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.slf4j</groupId>
-                    <artifactId>jul-to-slf4j</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>net.minidev</groupId>
-                    <artifactId>json-smart</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc-test</artifactId>
             <version>${spring-boot.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>net.minidev</groupId>
-            <artifactId>json-smart</artifactId>
-            <version>${json-smart.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-to-slf4j</artifactId>
-            <version>${log4j-to-slf4j.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -183,6 +197,77 @@
                         <essentials.jackson.flavor>${essentials.jackson.flavor}</essentials.jackson.flavor>
                     </systemPropertyVariables>
                 </configuration>
+            </plugin>
+            <!-- Failsafe needs the same property as surefire. Without it WebFluxControllerIT's
+                 @EnabledIfSystemProperty guard can never match and the IT is silently skipped in *both* profiles -
+                 which is what it did until now. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <essentials.jackson.flavor>${essentials.jackson.flavor}</essentials.jackson.flavor>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+                <version>${kotlin.version}</version>
+                <executions>
+                    <execution>
+                        <id>compile</id>
+                        <phase>process-sources</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>test-compile</id>
+                        <phase>test-compile</phase>
+                        <goals>
+                            <goal>test-compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
+                                <!-- Exactly one of src/test/kotlin-jackson2 / -jackson3, chosen by the active
+                                     flavour profile. Both directories hold a test that names
+                                     dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule, and the two
+                                     flavours share that fully qualified name while extending different Jackson
+                                     majors - so the two tests cannot be compiled against the same classpath. -->
+                                <sourceDir>${project.basedir}/src/test/kotlin-${essentials.jackson.flavor}</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                </executions>
+                <configuration>
+                    <args>
+                        <arg>-Xjsr305=strict</arg>
+                    </args>
+                    <jvmTarget>${java.version}</jvmTarget>
+                    <!-- Pin language/API level (root pom properties) so artifacts compiled with a
+                         newer Kotlin compiler remain binary- and metadata-compatible for consumers on the
+                         level the root POM declares. The numbers live only in kotlinLanguage.version /
+                         kotlinApi.version there, and deliberately differ — see the comment beside them. Don't
+                         restate them here: that is how these comments drifted out of date once already.
+                         apiVersion prevents binding to newer stdlib APIs (stdlib is
+                         'optional', so the consumer supplies their own). -->
+                    <languageVersion>${kotlinLanguage.version}</languageVersion>
+                    <apiVersion>${kotlinApi.version}</apiVersion>
+                </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-allopen</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
         </plugins>
         <pluginManagement>

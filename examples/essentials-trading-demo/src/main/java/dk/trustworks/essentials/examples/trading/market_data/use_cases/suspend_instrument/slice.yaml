@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: market_data.suspend_instrument
+kind: command
+bc: market_data
+owner: market-data-team
+status: live
+summary: Suspend trading in an instrument, recording why.
+generator: essentials
+language: java
+
+handles: [SuspendInstrument]
+publishes: [InstrumentSuspended]
+writes: [Instrument]
+reads:
+  - { name: Instrument }
+endpoints:
+  - { method: POST, path: /api/admin/instruments/{instrumentId}/suspension, auth: anonymous }
+invariants:
+  - id: INV-SI-1
+    text: "Suspending an already-suspended instrument is an idempotent no-op, so the first reason is the one that stands"
+    enforcedBy: Instrument
+  - id: INV-SI-2
+    text: "Suspension is one-way - there is no un-suspend event and no DELETE counterpart"
+    enforcedBy: Instrument
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

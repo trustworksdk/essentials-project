@@ -47,7 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
-    private CdcEventStore                                                           cdcEventStore;
+    private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore;
     private EventProcessorIT.TestPersistableEventMapper                             eventMapper;
     private JSONEventSerializer                                                    jacksonJSONSerializer;
     private CdcInboxRepository                                                      inboxRepository;
@@ -74,7 +74,7 @@ public class CdcPoisonGapIntegrationIT extends AbstractLogicalReplicationPostgre
 
         var availability = new CdcAvailability();
         availability.active("test");
-        cdcEventStore = new CdcEventStore(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties(), availability);
+        cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties(), availability);
 
         inboxRepository = new CdcInboxRepository(unitOfWorkFactory);
     }

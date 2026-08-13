@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.reconcile_settlement
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Record that a completed settlement has been reconciled against the books.
+generator: essentials
+language: java
+
+handles: [ReconcileSettlement]
+publishes: [SettlementReconciled]
+writes: [Settlement]
+reads:
+  - { name: Settlement }
+endpoints:
+  - { method: POST, path: "/api/admin/settlements/{settlementId}/reconciliation" }
+invariants:
+  - id: INV-RCS-1
+    text: "A settlement cannot be reconciled before it has completed"
+    enforcedBy: Settlement
+  - id: INV-RCS-2
+    text: "Reconciling twice is an idempotent no-op"
+    enforcedBy: Settlement
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

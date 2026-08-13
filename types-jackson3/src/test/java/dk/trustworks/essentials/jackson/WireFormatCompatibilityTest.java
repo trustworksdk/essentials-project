@@ -111,7 +111,7 @@ class WireFormatCompatibilityTest {
                                             percentage,
                                             CurrencyCode.DKK,
                                             CountryCode.of("DK"),
-                                            EmailAddress.of("john@nonexistingdomain.com"),
+                                            EmailAddress.of("john@example.com"),
                                             Map.of(ProductId.of("product-1"), Quantity.of(10),
                                                    ProductId.of("product-2"), Quantity.of(5)),
                                             Money.of(amount.add(percentage.of(amount)), CurrencyCode.DKK),

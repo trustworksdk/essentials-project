@@ -48,7 +48,7 @@ import static org.awaitility.Awaitility.await;
 public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
-    private CdcEventStore                                                           cdcEventStore;
+    private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore;
     private EventProcessorIT.TestPersistableEventMapper                             eventMapper;
     private JSONEventSerializer                                                    jacksonJSONSerializer;
     private CdcInboxRepository                                                      inboxRepository;
@@ -78,7 +78,7 @@ public class SubscriptionResetOnPoisonNotifierIT extends AbstractLogicalReplicat
         gapHandler = new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory);
 
         availability = new CdcAvailability();
-        cdcEventStore = new CdcEventStore(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties(), availability);
+        cdcEventStore = new CdcEventStore<>(eventStore, unitOfWorkFactory, gapHandler, new CdcEventBus(), new CdcProperties(), availability);
 
         durableSubscriptionRepository = new PostgresqlDurableSubscriptionRepository(jdbi, cdcEventStore);
 

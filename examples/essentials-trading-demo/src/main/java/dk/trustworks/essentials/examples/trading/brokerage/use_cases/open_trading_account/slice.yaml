@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: brokerage.open_trading_account
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Open the first books generation of a trading account, at a zero cash balance and zero realized P&L.
+generator: essentials
+language: java
+
+handles: [OpenTradingAccount]
+publishes: [TradingAccountOpened]
+writes: [TradingAccount]
+reads: []
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts, auth: anonymous }
+invariants:
+  - id: INV-OTA-1
+    text: "An account opens with zero cash, zero reserved funds and zero realized P&L"
+    enforcedBy: TradingAccount
+  - id: INV-OTA-2
+    text: "A second open for the same TradingAccountId fails rather than silently no-ops"
+    enforcedBy: TradingAccounts
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

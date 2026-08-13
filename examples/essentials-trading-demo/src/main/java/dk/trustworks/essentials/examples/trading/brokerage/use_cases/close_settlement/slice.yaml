@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.close_settlement
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Close a reconciled settlement - the last step of its lifecycle.
+generator: essentials
+language: java
+
+handles: [CloseSettlement]
+publishes: [SettlementClosed]
+writes: [Settlement]
+reads:
+  - { name: Settlement }
+endpoints:
+  - { method: POST, path: "/api/admin/settlements/{settlementId}/closure" }
+invariants:
+  - id: INV-CLS-1
+    text: "A settlement cannot be closed before reconciliation is complete"
+    enforcedBy: Settlement
+  - id: INV-CLS-2
+    text: "A closed settlement accepts nothing further - closing twice is an error, not a no-op"
+    enforcedBy: Settlement
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

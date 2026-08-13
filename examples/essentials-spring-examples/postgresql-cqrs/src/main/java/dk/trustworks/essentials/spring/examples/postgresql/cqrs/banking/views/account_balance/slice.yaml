@@ -1,0 +1,31 @@
+schemaVersion: "1.1"
+slice: banking.account_balance
+kind: view
+bc: banking
+owner: banking-team
+status: live
+summary: Serve the running balance per account from a projected read model.
+generator: essentials
+language: java
+
+serves: [ListAccountBalances, GetAccountBalance]
+endpoints:
+  - { method: GET, path: /banking/accounts, auth: anonymous }
+  - { method: GET, path: "/banking/accounts/{accountId}", auth: anonymous }
+reads:
+  - { name: AccountBalanceView }
+projections:
+  - name: AccountBalanceProjection
+    from: [AccountOpened, AccountDeposited, AccountWithdrawn]
+    consistency: eventual
+    store: document-db
+invariants:
+  - id: INV-AB-1
+    text: "Projecting an already-applied event is a no-op: each handler compares the event's EventOrder against the row's stored version before writing, so at-least-once delivery cannot double-count a balance"
+    enforcedBy: AccountBalanceProjection
+forbidden:
+  - cross-slice-internal:banking
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

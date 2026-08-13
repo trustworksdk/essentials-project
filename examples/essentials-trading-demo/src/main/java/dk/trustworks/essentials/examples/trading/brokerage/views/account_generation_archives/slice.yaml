@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.account_generation_archives
+kind: view
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: List the archived books generations of a trading account, and serve the contents of one archive entry.
+generator: essentials
+language: java
+
+serves: [ListArchivedGenerations, GetArchiveContent]
+endpoints:
+  - { method: GET, path: "/api/admin/trading-accounts/{accountId}/archives", auth: anonymous }
+  - { method: GET, path: "/api/admin/trading-accounts/{accountId}/generations/{generation}/archive-content", auth: anonymous }
+reads:
+  - { name: ApiArchivedGeneration }
+projections: []
+invariants:
+  - id: INV-AGA-1
+    text: "Archiving being disabled is reported with the property that enables it, never faked as an empty archive"
+    enforcedBy: AccountGenerationArchivesQuery
+  - id: INV-AGA-2
+    text: "Only file: archive locations are readable; any other scheme fails loudly with the location it got"
+    enforcedBy: AccountGenerationArchivesQuery
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

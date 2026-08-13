@@ -70,43 +70,74 @@
         <java.release.version>21</java.release.version>
         <java.version>${java.release.version}</java.version>
         <maven.compiler.release>${java.release.version}</maven.compiler.release>
-        <kotlin.version>2.1.21</kotlin.version>
-        <!-- Language/API level artifacts are compiled against, kept independent of the compiler
-             (kotlin.version) so a newer compiler still emits Kotlin 2.1-compatible binaries/metadata
-             for consumers on Kotlin 2.1. -->
-        <kotlinLanguage.version>2.1</kotlinLanguage.version>
+        <kotlin.version>2.2.21</kotlin.version>
+        <!-- The language/API level artifacts are compiled against, kept independent of the compiler
+             (kotlin.version) so a newer compiler still emits binaries/metadata an older consumer can read.
+             These two properties are the single source for that level — the kotlin-maven-plugin blocks in
+             types, types-jdbi, types-spring-web, postgresql-event-store, kotlin-eventsourcing and
+             postgresql-document-db reference them and deliberately do not restate the numbers.
+
+             kotlinLanguage.version sets the emitted @Metadata binary version, so it *is* the consumer floor:
+             at 2.2 a Kotlin 2.1 compiler rejects these artifacts as an incompatible binary version. Verify
+             after changing it with `javap -v` on any compiled Kotlin class and read the mv=[...] tuple.
+             Raising it is consumer-visible, belongs in the release notes, and per the stable-API rule may
+             not happen outside a new major.
+
+             kotlinApi.version is deliberately left one level behind: it caps which stdlib APIs the bytecode
+             may bind to — which lowering kotlinLanguage.version would not do — and does not affect the
+             metadata version, so it is not part of the floor. -->
+        <kotlinLanguage.version>2.2</kotlinLanguage.version>
         <kotlinApi.version>2.1</kotlinApi.version>
         <revision>DEV-SNAPSHOT</revision>
         <skipDependencyCheck>false</skipDependencyCheck>
 
-        <spring-boot.version>4.0.3</spring-boot.version>
+        <spring-boot.version>4.0.7</spring-boot.version>
         <!-- The default Jackson flavour. Jackson 3 is the default because that is what Spring Boot 4 ships with; build
              or depend with -Pjackson2 to stay on Jackson 2. Both flavours publish the same class names, so exactly one
              is ever on the classpath, and both write byte-identical JSON — see EssentialsObjectMappers. -->
         <essentials.jackson.flavor>jackson3</essentials.jackson.flavor>
         <essentials.types-jackson.artifactId>types-jackson3</essentials.types-jackson.artifactId>
         <essentials.immutable-jackson.artifactId>immutable-jackson3</essentials.immutable-jackson.artifactId>
-        <objenesis.version>3.5</objenesis.version>
+        <objenesis.version>3.6</objenesis.version>
         <postgresql.version>42.7.13</postgresql.version>
         <slf4j.version>2.0.18</slf4j.version>
         <awaitility.version>4.3.0</awaitility.version>
         <assertj.version>3.27.7</assertj.version>
-        <log4j-to-slf4j.version>2.25.5</log4j-to-slf4j.version>
-        <json-smart.version>2.6.0</json-smart.version>
-        <json-path.version>2.9.0</json-path.version>
+        <!-- Covers log4j-to-slf4j and log4j-api together; both are managed in dependencyManagement below. -->
+        <log4j.version>2.26.1</log4j.version>
         <junit-bom.version>6.0.3</junit-bom.version>
         <testcontainers-bom.version>2.0.5</testcontainers-bom.version>
         <jdbi3-bom.version>3.54.0</jdbi3-bom.version>
-        <jackson3-bom.version>3.0.4</jackson3-bom.version>
-        <jackson-bom.version>2.22.1</jackson-bom.version>
+        <jackson3-bom.version>3.1.5</jackson3-bom.version>
+        <!-- Jackson 2. Both properties are consumed by the *direct* dependencyManagement entries below, not by
+             the jackson-bom import: an imported BOM cannot outrank spring-boot-dependencies, which is imported
+             first and manages its own Jackson 2 line. See the comment on those entries.
+             jackson-annotations tracks a separate, patch-less version: since 2.20 Jackson releases it only on
+             minor boundaries, so it does not move with jackson-bom.version. Read both off the jackson-bom of
+             the same release rather than assuming they match. -->
+        <jackson-bom.version>2.21.5</jackson-bom.version>
+        <jackson-annotations.version>2.21</jackson-annotations.version>
         <mockito-bom.version>5.23.0</mockito-bom.version>
+        <!-- Newest release; the floor is assertj-core's own 1.18.3, which is what Spring Boot's management
+             was pulling back down. Take the plain version, never the `-jdk5` line Central reports as
+             <latest> — that is the legacy Java 5 build, not a newer release. -->
+        <byte-buddy.version>1.18.11</byte-buddy.version>
+        <snakeyaml.version>2.6</snakeyaml.version>
         <avro.version>1.12.1</avro.version>
         <commons-compress.version>1.28.0</commons-compress.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
-        <xmlunit-core.version>2.10.4</xmlunit-core.version>
-        <archunit-junit5.version>1.4.2</archunit-junit5.version>
+        <xmlunit-core.version>2.13.0</xmlunit-core.version>
+        <archunit-junit5.version>1.5.0</archunit-junit5.version>
+        <java-uuid-generator.version>5.1.1</java-uuid-generator.version>
+        <jmh.version>1.37</jmh.version>
+        <reactive-streams.version>1.0.4</reactive-streams.version>
+        <!-- Held ahead of the versions the Spring Boot BOM manages, purely to clear CVEs Spring Boot has not
+             yet picked up; drop the override once its BOM catches up. Both are patch-level moves within the
+             line Spring Boot already targets, so no API change is implied. -->
+        <tomcat.version>11.0.24</tomcat.version>
+        <netty-bom.version>4.2.17.Final</netty-bom.version>
 
-        <dokka.version>2.1.0</dokka.version>
+        <dokka.version>2.2.0</dokka.version>
         <maven-dependency-plugin.version>3.11.0</maven-dependency-plugin.version>
         <maven-project-info-reports-plugin.version>3.9.0</maven-project-info-reports-plugin.version>
         <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
@@ -114,7 +145,7 @@
         <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
         <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
         <maven-site-plugin.version>3.22.0</maven-site-plugin.version>
-        <maven-jar-plugin.version>3.5.0</maven-jar-plugin.version>
+        <maven-jar-plugin.version>3.5.1</maven-jar-plugin.version>
         <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
         <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
         <maven-failsafe-plugin.version>3.5.6</maven-failsafe-plugin.version>
@@ -127,9 +158,9 @@
         <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
         <minimum-maven-version>3.8.8</minimum-maven-version>
         <dependency-check-maven.version>12.2.2</dependency-check-maven.version>
-        <flatten-maven-plugin.version>1.7.3</flatten-maven-plugin.version>
+        <flatten-maven-plugin.version>1.8.0</flatten-maven-plugin.version>
         <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
-        <maven.docker.plugin.version>0.48.1</maven.docker.plugin.version>
+        <maven.docker.plugin.version>0.49.0</maven.docker.plugin.version>
         <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
         <essentials.postgres.base-image>postgres:17.5-bookworm</essentials.postgres.base-image>
         <essentials.postgres.image>essentials-postgres:17.5</essentials.postgres.image>
@@ -170,11 +201,52 @@
         <module>components/spring-boot-starter-admin-api</module>
         <module>components/spring-boot-starter-admin-ui</module>
         <module>examples/essentials-performance-lab</module>
+        <module>examples/essentials-spring-examples</module>
     </modules>
 
 
     <dependencyManagement>
         <dependencies>
+            <!-- ORDER IS LOAD-BEARING for everything above spring-boot-dependencies. Among *imported* BOMs
+                 the first declaration wins, so a vendor BOM only outranks Spring Boot's by sitting above it;
+                 imported below, it is silently inert — the version property still reads as if it applies, and
+                 the resolved tree quietly disagrees. Direct (non-import) entries further down need no such
+                 care: those outrank every import wherever they sit, which is why the log4j pair below works.
+                 Importing the whole vendor BOM is the right tool for a wide artifact line — netty resolves
+                 20+ artifacts here, and pinning them one at a time would split the set the first time a new
+                 sibling arrived transitively.
+                 Verify a change here against `mvn dependency:tree`, never against this file. -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>tools.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson3-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-bom</artifactId>
+                <version>${mockito-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Currently the same version Spring Boot manages, so this import changes nothing today. It is
+                 here so junit-bom.version is the knob it looks like it is; without it the property was dead
+                 and JUnit tracked whatever Spring Boot picked. -->
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>${junit-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>testcontainers-bom</artifactId>
@@ -196,26 +268,117 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- Jackson 2, held a patch ahead of the Spring Boot BOM for CVE-2026-54515 (fixed in 2.21.5).
+                 Direct entries rather than importing com.fasterxml.jackson:jackson-bom, because that import
+                 would have to move above spring-boot-dependencies to have any effect at all, and doing so
+                 replaces Spring Boot's whole Jackson 2 line instead of just the artifacts in play.
+                 The cost of listing them: this is the set Spring Boot actually puts on our classpath today,
+                 so a Jackson 2 artifact arriving transitively in future would stay on Spring Boot's version
+                 and silently split the set. Check the resolved tree, not this list, after adding a Jackson
+                 dependency. jackson-annotations is deliberately on its own property — see the properties. -->
             <dependency>
-                <groupId>tools.jackson</groupId>
-                <artifactId>jackson-bom</artifactId>
-                <version>${jackson3-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson</groupId>
-                <artifactId>jackson-bom</artifactId>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
                 <version>${jackson-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>org.mockito</groupId>
-                <artifactId>mockito-bom</artifactId>
-                <version>${mockito-bom.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${jackson-bom.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>${jackson-annotations.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.datatype</groupId>
+                <artifactId>jackson-datatype-jsr310</artifactId>
+                <version>${jackson-bom.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.datatype</groupId>
+                <artifactId>jackson-datatype-jdk8</artifactId>
+                <version>${jackson-bom.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.dataformat</groupId>
+                <artifactId>jackson-dataformat-yaml</artifactId>
+                <version>${jackson-bom.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.module</groupId>
+                <artifactId>jackson-module-kotlin</artifactId>
+                <version>${jackson-bom.version}</version>
+            </dependency>
+            <!-- Tomcat, held ahead of the Spring Boot BOM for CVE-2026-53434 / -55276 / -59083 / -59084 and
+                 five others. Only ever reaches a consumer through their own Spring Boot; here it is provided
+                 in the admin starters and compile in the examples. All four artifacts move together — Tomcat
+                 releases them as a set and mixing them is not supported. -->
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-core</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-el</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-websocket</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat</groupId>
+                <artifactId>tomcat-annotations-api</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <!-- Held one patch ahead of the version the Spring Boot BOM manages (2.25.4). Both artifacts are
+                 pinned together: log4j-to-slf4j depends on the matching log4j-api, and managing only the bridge
+                 leaves the BOM to pull log4j-api back down, so the pair would ship mismatched.
+                 Deliberately no <scope>: neither artifact is ever declared directly, they only arrive
+                 transitively via spring-boot-starter-logging, and management must raise the version without
+                 disturbing the scope that path gives it. The alternative — excluding the bridge and
+                 re-declaring it directly at test scope — silently *demotes* the binding on any module whose
+                 transitive path is compile or provided ("scope not updated to compile"), dropping Spring Boot's
+                 log4j -> slf4j routing off the runtime classpath instead of upgrading it. -->
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-to-slf4j</artifactId>
+                <version>${log4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-api</artifactId>
+                <version>${log4j.version}</version>
+            </dependency>
+            <!-- Raised above the version the Spring Boot BOM manages (1.17.8) because assertj-core
+                 ${assertj.version} is built against 1.18.3 and Spring Boot's management silently pulls it back
+                 down — requireUpperBoundDeps below is what surfaced that. mockito-core asks for less
+                 (1.17.7), so one pin satisfies both. Both artifacts move together: mockito loads the agent
+                 and the core from the same generation, and splitting them breaks inline mocking.
+                 Test-scope everywhere (foundation-test carries it at compile, and that module is internal
+                 test tooling), so this never reaches a consumer's classpath. -->
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy-agent</artifactId>
+                <version>${byte-buddy.version}</version>
+            </dependency>
+            <!-- One release ahead of the Spring Boot BOM (2.5), because swagger-core-jakarta in
+                 admin-api-spec is built against 2.6 and management was pulling it back down —
+                 requireUpperBoundDeps below is what surfaced that. 2.6 is the current release, so this
+                 satisfies every asker rather than picking a midpoint. -->
+            <dependency>
+                <groupId>org.yaml</groupId>
+                <artifactId>snakeyaml</artifactId>
+                <version>${snakeyaml.version}</version>
             </dependency>
             <!-- Due to CVE-2023-42503, CVE-2024-26308, CVE-2024-25710 -->
             <dependency>
@@ -527,6 +690,66 @@
                                 <requireJavaVersion>
                                     <version>[${java.release.version},26)</version>
                                 </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                    <!--
+                      Guards the failure mode that a POM cannot show you: a version that is declared here but
+                      is not the one that resolves. dependencyManagement above pins several artifacts ahead of
+                      the Spring Boot BOM, and nothing in the file itself proves those pins bind — an imported
+                      BOM in the wrong position, or a transitive dependency asking for more than we manage,
+                      both read as fine and resolve to something else.
+
+                      requireUpperBoundDeps fails when management pulls an artifact *below* what something in
+                      the graph asked for. That is the direction that breaks at runtime (a library compiled
+                      against a newer API), and it is the direction plain `dependency:tree` hides, because the
+                      tree only prints the winner. It found both downgrades pinned above, byte-buddy and
+                      snakeyaml, neither of which anything else in the build was complaining about.
+
+                      banDuplicatePomDependencyVersions fails on the same groupId:artifactId declared twice in
+                      one POM, where the second silently wins.
+
+                      Neither rule looks at the *plugin* graph, and neither can tell you a pin is inert when
+                      nothing else in the build asks for a higher version — for that, still read the resolved
+                      tree.
+                    -->
+                    <execution>
+                        <id>enforce-dependency-hygiene</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireUpperBoundDeps>
+                                    <!--
+                                      Listed one artifact at a time on purpose: a new violation should fail
+                                      the build and force a decision rather than land inside a wildcard.
+
+                                      Both entries exist because swagger-project-jakarta:2.2.52 (parent of the
+                                      swagger-core-jakarta admin-api-spec compiles against) declares a Jackson 2
+                                      set that does not agree with itself: jackson-databind-version=2.21.1 and
+                                      jackson-annotations-version=2.21, but jackson-version=2.22.0 for these
+                                      two. Jackson requires one version across the set, so *no* resolution can
+                                      honour that upper bound without splitting Jackson — including swagger's
+                                      own. Our 2.21.5-for-everything is the coherent reading of it, and it is
+                                      already above the databind swagger asks for.
+                                      Re-check when swagger-core.version moves: if a release lines those three
+                                      properties up, drop these and let the rule speak.
+                                    -->
+                                    <excludes>
+                                        <exclude>com.fasterxml.jackson.datatype:jackson-datatype-jsr310</exclude>
+                                        <exclude>com.fasterxml.jackson.dataformat:jackson-dataformat-yaml</exclude>
+                                    </excludes>
+                                </requireUpperBoundDeps>
+                                <banDuplicatePomDependencyVersions/>
+                                <!-- allowSnapshots is not a loophole: the rule counts a SNAPSHOT as dynamic,
+                                     and ${revision} is DEV-SNAPSHOT on every local and CI build, so without
+                                     it every module that depends on a sibling fails. What stays banned is the
+                                     thing actually worth banning — a version range or LATEST/RELEASE, which
+                                     would make the resolved tree depend on when you built. -->
+                                <banDynamicVersions>
+                                    <allowSnapshots>true</allowSnapshots>
+                                </banDynamicVersions>
                             </rules>
                         </configuration>
                     </execution>

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
+<!-- Inspired by: https://github.com/marcingrzejszczak/observability-boot-blog-post/blob/main/server/src/main/resources/logback-spring.xml -->
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/base.xml" />
+    <springProperty scope="context" name="appName" source="spring.application.name"/>
+
+    <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+        <http>
+            <url>http://localhost:3100/loki/api/v1/push</url>
+        </http>
+        <!-- loki-logback-appender 2.x replaced the nested <format> block with top-level <labels> and <message>
+             elements, and dropped <sortByTime> (batches are always sorted by time now). -->
+        <labels>app=${appName},host=${HOSTNAME},traceID=%X{traceId:-NONE},level=%level</labels>
+        <message class="ch.qos.logback.classic.PatternLayout">
+            <pattern>${FILE_LOG_PATTERN}</pattern>
+        </message>
+    </appender>
+
+    <logger name="dk.trustworks.essentials" level="DEBUG"/>
+    <logger name="dk.trustworks.essentials.components.foundation.transaction" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.foundation.reactive.command.DurableLocalCommandBus" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.distributed.fencedlock.postgresql.PostgresqlFencedLockManager" level="INFO"/>
+    <logger name="dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.Inboxes.DurableQueueBasedInboxes" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues$1" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer.MessageHandlingFailures" level="INFO"/>
+    <logger name="dk.trustworks.essentials.components.foundation.messaging.queue.QueuePollingOptimizer.SimpleQueuePollingOptimizer" level="INFO"/>
+
+    <logger name="dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeCommandBusInterceptor" level="DEBUG"/>
+    <logger name="dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeDurableQueueInterceptor" level="DEBUG"/>
+    <logger name="dk.trustworks.essentials.components.foundation.interceptor.micrometer.RecordExecutionTimeMessageHandlerInterceptor" level="DEBUG"/>
+
+    <root level="INFO">
+        <appender-ref ref="LOKI"/>
+    </root>
+</configuration>

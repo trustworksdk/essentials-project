@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.confirm_clearing
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Record that clearing came back confirmed.
+generator: essentials
+language: java
+
+handles: [ConfirmClearing]
+publishes: [ClearingConfirmed]
+writes: [Settlement]
+reads:
+  - { name: Settlement }
+endpoints:
+  - { method: POST, path: "/api/admin/settlements/{settlementId}/clearing-confirmations" }
+invariants:
+  - id: INV-CC-1
+    text: "Clearing cannot be confirmed before it has been requested"
+    enforcedBy: Settlement
+  - id: INV-CC-2
+    text: "Confirming clearing twice is an idempotent no-op"
+    enforcedBy: Settlement
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

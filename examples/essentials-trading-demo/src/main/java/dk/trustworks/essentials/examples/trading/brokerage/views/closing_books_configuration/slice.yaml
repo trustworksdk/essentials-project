@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: brokerage.closing_books_configuration
+kind: view
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Report the closing-books policy currently in force, rendered in the vocabulary the admin surface speaks.
+generator: essentials
+language: java
+
+serves: [GetClosingBooksConfiguration]
+endpoints:
+  - { method: GET, path: /api/admin/trading-accounts/closing-books, auth: anonymous }
+reads:
+  - { name: ClosingBooksSettings }
+projections: []
+invariants:
+  - id: INV-CBC-1
+    text: "The settings snapshot is read once and rendered whole, so no response can mix two configurations"
+    enforcedBy: ClosingBooksConfigurationAPI
+  - id: INV-CBC-2
+    text: "mode and timeBoundary render lowercase-with-hyphens, the same vocabulary the update command accepts"
+    enforcedBy: ClosingBooksConfiguration
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

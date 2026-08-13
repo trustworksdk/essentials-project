@@ -1,0 +1,28 @@
+schemaVersion: "1.1"
+slice: shipping.register_shipping_order
+kind: command
+bc: shipping
+owner: shipping-team
+status: live
+summary: Register a new shipping order with its destination address.
+generator: essentials
+language: java
+tier: service-entity
+
+handles: [RegisterShippingOrder]
+publishes: [ShippingOrderRegistered]
+writes: [ShippingOrder]
+reads:
+  - { name: ShippingOrder }
+endpoints:
+  - { method: POST, path: /shipping/register-order }
+invariants:
+  - id: INV-RSO-1
+    text: "A shipping order is registered at most once - re-handling the command for an existing order is a no-op."
+    enforcedBy: RegisterShippingOrderHandler
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

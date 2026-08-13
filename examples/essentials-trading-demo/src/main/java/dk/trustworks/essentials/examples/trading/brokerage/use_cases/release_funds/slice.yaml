@@ -1,0 +1,32 @@
+schemaVersion: "1.1"
+slice: brokerage.release_funds
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Give previously reserved cash back to a trading account's available balance.
+generator: essentials
+language: java
+
+handles: [ReleaseFunds]
+# AccountBooksClosed/TradingAccountOpened are emitted when the ON_ACCESS closing-books policy rolls the
+# account while it is being loaded for this command.
+publishes: [FundsReleased, AccountBooksClosed, TradingAccountOpened]
+writes: [TradingAccount]
+reads:
+  - { name: TradingAccount }
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts/{accountId}/fund-releases, auth: anonymous }
+invariants:
+  - id: INV-RLF-1
+    text: "More may not be released than is currently reserved"
+    enforcedBy: TradingAccount
+  - id: INV-RLF-2
+    text: "Nothing may be booked once the books are closed"
+    enforcedBy: TradingAccount
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

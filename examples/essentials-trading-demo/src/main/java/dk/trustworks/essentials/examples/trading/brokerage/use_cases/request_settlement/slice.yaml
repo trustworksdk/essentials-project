@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.request_settlement
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Record on a trade that settlement has been requested, under a named SettlementId.
+generator: essentials
+language: java
+
+handles: [RequestSettlement]
+publishes: [SettlementRequested]
+writes: [Trade]
+reads:
+  - { name: Trade }
+endpoints:
+  - { method: POST, path: "/api/admin/trades/{tradeId}/settlement-requests" }
+invariants:
+  - id: INV-RS-1
+    text: "Settlement cannot be requested before the trade has been executed"
+    enforcedBy: Trade
+  - id: INV-RS-2
+    text: "Re-requesting settlement is an idempotent no-op; the first SettlementId stands"
+    enforcedBy: Trade
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

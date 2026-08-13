@@ -43,3 +43,4 @@ CLAUDE.local.md
 graphify-out
 .claude/skills/graphify
 # <<< managed <<<
+/.claude/settings.json.graphify-bak

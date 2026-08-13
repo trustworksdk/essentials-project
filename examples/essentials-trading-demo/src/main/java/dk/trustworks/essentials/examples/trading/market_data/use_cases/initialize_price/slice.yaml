@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: market_data.initialize_price
+kind: command
+bc: market_data
+owner: market-data-team
+status: live
+summary: Open the price stream for an instrument at its first known market price.
+generator: essentials
+language: java
+
+handles: [InitializePrice]
+publishes: [PriceInitialized]
+writes: [InstrumentPrice]
+reads: []
+endpoints:
+  - { method: POST, path: /api/admin/instrument-prices, auth: anonymous }
+invariants:
+  - id: INV-IP-1
+    text: "A price must be greater than zero - enforced in the event's canonical constructor, so it also holds on replay"
+    enforcedBy: InstrumentPriceEvent
+  - id: INV-IP-2
+    text: "The price stream is keyed by InstrumentId, not a dedicated price id"
+    enforcedBy: InstrumentPrices
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

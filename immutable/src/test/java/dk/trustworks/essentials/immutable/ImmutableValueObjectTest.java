@@ -31,7 +31,7 @@ public class ImmutableValueObjectTest {
         var testSubject = new ImmutableOrder(OrderId.of(123456789),
                                              CustomerId.of("CustomerId1"),
                                              Percentage.from("50%"),
-                                             EmailAddress.of("john@nonexistingdomain.com"),
+                                             EmailAddress.of("john@example.com"),
                                              Map.of(ProductId.of("Product1"), Quantity.of(10)),
                                              Money.of("1234.56", CurrencyCode.DKK));
 
@@ -43,7 +43,7 @@ public class ImmutableValueObjectTest {
         var testSubject = new ImmutableOrder(OrderId.of(123456789),
                                              CustomerId.of("CustomerId1"),
                                              Percentage.from("50%"),
-                                             EmailAddress.of("john@nonexistingdomain.com"),
+                                             EmailAddress.of("john@example.com"),
                                              Map.of(ProductId.of("Product1"), Quantity.of(10)),
                                              Money.of("1234.56", CurrencyCode.DKK));
 
@@ -56,7 +56,7 @@ public class ImmutableValueObjectTest {
         var testSubject = new ImmutableOrder(OrderId.of(123456789),
                                              CustomerId.of("CustomerId1"),
                                              Percentage.from("50%"),
-                                             EmailAddress.of("john@nonexistingdomain.com"),
+                                             EmailAddress.of("john@example.com"),
                                              Map.of(ProductId.of("Product1"), Quantity.of(10)),
                                              Money.of("1234.56", CurrencyCode.DKK));
 
@@ -65,14 +65,14 @@ public class ImmutableValueObjectTest {
 
         // Then
         assertThat(toString).isNotNull();
-        assertThat(toString).isEqualTo("ImmutableOrder { customerId: CustomerId1, email: john@nonexistingdomain.com, orderId: 123456789, orderLines: {Product1=10}, percentage: 50.00% }");
+        assertThat(toString).isEqualTo("ImmutableOrder { customerId: CustomerId1, email: john@example.com, orderId: 123456789, orderLines: {Product1=10}, percentage: 50.00% }");
     }
 
     @Test
     void test_hashCode_with_only_non_null_values() {
         // Given (fields in hashCode calculation order)
         var customerId   = CustomerId.of("CustomerId1");
-        var emailAddress = EmailAddress.of("john@nonexistingdomain.com");
+        var emailAddress = EmailAddress.of("john@example.com");
         var orderId      = OrderId.of(123456789);
         var orderLines   = Map.of(ProductId.of("Product1"), Quantity.of(10));
         var percentage   = Percentage.from("50%");
@@ -100,7 +100,7 @@ public class ImmutableValueObjectTest {
     void test_equals_with_only_non_null_values() {
         // Given (fields in hashCode calculation order)
         var customerId   = CustomerId.of("CustomerId1");
-        var emailAddress = EmailAddress.of("john@nonexistingdomain.com");
+        var emailAddress = EmailAddress.of("john@example.com");
         var orderId      = OrderId.of(123456789);
         var percentage   = Percentage.from("50%");
         var totalPrice   = Money.of("1234.56", CurrencyCode.DKK);
@@ -245,7 +245,7 @@ public class ImmutableValueObjectTest {
     void test_equals_with_both_null_and_non_null_values() {
         // Given (fields in hashCode calculation order)
         CustomerId               customerId   = CustomerId.of("CustomerId1");
-        EmailAddress             emailAddress = EmailAddress.of("john@nonexistingdomain.com");
+        EmailAddress             emailAddress = EmailAddress.of("john@example.com");
         OrderId                  orderId      = OrderId.of(123456789);
         Map<ProductId, Quantity> orderLines   = Map.of(ProductId.of("Product1"), Quantity.of(10));
         Percentage               percentage   = Percentage.from("25%");

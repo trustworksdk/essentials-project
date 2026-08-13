@@ -1,0 +1,33 @@
+schemaVersion: "1.1"
+slice: brokerage.close_books_and_open_next_period
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Roll a trading account's books - seal the current generation and open the next one.
+generator: essentials
+language: java
+
+handles: [CloseBooksAndOpenNextPeriod]
+publishes: [AccountBooksClosed, TradingAccountOpened]
+writes: [TradingAccount]
+reads:
+  - { name: TradingAccount }
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts/{accountId}/generations, auth: anonymous }
+invariants:
+  - id: INV-CBON-1
+    text: "Close then open, in one transaction - only closing leaves no open generation, only opening loses the closing entry"
+    enforcedBy: CloseBooksAndOpenNextPeriodHandler
+  - id: INV-CBON-2
+    text: "Owner and cash carry into the next generation, realized P&L resets, reserved funds are zeroed"
+    enforcedBy: TradingAccountNextGenerationFactory
+  - id: INV-CBON-3
+    text: "Closing already-closed books is an idempotent no-op"
+    enforcedBy: TradingAccount
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

@@ -1,0 +1,32 @@
+schemaVersion: "1.1"
+slice: banking.transfer_money
+kind: automation
+bc: banking
+owner: banking-team
+status: live
+summary: Carry a requested intra-bank transfer through withdrawal, deposit and completion.
+generator: essentials
+language: java
+
+consumes:
+  - IntraBankMoneyTransferRequested
+  - IntraBankMoneyTransferStatusChanged
+  - AccountWithdrawn
+  - AccountDeposited
+writes: [Account, IntraBankMoneyTransfer]
+reads:
+  - { name: Account }
+  - { name: IntraBankMoneyTransfer }
+invariants:
+  - id: INV-TM-1
+    text: "The withdrawal from the source account is rejected when it would overdraw the balance, because the automation always withdraws with AllowOverdrawingBalance.NO"
+    enforcedBy: Account
+  - id: INV-TM-2
+    text: "The transfer lifecycle is a strict state machine: REQUESTED -> FROM_ACCOUNT_WITHDRAWN -> TO_ACCOUNT_DEPOSITED/COMPLETED; a transition from any other state throws IllegalStateException"
+    enforcedBy: IntraBankMoneyTransfer
+forbidden:
+  - cross-slice-internal:banking
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

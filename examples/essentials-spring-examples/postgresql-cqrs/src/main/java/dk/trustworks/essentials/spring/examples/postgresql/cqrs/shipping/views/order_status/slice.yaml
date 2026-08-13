@@ -1,0 +1,28 @@
+schemaVersion: "1.1"
+slice: shipping.order_status
+kind: view
+bc: shipping
+owner: shipping-team
+status: live
+summary: Answer where a shipping order stands, by list, by id, or filtered by status.
+generator: essentials
+language: java
+
+serves: [ListOrders, GetOrderStatus, FindOrdersByStatus]
+endpoints:
+  - { method: GET, path: /shipping/orders, maps: ListOrders }
+  - { method: GET, path: "/shipping/orders/{orderId}", maps: GetOrderStatus }
+  - { method: GET, path: "/shipping/orders?status=", maps: FindOrdersByStatus }
+reads:
+  - { name: OrderStatusView }
+projections:
+  - name: OrderStatusProjection
+    from: [ShippingOrderRegistered, OrderShipped]
+    consistency: eventual
+    store: document-db
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

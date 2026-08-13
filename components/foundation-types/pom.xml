@@ -47,7 +47,7 @@
         <dependency>
             <groupId>com.fasterxml.uuid</groupId>
             <artifactId>java-uuid-generator</artifactId>
-            <version>5.1.0</version>
+            <version>${java-uuid-generator.version}</version>
             <optional>true</optional>
         </dependency>
     </dependencies>

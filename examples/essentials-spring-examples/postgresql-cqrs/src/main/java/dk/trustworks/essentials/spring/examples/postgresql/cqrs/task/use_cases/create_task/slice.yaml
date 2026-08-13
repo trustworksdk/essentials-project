@@ -1,0 +1,21 @@
+schemaVersion: "1.1"
+slice: task.create_task
+kind: command
+bc: task
+owner: task-team
+status: live
+summary: Create a task, optionally carrying an initial comment.
+generator: essentials
+language: java
+
+handles: [CreateTask]
+publishes: [TaskCreated]
+writes: [Task]
+endpoints:
+  - { method: POST, path: /tasks/create, auth: anonymous }
+forbidden:
+  - cross-slice-internal:task
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

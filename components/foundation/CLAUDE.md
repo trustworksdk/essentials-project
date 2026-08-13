@@ -81,6 +81,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 - `lockConfirmationInterval` MUST be strictly less than `lockTimeOut` — `DBFencedLockManager` does not enforce this; violation → spurious lock loss
 - `DBFencedLockManager` uses hostname as default `lockManagerInstanceId`; containers without stable hostnames need explicit id
 - `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation=false` means locks survive DB blips locally but risk split-brain if the DB actually moved the lock
+- `FencedLock.release()` does NOT stop an `acquireLockAsync` background acquirer — the next tick re-acquires the freed lock with the next token. Use `cancelAsyncLockAcquiring(lockName)` to hand a lock over. `releaseLock` is also not under the manager's `reentrantLock`, so the release and the re-acquire genuinely interleave
 - `CentralizedMessageFetcher` is Postgres-only; Mongo uses `DefaultDurableQueueConsumer`-per-thread approach — ordered-message key tracking differs between the two
 - `OrderedMessage` ordering across multiple cluster nodes is NOT guaranteed — only within a single node
 - `PostgresqlUtil.checkIsValidTableOrColumnName` is first-line defense only — callers must never pass user-supplied table names directly

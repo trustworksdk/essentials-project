@@ -4,9 +4,15 @@
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.types.spring.web`
-- Purpose: Spring WebMvc/WebFlux converter enabling `SingleValueType` as `@PathVariable`/`@RequestParam`
-- Dependencies: `spring-web` (provided), `spring-webmvc` (provided) or `spring-webflux` (provided)
-- Key class: `SingleValueTypeConverter`
+- Purpose: Spring WebMvc/WebFlux converters enabling semantic types as `@PathVariable`/`@RequestParam`
+- Dependencies: `spring-web`, `spring-webmvc` / `spring-webflux` (all provided); `kotlin-reflect` (optional)
+- Key classes: `SingleValueTypeConverter`, `KotlinValueTypeConverter`, `EssentialsWebMvcConfigurer`, `EssentialsWebFluxConfigurer`
+
+⚠️ **Read before answering questions about this module:**
+- The configurers are **shipped production classes**, but there is **no auto-configuration**. Consumers must `@Import` one.
+- `WebMvcConfig` / `WebFluxConfig` are **test-scope** classes. They are not on a consumer's classpath, are not API, and are not templates. `WebFluxConfig` in particular overrides `configureHttpMessageCodecs` with Jackson 2 codecs — correct for this module's own `-Pjackson2` runs, wrong for anyone else on Boot 4.
+- Neither shipped configurer touches HTTP message converters or codecs, so adding this module **cannot** change which Jackson major serialises bodies.
+- This module covers `@PathVariable`/`@RequestParam` only. Bodies are `types-jackson3` (Jackson 3 / Boot 4) or `types-jackson` (Jackson 2), registered on the **web** mapper.
 
 ```xml
 <dependency>
@@ -60,43 +66,54 @@ public final class SingleValueTypeConverter implements GenericConverter {
 ### WebMvc
 
 ```java
-import dk.trustworks.essentials.types.spring.web.SingleValueTypeConverter;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import dk.trustworks.essentials.types.spring.web.EssentialsWebMvcConfigurer;
 
-@Configuration
-public class WebMvcConfig implements WebMvcConfigurer {
-    @Override
-    public void addFormatters(FormatterRegistry registry) {
-        registry.addConverter(new SingleValueTypeConverter());
-    }
-}
+@SpringBootApplication
+@Import(EssentialsWebMvcConfigurer.class)
+public class Application { }
 ```
 
 ### WebFlux
 
 ```java
-import dk.trustworks.essentials.types.spring.web.SingleValueTypeConverter;
-import org.springframework.web.reactive.config.WebFluxConfigurer;
+import dk.trustworks.essentials.types.spring.web.EssentialsWebFluxConfigurer;
 
-@Configuration
-public class WebFluxConfig implements WebFluxConfigurer {
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    @Override
-    public void configureHttpMessageCodecs(ServerCodecConfigurer configurer) {
-        configurer.defaultCodecs().jackson2JsonEncoder(new Jackson2JsonEncoder(objectMapper));
-        configurer.defaultCodecs().jackson2JsonDecoder(new Jackson2JsonDecoder(objectMapper));
-    }
-
-    @Override
-    public void addFormatters(FormatterRegistry registry) {
-        registry.addConverter(new SingleValueTypeConverter());
-    }
-}
+@SpringBootApplication
+@Import(EssentialsWebFluxConfigurer.class)
+public class Application { }
 ```
 
-**JSON request/response bodies:** Requires `types-jackson` module with `EssentialTypesJacksonModule` bean. See [README Configuration](../types-spring-web/README.md#webmvc-configuration).
+Both register `SingleValueTypeConverter` — and `KotlinValueTypeConverter` when `kotlin-reflect` is
+present — via `addFormatters`, and nothing else.
+
+⚠️ **Do not override `configureHttpMessageCodecs` to register the Essentials Jackson module.** That
+*replaces* the application's JSON codecs. The commonly copied version of that override installs
+Jackson **2** codecs, which on Spring Boot 4 silently downgrades the whole application's body
+serialisation from Jackson 3. Register the Jackson module on the `ObjectMapper`/`JsonMapper` bean and
+let Boot build the codecs from it.
+
+**JSON request/response bodies:** a separate mechanism. Requires `EssentialTypesJacksonModule` on the
+**web** mapper, from the artifact matching your application's Jackson major:
+`types-jackson3` for Spring Boot 4 / Jackson 3, `types-jackson` for Jackson 2. Both publish the class
+under the same FQCN `dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule`, extending
+different Jackson majors — only one may be on the classpath. No Essentials starter registers it on the
+web mapper; the starters configure the persistence mapper.
+
+### Kotlin semantic types
+
+`SingleValueTypeConverter` covers the **Java** `SingleValueType` hierarchy only.
+`dk.trustworks.essentials.kotlin.types` is an unrelated hierarchy, handled by `KotlinValueTypeConverter`
+— which is needed far less often than it looks:
+
+| Kotlin type | Binds as `@PathVariable`? | Why |
+|---|---|---|
+| `@JvmInline value class` over anything | yes, with **nothing from Essentials** | Kotlin unboxes it in the JVM signature, nullable included: `fun byOrderId(orderId: OrderId)` → `byOrderId-GEJpfBY(String)`. Spring binds the underlying type; the converter is unreachable |
+| non-inline class wrapping `String` | yes, via **Spring's** `ObjectToObjectConverter` | it finds the single `String`-arg constructor |
+| non-inline class wrapping anything else | only with `KotlinValueTypeConverter` | otherwise `ConversionNotSupportedException` → HTTP **500**, not 400 |
+
+**Kotlin bodies** are covered by neither converter *nor* `EssentialTypesJacksonModule`. Register
+`jackson-module-kotlin`'s `KotlinModule` on the web mapper. Skipping it fails silently rather than
+loudly: a value class serialises as `{"value":"order-4711"}` instead of `"order-4711"`.
 
 ---
 
@@ -229,7 +246,15 @@ Required for JSON request/response bodies when using `types-jackson`.
 
 ## Gotchas
 
-⚠️ **Scope limitation** - Converter handles ONLY `@PathVariable` and `@RequestParam`, NOT `@RequestBody`/`@ResponseBody` (use `types-jackson`)
+⚠️ **Nothing is registered until a configurer is imported** - there is no `AutoConfiguration.imports` in this module. Declaring the dependency alone does nothing, which is a common source of "why is my typed `@PathVariable` a 500".
+
+⚠️ **`WebMvcConfig` / `WebFluxConfig` are test-scope** - not shipped, not on a consumer's classpath, not templates. Use `EssentialsWebMvcConfigurer` / `EssentialsWebFluxConfigurer`. Never recommend copying `WebFluxConfig`: its Jackson 2 codec override is correct only for this module's own `-Pjackson2` runs.
+
+⚠️ **Scope limitation** - Converters handle ONLY `@PathVariable` and `@RequestParam`, NOT `@RequestBody`/`@ResponseBody` (use `types-jackson3`/`types-jackson` on the web mapper)
+
+⚠️ **Java hierarchy only, for `SingleValueTypeConverter`** - its four `ConvertiblePair`s are `String`→`CharSequenceType`, `Number`→`NumberType`, `String`→`NumberType`, `String`→`JSR310SingleValueType`. Kotlin types are `KotlinValueTypeConverter`'s job.
+
+⚠️ **Region zone ids cannot be path variables** - `Europe/Paris` URL-encodes to a `%2F` that the servlet container rejects before conversion runs. Offset-only values work; otherwise use a request param.
 
 ⚠️ **ZonedDateTimeType URL encoding** - Client MUST URL-encode before sending:
 ```java

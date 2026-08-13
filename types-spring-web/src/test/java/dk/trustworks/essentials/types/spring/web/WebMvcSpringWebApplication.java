@@ -21,8 +21,15 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 
+/**
+ * Jackson <b>2</b> test application. {@link WebMvcConfig} and {@link WebFluxConfig} supply the Jackson 2 body
+ * converters/codecs; the semantic-type conversion for {@code @PathVariable}/{@code @RequestParam} comes from the
+ * shipped {@link EssentialsWebMvcConfigurer}, imported explicitly the way a consumer would.
+ */
 @SpringBootApplication
+@Import(EssentialsWebMvcConfigurer.class)
 class WebMvcSpringWebApplication {
 
     @Bean

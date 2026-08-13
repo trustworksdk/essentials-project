@@ -4,16 +4,34 @@
 
 ## Quick Facts
 - Package: `dk.trustworks.essentials.jackson.types`
-- Purpose: Jackson serialization/deserialization for `SingleValueType` implementations
+- Purpose: Jackson serialization/deserialization for **Java** `SingleValueType` implementations
 - Dependencies: `jackson-databind` (provided), `types` module
 - Key class: `EssentialTypesJacksonModule`
 
+**Two artifacts, one FQCN.** `types-jackson3` is the Jackson 3 flavour and the repository default;
+`types-jackson` is Jackson 2. Both publish
+`dk.trustworks.essentials.jackson.types.EssentialTypesJacksonModule`, extending
+`tools.jackson.databind` and `com.fasterxml.jackson.databind` respectively, so only one may ever be on
+the classpath. Pick the one matching your application's Jackson major — Spring Boot 4 is Jackson 3.
+
 ```xml
+<!-- Spring Boot 4 / Jackson 3 -->
+<dependency>
+    <groupId>dk.trustworks.essentials</groupId>
+    <artifactId>types-jackson3</artifactId>
+</dependency>
+
+<!-- Jackson 2 -->
 <dependency>
     <groupId>dk.trustworks.essentials</groupId>
     <artifactId>types-jackson</artifactId>
 </dependency>
 ```
+
+⚠️ **Java hierarchy only.** `EssentialTypesJacksonModule` registers serializers for `CharSequenceType`,
+`NumberType`, `Money` and `JSR310SingleValueType`. It has **no** knowledge of
+`dk.trustworks.essentials.kotlin.types` — Kotlin semantic types need `jackson-module-kotlin`'s
+`KotlinModule` registered alongside it. See [Kotlin semantic types](#kotlin-semantic-types).
 
 ## TOC
 - [Core API](#core-api)
@@ -151,6 +169,61 @@ public class OrderId extends CharSequenceType<OrderId> {
 
 ⚠️ Missing `String` constructor → deserialization fails in Jackson 2.18+
 
+### NumberType deserialization
+
+**No extra constructor is required — the module deserializes the whole family:**
+
+```java
+import dk.trustworks.essentials.types.BigDecimalType;
+
+public class Quantity extends BigDecimalType<Quantity> {
+    public Quantity(BigDecimal value) { super(value); }   // the only constructor Jackson needs
+
+    public static Quantity of(BigDecimal value) { return new Quantity(value); }
+}
+```
+
+`NumberTypeJsonDeserializers` (a `Deserializers` SPI) resolves a `NumberTypeJsonDeserializer` for every concrete
+`NumberType` subclass, reads the JSON number at the width the type wraps (via `NumberType.resolveNumberClass`), and
+constructs through `SingleValueType.from(...)` so the type's own validation still runs.
+
+⚠️ Registered through the SPI, **not** `addDeserializer(NumberType.class, …)`. The two sides of Jackson are not
+symmetric: serializer lookup walks supertypes, so one serializer on the base covers every subclass, but deserializer
+lookup is an exact-type match and a registration on the base would never fire.
+
+**Coercion rules it enforces**, which are as load-bearing as the fix — quietly truncating on replay would be worse
+than the crash it replaces:
+
+| JSON | `BigDecimalType` | `LongType` / `IntegerType` / `BigIntegerType` | `DoubleType` |
+|---|---|---|---|
+| `2` | ✅ | ✅ | ✅ |
+| `9007199254740993` | ✅ | ✅ (`IntegerType` ❌ — overflow) | ✅ |
+| `2.5` | ✅ | ❌ **refused, never truncated to `2`** | ✅ |
+| `"2"` (quoted) | ✅ | ✅ | ✅ |
+| `"2.5"` (quoted) | ✅ | ❌ refused | ✅ |
+| `null` | `null` | `null` | `null` |
+
+Quoted numbers stay readable on purpose — anything persisted with `WRITE_NUMBERS_AS_STRINGS`, or written by a
+producer that quotes large numbers, depends on it.
+
+A type extending `NumberType` directly, outside the eight known bases, is left to Jackson's default handling rather
+than guessed at.
+
+#### The trap this removed
+
+Before the deserializer existed, concrete subclasses fell through to Jackson's own creator detection, which selects
+a creator **by the incoming JSON token's own type** and does not widen. A `BigDecimalType` declaring only the natural
+`(BigDecimal)` constructor could not be read from an integral number at all — `"quantity":2` failed with *"no
+int/Int-argument constructor/factory method to deserialize from Number value"*. It serialized fine, so the breakage
+surfaced only on replay of existing events.
+
+Adding a `(double)` constructor cleared that error and was the obvious workaround — but Jackson then routed every
+floating-point token through it, narrowing to a `double` before the `BigDecimal` was built, so
+`1234.5678901234567890123` came back as `1234.567890123457`. `Amount` carries such a constructor and did lose
+precision this way. Both problems are gone: the deserializer never consults those overloads.
+
+Pinned by `NumberTypeCreatorRequirementTest` (both flavors) and `NumberTypeCreatorPrecisionTest` (`types-jackson3`).
+
 ### JSR310SingleValueType
 
 **@JsonCreator required:**
@@ -282,14 +355,46 @@ Order restored = mapper.readValue(json, Order.class);
 
 ---
 
+## Kotlin semantic types
+
+`EssentialTypesJacksonModule` does **not** cover `dk.trustworks.essentials.kotlin.types` — neither
+flavour references that package at all. Kotlin semantic types are handled by `jackson-module-kotlin`,
+which the consumer registers:
+
+```kotlin
+// Jackson 3
+JsonMapper.builder()
+    .addModule(EssentialTypesJacksonModule())
+    .addModule(tools.jackson.module.kotlin.KotlinModule.Builder().build())
+    .build()
+
+// Jackson 2
+ObjectMapper()
+    .registerModule(EssentialTypesJacksonModule())
+    .registerModule(com.fasterxml.jackson.module.kotlin.KotlinModule.Builder().build())
+```
+
+⚠️ **Omitting `KotlinModule` fails silently, not loudly.** Jackson treats a `@JvmInline value class` as
+an ordinary bean and writes `{"value":"order-4711"}` where the wire contract is the bare scalar
+`"order-4711"`. Nothing throws on the way out; the mismatch surfaces later as unreadable persisted
+JSON. Asserted on both majors by `KotlinJacksonBodyJackson2Test` / `KotlinJacksonBodyJackson3Test` in
+`types-spring-web`.
+
+For an application that persists Kotlin documents, `components/postgresql-document-db`'s
+`TestObjectMappers.kt` is the worked example of assembling the flavour's mapper with `KotlinModule`.
+
+---
+
 ## Gotchas
 
 - ⚠️ `CharSequenceType` needs **both** `CharSequence` and `String` constructors for Jackson 2.18+
+- ⚠️ `NumberType` subclasses need only the value-typed constructor — `NumberTypeJsonDeserializers` handles the family. A fraction is **refused** by the integral bases rather than truncated, and quoted numbers still read
 - ⚠️ `JSR310SingleValueType` needs `@JsonCreator` on constructor
 - ⚠️ Map key deserialization requires explicit `@JsonDeserialize(keyUsing = ...)`
 - ⚠️ `Money` serializes as `{"amount":"...","currency":"..."}` object, not single value
 - ⚠️ Factory `createObjectMapper()` disables getter/setter detection - uses fields only
-- ⚠️ All registered types are from `dk.trustworks.essentials.types` module
+- ⚠️ All registered types are from `dk.trustworks.essentials.types` — the **Java** hierarchy. Kotlin value types need `jackson-module-kotlin`
+- ⚠️ This module covers `@RequestBody`/`@ResponseBody` and persistence. `@PathVariable`/`@RequestParam` is `types-spring-web`, a separate mechanism
 
 ---
 

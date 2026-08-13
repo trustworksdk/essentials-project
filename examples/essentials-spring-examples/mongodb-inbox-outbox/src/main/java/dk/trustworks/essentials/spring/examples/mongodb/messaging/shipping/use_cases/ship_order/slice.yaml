@@ -1,0 +1,31 @@
+schemaVersion: "1.1"
+slice: shipping.ship_order
+kind: command
+bc: shipping
+owner: shipping-team
+status: live
+summary: Mark a registered shipping order as shipped.
+generator: essentials
+language: java
+tier: service-entity
+
+handles: [ShipOrder]
+publishes: [OrderShipped]
+writes: [ShippingOrder]
+reads:
+  - { name: ShippingOrder }
+endpoints:
+  - { method: POST, path: /shipping/ship-order }
+invariants:
+  - id: INV-SO-1
+    text: "An order is shipped at most once - markOrderAsShipped only reports a state change when the order is not already shipped, because ShipOrder arrives over an at-least-once Inbox."
+    enforcedBy: ShippingOrder
+  - id: INV-SO-2
+    text: "The mutation is written back explicitly - Spring Data MongoDB does no dirty checking, so without save() the idempotency guard in INV-SO-1 never survives a redelivery."
+    enforcedBy: ShipOrderHandler
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: true }
+  integration: { present: true }
+  contract: { present: false }

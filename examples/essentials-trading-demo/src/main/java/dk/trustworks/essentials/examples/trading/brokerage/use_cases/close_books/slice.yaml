@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.close_books
+kind: command
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Seal a trading account's current books generation, naming the period the next one will open in.
+generator: essentials
+language: java
+
+handles: [CloseBooks]
+publishes: [AccountBooksClosed]
+writes: [TradingAccount]
+reads:
+  - { name: TradingAccount }
+endpoints:
+  - { method: POST, path: /api/admin/trading-accounts/{accountId}/books-closures, auth: anonymous }
+invariants:
+  - id: INV-CB-1
+    text: "Closing already-closed books is an idempotent no-op, not a failure"
+    enforcedBy: TradingAccount
+  - id: INV-CB-2
+    text: "Closing zeroes reserved funds"
+    enforcedBy: TradingAccount
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

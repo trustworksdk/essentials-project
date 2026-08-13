@@ -45,6 +45,7 @@ No sub-packages in main sources; test sources use `types.ids` and `types.dates` 
 - **New primitive base type** → implement `SingleValueType<V,C>` directly, or extend `NumberType<N,C>` for numeric variants
 - **New concrete domain type** → subclass one of the base classes (e.g. `extends LongType<MyId> implements Identifier`)
   - Convention: provide `(VALUE_TYPE value)` constructor + static `of(...)` + `ofNullable(...)` — `SingleValueType.fromObject()` searches in that order via reflection
+  - A `NumberType` subclass needs no extra constructor for JSON — `types-jackson`/`types-jackson3` deserialize the family at the wrapped width. Convenience overloads are not part of the wire contract; see `LLM/LLM-types-jackson.md` → *NumberType deserialization* for the trap this replaced
 - **Kotlin types** → implement the relevant `*ValueType<SELF>` interface; no Java inheritance needed
 
 ## Gotchas
