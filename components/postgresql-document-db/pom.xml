@@ -37,9 +37,6 @@
     <name>postgresql-document-db</name>
     <packaging>jar</packaging>
 
-    <properties>
-        <byte-buddy-agent.version>1.17.8</byte-buddy-agent.version>
-    </properties>
 
     <dependencies>
         <dependency>
@@ -161,11 +158,26 @@
         <sourceDirectory>src/main/kotlin</sourceDirectory>
         <testSourceDirectory>src/test/kotlin</testSourceDirectory>
         <plugins>
+            <!-- Supplies the `net.bytebuddy:byte-buddy-agent:jar` path property used by the surefire argLine below. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>resolve-test-agent-paths</id>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>-javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy-agent.version}/byte-buddy-agent-${byte-buddy-agent.version}.jar</argLine>
+                    <!-- Resolved-dependency path, not a hand-spelled ${settings.localRepository} one; see the
+                         longer note on the same plugin in components/postgresql-event-store/pom.xml. -->
+                    <argLine>-javaagent:${net.bytebuddy:byte-buddy-agent:jar}</argLine>
                 </configuration>
             </plugin>
             <plugin>

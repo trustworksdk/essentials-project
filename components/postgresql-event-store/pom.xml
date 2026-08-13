@@ -36,9 +36,6 @@
     <name>postgresql-event-store</name>
     <packaging>jar</packaging>
 
-    <properties>
-        <byte-buddy-agent.version>1.17.8</byte-buddy-agent.version>
-    </properties>
 
 
     <dependencies>
@@ -225,11 +222,41 @@
         </pluginManagement>
 
         <plugins>
+            <!--
+              Defines a `<groupId>:<artifactId>:<type>` property per resolved dependency, holding its path in the
+              local repository. That is what lets the surefire argLine below name the byte-buddy agent jar without
+              restating its version. Bound to `initialize`, so the property exists by the time surefire runs.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>resolve-test-agent-paths</id>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>-javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy-agent.version}/byte-buddy-agent-${byte-buddy-agent.version}.jar</argLine>
+                    <!--
+                      Mockito's inline mock maker needs the agent loaded at startup; JDK 21+ warns on dynamic
+                      self-attach and later JDKs refuse it outright.
+
+                      The path comes from maven-dependency-plugin above, so it always names the version this
+                      module actually resolves. Do not spell it out under ${settings.localRepository} with a
+                      hand-maintained version property: that duplicate silently stops matching the moment the pin
+                      in the root pom moves, and the JVM then dies at startup with "Error opening zip file or JAR
+                      manifest missing" - surfacing as surefire's "The forked VM terminated without properly
+                      saying goodbye", exit 1, with no test output to explain it. A developer's ~/.m2 still holds
+                      the stale jar from an earlier build, so it only fails on clean CI. That is exactly what the
+                      byte-buddy 1.17.8 -> 1.18.11 bump did.
+                    -->
+                    <argLine>-javaagent:${net.bytebuddy:byte-buddy-agent:jar}</argLine>
                 </configuration>
             </plugin>
             <plugin>
