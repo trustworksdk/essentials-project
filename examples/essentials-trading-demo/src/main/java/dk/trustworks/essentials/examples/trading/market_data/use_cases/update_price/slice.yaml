@@ -14,7 +14,7 @@ writes: [InstrumentPrice]
 reads:
   - { name: InstrumentPrice }
 endpoints:
-  - { method: POST, path: /api/admin/instrument-prices/{instrumentId}, auth: anonymous }
+  - { method: POST, path: "/api/admin/instrument-prices/{instrumentId}", auth: anonymous }
 invariants:
   - id: INV-UP-1
     text: "A tick repeating the price already held is a no-op - an unchanged market must not lengthen the stream, and a redelivered command leaves no trace"

@@ -16,7 +16,7 @@ writes: [TradingAccount]
 reads:
   - { name: TradingAccount }
 endpoints:
-  - { method: POST, path: /api/admin/trading-accounts/{accountId}/fund-releases, auth: anonymous }
+  - { method: POST, path: "/api/admin/trading-accounts/{accountId}/fund-releases", auth: anonymous }
 invariants:
   - id: INV-RLF-1
     text: "More may not be released than is currently reserved"

@@ -14,7 +14,7 @@ writes: [TradingAccount]
 reads:
   - { name: TradingAccount }
 endpoints:
-  - { method: POST, path: /api/admin/trading-accounts/{accountId}/books-closures, auth: anonymous }
+  - { method: POST, path: "/api/admin/trading-accounts/{accountId}/books-closures", auth: anonymous }
 invariants:
   - id: INV-CB-1
     text: "Closing already-closed books is an idempotent no-op, not a failure"

@@ -160,7 +160,12 @@ public abstract class LocalOrderedMessagesDurableQueueIT<DURABLE_QUEUES extends 
                                                      );
 
         // Then
-        Awaitility.waitAtMost(Duration.ofSeconds(30))
+        // 120s, not 30s: consuming 2000 ordered messages is throughput-bound, not latency-bound, and the throughput is
+        // whatever the machine gives us. On an idle dev box the Mongo variant consumes them in ~15s, but a CI runner
+        // sharing 4 vCPUs with a second forked IT JVM and two Testcontainers databases runs this workload ~2.5x slower -
+        // enough to blow a 30s budget (observed: 1635/2000 at 30s on the JDK 21 leg while the redelivery variant ran
+        // alongside it). The sibling LocalOrderedMessagesRedeliveryDurableQueueIT already waits 200s for the same reason.
+        Awaitility.waitAtMost(Duration.ofSeconds(120))
                   .untilAsserted(() -> assertThat(recordingQueueMessageHandler.messages.size()).isEqualTo(NUMBER_OF_MESSAGES));
         var timing = stopWatch.stop();
         timings.add(timing);

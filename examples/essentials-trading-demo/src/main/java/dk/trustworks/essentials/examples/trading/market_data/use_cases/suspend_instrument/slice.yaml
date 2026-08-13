@@ -14,7 +14,7 @@ writes: [Instrument]
 reads:
   - { name: Instrument }
 endpoints:
-  - { method: POST, path: /api/admin/instruments/{instrumentId}/suspension, auth: anonymous }
+  - { method: POST, path: "/api/admin/instruments/{instrumentId}/suspension", auth: anonymous }
 invariants:
   - id: INV-SI-1
     text: "Suspending an already-suspended instrument is an idempotent no-op, so the first reason is the one that stands"

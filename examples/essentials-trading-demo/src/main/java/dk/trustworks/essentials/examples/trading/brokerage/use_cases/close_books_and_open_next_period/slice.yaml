@@ -14,7 +14,7 @@ writes: [TradingAccount]
 reads:
   - { name: TradingAccount }
 endpoints:
-  - { method: POST, path: /api/admin/trading-accounts/{accountId}/generations, auth: anonymous }
+  - { method: POST, path: "/api/admin/trading-accounts/{accountId}/generations", auth: anonymous }
 invariants:
   - id: INV-CBON-1
     text: "Close then open, in one transaction - only closing leaves no open generation, only opening loses the closing entry"

@@ -14,7 +14,7 @@ writes: [Instrument]
 reads:
   - { name: Instrument }
 endpoints:
-  - { method: POST, path: /api/admin/instruments/{instrumentId}/name, auth: anonymous }
+  - { method: POST, path: "/api/admin/instruments/{instrumentId}/name", auth: anonymous }
 invariants:
   - id: INV-RN-1
     text: "Renaming to the display name already held is an idempotent no-op, not a second InstrumentRenamed"
