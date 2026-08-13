@@ -153,7 +153,7 @@ public class WebFluxControllerIT {
                               Percentage.from("40.5%"),
                               CurrencyCode.of("DKK"),
                               CountryCode.of("DK"),
-                              EmailAddress.of("john@nonexistingdomain.com"),
+                              EmailAddress.of("john@example.com"),
                               Money.of("102.75", CurrencyCode.EUR),
                               Created.now(),
                               DueDate.now(),

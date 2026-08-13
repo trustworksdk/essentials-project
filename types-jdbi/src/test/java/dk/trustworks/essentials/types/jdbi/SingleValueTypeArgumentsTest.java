@@ -89,7 +89,7 @@ class SingleValueTypeArgumentsTest {
             var amount          = Amount.of("123.456");
             var country         = CountryCode.of("DK");
             var currency        = CurrencyCode.of("DKK");
-            var email           = EmailAddress.of("john@nonexistingdomain.com");
+            var email           = EmailAddress.of("john@example.com");
             var percentage      = Percentage.from("40.5%");
             var created         = Created.now();
             var dueDate         = DueDate.now();

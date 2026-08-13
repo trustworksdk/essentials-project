@@ -49,7 +49,7 @@ public class CustomConversionsTest {
                          .setCurrency(CurrencyCode.of("DKK"))
                          .setCountry(CountryCode.of("DK"))
                          .setSalesTax(salesTax)
-                         .setEmail(EmailAddress.of("john@nonexistingdomain.com"))
+                         .setEmail(EmailAddress.of("john@example.com"))
                          .setTotalPrice(Money.newBuilder()
                                              .setAmount(totalPrice)
                                              .setCurrency(CurrencyCode.DKK)

@@ -47,7 +47,7 @@ class EssentialTypesJacksonModuleTest {
                                                        percentage,
                                                        CurrencyCode.DKK,
                                                        CountryCode.of("DK"),
-                                                       EmailAddress.of("john@nonexistingdomain.com"),
+                                                       EmailAddress.of("john@example.com"),
                                                        Map.of(orderLineProductId, Quantity.of(10),
                                                               ProductId.random(), Quantity.of(5),
                                                               ProductId.random(), Quantity.of(1)),

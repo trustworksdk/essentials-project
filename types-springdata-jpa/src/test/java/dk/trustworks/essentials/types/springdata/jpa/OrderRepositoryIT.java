@@ -79,7 +79,7 @@ class OrderRepositoryIT {
                                                                                                percentage,
                                                                                                currencyCode,
                                                                                                CountryCode.of("DK"),
-                                                                                               EmailAddress.of("john@nonexistingdomain.com"),
+                                                                                               EmailAddress.of("john@example.com"),
                                                                                                new Money(amount.add(percentage.of(amount)), currencyCode),
                                                                                                Created.now(),
                                                                                                DueDate.now(),
