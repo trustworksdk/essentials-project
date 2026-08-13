@@ -1,0 +1,27 @@
+schemaVersion: "1.1"
+slice: shipping.order_status
+kind: view
+bc: shipping
+owner: shipping-team
+status: live
+summary: Answer where a shipping order stands, by list, by id, or filtered by shipped status.
+generator: essentials
+language: java
+tier: service-entity
+
+serves: [ListOrders, GetOrderStatus, FindOrdersByShippedStatus]
+endpoints:
+  - { method: GET, path: /shipping/orders, maps: ListOrders }
+  - { method: GET, path: "/shipping/orders/{orderId}", maps: GetOrderStatus }
+  - { method: GET, path: "/shipping/orders?shipped=", maps: FindOrdersByShippedStatus }
+reads:
+  - { name: OrderStatusView }
+# No `projections:` - on the service-entity tier a view slice owns a query interface and a read shape, not a
+# projector. There is no stream to replay, so the read is strongly consistent and slice-check gate 10
+# (projection idempotency) does not apply.
+forbidden:
+  - cross-slice-internal:shipping
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

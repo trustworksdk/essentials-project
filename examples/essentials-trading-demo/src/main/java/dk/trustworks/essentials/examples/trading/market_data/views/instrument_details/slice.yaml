@@ -1,0 +1,31 @@
+schemaVersion: "1.1"
+slice: market_data.instrument_details
+kind: view
+bc: market_data
+owner: market-data-team
+status: live
+summary: Serve instrument reference data and suspension state from a projected read model.
+generator: essentials
+language: java
+
+serves: [ListInstruments, GetInstrumentDetails]
+endpoints:
+  - { method: GET, path: /api/admin/instruments, auth: anonymous }
+  - { method: GET, path: "/api/admin/instruments/{instrumentId}", auth: anonymous }
+reads:
+  - { name: InstrumentDetails }
+projections:
+  - name: InstrumentDetailsProjection
+    from: [InstrumentRegistered, InstrumentRenamed, InstrumentSuspended]
+    consistency: eventual
+    store: postgresql
+invariants:
+  - id: INV-ID-1
+    text: "InstrumentRegistered upserts, so a redelivery re-applies the same reference data rather than failing on the primary key; the two update handlers are naturally idempotent because they assign rather than accumulate"
+    enforcedBy: InstrumentDetailsProjection
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

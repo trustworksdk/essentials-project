@@ -21,8 +21,10 @@ import dk.trustworks.essentials.components.document_db.DocumentDbRepositoryFacto
 import dk.trustworks.essentials.components.document_db.VersionedEntity
 import dk.trustworks.essentials.components.document_db.annotations.DocumentEntity
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer
+import dk.trustworks.essentials.components.foundation.postgresql.InvalidTableOrColumnNameException
 import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil
 import dk.trustworks.essentials.kotlin.types.*
+import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.time.*
@@ -64,7 +66,8 @@ class Condition<T>(val jsonSerializer: JSONSerializer) {
     private var bindCounter = 0
 
     internal fun uniqueBindName(property: Property<*, *>): String {
-        return "${property.name()}__$bindCounter".also { bindCounter++ }
+        // The bind name is interpolated into the SQL as ":<bindName>", so it is a SQL sink like the path expression is
+        return "${property.checkedBindName()}__$bindCounter".also { bindCounter++ }
     }
 
     /**
@@ -334,10 +337,11 @@ class Condition<T>(val jsonSerializer: JSONSerializer) {
             else -> null
         }
 
+        val valuePath = property.checkedJSONValueArrowPath()
         val condition = if (dbType != null) {
-            "CAST(${property.toJSONValueArrowPath()} AS $dbType) $operator :$bindName"
+            "CAST($valuePath AS $dbType) $operator :$bindName"
         } else {
-            "${property.toJSONValueArrowPath()} $operator :$bindName"
+            "$valuePath $operator :$bindName"
         }
 
         conditions.add(condition)
@@ -356,10 +360,11 @@ class Condition<T>(val jsonSerializer: JSONSerializer) {
     internal fun applyPathCondition(path: String, operator: String, value: Any?, dbType: DbType?): Condition<T> {
         val property = JsonPathProperty<T>(path)
         val bindName = uniqueBindName(property)
+        val valuePath = property.checkedJSONValueArrowPath()
         val condition = if (dbType != null) {
-            "CAST(${property.toJSONValueArrowPath()} AS ${dbType.sql}) $operator :$bindName"
+            "CAST($valuePath AS ${dbType.sql}) $operator :$bindName"
         } else {
-            "${property.toJSONValueArrowPath()} $operator :$bindName"
+            "$valuePath $operator :$bindName"
         }
 
         conditions.add(condition)
@@ -381,12 +386,117 @@ class Condition<T>(val jsonSerializer: JSONSerializer) {
 
 /**
  * Reference to a property of a [VersionedEntity]
+ *
+ * `sealed`, so the only implementations are [SingleProperty], [NestedProperty] and [JsonPathProperty]. Nothing is lost by
+ * closing it: everything a [Property] contributes to a SQL statement has to survive [checkedJSONValueArrowPath] /
+ * [checkedBindName], which restrict it to a plain JSON path, and [JsonPathProperty] already expresses every such path.
+ *
+ * Sealing does *not* replace those checks. [SingleProperty] and [NestedProperty] wrap arbitrary [KProperty1] references,
+ * and a Kotlin backtick-quoted identifier may contain quotes and spaces, so even these implementations carry text this
+ * module didn't author.
  */
-interface Property<T, R> {
+sealed interface Property<T, R> {
     fun toJSONValueArrowPath(): String
     fun toJSONArrowPath(): String
     fun returnType(): KType
     fun name(): String
+}
+
+/**
+ * The only shape a [Property] is allowed to contribute to a generated SQL statement: the literal `data` column
+ * followed by single-quoted JSON path segments, e.g. `data->>'city'` or `data->'contact'->'address'->>'city'`.
+ */
+private val JSON_PATH_EXPRESSION_PATTERN = Regex("^data(->'[^']*')*(->>'[^']*')?$")
+
+/**
+ * Captures the JSON path segment inside each `->'…'` / `->>'…'` step of a [JSON_PATH_EXPRESSION_PATTERN] match.
+ */
+private val JSON_PATH_SEGMENT_PATTERN = Regex("->>?'([^']*)'")
+
+/**
+ * Validate a [Property] path expression at the point where it is concatenated into a SQL statement.
+ *
+ * [Property] is a public extension point, so validating only at construction time (as [JsonPathProperty] and [Index] do)
+ * leaves the concatenation itself unguarded: an implementation that builds its path expression from an untrusted string
+ * reaches the generated SQL unchecked. Checking here means the guarantee holds for every implementation, including ones
+ * outside this module.
+ *
+ * The expression must match [JSON_PATH_EXPRESSION_PATTERN] and every path segment must pass
+ * [PostgresqlUtil.checkIsValidTableOrColumnName]. This deliberately restricts a [Property] to plain JSON paths -
+ * an implementation that needs to wrap a path in a larger SQL fragment must compose around a checked path rather than
+ * emit the fragment from [Property.toJSONValueArrowPath].
+ *
+ * As with everything built on [PostgresqlUtil.checkIsValidTableOrColumnName], this is a defense layer and not a
+ * security guarantee - see that method's security notice.
+ */
+internal fun checkJsonPathExpression(pathExpression: String): String {
+    if (!JSON_PATH_EXPRESSION_PATTERN.matches(pathExpression)) {
+        throw InvalidTableOrColumnNameException(
+            "Invalid JSON path expression: '$pathExpression'. A Property may only contribute a plain JSON path, " +
+                "e.g. \"data->>'city'\" or \"data->'contact'->'address'->>'city'\""
+        )
+    }
+    val segments = JSON_PATH_SEGMENT_PATTERN.findAll(pathExpression).map { it.groupValues[1] }.toList()
+    if (segments.isEmpty()) {
+        throw InvalidTableOrColumnNameException("Invalid JSON path expression: '$pathExpression'. It must contain at least one path segment")
+    }
+    segments.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it, pathExpression) }
+    return pathExpression
+}
+
+/**
+ * [Property.toJSONValueArrowPath] validated by [checkJsonPathExpression] - use this, never the raw accessor,
+ * when the result is concatenated into a SQL statement.
+ */
+internal fun Property<*, *>.checkedJSONValueArrowPath(): String = checkJsonPathExpression(toJSONValueArrowPath())
+
+/**
+ * How much of a [Property.name] is kept in a bind name.
+ *
+ * A bind name is not a SQL identifier - JDBI replaces `:<name>` with a `?` placeholder before the statement reaches
+ * PostgreSQL - so [PostgresqlUtil.MAX_IDENTIFIER_LENGTH] does not apply and would only be a borrowed number: the name is a
+ * *JSON* property path, and [NestedProperty] joins a whole chain of them. 63 would truncate an ordinary 4-level chain, and
+ * since the bind name is what makes generated SQL readable, that is worth avoiding. 256 is still a bound - the string does
+ * end up in the SQL text - but one no realistic entity model reaches, because every segment is separately capped at
+ * [PostgresqlUtil.MAX_IDENTIFIER_LENGTH] when the entity is configured.
+ */
+private const val MAX_BIND_NAME_LENGTH = 256
+
+private val bindNameLog = LoggerFactory.getLogger("dk.trustworks.essentials.components.document_db.postgresql.BindName")
+
+/**
+ * [Property.name] reduced to something safe to interpolate as a JDBI named bind parameter (`:<name>`).
+ *
+ * The identifier character class is borrowed from [PostgresqlUtil] (along with its reserved-word list) even though the
+ * length limit isn't, which is why this uses [PostgresqlUtil.isValidSqlIdentifier] with an explicit maximum rather than
+ * [PostgresqlUtil.checkIsValidTableOrColumnName]. The name is truncated *before* it is validated; that cannot weaken the
+ * check, because what is validated is exactly what is emitted, and uniqueness comes from the counter the caller appends
+ * rather than from the name.
+ *
+ * The qualified variant ([PostgresqlUtil.isValidQualifiedSqlIdentifier], which allows 2*63+1 characters) is not an option:
+ * it requires exactly one dot, which no [Property.name] contains, and a dot in a bind name means bean-property navigation
+ * to JDBI.
+ */
+internal fun Property<*, *>.checkedBindName(): String {
+    val name = name()
+    val bindName = name.take(MAX_BIND_NAME_LENGTH)
+    if (bindName.length < name.length) {
+        // Truncation is safe but not free: two properties sharing a MAX_BIND_NAME_LENGTH-long prefix produce bind names
+        // that differ only in the counter, and neither matches the property name the caller is looking for in the binding
+        // map. Say so rather than let it surface as a confusing generated statement
+        bindNameLog.warn(
+            "Property name '{}' exceeds the maximum bind parameter name length of {} and was truncated to '{}' - " +
+                "the generated SQL and its bindings will not carry the full property name",
+            name, MAX_BIND_NAME_LENGTH, bindName
+        )
+    }
+    if (!PostgresqlUtil.isValidSqlIdentifier(bindName, MAX_BIND_NAME_LENGTH)) {
+        throw InvalidTableOrColumnNameException(
+            "Invalid bind parameter name: '$bindName'. A Property name must start with a letter or underscore, " +
+                "followed by letters, digits or underscores"
+        )
+    }
+    return bindName
 }
 
 /**
@@ -843,41 +953,41 @@ class QueryBuilder<ID, ENTITY : VersionedEntity<ID, ENTITY>>(
         val propertyType: KType = property.returnType()
         val classifier = propertyType.classifier as? KClass<*>
             ?: throw IllegalArgumentException("Unsupported type '${propertyType.classifier}' for property ${property.name()}")
-
+        val valuePath = property.checkedJSONValueArrowPath()
 
         return when {
-            classifier == LocalDate::class -> "CAST(${property.toJSONValueArrowPath()} AS DATE)"
-            LocalDateValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS DATE)"
+            classifier == LocalDate::class -> "CAST($valuePath AS DATE)"
+            LocalDateValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS DATE)"
 
-            classifier == LocalTime::class -> "CAST(${property.toJSONValueArrowPath()} AS TIME)"
-            LocalTimeValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS TIME)"
+            classifier == LocalTime::class -> "CAST($valuePath AS TIME)"
+            LocalTimeValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS TIME)"
 
-            classifier == LocalDateTime::class -> "CAST(${property.toJSONValueArrowPath()} AS TIMESTAMP)"
-            LocalDateTimeValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS TIMESTAMP)"
+            classifier == LocalDateTime::class -> "CAST($valuePath AS TIMESTAMP)"
+            LocalDateTimeValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS TIMESTAMP)"
 
-            classifier == Instant::class || classifier == OffsetDateTime::class || classifier == ZonedDateTime::class -> "CAST(${property.toJSONValueArrowPath()} AS TIMESTAMPTZ)"
-            InstantValueType::class.isSuperclassOf(classifier) || OffsetDateTimeValueType::class.isSuperclassOf(classifier) || ZonedDateTimeValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS TIMESTAMPTZ)"
+            classifier == Instant::class || classifier == OffsetDateTime::class || classifier == ZonedDateTime::class -> "CAST($valuePath AS TIMESTAMPTZ)"
+            InstantValueType::class.isSuperclassOf(classifier) || OffsetDateTimeValueType::class.isSuperclassOf(classifier) || ZonedDateTimeValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS TIMESTAMPTZ)"
 
-            IntValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS INTEGER)"
-            LongValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS BIGINT)"
-            FloatValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS REAL)"
-            DoubleValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS DOUBLE PRECISION)"
-            BigDecimalValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS DOUBLE PRECISION)"
-            BigIntegerValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS NUMERIC)"
-            BooleanValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS BOOLEAN)"
-            ShortValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS SMALLINT)"
-            ByteValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS SMALLINT)"
-            StringValueType::class.isSuperclassOf(classifier) -> "CAST(${property.toJSONValueArrowPath()} AS TEXT)"
-            classifier == Int::class -> "CAST(${property.toJSONValueArrowPath()} AS INTEGER)"
-            classifier == Long::class -> "CAST(${property.toJSONValueArrowPath()} AS BIGINT)"
-            classifier == Float::class -> "CAST(${property.toJSONValueArrowPath()} AS REAL)"
-            classifier == Double::class -> "CAST(${property.toJSONValueArrowPath()} AS DOUBLE PRECISION)"
-            classifier == BigDecimal::class -> "CAST(${property.toJSONValueArrowPath()} AS DOUBLE PRECISION)"
-            classifier == BigInteger::class -> "CAST(${property.toJSONValueArrowPath()} AS NUMERIC)"
-            classifier == Boolean::class -> "CAST(${property.toJSONValueArrowPath()} AS BOOLEAN)"
-            classifier == Short::class -> "CAST(${property.toJSONValueArrowPath()} AS SMALLINT)"
-            classifier == Byte::class -> "CAST(${property.toJSONValueArrowPath()} AS SMALLINT)"
-            classifier == String::class -> "CAST(${property.toJSONValueArrowPath()} AS TEXT)"
+            IntValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS INTEGER)"
+            LongValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS BIGINT)"
+            FloatValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS REAL)"
+            DoubleValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS DOUBLE PRECISION)"
+            BigDecimalValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS DOUBLE PRECISION)"
+            BigIntegerValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS NUMERIC)"
+            BooleanValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS BOOLEAN)"
+            ShortValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS SMALLINT)"
+            ByteValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS SMALLINT)"
+            StringValueType::class.isSuperclassOf(classifier) -> "CAST($valuePath AS TEXT)"
+            classifier == Int::class -> "CAST($valuePath AS INTEGER)"
+            classifier == Long::class -> "CAST($valuePath AS BIGINT)"
+            classifier == Float::class -> "CAST($valuePath AS REAL)"
+            classifier == Double::class -> "CAST($valuePath AS DOUBLE PRECISION)"
+            classifier == BigDecimal::class -> "CAST($valuePath AS DOUBLE PRECISION)"
+            classifier == BigInteger::class -> "CAST($valuePath AS NUMERIC)"
+            classifier == Boolean::class -> "CAST($valuePath AS BOOLEAN)"
+            classifier == Short::class -> "CAST($valuePath AS SMALLINT)"
+            classifier == Byte::class -> "CAST($valuePath AS SMALLINT)"
+            classifier == String::class -> "CAST($valuePath AS TEXT)"
             else -> throw IllegalArgumentException("Unsupported type '${classifier.qualifiedName}' for property ${property.name()}")
         }
 
@@ -903,8 +1013,9 @@ class QueryBuilder<ID, ENTITY : VersionedEntity<ID, ENTITY>>(
         if (orderByPathFields.isNotEmpty()) {
             val prefix = if (orderByFields.isEmpty()) " ORDER BY " else ", "
             sql.append(prefix).append(orderByPathFields.joinToString(", ") {
-                val expression = it.third?.let { dbType -> "CAST(${it.first.toJSONValueArrowPath()} AS ${dbType.sql})" }
-                    ?: it.first.toJSONValueArrowPath()
+                val valuePath = it.first.checkedJSONValueArrowPath()
+                val expression = it.third?.let { dbType -> "CAST($valuePath AS ${dbType.sql})" }
+                    ?: valuePath
                 "$expression ${it.second}"
             })
         }

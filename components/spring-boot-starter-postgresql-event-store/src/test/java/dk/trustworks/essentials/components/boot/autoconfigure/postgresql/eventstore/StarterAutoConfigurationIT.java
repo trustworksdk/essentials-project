@@ -17,10 +17,12 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql.eventstore;
 
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.api.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.observability.micrometer.MeasurementEventStoreSubscriptionObserver;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.subscription.EventStoreSubscriptionManager;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -181,6 +183,46 @@ public class StarterAutoConfigurationIT {
                     assertThat(ctx.getBean(EventStoreSubscriptionObserver.class))
                             .isInstanceOf(MeasurementEventStoreSubscriptionObserver.class);
                     assertThat(ctx.getBean(EventStoreApi.class).findAllSubscriptionStatistics("principal")).isEmpty();
+                });
+    }
+
+    /**
+     * Guards the single-identity invariant of the {@code cdcEventStore} bean. Spring matches a not-yet-created
+     * {@code @Bean} on its declared return type, so narrowing {@code cdcEventStore} back to {@link EventStore}
+     * would leave {@link ConfigurableEventStore} injection points holding the un-decorated store. That store still
+     * exposes {@link EventStore#pollEvents}, so it would silently poll without CDC — no error, just no CDC. The
+     * {@code isSameAs} assertions are the point: same type is not enough, it has to be the same object.
+     */
+    @Test
+    void cdc_event_store_is_the_one_instance_behind_both_event_store_types() {
+        cdcEnabledContextRunner.run(ctx -> {
+            var asEventStore   = ctx.getBean(EventStore.class);
+            var asConfigurable = ctx.getBean(ConfigurableEventStore.class);
+            var undecorated    = ctx.getBean("essentialsEventStore");
+
+            assertThat(asEventStore).isInstanceOf(CdcEventStore.class);
+            assertThat(asConfigurable).isSameAs(asEventStore);
+
+            // The wrapped store is still reachable by name — the documented way to opt out of CDC decoration.
+            assertThat(undecorated).isNotSameAs(asEventStore);
+            assertThat(undecorated).isInstanceOf(PostgresqlEventStore.class);
+
+            // The subscription manager is the consumer that most needs the decorator: its subscriptions are what
+            // call pollEvents, and CdcEventStore.pollEvents is the CDC-bus-backed implementation.
+            assertThat(ctx.getBean(EventStoreSubscriptionManager.class).getEventStore()).isSameAs(asEventStore);
+        });
+    }
+
+    @Test
+    void without_cdc_both_event_store_types_resolve_to_the_undecorated_store() {
+        contextRunner
+                .withPropertyValues("essentials.eventstore.cdc.enabled=false")
+                .run(ctx -> {
+                    var eventStore = ctx.getBean(EventStore.class);
+
+                    assertThat(eventStore).isNotInstanceOf(CdcEventStore.class);
+                    assertThat(eventStore).isSameAs(ctx.getBean("essentialsEventStore"));
+                    assertThat(ctx.getBean(ConfigurableEventStore.class)).isSameAs(eventStore);
                 });
     }
 

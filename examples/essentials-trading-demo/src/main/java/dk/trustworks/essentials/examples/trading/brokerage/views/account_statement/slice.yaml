@@ -1,0 +1,41 @@
+schemaVersion: "1.1"
+slice: brokerage.account_statement
+kind: view
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Serve the statement state of each logical trading account from a projected read model, plus the closing-books generations behind one account.
+generator: essentials
+language: java
+
+serves: [ListAccountStatements, GetAccountOverview]
+endpoints:
+  - { method: GET, path: /api/admin/projections/account-statements, auth: anonymous }
+  - { method: GET, path: "/api/admin/trading-accounts/{accountId}", auth: anonymous }
+reads:
+  - { name: AccountStatement }
+  - { name: ApiClosingBooksGeneration }
+projections:
+  - name: AccountStatementProjection
+    from: [TradingAccountOpened, CashDeposited, FundsReserved, FundsReleased, TradeSettlementApplied, AccountBooksClosed]
+    consistency: eventual
+    store: jdbc
+invariants:
+  - id: INV-AS-1
+    text: "One row per logical account, not per generation stream: a books rollover restates the row rather than adding one"
+    enforcedBy: AccountStatementProjection
+  - id: INV-AS-2
+    text: "The generation number is read through TradingAccountGenerationId.generation(), never re-parsed here"
+    enforcedBy: AccountStatementProjection
+  - id: INV-AS-3
+    text: "A replay must go through onSubscriptionsReset, which truncates - every handler but the opening upsert is a delta and would otherwise double-count"
+    enforcedBy: AccountStatementProjection
+  - id: INV-AS-4
+    text: "Balances are sourced from the projection row, never from a rehydrated TradingAccount"
+    enforcedBy: AccountStatementQuery
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

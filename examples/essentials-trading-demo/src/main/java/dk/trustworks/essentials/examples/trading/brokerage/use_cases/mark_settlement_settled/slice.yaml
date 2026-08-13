@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.mark_settlement_settled
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Record that the settlement itself has completed.
+generator: essentials
+language: java
+
+handles: [MarkSettlementSettled]
+publishes: [SettlementMarkedSettled]
+writes: [Settlement]
+reads:
+  - { name: Settlement }
+endpoints:
+  - { method: POST, path: "/api/admin/settlements/{settlementId}/settlement" }
+invariants:
+  - id: INV-MSS-1
+    text: "A settlement cannot complete before clearing has been confirmed"
+    enforcedBy: Settlement
+  - id: INV-MSS-2
+    text: "Marking an already-settled settlement is an idempotent no-op"
+    enforcedBy: Settlement
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

@@ -65,7 +65,7 @@ import static org.awaitility.Awaitility.await;
 class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
-    private CdcEventStore                                                           cdcEventStore;
+    private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore;
     private CdcEventBus                                                             cdcBus;
     private CdcAvailability                                                         availability;
     private MeterRegistry                                                           meterRegistry;
@@ -95,7 +95,7 @@ class CdcEventStoreLiveDrainStallRecoveryIT extends AbstractLogicalReplicationPo
         // Low threshold so the stall is detected quickly; still > 0 (detection enabled).
         cdcProperties.getEventBus().setLiveDrainStallThreshold(Duration.ofSeconds(2));
 
-        cdcEventStore = new CdcEventStore(
+        cdcEventStore = new CdcEventStore<>(
                 eventStore,
                 unitOfWorkFactory,
                 new PostgresqlEventStreamGapHandler<>(eventStore, unitOfWorkFactory),

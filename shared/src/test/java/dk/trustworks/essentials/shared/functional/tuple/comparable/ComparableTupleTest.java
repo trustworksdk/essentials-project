@@ -171,10 +171,10 @@ class ComparableTupleTest {
         assertThat(ComparableTuple.of("1", "2", "3").map3(Integer::parseInt)).isEqualTo(ComparableTuple.of("1", "2", 3));
 
         // Arity
-        assertThat(Tuple.of("Hi", "there", "World").arity()).isEqualTo(3);
+        assertThat(ComparableTuple.of("Hi", "there", "World").arity()).isEqualTo(3);
 
         // ToList
-        assertThat(Tuple.of("Hi", "there", "World").toList()).isEqualTo(List.of("Hi", "there", "World"));
+        assertThat(ComparableTuple.of("Hi", "there", "World").toList()).isEqualTo(List.of("Hi", "there", "World"));
     }
 
     @Test

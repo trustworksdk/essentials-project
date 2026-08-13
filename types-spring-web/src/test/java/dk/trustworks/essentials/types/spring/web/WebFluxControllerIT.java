@@ -22,8 +22,12 @@ import dk.trustworks.essentials.types.spring.web.model.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.json.Jackson2JsonDecoder;
+import org.springframework.http.codec.json.Jackson2JsonEncoder;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 import java.util.Map;
@@ -34,16 +38,40 @@ import static org.assertj.core.api.Assertions.assertThat;
                 webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @EnabledIfSystemProperty(named = "essentials.jackson.flavor", matches = "jackson2")
 public class WebFluxControllerIT {
-    @Autowired
-    private WebTestClient testClient;
+    // WebTestClient is not contributed automatically here: spring-webmvc is on this module's test classpath too, so
+    // Boot's test support sees a servlet application and supplies a TestRestTemplate instead. Binding to the running
+    // port by hand is what makes this IT run at all - until the failsafe plugin was given
+    // essentials.jackson.flavor it was silently skipped in both profiles and this never surfaced.
+    @Value("${local.server.port}")
+    private int port;
 
     @Autowired
     private ObjectMapper objectMapper;
 
+    /**
+     * The client has to decode responses with the <em>application's</em> {@link ObjectMapper}, not a default one: the
+     * response bodies are Essentials semantic types, and only that mapper carries {@code EssentialTypesJacksonModule}.
+     * A default {@code WebTestClient} fails these with "no String-argument constructor/factory method".
+     */
+    @SuppressWarnings("removal") // Jackson 2 codecs; this IT only runs under -Pjackson2
+    private WebTestClient testClient() {
+        return WebTestClient.bindToServer()
+                            .baseUrl("http://localhost:" + port)
+                            .exchangeStrategies(ExchangeStrategies.builder()
+                                                                  .codecs(configurer -> {
+                                                                      configurer.defaultCodecs()
+                                                                                .jackson2JsonEncoder(new Jackson2JsonEncoder(objectMapper));
+                                                                      configurer.defaultCodecs()
+                                                                                .jackson2JsonDecoder(new Jackson2JsonDecoder(objectMapper));
+                                                                  })
+                                                                  .build())
+                            .build();
+    }
+
     @Test
     public void test_LocalDateType_DueDate_request_param() throws Exception {
         var dueDate = DueDate.now();
-        var result = testClient.get()
+        var result = testClient().get()
                                .uri("/reactive-orders?dueDate={dueDate}", dueDate)
                                .exchange()
                                .expectStatus()
@@ -57,7 +85,7 @@ public class WebFluxControllerIT {
     @Test
     public void test_LocalDateType_DueDate_path_variable() throws Exception {
         var dueDate = DueDate.now();
-        var result = testClient.get()
+        var result = testClient().get()
                                .uri("/reactive-orders/by-due-date/{dueDate}", dueDate)
                                .exchange()
                                .expectStatus()
@@ -71,7 +99,7 @@ public class WebFluxControllerIT {
     @Test
     public void getOrderForCustomer() throws Exception {
         var customerId = CustomerId.random();
-        var result = testClient.get()
+        var result = testClient().get()
                                .uri("/reactive-order/for-customer/{customerId}", customerId)
                                .exchange()
                                .expectStatus()
@@ -86,7 +114,7 @@ public class WebFluxControllerIT {
     @Test
     public void findById() throws Exception {
         var orderId = OrderId.random();
-        var result = testClient.get()
+        var result = testClient().get()
                                .uri("/reactive-order/{orderId}", orderId)
                                .exchange()
                                .expectStatus()
@@ -101,7 +129,7 @@ public class WebFluxControllerIT {
     public void updatePrice() throws Exception {
         var customerId = CustomerId.random();
         var price      = Amount.of("100.5");
-        var result = testClient.post()
+        var result = testClient().post()
                                .uri("/reactive-order/for-customer/{customerId}/update/total-price?price={price}", customerId, price)
                                .exchange()
                                .expectStatus()
@@ -125,7 +153,7 @@ public class WebFluxControllerIT {
                               Percentage.from("40.5%"),
                               CurrencyCode.of("DKK"),
                               CountryCode.of("DK"),
-                              EmailAddress.of("john@nonexistingdomain.com"),
+                              EmailAddress.of("john@example.com"),
                               Money.of("102.75", CurrencyCode.EUR),
                               Created.now(),
                               DueDate.now(),
@@ -133,7 +161,7 @@ public class WebFluxControllerIT {
                               TimeOfDay.now(),
                               TransactionTime.now(),
                               TransferTime.now());
-        var result = testClient.put()
+        var result = testClient().put()
                                .uri("/reactive-order")
                                .contentType(MediaType.APPLICATION_JSON)
                                .bodyValue(objectMapper.writeValueAsString(order))

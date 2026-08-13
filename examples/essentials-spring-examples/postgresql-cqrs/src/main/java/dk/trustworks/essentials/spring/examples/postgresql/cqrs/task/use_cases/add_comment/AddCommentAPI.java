@@ -1,0 +1,48 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.spring.examples.postgresql.cqrs.task.use_cases.add_comment;
+
+import dk.trustworks.essentials.reactive.command.CommandBus;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+/**
+ * The API file of the {@code task.add_comment} slice (rules/slice-design.md §R2).
+ * <p>
+ * The command is the request body, so {@code createdAt} is supplied by the caller rather than stamped by the
+ * server. That is a property of the existing {@code AddComment} command shape — the automation that replays a
+ * task's initial comment needs to pass the originating timestamp through, and the aggregate's dedup check
+ * keys on it. Worth knowing before copying this command into a design where the server should own the clock.
+ */
+@RestController
+@RequestMapping(path = "/tasks")
+public class AddCommentAPI {
+    private final CommandBus commandBus;
+
+    public AddCommentAPI(CommandBus commandBus) {
+        this.commandBus = requireNonNull(commandBus, "No commandBus provided");
+    }
+
+    @PostMapping("/add-comment")
+    public void addComment(@RequestBody AddComment cmd) {
+        commandBus.send(cmd);
+    }
+}

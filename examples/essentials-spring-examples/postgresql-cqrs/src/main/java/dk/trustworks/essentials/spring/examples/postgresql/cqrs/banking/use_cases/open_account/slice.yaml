@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: banking.open_account
+kind: command
+bc: banking
+owner: banking-team
+status: live
+summary: Open a new bank account with a zero balance.
+generator: essentials
+language: java
+
+handles: [OpenAccount]
+publishes: [AccountOpened]
+writes: [Account]
+reads:
+  - { name: Account }
+endpoints:
+  - { method: POST, path: /banking/open-account, auth: anonymous }
+invariants:
+  - id: INV-OA-1
+    text: "Opening an account that already exists is an idempotent no-op, not a second AccountOpened"
+    enforcedBy: OpenAccountHandler
+  - id: INV-OA-2
+    text: "An account always starts at a zero balance"
+    enforcedBy: Account
+forbidden:
+  - cross-slice-internal:banking
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

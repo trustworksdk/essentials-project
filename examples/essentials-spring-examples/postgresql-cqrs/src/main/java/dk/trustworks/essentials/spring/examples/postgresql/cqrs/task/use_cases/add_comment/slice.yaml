@@ -1,0 +1,25 @@
+schemaVersion: "1.1"
+slice: task.add_comment
+kind: command
+bc: task
+owner: task-team
+status: live
+summary: Add a comment to an existing task.
+generator: essentials
+language: java
+
+handles: [AddComment]
+publishes: [CommentAdded]
+writes: [Task]
+reads:
+  - { name: Task }
+endpoints:
+  - { method: POST, path: /tasks/add-comment, auth: anonymous }
+invariants:
+  - { id: INV-AC-1, text: "A comment (taskId + content + createdAt) is applied at most once per task", enforcedBy: Task }
+forbidden:
+  - cross-slice-internal:task
+tests:
+  unit: { present: false }
+  integration: { present: true }
+  contract: { present: false }

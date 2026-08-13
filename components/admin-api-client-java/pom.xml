@@ -39,7 +39,14 @@
     <packaging>jar</packaging>
 
     <properties>
-        <openapi-generator.version>7.8.0</openapi-generator.version>
+        <!-- This version *is* the client's public API: every class under ${generated.client.package} is
+             emitted by the plugin, so a bump changes the surface consumers compile against while no source
+             in this module moves. A green build proves nothing here — nothing in this repo calls the client.
+             Diff the generated surface itself (javap over target/classes, before vs after) and treat
+             removals or signature changes as the API break they are. The 7.8.0 -> 7.24.0 move, for
+             instance, retyped the async response interceptor from HttpResponse<String> to
+             HttpResponse<InputStream> and made updateBaseUri final. -->
+        <openapi-generator.version>7.24.0</openapi-generator.version>
         <jakarta-annotation.version>2.1.1</jakarta-annotation.version>
         <!-- The contract this client is generated from -->
         <admin-api.spec>${project.basedir}/../admin-api-spec/openapi/essentials-admin-api.yaml</admin-api.spec>

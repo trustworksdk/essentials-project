@@ -16,10 +16,11 @@
 
 package dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.cdc;
 
-import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.EventStorePollingOptimizer;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.*;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.gap.EventStreamGapHandler;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWork;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.transaction.EventStoreUnitOfWorkFactory;
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.GlobalEventOrder;
@@ -48,12 +49,12 @@ class CdcEventStoreFallbackTest {
      */
     @Test
     void pollEvents_falls_back_to_delegate_when_cdc_inactive() {
-        EventStore delegate = mock(EventStore.class);
+        ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(ConfigurableEventStore.class);
         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
         EventStreamGapHandler<?> gapHandler = mock(EventStreamGapHandler.class);
 
         var availability = new CdcAvailability(); // stays INACTIVE → fallback-to-polling path
-        var cdcEventStore = new CdcEventStore(
+        var cdcEventStore = new CdcEventStore<>(
                 delegate,
                 unitOfWorkFactory,
                 gapHandler,
@@ -100,7 +101,7 @@ class CdcEventStoreFallbackTest {
     @Test
     @SuppressWarnings("unchecked")
     void pollEvents_after_cdc_has_been_active_records_a_fallback() {
-        EventStore delegate = mock(EventStore.class);
+        ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(ConfigurableEventStore.class);
         EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory = mock(EventStoreUnitOfWorkFactory.class);
         EventStreamGapHandler<?> gapHandler = mock(EventStreamGapHandler.class);
 
@@ -108,7 +109,7 @@ class CdcEventStoreFallbackTest {
         availability.active("slot_a");
         availability.inactive("slot_a", "tailer stopped");
 
-        var cdcEventStore = new CdcEventStore(
+        var cdcEventStore = new CdcEventStore<>(
                 delegate,
                 unitOfWorkFactory,
                 gapHandler,
@@ -147,8 +148,8 @@ class CdcEventStoreFallbackTest {
     @Test
     @SuppressWarnings("unchecked")
     void findHighest_and_findLowest_global_event_order_delegate_to_wrapped_store() {
-        EventStore delegate = mock(EventStore.class);
-        var cdcEventStore = new CdcEventStore(
+        ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> delegate = mock(ConfigurableEventStore.class);
+        var cdcEventStore = new CdcEventStore<>(
                 delegate,
                 mock(EventStoreUnitOfWorkFactory.class),
                 mock(EventStreamGapHandler.class),

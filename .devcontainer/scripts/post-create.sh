@@ -177,6 +177,19 @@ if [ "${INSTALL_GRAPHIFY:-false}" = "true" ]; then
         if command -v graphify &> /dev/null; then
             # Install the skill project-scoped (.claude/skills/graphify). Idempotent
             # (re-asserts the skill files). --platform defaults to Claude Code.
+            #
+            # ALSO REWRITES THE TRACKED root CLAUDE.md. `install --project` calls
+            # _replace_or_append_section(content, "## graphify", <packaged template>)
+            # (graphify/install.py): it finds the LAST line that is exactly
+            # "## graphify" and replaces everything from there to the next "## "
+            # heading (or EOF) with graphify/always_on/claude-md.md. Hand-written
+            # bullets inside that section are silently lost on every rebuild — this
+            # is what reverted the query-shaping rules from commit caa652fd. The
+            # match is exact-line only (they anchored it in #1688), and any other H2
+            # terminates the replaced range, so durable graphify guidance lives under
+            # "## Knowledge graph queries" instead. Same applies to the "# graphify"
+            # block in .claude/CLAUDE.md, which graphify also owns (skill
+            # registration). Do not "fix" the stock section — it is regenerated.
             if [ -d "/workspace" ]; then
                 ( cd /workspace && graphify install --project 2>&1 ) \
                     || echo "  WARNING: 'graphify install --project' failed."
@@ -272,6 +285,29 @@ fi
 # want it, run `headroom proxy` and set ANTHROPIC_BASE_URL=http://127.0.0.1:8787
 # (that path needs the [proxy] extra). State lives on the ~/.headroom named
 # volume; the update check is disabled.
+#
+# WHAT "needs the [proxy] extra" LOOKS LIKE (verified on headroom-ai 0.34.0), so
+# nobody rediscovers it: `headroom proxy` / `headroom wrap claude` dies at
+# startup with `ImportError: Using http2=True, but the 'h2' package is not
+# installed` — h2 arrives via [proxy]'s `httpx[http2]` pin, and the proxy
+# defaults to HTTP/2. `headroom proxy --no-http2` (env: HEADROOM_HTTP2=0) does
+# get past startup and binds :8787, but that is a false summit: 9 of the 13
+# [proxy] requirements are absent under [code,mcp] (orjson, h2, openai, magika,
+# zstandard, websockets, onnxruntime, transformers, sqlite-vec), and orjson +
+# magika sit on the request hot path. So there is no cheap subset — resolving
+# [code,mcp,proxy] pulls 28 packages including the ONNX/transformers ML stack.
+#
+# If you ever opt in: add `proxy` to the extras on BOTH `uv tool install` lines
+# below and DROP both `--with` flags — [proxy] already declares fastapi>=0.100.0
+# and a bounded mcp>=1.28.1,<2.0.0, making the two workarounds below redundant.
+# Also set HEADROOM_HTTP2=0 (headroom's own --http2 help warns HTTP/2 hits
+# SSLV3_ALERT_BAD_RECORD_MAC when many concurrent streams are cancelled, which
+# is exactly Claude Code's traffic shape). Do NOT put ANTHROPIC_BASE_URL in
+# devcontainer.json containerEnv: a proxy that is not running would then break
+# Claude Code container-wide. Route per-launch via `headroom wrap claude`.
+# Note the payoff is weak on a subscription seat — billing is not per-token, so
+# headroom's cost figures do not apply; the only benefit is hitting usage limits
+# less often.
 #
 # `--with fastapi`: UPSTREAM BUG (headroom-ai 0.32.1). fastapi is declared only
 # under the [proxy]/[dev] extras, but headroom's CLI eagerly registers every

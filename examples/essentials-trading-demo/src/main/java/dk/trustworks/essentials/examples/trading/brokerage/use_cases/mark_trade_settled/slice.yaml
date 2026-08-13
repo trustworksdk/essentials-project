@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.mark_trade_settled
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Mark a trade as settled, once its settlement has completed.
+generator: essentials
+language: java
+
+handles: [MarkTradeSettled]
+publishes: [TradeSettled]
+writes: [Trade]
+reads:
+  - { name: Trade }
+endpoints:
+  - { method: POST, path: "/api/admin/trades/{tradeId}/settlement" }
+invariants:
+  - id: INV-MTS-1
+    text: "A trade cannot be marked settled before a settlement has been requested for it"
+    enforcedBy: Trade
+  - id: INV-MTS-2
+    text: "Marking an already-settled trade is an idempotent no-op"
+    enforcedBy: Trade
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: brokerage.create_settlement
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Open the post-trade settlement of a trade.
+generator: essentials
+language: java
+
+handles: [CreateSettlement]
+publishes: [SettlementCreated]
+writes: [Settlement]
+reads: []
+endpoints:
+  - { method: POST, path: /api/admin/settlements }
+invariants:
+  - id: INV-CS-1
+    text: "A settlement starts open and at step zero - no clearing, settlement, reconciliation or closure until commanded"
+    enforcedBy: Settlement
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

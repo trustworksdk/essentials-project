@@ -44,7 +44,7 @@ import static org.awaitility.Awaitility.await;
 class CdcEventStoreSubscriptionParity_IT extends AbstractLogicalReplicationPostgresIT {
 
     private PostgresqlEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
-    private CdcEventStore                                                           cdcEventStore;
+    private CdcEventStore<SeparateTablePerAggregateEventStreamConfiguration> cdcEventStore;
     private EventStoreSubscriptionManager                                           eventStoreSubscriptionManager;
     private DurableSubscriptionRepository durableSubscriptionRepository;
 
@@ -64,7 +64,7 @@ class CdcEventStoreSubscriptionParity_IT extends AbstractLogicalReplicationPostg
         eventStore = new PostgresqlEventStore<>(unitOfWorkFactory, persistenceStrategy);
 
         var availability = new CdcAvailability(); // INACTIVE => fallback-to-polling path
-        cdcEventStore = new CdcEventStore(
+        cdcEventStore = new CdcEventStore<>(
                 eventStore,
                 unitOfWorkFactory,
                 new PostgresqlEventStreamGapHandler<>(unitOfWorkFactory),

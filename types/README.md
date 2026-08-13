@@ -365,7 +365,7 @@ OrderId id = SingleValueType.from("abc789", OrderId.class);
 
 ### Kotlin Value Class Integration
 
-Base package: `dk.trustworks.essentials.types.kotlin`  
+Base package: `dk.trustworks.essentials.kotlin.types`  
 Kotlin types use `@JvmInline` value classes for zero-runtime-overhead:
 
 ```kotlin

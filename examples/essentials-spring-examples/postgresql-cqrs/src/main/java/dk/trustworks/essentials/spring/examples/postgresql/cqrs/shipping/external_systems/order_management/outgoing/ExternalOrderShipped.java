@@ -1,0 +1,35 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.spring.examples.postgresql.cqrs.shipping.external_systems.order_management.outgoing;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+/**
+ * The published form of {@code OrderShipped}: what the outside world is told when an order ships.
+ *
+ * <p>It is a separate type from the internal event on purpose -- this one is a contract with consumers we do not
+ * control, so it changes on their schedule rather than the domain's.
+ *
+ * <p>{@code eventOrder} is the position of the source event within its stream, taken from the {@code OrderedMessage}
+ * the publisher received. Passing it on gives consumers a way to detect a duplicate or out-of-order delivery without
+ * relying on timestamps, which never order events here.
+ */
+public record ExternalOrderShipped(String orderId, long eventOrder) implements ExternalOrderShippingEvent {
+    public ExternalOrderShipped {
+        requireNonNull(orderId, "No orderId provided");
+    }
+}

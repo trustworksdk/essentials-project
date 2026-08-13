@@ -21,8 +21,16 @@ import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.context.annotation.Import;
 
+/**
+ * Spring Boot 4 / Jackson 3 test application, wired the way a consumer is meant to wire one: import the
+ * <em>shipped</em> {@link EssentialsWebMvcConfigurer} rather than hand-rolling a {@code WebMvcConfigurer}.
+ * <p>
+ * There is deliberately no local configurer class here any more. One used to exist and the module's documentation
+ * described it as something {@code types-spring-web} shipped, which it was not - it was test scope, invisible to
+ * consumers. Keeping the test on the shipped class is what stops that drifting apart again.
+ */
 @SpringBootConfiguration
 @EnableAutoConfiguration
-@Import({WebMvcJackson3Config.class, WebMvcController.class})
+@Import({EssentialsWebMvcConfigurer.class, WebMvcController.class})
 class WebMvcJackson3SpringWebApplication {
 }

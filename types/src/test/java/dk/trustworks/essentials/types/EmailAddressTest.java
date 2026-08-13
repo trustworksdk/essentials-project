@@ -29,8 +29,8 @@ class EmailAddressTest {
     void test_EmailAddress_without_validation() {
         EmailAddress.setValidator(new EmailAddress.NonValidatingEmailAddressValidator());
 
-        assertThat(EmailAddress.of("doe@nonexistingdomain.com").value()).isEqualTo("doe@nonexistingdomain.com");
-        assertThat(new EmailAddress("john@nonexistingdomain.com").value()).isEqualTo("john@nonexistingdomain.com");
+        assertThat(EmailAddress.of("doe@example.com").value()).isEqualTo("doe@example.com");
+        assertThat(new EmailAddress("john@example.com").value()).isEqualTo("john@example.com");
         assertThatThrownBy(() -> new EmailAddress(null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> EmailAddress.of(null))
@@ -42,8 +42,8 @@ class EmailAddressTest {
     void test_EmailAddress_with_test_validation() {
         EmailAddress.setValidator(new TestEmailAddressValidator());
 
-        assertThat(EmailAddress.of("doe@nonexistingdomain.com").value()).isEqualTo("doe@nonexistingdomain.com");
-        assertThat(new EmailAddress("john@nonexistingdomain.com").value()).isEqualTo("john@nonexistingdomain.com");
+        assertThat(EmailAddress.of("doe@example.com").value()).isEqualTo("doe@example.com");
+        assertThat(new EmailAddress("john@example.com").value()).isEqualTo("john@example.com");
         assertThatThrownBy(() -> new EmailAddress(null))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> EmailAddress.of(null))

@@ -1,0 +1,94 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.aggregates;
+
+import dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateRepository;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ConfigurableEventStore;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.eventstream.AggregateType;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.table_per_aggregate_type.SeparateTablePerAggregateEventStreamConfiguration;
+import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.types.EventOrder;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.events.AccountEvent;
+import dk.trustworks.essentials.types.LongRange;
+import org.springframework.stereotype.Component;
+
+import java.util.Optional;
+import dk.trustworks.essentials.spring.examples.postgresql.cqrs.banking.types.AccountId;
+
+import static dk.trustworks.essentials.components.eventsourced.aggregates.stateful.StatefulAggregateInstanceFactory.reflectionBasedAggregateRootFactory;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
+/**
+ * The repository for {@link Account} aggregates, and the owner of the {@code Accounts} {@link AggregateType} -- the
+ * name under which their events are stored, which every subscriber and projection in the banking context refers back
+ * to.
+ *
+ * <p>It wraps a {@link StatefulAggregateRepository}, which loads an aggregate by replaying its stream and persists
+ * the events a command produced. The thin wrapper exists so the context speaks its own language ({@code getAccount},
+ * {@code hasAccount}) instead of a generic {@code load}/{@code save}, and so {@link #hasAccount} can answer an
+ * existence question cheaply -- by asking the EventStore whether the stream has a first event, rather than
+ * rehydrating the whole aggregate.
+ *
+ * <p>It does not construct aggregates; see {@link #openNewAccount}.
+ */
+@Component
+public class Accounts {
+    public static final AggregateType                                                             AGGREGATE_TYPE = AggregateType.of("Accounts");
+    private final       ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
+    private final       StatefulAggregateRepository<AccountId, AccountEvent, Account>             repository;
+
+    public Accounts(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+        requireNonNull(eventStore, "No eventStore provided");
+        this.eventStore = eventStore;
+        repository = StatefulAggregateRepository.from(eventStore,
+                                                      AGGREGATE_TYPE,
+                                                      reflectionBasedAggregateRootFactory(),
+                                                      Account.class);
+    }
+
+    public boolean hasAccount(AccountId accountId) {
+        requireNonNull(accountId, "No accountId provided");
+        return eventStore.fetchStream(AGGREGATE_TYPE,
+                                      accountId,
+                                      LongRange.only(EventOrder.FIRST_EVENT_ORDER.longValue()))
+                         .isPresent();
+    }
+
+    public boolean isAccountMissing(AccountId accountId) {
+        requireNonNull(accountId, "No accountId provided");
+        return !hasAccount(accountId);
+    }
+
+    public Optional<Account> findAccount(AccountId accountId) {
+        requireNonNull(accountId, "No accountId provided");
+        return repository.tryLoad(accountId);
+    }
+
+    public Account getAccount(AccountId accountId) {
+        requireNonNull(accountId, "No accountId provided");
+        return repository.load(accountId);
+    }
+
+    /**
+     * Persists an already-constructed {@link Account}. Constructing it — which is what emits {@code AccountOpened} —
+     * is the {@code banking.open_account} slice's decision, not this repository's, so it happens there. Mirrors
+     * {@code ShippingOrders.registerNewOrder} and {@code IntraBankMoneyTransfers.requestNewTransfer}.
+     */
+    public Account openNewAccount(Account account) {
+        requireNonNull(account, "No account provided");
+        return repository.save(account);
+    }
+}

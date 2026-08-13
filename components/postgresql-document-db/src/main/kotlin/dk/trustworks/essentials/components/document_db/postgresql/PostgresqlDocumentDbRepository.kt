@@ -157,8 +157,9 @@ class PostgresqlDocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID>(
         require(index.properties.isNotEmpty()) { "You have to specify at least 1 property" }
         index.properties.forEach { PostgresqlUtil.checkIsValidTableOrColumnName(it.name()) }
 
+        // Property is a public extension point, and it is the path expression - not name() - that lands in the DDL
+        val properties = index.properties.joinToString(", ") { "(" + it.checkedJSONValueArrowPath() + ")" }
         indexesAdded.add(index)
-        val properties = index.properties.joinToString(", ") { "(" + it.toJSONValueArrowPath() + ")" }
         val tableName = entityConfiguration().tableName()
         val createIndexSQL = """
             CREATE INDEX IF NOT EXISTS idx_${entityConfiguration.tableName()}_${index.name} ON $tableName (${properties})

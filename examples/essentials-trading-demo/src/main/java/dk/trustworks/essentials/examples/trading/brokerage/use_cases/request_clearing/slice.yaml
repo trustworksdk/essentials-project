@@ -1,0 +1,30 @@
+schemaVersion: "1.1"
+slice: brokerage.request_clearing
+kind: command
+bc: brokerage
+owner: trading-demo
+status: live
+summary: Send a created settlement to clearing.
+generator: essentials
+language: java
+
+handles: [RequestClearing]
+publishes: [ClearingRequested]
+writes: [Settlement]
+reads:
+  - { name: Settlement }
+endpoints:
+  - { method: POST, path: "/api/admin/settlements/{settlementId}/clearing-requests" }
+invariants:
+  - id: INV-RC-1
+    text: "A closed settlement accepts no further steps"
+    enforcedBy: Settlement
+  - id: INV-RC-2
+    text: "Requesting clearing twice is an idempotent no-op"
+    enforcedBy: Settlement
+forbidden:
+  - cross-slice-internal:brokerage
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

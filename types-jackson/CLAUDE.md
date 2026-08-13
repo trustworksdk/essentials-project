@@ -4,7 +4,7 @@ Jackson serialization/deserialization support for Essentials `SingleValueType` h
 
 ## Package Structure
 
-- `dk.trustworks.essentials.jackson.types` — all production code (4 classes total)
+- `dk.trustworks.essentials.jackson.types` — all production code
 - `dk.trustworks.essentials.jackson` (test) — single integration test
 - `dk.trustworks.essentials.jackson.model` (test) — concrete type fixtures used by test
 
@@ -16,6 +16,8 @@ Jackson serialization/deserialization support for Essentials `SingleValueType` h
 | `CharSequenceTypeJsonSerializer` | Extends `ToStringSerializerBase`; calls `value.toString()` → JSON string |
 | `NumberTypeJsonSerializer` | Extends `NumberSerializer`; unwraps inner `value()` before delegating to parent |
 | `MoneyDeserializer` | `StdDeserializer<Money>`; reads `amount` + `currency` fields from JSON object node |
+| `NumberTypeJsonDeserializer` | Counterpart to `NumberTypeJsonSerializer`; reads a JSON number at the width the concrete type wraps, refuses a fraction for integral bases, accepts quoted numbers |
+| `NumberTypeJsonDeserializers` | `Deserializers` SPI resolving the above per concrete `NumberType`; needed because deserializer lookup is exact-type, not supertype-walking |
 | `JSR310SingleValueTypeMixIn` (private interface) | Injects `@JsonValue` on `value()` for all `JSR310SingleValueType` subclasses; avoids annotating each concrete class |
 
 ## Test Structure
@@ -48,3 +50,5 @@ No SPI. Module is closed/final. To support new type families:
 **`createObjectMapper` disables getter/setter visibility entirely.** Fields are serialized directly. Adding getters to DTO classes does not affect JSON shape. Mixing this mapper with a getter-based framework (e.g. plain Spring Boot default mapper) produces different JSON — keep mappers aligned.
 
 **`Money` has no serializer, only a deserializer.** Serialization relies on Jackson field-based default (fields `amount` + `currency` emitted directly). The JSON contract is `{"amount":"...","currency":"..."}` — changing `Money`'s field names breaks the custom deserializer.
+
+**`NumberType` deserialization is registered via the `Deserializers` SPI, not `addDeserializer`.** Serializer lookup walks supertypes, so `addSerializer(NumberType.class, …)` covers every subclass; deserializer lookup is an exact-type match, so the same trick does not work and `NumberTypeJsonDeserializers` must resolve per concrete class. Without it, subclasses fall back to Jackson's creator detection, which picks a creator by JSON token type and will not widen an integral token to `BigDecimal` — a `BigDecimalType` with only the natural `(BigDecimal)` constructor serialized fine and failed on replay. The deserializer also owns the coercion rules: a fraction is **refused** by the integral bases rather than silently truncated, and quoted numbers stay readable. Pinned by `NumberTypeCreatorRequirementTest`.

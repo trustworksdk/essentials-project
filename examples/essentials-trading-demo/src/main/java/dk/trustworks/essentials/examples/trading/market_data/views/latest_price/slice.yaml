@@ -1,0 +1,26 @@
+schemaVersion: "1.1"
+slice: market_data.latest_price
+kind: view
+bc: market_data
+owner: market-data-team
+status: live
+summary: Serve the current price of one instrument, read strongly-consistently from the InstrumentPrice aggregate.
+generator: essentials
+language: java
+
+serves: [GetLatestPrice]
+endpoints:
+  - { method: GET, path: "/api/admin/instrument-prices/{instrumentId}", auth: anonymous }
+reads:
+  - { name: LatestPrice }
+projections: []
+invariants:
+  - id: INV-LP-1
+    text: "The read is strongly consistent: it loads the InstrumentPrice aggregate inside a read-only transaction rather than a projected model, because the demo's bootstrap uses this query to decide whether seed data already exists and an eventually-consistent answer would let it seed twice"
+    enforcedBy: LatestPriceQuery
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

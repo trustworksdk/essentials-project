@@ -98,6 +98,26 @@ public class ProductSequence extends LongType<ProductSequence> {
 }
 ```
 
+### Decimal Type (BigDecimalType)
+```java
+public class Quantity extends BigDecimalType<Quantity> {
+    public Quantity(BigDecimal value) { super(value); }
+    public Quantity(long value) { super(BigDecimal.valueOf(value)); }  // Required for Jackson 2
+
+    public static Quantity of(BigDecimal value) { return new Quantity(value); }
+    public static Quantity of(long value) { return new Quantity(BigDecimal.valueOf(value)); }
+}
+```
+
+No extra constructor is needed for Jackson. `types-jackson`/`types-jackson3` register a `NumberType` deserializer
+that reads the JSON number at the width the type wraps and constructs through `SingleValueType.from(...)`, so the
+value-typed constructor is the only one the wire format depends on. Convenience overloads (`(long)`, `(double)`)
+are yours to add or omit on their own merits.
+
+Historically this was a trap: without that deserializer, Jackson picked a creator by the incoming JSON token's
+type and would not widen `"quantity":2` to `BigDecimal`, so a `BigDecimalType` serialized fine and failed on
+replay. See `LLM-types-jackson.md` → *NumberType deserialization*.
+
 ### Validated Type (IntegerType)
 ```java
 public class Quantity extends IntegerType<Quantity> {
@@ -381,6 +401,7 @@ See [LLM-types-integrations.md](LLM-types-integrations.md) for overview.
 
 - **Null rejection**: All constructors reject null values
 - **Jackson 2.18+**: Requires explicit `String` constructor alongside `CharSequence` for `CharSequenceType`
+- **`NumberType` subclasses need only the value-typed constructor**: a registered `NumberType` deserializer reads each value at its own width, so convenience overloads are never part of the wire contract. A `(double)` overload on a `BigDecimalType` used to silently truncate decimals; it no longer does
 - **Immutability**: All operations return new instances
 - **Money currency**: Operations throw `NotTheSameCurrenciesException` if currencies differ
 - **Percentage scale**: Enforces minimum scale of 2

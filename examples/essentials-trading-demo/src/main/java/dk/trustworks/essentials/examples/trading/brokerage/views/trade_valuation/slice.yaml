@@ -1,0 +1,40 @@
+schemaVersion: "1.1"
+slice: brokerage.trade_valuation
+kind: view
+bc: brokerage
+owner: brokerage-team
+status: live
+summary: Value one trade against the latest market price, from a read model that projects both the trade's lifecycle and market_data's price events.
+generator: essentials
+language: java
+
+serves: [GetTradeValuation]
+endpoints:
+  - { method: GET, path: "/api/admin/trades/{tradeId}", auth: anonymous }
+reads:
+  - { name: TradeValuation }
+projections:
+  - name: TradeValuationProjection
+    from: [TradePlaced, TradeExecuted, SettlementRequested, TradeSettled, PriceInitialized, PriceUpdated]
+    consistency: eventual
+    store: jdbc
+invariants:
+  - id: INV-TV-1
+    text: "The market price is projected from market_data's price events, never fetched by calling into market_data's write model"
+    enforcedBy: TradeValuationProjection
+  - id: INV-TV-2
+    text: "A replayed TradePlaced must not wipe a price already projected for the instrument"
+    enforcedBy: TradeValuationProjection
+  - id: INV-TV-3
+    text: "latestMarketPrice, marketValue and unrealizedPnl are null together - an unpriced trade is not a zero-valued one"
+    enforcedBy: TradeValuationQuery
+  - id: INV-TV-4
+    text: "unrealizedPnl is the price delta, negated for SELL, times quantity - computed on read, never stored"
+    enforcedBy: TradeValuationQuery
+forbidden:
+  - cross-slice-internal:brokerage
+  - cross-bc-writemodel:market_data
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }

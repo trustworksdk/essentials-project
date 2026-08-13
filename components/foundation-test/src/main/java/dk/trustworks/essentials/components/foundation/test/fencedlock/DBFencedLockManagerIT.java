@@ -319,8 +319,11 @@ public abstract class DBFencedLockManagerIT<LOCK_MANAGER extends DBFencedLockMan
         assertThat(lock.get().getLockLastConfirmedTimestamp()).isAfter(lastLockConfirmedTimestamp);
 
         // When
-        lockNode1Callback.lockAcquired.release();
+        // Node 1 MUST be paused before the lock is released: acquireLockAsync keeps trying to (re)acquire the lock for as long as it isn't cancelled,
+        // so a release performed while node 1 is still acquiring is immediately followed by node 1 re-acquiring the now free lock with the next token,
+        // which shifts the token node 2 ends up with and makes the assertions below fail
         lockManagerNode1.pause();
+        lockNode1Callback.lockAcquired.release();
         Awaitility.waitAtMost(Duration.ofSeconds(5))
                   .untilAsserted(() -> assertThat(lockNode1Callback.lockReleased).isNotNull());
 
