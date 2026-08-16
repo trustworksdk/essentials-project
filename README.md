@@ -8,12 +8,12 @@
  ║     ███████╗███████║███████║███████╗██║ ╚████║   ██║   ██║██║  ██║███████╗███████║     ║
  ║     ╚══════╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝     ║
  ║                                                                                        ║
- ║                     Java 17+ Building Blocks for Strongly-Typed Code                   ║
+ ║                     Java 21+ Building Blocks for Strongly-Typed Code                   ║
  ║                                                                                        ║
  ╚════════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> High-level, strongly-typed building blocks for Java 17+ applications—framework-independent core with seamless integrations
+> High-level, strongly-typed building blocks for Java 21+ applications—framework-independent core with seamless integrations
 
 📖 **LLM Context:** [LLM.md](LLM/LLM.md)
 
@@ -43,7 +43,7 @@
 
 ## What is Essentials?
 
-Essentials is a set of Java 17+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
+Essentials is a set of Java 21+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
 
 **Core Modules:** Zero-dependency utilities providing **semantic types**, immutable value objects, functional primitives, and reactive patterns.
 
@@ -722,9 +722,23 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 ## Version Compatibility
 
-| Essentials Version | Java | Spring Boot | Notes |
-|--------------------|------|-------------|-------|
-| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 17+ | 3.3.x | Under active development |
+| Essentials Version | Java | Spring Boot | Jackson | Kotlin | Notes |
+|--------------------|------|-------------|---------|--------|-------|
+| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 21+ | 4.0.x | 3 (default) / 2 | 2.2+ | Under active development |
+
+**Java 21 is a hard floor, not a recommendation.** Artifacts are compiled with `--release 21`, so the class files
+carry major version 65 and a Java 17 runtime rejects them with `UnsupportedClassVersionError`. Building the project
+itself requires JDK 21–25 (`maven-enforcer` pins `[21,26)`); CI builds on JDK 25.
+
+**Spring Boot 4.0.x.** The starters resolve `org.springframework.boot:spring-boot:4.0.7`. Spring Boot 3.x is no longer
+supported — 4.0 moved to Jackson 3 and Jakarta EE 11, so a 3.x application cannot consume these starters unchanged.
+
+**Jackson.** Jackson 3 (`tools.jackson.core`) is the default because that is what Spring Boot 4 ships. Jackson 2
+(`com.fasterxml.jackson.core`) is still supported — see [Choosing the Jackson Major](#-choosing-the-jackson-major),
+including the two payload-class changes that bite silently on the way in.
+
+**Kotlin.** Kotlin artifacts are compiled at language level 2.2, which sets the emitted `@Metadata` binary version —
+a Kotlin 2.1 compiler rejects them as an incompatible binary version. The stdlib API level is held one behind, at 2.1.
 
 ### Migration Note
 

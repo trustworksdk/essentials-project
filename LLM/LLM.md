@@ -16,10 +16,10 @@
 
 | Aspect | Details                                                                                |
 |--------|----------------------------------------------------------------------------------------|
-| **What** | Java 17+ building blocks for strongly-typed, framework-independent distributed systems |
+| **What** | Java 21+ building blocks for strongly-typed, framework-independent distributed systems |
 | **GroupId** | `dk.trustworks.essentials` (core), `dk.trustworks.essentials.components` (components)  |
 | **License** | Apache 2.0                                                                             |
-| **Spring Boot** | 3.3.x+                                                                                 |
+| **Spring Boot** | 4.0.x (Jackson 3 + Jakarta EE 11; Spring Boot 3.x is not supported)                    |
 | **Philosophy** | Zero-dependency core, `provided` scope integrations                                    |
 | **Scope** | Intra-service coordination (same service, shared DB)                                   |
 
