@@ -20,7 +20,6 @@ import dk.trustworks.essentials.shared.reflection.invocation.test_subjects.*;
 import dk.trustworks.essentials.shared.types.GenericType;
 import org.junit.jupiter.api.Test;
 
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -34,8 +33,8 @@ class PatternMatchingMethodInvokerTest {
                                                                         new SingleArgumentAnnotatedMethodPatternMatcher<>(EventHandler.class,
                                                                                                                           OrderEvent.class),
                                                                         InvocationStrategy.InvokeMostSpecificTypeMatched,
-                                                                        Optional.of(noMatchingMethodsHandler),
-                                                                        Optional.empty());
+                                                                        noMatchingMethodsHandler,
+                                                                        InvocationTracker.noOp());
 
         // When
         var orderCreated   = new OrderCreated("1");
@@ -63,8 +62,8 @@ class PatternMatchingMethodInvokerTest {
                                                                         new SingleArgumentAnnotatedMethodPatternMatcher<>(EventHandler.class,
                                                                                                                           new GenericType<OrderEvent>() {}),
                                                                         InvocationStrategy.InvokeMostSpecificTypeMatched,
-                                                                        Optional.empty(),
-                                                                        Optional.empty());
+                                                                        NoMatchingMethodsHandler.ignore(),
+                                                                        InvocationTracker.noOp());
 
         // And
         var orderCreated   = new OrderCreated("1");
@@ -105,8 +104,8 @@ class PatternMatchingMethodInvokerTest {
                                                                         new SingleArgumentAnnotatedMethodPatternMatcher<>(EventHandler.class,
                                                                                                                           OrderEvent.class),
                                                                         InvocationStrategy.InvokeAllMatches,
-                                                                        Optional.of(noMatchingMethodsHandler),
-                                                                        Optional.empty());
+                                                                        noMatchingMethodsHandler,
+                                                                        InvocationTracker.noOp());
 
         // And
         var orderCreated  = new OrderCreated("1");
@@ -139,8 +138,8 @@ class PatternMatchingMethodInvokerTest {
                                                                         new SingleArgumentAnnotatedMethodPatternMatcher<>(EventHandler.class,
                                                                                                                           OrderEvent.class),
                                                                         InvocationStrategy.InvokeAllMatches,
-                                                                        Optional.empty(),
-                                                                        Optional.empty());
+                                                                        NoMatchingMethodsHandler.ignore(),
+                                                                        InvocationTracker.noOp());
 
         // And
         var orderCreated  = new OrderCreated("1");

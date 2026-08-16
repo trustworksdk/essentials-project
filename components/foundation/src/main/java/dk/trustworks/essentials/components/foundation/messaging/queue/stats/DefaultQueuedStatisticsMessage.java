@@ -41,6 +41,31 @@ public class DefaultQueuedStatisticsMessage implements QueuedStatisticsMessage {
     public final int             deliveryLatency;
     public final MessageMetaData metaData;
 
+    /**
+     * Creates a builder for a {@link DefaultQueuedStatisticsMessage}.
+     *
+     * @return a new builder
+     */
+    public static DefaultQueuedStatisticsMessageBuilder builder() {
+        return new DefaultQueuedStatisticsMessageBuilder();
+    }
+
+    /**
+     * @param id                    the queue entry id
+     * @param queueName             the queue the message belonged to
+     * @param addedTimestamp        when the message was added to the queue
+     * @param deliveryTimestamp     when the message was delivered
+     * @param deletionTimestamp     when the message was deleted from the queue
+     * @param deliveryMode          the delivery mode the message was queued under
+     * @param totalDeliveryAttempts total number of delivery attempts
+     * @param redeliveryAttempts    number of redelivery attempts
+     * @param deliveryLatency       the delivery latency
+     * @param metaData              the message meta data
+     * @deprecated Use {@link #builder()}. Three adjacent {@code OffsetDateTime}s followed by three adjacent
+     *         {@code int}s cannot be checked by the compiler and cannot be read at the call site. This constructor
+     *         delegates to the same implementation and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultQueuedStatisticsMessage(QueueEntryId id,
                                           QueueName queueName,
                                           OffsetDateTime addedTimestamp,

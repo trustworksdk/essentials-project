@@ -53,7 +53,10 @@ public final class QueueMessages {
      * @param queueName     the name of the Queue the messages will be added to
      * @param messages      the message payloads  ({@link Message}/{@link OrderedMessage})
      * @param deliveryDelay optional: how long will the queue wait until it delivers the messages to the {@link DurableQueueConsumer}
+     * @deprecated Use {@link #builder()}, whose {@code setDeliveryDelay} setter accepts both a plain {@code Duration} and an
+     *         {@code Optional}. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public QueueMessages(QueueName queueName, List<? extends Message> messages, Optional<Duration> deliveryDelay) {
         this.queueName = requireNonNull(queueName, "No queueName provided");
         this.messages = requireNonNull(messages, "No payloads provided");
@@ -68,7 +71,10 @@ public final class QueueMessages {
      * @param queueName     the name of the Queue the messages will be added to
      * @param messages      the message payloads  ({@link Message}/{@link OrderedMessage})
      * @param deliveryDelay optional: how long will the queue wait until it delivers the messages to the {@link DurableQueueConsumer}
+     * @deprecated Use {@link #builder()}, whose {@code setDeliveryDelay} setter accepts both a plain {@code Duration} and an
+     *         {@code Optional}. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public QueueMessages(QueueName queueName, List<? extends Message> messages, Duration deliveryDelay) {
         this(queueName,
              messages,

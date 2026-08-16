@@ -107,6 +107,7 @@ public final class ConsumeFromQueueBuilder {
      *
      * @return the {@link ConsumeFromQueue} instance
      */
+    @SuppressWarnings("removal")
     public ConsumeFromQueue build() {
         return new ConsumeFromQueue(consumerName,
                                     queueName,

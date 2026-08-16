@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.*;
 import dk.trustworks.essentials.components.eventsourced.aggregates.EventHandler;
 import dk.trustworks.essentials.components.eventsourced.aggregates.projection.AnnotationBasedInMemoryProjector;
@@ -657,10 +658,12 @@ public class EventStoreConfiguration {
                                                                         Optional<MeterRegistry> meterRegistry,
                                                                         EssentialsComponentsProperties essentialsProperties,
                                                                         Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
-        EventStoreSubscriptionObserver observer = new MeasurementEventStoreSubscriptionObserver(meterRegistry,
-                                                                                               properties.getSubscriptionManager().getMetrics().isEnabled(),
-                                                                                               properties.getSubscriptionManager().getMetrics().toLogThresholds(),
-                                                                                               essentialsProperties.getTracingProperties().getModuleTag());
+        EventStoreSubscriptionObserver observer =
+                new MeasurementEventStoreSubscriptionObserver(measurementTakerFor(meterRegistry,
+                                                                                  properties.getSubscriptionManager().getMetrics().isEnabled(),
+                                                                                  properties.getSubscriptionManager().getMetrics().toLogThresholds(),
+                                                                                  MeasurementEventStoreSubscriptionObserver.class),
+                                                             essentialsProperties.getTracingProperties().getModuleTag());
         return subscriptionStatisticsRegistry.<EventStoreSubscriptionObserver>map(registry -> new StatisticsCollectingEventStoreSubscriptionObserver(observer, registry))
                                              .orElse(observer);
     }
@@ -670,9 +673,10 @@ public class EventStoreConfiguration {
     public RecordExecutionTimeEventStoreInterceptor measurementEventStoreInterceptor(EssentialsEventStoreProperties properties,
                                                                                      Optional<MeterRegistry> meterRegistry,
                                                                                      EssentialsComponentsProperties essentialsProperties) {
-        return new RecordExecutionTimeEventStoreInterceptor(meterRegistry,
-                                                            properties.getMetrics().isEnabled(),
-                                                            properties.getMetrics().toLogThresholds(),
+        return new RecordExecutionTimeEventStoreInterceptor(measurementTakerFor(meterRegistry,
+                                                                               properties.getMetrics().isEnabled(),
+                                                                               properties.getMetrics().toLogThresholds(),
+                                                                               RecordExecutionTimeEventStoreInterceptor.class),
                                                             essentialsProperties.getTracingProperties().getModuleTag());
     }
 
@@ -742,7 +746,8 @@ public class EventStoreConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnProperty(prefix = "essentials.eventstore.cdc", name = "enabled", havingValue = "true")
     public CdcAvailability cdcAvailability(Optional<MeterRegistry> meterRegistry) {
-        return new CdcAvailability(meterRegistry);
+        // Optional is idiomatic at the @Bean injection point and is unwrapped on the spot
+        return new CdcAvailability(meterRegistry.orElse(null));
     }
 
     @Bean
@@ -1046,7 +1051,7 @@ public class EventStoreConfiguration {
                                          CdcSlotNameProvider slotNameProvider) {
         String slotName = getCdcSlotName(essentialsProperties, group, slotNameProvider);
         return new CdcSlotMetrics(walReplicationTailer,
-                                  meterRegistry,
+                                  meterRegistry.orElse(null),
                                   slotName,
                                   essentialsProperties.getCdc().getSlot());
     }
@@ -1125,5 +1130,35 @@ public class EventStoreConfiguration {
                                                             aggregateEventStreamTableNames);
     }
 
+
+
+    /**
+     * Assembles the {@link MeasurementTaker} for one metrics subsystem.
+     * <p>
+     * This is where {@code Optional<MeterRegistry>} is allowed to live and is unwrapped on the spot: an
+     * {@code Optional} injection point is idiomatic in a {@code @Bean} method, and nothing downstream sees it. The
+     * per-subsystem {@link LogThresholds} are why there is one taker per subsystem rather than a single global one.
+     * A disabled subsystem gets {@link MeasurementTaker#none()}, which the interceptors detect via
+     * {@link MeasurementTaker#isRecording()} and skip all context assembly.
+     *
+     * @param meterRegistry the optionally-present Micrometer registry
+     * @param enabled       whether this subsystem records at all
+     * @param thresholds    the log-level thresholds for this subsystem
+     * @param loggerOwner   the class the logging recorder logs under
+     * @return the taker, or {@link MeasurementTaker#none()} when disabled
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private static MeasurementTaker measurementTakerFor(Optional<MeterRegistry> meterRegistry,
+                                                        boolean enabled,
+                                                        LogThresholds thresholds,
+                                                        Class<?> loggerOwner) {
+        if (!enabled) {
+            return MeasurementTaker.none();
+        }
+        return MeasurementTaker.builder()
+                               .setLoggingRecorder(loggerOwner, thresholds)
+                               .setMeterRegistry(meterRegistry)
+                               .build();
+    }
 
 }

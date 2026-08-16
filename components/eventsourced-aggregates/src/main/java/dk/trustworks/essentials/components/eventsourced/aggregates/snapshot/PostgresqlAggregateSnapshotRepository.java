@@ -154,7 +154,9 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      *                                 vulnerabilities, compromising the security and integrity of the database.</b>
      * @param addNewSnapshotStrategy   the strategy determining when a new {@link AggregateSnapshot} will be stored
      * @param snapshotDeletionStrategy the strategy determining when an existing {@link AggregateSnapshot} will be deleted
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                  HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                  String snapshotTableName,
@@ -219,7 +221,9 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
      * @param jsonSerializer           JSON serializer that will be used to serialize Aggregate instances
      * @param addNewSnapshotStrategy   the strategy determining when a new {@link AggregateSnapshot} will be stored
      * @param snapshotDeletionStrategy the strategy determining when an existing {@link AggregateSnapshot} will be deleted
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                  HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                  Optional<String> snapshotTableName,
@@ -236,6 +240,10 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlAggregateSnapshotRepository(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                  HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                  Optional<String> snapshotTableName,
@@ -389,4 +397,131 @@ public class PostgresqlAggregateSnapshotRepository implements AggregateSnapshotR
                                       withAggregateImplementationType,
                                       snapshotEventOrdersToDelete);
     }
+
+    /**
+     * Creates a builder for a {@link PostgresqlAggregateSnapshotRepository}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link PostgresqlAggregateSnapshotRepository}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload for Spring {@code @Bean} methods.
+     */
+    public static final class Builder {
+        private ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
+        private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+        private String snapshotTableName;
+        private JSONEventSerializer jsonSerializer;
+        private AddNewAggregateSnapshotStrategy addNewSnapshotStrategy;
+        private AggregateSnapshotDeletionStrategy snapshotDeletionStrategy;
+        private MeterRegistry meterRegistryOptional;
+
+        /**
+         * @param eventStore required
+         * @return this builder
+         */
+        public Builder setEventStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore) {
+            this.eventStore = eventStore;
+            return this;
+        }
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder setUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param snapshotTableName optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setSnapshotTableName(String snapshotTableName) {
+            this.snapshotTableName = snapshotTableName;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setSnapshotTableName(String)}.
+         *
+         * @param snapshotTableName the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setSnapshotTableName(Optional<String> snapshotTableName) {
+            requireNonNull(snapshotTableName, "No snapshotTableName provided");
+            return setSnapshotTableName(snapshotTableName.orElse(null));
+        }
+
+        /**
+         * @param jsonSerializer required
+         * @return this builder
+         */
+        public Builder setJsonSerializer(JSONEventSerializer jsonSerializer) {
+            this.jsonSerializer = jsonSerializer;
+            return this;
+        }
+
+        /**
+         * @param addNewSnapshotStrategy required
+         * @return this builder
+         */
+        public Builder setAddNewSnapshotStrategy(AddNewAggregateSnapshotStrategy addNewSnapshotStrategy) {
+            this.addNewSnapshotStrategy = addNewSnapshotStrategy;
+            return this;
+        }
+
+        /**
+         * @param snapshotDeletionStrategy required
+         * @return this builder
+         */
+        public Builder setSnapshotDeletionStrategy(AggregateSnapshotDeletionStrategy snapshotDeletionStrategy) {
+            this.snapshotDeletionStrategy = snapshotDeletionStrategy;
+            return this;
+        }
+
+        /**
+         * @param meterRegistryOptional optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setMeterRegistry(MeterRegistry meterRegistryOptional) {
+            this.meterRegistryOptional = meterRegistryOptional;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry(MeterRegistry)}.
+         *
+         * @param meterRegistryOptional the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setMeterRegistry(Optional<MeterRegistry> meterRegistryOptional) {
+            requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
+            return setMeterRegistry(meterRegistryOptional.orElse(null));
+        }
+
+        /**
+         * @return the new {@link PostgresqlAggregateSnapshotRepository}
+         */
+        @SuppressWarnings("removal")
+        public PostgresqlAggregateSnapshotRepository build() {
+            return new PostgresqlAggregateSnapshotRepository(eventStore,
+                                                             unitOfWorkFactory,
+                                                             Optional.ofNullable(snapshotTableName),
+                                                             jsonSerializer,
+                                                             addNewSnapshotStrategy,
+                                                             snapshotDeletionStrategy,
+                                                             Optional.ofNullable(meterRegistryOptional));
+        }
+    }
+
 }

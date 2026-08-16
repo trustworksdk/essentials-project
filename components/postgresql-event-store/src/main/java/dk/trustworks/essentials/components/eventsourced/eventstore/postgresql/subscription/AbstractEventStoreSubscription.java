@@ -38,7 +38,12 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
     protected final EventStore                                   eventStore;
     protected final AggregateType                                aggregateType;
     protected final SubscriberId                                 subscriberId;
-    protected final Optional<Tenant>                             onlyIncludeEventsForTenant;
+    /**
+     * Held nullable rather than as an {@code Optional} field: this is read on every poll, {@code Optional} is not
+     * {@link java.io.Serializable} and costs an allocation per access. {@link #onlyIncludeEventsForTenant()} still
+     * returns {@code Optional}, so {@link EventStoreSubscription} is unchanged.
+     */
+    protected final Tenant                                       onlyIncludeEventsForTenant;
     protected final EventStoreSubscriptionObserver               eventStoreSubscriptionObserver;
     protected final Consumer<EventStoreSubscription>             unsubscribeCallback;
     protected final Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory;
@@ -56,6 +61,35 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
      * @param unsubscribeCallback               Callback to execute when unsubscribing
      * @param eventStorePollingOptimizerFactory Factory to create EventStorePollingOptimizers - input String parameter is the {@code eventStreamLogName} that is used label for logs (e.g., subscriberId+aggregateType)
      */
+    /**
+     * @param context the seven arguments every subscription needs — see {@link EventStoreSubscriptionContext#builder()}
+     */
+    protected AbstractEventStoreSubscription(EventStoreSubscriptionContext context) {
+        requireNonNull(context, "No context provided - see EventStoreSubscriptionContext.builder()");
+        this.log = LoggerFactory.getLogger(this.getClass());
+        this.eventStore = context.eventStore();
+        this.aggregateType = context.aggregateType();
+        this.subscriberId = context.subscriberId();
+        this.onlyIncludeEventsForTenant = context.onlyIncludeEventsForTenant();
+        this.eventStoreSubscriptionObserver = context.eventStoreSubscriptionObserver();
+        this.unsubscribeCallback = context.unsubscribeCallback();
+        this.eventStorePollingOptimizerFactory = context.eventStorePollingOptimizerFactory();
+    }
+
+    /**
+     * @param eventStore                        the event store to subscribe to
+     * @param aggregateType                     the aggregate type whose event stream is subscribed to
+     * @param subscriberId                      the durable identity of this subscriber
+     * @param onlyIncludeEventsForTenant        restrict the subscription to one tenant, or {@link Optional#empty()} for all
+     * @param eventStoreSubscriptionObserver    observability hook for the subscription lifecycle
+     * @param unsubscribeCallback               invoked when the subscription unsubscribes
+     * @param eventStorePollingOptimizerFactory creates the polling optimizer for a given subscription
+     * @deprecated Use {@link #AbstractEventStoreSubscription(EventStoreSubscriptionContext)}. These seven arguments
+     *         were repeated positionally by all five subscription subclasses, which is what pushed the widest of them
+     *         to thirteen parameters. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     protected AbstractEventStoreSubscription(EventStore eventStore,
                                              AggregateType aggregateType,
                                              SubscriberId subscriberId,
@@ -63,14 +97,15 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
                                              EventStoreSubscriptionObserver eventStoreSubscriptionObserver,
                                              Consumer<EventStoreSubscription> unsubscribeCallback,
                                              Function<String, EventStorePollingOptimizer> eventStorePollingOptimizerFactory) {
-        this.log = LoggerFactory.getLogger(this.getClass());
-        this.eventStore = requireNonNull(eventStore, "No eventStore provided");
-        this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
-        this.subscriberId = requireNonNull(subscriberId, "No subscriberId provided");
-        this.onlyIncludeEventsForTenant = requireNonNull(onlyIncludeEventsForTenant, "No onlyIncludeEventsForTenant provided");
-        this.eventStoreSubscriptionObserver = requireNonNull(eventStoreSubscriptionObserver, "No eventStoreSubscriptionObserver provided");
-        this.unsubscribeCallback = requireNonNull(unsubscribeCallback, "No unsubscribeCallback provided");
-        this.eventStorePollingOptimizerFactory = requireNonNull(eventStorePollingOptimizerFactory, "No eventStorePollingOptimizerFactory provided");
+        this(EventStoreSubscriptionContext.builder()
+                                          .setEventStore(eventStore)
+                                          .setAggregateType(aggregateType)
+                                          .setSubscriberId(subscriberId)
+                                          .setOnlyIncludeEventsForTenant(requireNonNull(onlyIncludeEventsForTenant, "No onlyIncludeEventsForTenant provided"))
+                                          .setEventStoreSubscriptionObserver(eventStoreSubscriptionObserver)
+                                          .setUnsubscribeCallback(unsubscribeCallback)
+                                          .setEventStorePollingOptimizerFactory(eventStorePollingOptimizerFactory)
+                                          .build());
     }
 
     @Override
@@ -99,7 +134,7 @@ public abstract class AbstractEventStoreSubscription implements EventStoreSubscr
 
     @Override
     public Optional<Tenant> onlyIncludeEventsForTenant() {
-        return onlyIncludeEventsForTenant;
+        return Optional.ofNullable(onlyIncludeEventsForTenant);
     }
 
     /**

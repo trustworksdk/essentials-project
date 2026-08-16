@@ -137,7 +137,9 @@ public final class MongoDurableQueues implements DurableQueues {
      *                                     After this timeout the message delivery will be reset and the message will again be a candidate for delivery
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               Duration messageHandlingTimeout,
                               Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory) {
@@ -157,7 +159,9 @@ public final class MongoDurableQueues implements DurableQueues {
      *
      * @param mongoTemplate     the {@link MongoTemplate} used
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
         this(mongoTemplate,
@@ -173,7 +177,9 @@ public final class MongoDurableQueues implements DurableQueues {
      * @param jsonSerializer         the {@link JSONSerializer} to use for serializing/deserializing message payloads
      * @param messageHandlingTimeout Defines the timeout for messages being delivered, but haven't yet been acknowledged.
      *                               After this timeout the message delivery will be reset and the message will again be a candidate for delivery
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               JSONSerializer jsonSerializer,
                               Duration messageHandlingTimeout) {
@@ -194,7 +200,9 @@ public final class MongoDurableQueues implements DurableQueues {
      * @param mongoTemplate     the {@link MongoTemplate} used
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
      * @param jsonSerializer    the {@link JSONSerializer} to use for serializing/deserializing message payloads
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                               JSONSerializer jsonSerializer) {
@@ -213,7 +221,9 @@ public final class MongoDurableQueues implements DurableQueues {
      * @param unitOfWorkFactory            the {@link UnitOfWorkFactory} needed to access the database
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                               Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory) {
@@ -252,7 +262,9 @@ public final class MongoDurableQueues implements DurableQueues {
      *                                     <b>Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.</b>
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                               JSONSerializer jsonSerializer,
@@ -275,7 +287,9 @@ public final class MongoDurableQueues implements DurableQueues {
      * @param jsonSerializer               the {@link JSONSerializer} that is used to serialize/deserialize message payloads
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                               JSONSerializer jsonSerializer,
@@ -316,7 +330,9 @@ public final class MongoDurableQueues implements DurableQueues {
      *                                     <b>Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.</b>
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               Duration messageHandlingTimeout,
                               JSONSerializer jsonSerializer,
@@ -340,7 +356,9 @@ public final class MongoDurableQueues implements DurableQueues {
      * @param jsonSerializer               the {@link JSONSerializer} that is used to serialize/deserialize message payloads
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     * @deprecated Use {@link #builder()}. Ten constructors over the same collaborators is a telescoping ladder: adding one option doubles it, and no call site can be read without counting positions. The builder replaces every combination; the shortest constructor remains for the all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueues(MongoTemplate mongoTemplate,
                               Duration messageHandlingTimeout,
                               JSONSerializer jsonSerializer,
@@ -1809,4 +1827,85 @@ public final class MongoDurableQueues implements DurableQueues {
             return this;
         }
     }
+
+    /**
+     * Creates a builder for a {@link MongoDurableQueues}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link MongoDurableQueues}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private MongoTemplate mongoTemplate;
+        private SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory;
+        private JSONSerializer jsonSerializer;
+        private String sharedQueueCollectionName;
+        private Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory;
+
+        /**
+         * @param mongoTemplate required
+         * @return this builder
+         */
+        public Builder setMongoTemplate(MongoTemplate mongoTemplate) {
+            this.mongoTemplate = mongoTemplate;
+            return this;
+        }
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder setUnitOfWorkFactory(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param jsonSerializer required
+         * @return this builder
+         */
+        public Builder setJsonSerializer(JSONSerializer jsonSerializer) {
+            this.jsonSerializer = jsonSerializer;
+            return this;
+        }
+
+        /**
+         * @param sharedQueueCollectionName required
+         * @return this builder
+         */
+        public Builder setSharedQueueCollectionName(String sharedQueueCollectionName) {
+            this.sharedQueueCollectionName = sharedQueueCollectionName;
+            return this;
+        }
+
+        /**
+         * @param queuePollingOptimizerFactory required
+         * @return this builder
+         */
+        public Builder setQueuePollingOptimizerFactory(Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory) {
+            this.queuePollingOptimizerFactory = queuePollingOptimizerFactory;
+            return this;
+        }
+
+        /**
+         * @return the new {@link MongoDurableQueues}
+         */
+        @SuppressWarnings("removal")
+        public MongoDurableQueues build() {
+            return new MongoDurableQueues(mongoTemplate,
+                                          unitOfWorkFactory,
+                                          jsonSerializer,
+                                          sharedQueueCollectionName,
+                                          queuePollingOptimizerFactory);
+        }
+    }
+
 }

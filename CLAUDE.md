@@ -1,6 +1,6 @@
 # Essentials
 
-Java 17+ building blocks for strongly-typed, event-sourced distributed systems.
+Java 21+ building blocks for strongly-typed, event-sourced distributed systems (compiled `--release 21`; build on JDK 21-25).
 Multi-module Maven. GroupId: `dk.trustworks.essentials` / `dk.trustworks.essentials.components`.
 
 - `examples/` — demo projects, not part of the release

@@ -105,8 +105,10 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
      *                                                                       with an exception where {@link IOExceptionUtil#isIOException(Throwable)} returns true -
      *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
      *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlFencedLockManager(Jdbi jdbi,
                                        HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                        Optional<String> lockManagerInstanceId,
@@ -155,8 +157,10 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
      *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
      *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
      * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlFencedLockManager(Jdbi jdbi,
                                        HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                        Optional<String> lockManagerInstanceId,
@@ -188,7 +192,9 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
      *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
      *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
      * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlFencedLockManager(Jdbi jdbi,
                                        HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                        Duration lockTimeOut,
@@ -218,7 +224,9 @@ public final class PostgresqlFencedLockManager extends DBFencedLockManager<Handl
      *                                                                       with an exception where {@link IOExceptionUtil#isIOException(Throwable)} returns true -
      *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
      *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlFencedLockManager(Jdbi jdbi,
                                        HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                        Optional<String> lockManagerInstanceId,

@@ -83,6 +83,10 @@ public class PostgresqlAggregateSnapshotJobProcessor {
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlAggregateSnapshotJobProcessor(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
                                                    AggregateSnapshotStore snapshotStore,
                                                    AggregateSnapshotJobRepository jobRepository,
@@ -213,4 +217,108 @@ public class PostgresqlAggregateSnapshotJobProcessor {
                                    job.serializedSnapshot());
         jobRepository.markCompleted(job.jobId());
     }
+
+    /**
+     * Creates a builder for a {@link PostgresqlAggregateSnapshotJobProcessor}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link PostgresqlAggregateSnapshotJobProcessor}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload for Spring {@code @Bean} methods.
+     */
+    public static final class Builder {
+        private ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
+        private AggregateSnapshotStore snapshotStore;
+        private AggregateSnapshotJobRepository jobRepository;
+        private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+        private DurableAsyncSnapshotSettings settings;
+        private MeterRegistry meterRegistryOptional;
+
+        /**
+         * @param eventStore required
+         * @return this builder
+         */
+        public Builder setEventStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore) {
+            this.eventStore = eventStore;
+            return this;
+        }
+
+        /**
+         * @param snapshotStore required
+         * @return this builder
+         */
+        public Builder setSnapshotStore(AggregateSnapshotStore snapshotStore) {
+            this.snapshotStore = snapshotStore;
+            return this;
+        }
+
+        /**
+         * @param jobRepository required
+         * @return this builder
+         */
+        public Builder setJobRepository(AggregateSnapshotJobRepository jobRepository) {
+            this.jobRepository = jobRepository;
+            return this;
+        }
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder setUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param settings required
+         * @return this builder
+         */
+        public Builder setSettings(DurableAsyncSnapshotSettings settings) {
+            this.settings = settings;
+            return this;
+        }
+
+        /**
+         * @param meterRegistryOptional optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setMeterRegistry(MeterRegistry meterRegistryOptional) {
+            this.meterRegistryOptional = meterRegistryOptional;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry(MeterRegistry)}.
+         *
+         * @param meterRegistryOptional the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setMeterRegistry(Optional<MeterRegistry> meterRegistryOptional) {
+            requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
+            return setMeterRegistry(meterRegistryOptional.orElse(null));
+        }
+
+        /**
+         * @return the new {@link PostgresqlAggregateSnapshotJobProcessor}
+         */
+        @SuppressWarnings("removal")
+        public PostgresqlAggregateSnapshotJobProcessor build() {
+            return new PostgresqlAggregateSnapshotJobProcessor(eventStore,
+                                                               snapshotStore,
+                                                               jobRepository,
+                                                               unitOfWorkFactory,
+                                                               settings,
+                                                               Optional.ofNullable(meterRegistryOptional));
+        }
+    }
+
 }

@@ -22,6 +22,20 @@ import java.time.Duration;
 public interface InvocationTracker {
 
     /**
+     * The neutral default: tracks nothing.
+     * <p>
+     * {@link PatternMatchingMethodInvoker} has always substituted a {@link NoOpInvocationTracker} for an absent
+     * tracker; this exposes that fallback as a value, so a caller with nothing to track passes
+     * {@code InvocationTracker.noOp()} rather than an empty {@code Optional}. The instance is shared — it is
+     * stateless.
+     *
+     * @return a tracker that does nothing — never {@code null}
+     */
+    static InvocationTracker noOp() {
+        return NoOpInvocationTracker.INSTANCE;
+    }
+
+    /**
      * Track that the method had been invocation
      *
      * @param method          the invoked method
@@ -32,6 +46,11 @@ public interface InvocationTracker {
     void trackMethodInvoked(Method method, Object invokeMethodsOn, Duration duration, Object argument);
 
     class NoOpInvocationTracker implements InvocationTracker {
+        /**
+         * The shared instance handed out by {@link InvocationTracker#noOp()}. Safe to share — this tracker holds no
+         * state.
+         */
+        static final NoOpInvocationTracker INSTANCE = new NoOpInvocationTracker();
 
         @Override
         public void trackMethodInvoked(Method method, Object invokeMethodsOn, Duration duration, Object argument) {

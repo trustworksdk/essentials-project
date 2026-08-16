@@ -184,6 +184,21 @@ public final class SeparateTablePerAggregateEventStreamConfiguration extends Agg
      * @param eventMetadataJsonColumnType The SQL column type for the {@link JSONEventSerializer} serialized {@link EventMetaData}
      * @param tenantSerializer            The serializer for the {@link Tenant} value (or {@link NoSupportForMultiTenancySerializer} if it's a single tenant application)
      */
+    /**
+     * Creates a builder for a {@link SeparateTablePerAggregateEventStreamConfiguration}.
+     *
+     * @return a new builder
+     */
+    public static SeparateTablePerAggregateEventStreamConfigurationBuilder builder() {
+        return new SeparateTablePerAggregateEventStreamConfigurationBuilder();
+    }
+
+    /**
+     * @deprecated Use {@link #builder()}. Twelve positional arguments — five of them consecutive column-type enums of
+     *         only two distinct types — cannot be checked by the compiler and cannot be read at the call site. This
+     *         constructor is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public SeparateTablePerAggregateEventStreamConfiguration(AggregateType aggregateType,
                                                              String eventStreamTableName,
                                                              EventStreamTableColumnNames eventStreamTableColumnNames,

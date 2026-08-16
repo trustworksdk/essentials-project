@@ -51,6 +51,10 @@ public class DefaultAggregateGenerationArchiver implements AggregateGenerationAr
     private final AggregateArchiveDestination archiveDestination;
     private final AggregateArchiveMeasurementSupport measurementSupport;
 
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultAggregateGenerationArchiver(AggregateArchiveRegistry archiveRegistry,
                                               AggregateClosingBooksGenerationAccessProvider generationAccessProvider,
                                               ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
@@ -67,6 +71,10 @@ public class DefaultAggregateGenerationArchiver implements AggregateGenerationAr
     }
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultAggregateGenerationArchiver(AggregateArchiveRegistry archiveRegistry,
                                               AggregateClosingBooksGenerationAccessProvider generationAccessProvider,
                                               ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore,
@@ -227,4 +235,119 @@ public class DefaultAggregateGenerationArchiver implements AggregateGenerationAr
             return archiveDestination.write(writeRequest, out -> archiveExporter.export(exportRequest, out));
         });
     }
+
+    /**
+     * Creates a builder for a {@link DefaultAggregateGenerationArchiver}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link DefaultAggregateGenerationArchiver}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private AggregateArchiveRegistry archiveRegistry;
+        private AggregateClosingBooksGenerationAccessProvider generationAccessProvider;
+        private ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
+        private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+        private AggregateArchiveExporter archiveExporter;
+        private AggregateArchiveDestination archiveDestination;
+        private MeterRegistry meterRegistryOptional;
+
+        /**
+         * @param archiveRegistry required
+         * @return this builder
+         */
+        public Builder setArchiveRegistry(AggregateArchiveRegistry archiveRegistry) {
+            this.archiveRegistry = archiveRegistry;
+            return this;
+        }
+
+        /**
+         * @param generationAccessProvider required
+         * @return this builder
+         */
+        public Builder setGenerationAccessProvider(AggregateClosingBooksGenerationAccessProvider generationAccessProvider) {
+            this.generationAccessProvider = generationAccessProvider;
+            return this;
+        }
+
+        /**
+         * @param eventStore required
+         * @return this builder
+         */
+        public Builder setEventStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore) {
+            this.eventStore = eventStore;
+            return this;
+        }
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder setUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param archiveExporter required
+         * @return this builder
+         */
+        public Builder setArchiveExporter(AggregateArchiveExporter archiveExporter) {
+            this.archiveExporter = archiveExporter;
+            return this;
+        }
+
+        /**
+         * @param archiveDestination required
+         * @return this builder
+         */
+        public Builder setArchiveDestination(AggregateArchiveDestination archiveDestination) {
+            this.archiveDestination = archiveDestination;
+            return this;
+        }
+
+        /**
+         * @param meterRegistryOptional optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setMeterRegistry(MeterRegistry meterRegistryOptional) {
+            this.meterRegistryOptional = meterRegistryOptional;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry}.
+         *
+         * @param meterRegistryOptional the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setMeterRegistry(Optional<MeterRegistry> meterRegistryOptional) {
+            requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
+            return setMeterRegistry(meterRegistryOptional.orElse(null));
+        }
+
+        /**
+         * @return the new {@link DefaultAggregateGenerationArchiver}
+         */
+        @SuppressWarnings("removal")
+        public DefaultAggregateGenerationArchiver build() {
+            return new DefaultAggregateGenerationArchiver(archiveRegistry,
+                                                          generationAccessProvider,
+                                                          eventStore,
+                                                          unitOfWorkFactory,
+                                                          archiveExporter,
+                                                          archiveDestination,
+                                                          Optional.ofNullable(meterRegistryOptional));
+        }
+    }
+
 }

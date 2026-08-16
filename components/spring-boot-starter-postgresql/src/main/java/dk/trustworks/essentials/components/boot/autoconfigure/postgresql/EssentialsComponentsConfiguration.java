@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import dk.trustworks.essentials.shared.measurement.*;
 import dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsProperties.*;
 import dk.trustworks.essentials.components.distributed.fencedlock.postgresql.*;
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
@@ -206,9 +207,10 @@ public class EssentialsComponentsConfiguration {
         jdbi.installPlugin(new PostgresPlugin());
         if (properties.getMetrics().getSql().isEnabled()) {
             EssentialsQueryTagger.tagQueries(jdbi);
-            jdbi.setSqlLogger(new RecordSqlExecutionTimeLogger(meterRegistry,
-                                                               properties.getMetrics().getSql().isEnabled(),
-                                                               properties.getMetrics().getSql().toLogThresholds(),
+            jdbi.setSqlLogger(new RecordSqlExecutionTimeLogger(measurementTakerFor(meterRegistry,
+                                                                                  properties.getMetrics().getSql().isEnabled(),
+                                                                                  properties.getMetrics().getSql().toLogThresholds(),
+                                                                                  RecordSqlExecutionTimeLogger.class),
                                                                properties.getTracingProperties().getModuleTag())
                              );
         } else {
@@ -511,30 +513,33 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingBean
     public RecordExecutionTimeMessageHandlerInterceptor measurementMessageHandlerInterceptor(EssentialsComponentsProperties properties,
                                                                                              Optional<MeterRegistry> meterRegistry) {
-        return new RecordExecutionTimeMessageHandlerInterceptor(meterRegistry,
-                                                                properties.getMetrics().getMessageHandler().isEnabled(),
-                                                                properties.getMetrics().getMessageHandler().toLogThresholds(),
-                                                                properties.getTracingProperties().getModuleTag());
+        return new RecordExecutionTimeMessageHandlerInterceptor(measurementTakerFor(meterRegistry,
+                                                                                properties.getMetrics().getMessageHandler().isEnabled(),
+                                                                                properties.getMetrics().getMessageHandler().toLogThresholds(),
+                                                                                RecordExecutionTimeMessageHandlerInterceptor.class),
+                                                           properties.getTracingProperties().getModuleTag());
     }
 
     @Bean
     @ConditionalOnMissingBean
     public RecordExecutionTimeCommandBusInterceptor measurementCommandBusInterceptor(EssentialsComponentsProperties properties,
                                                                                      Optional<MeterRegistry> meterRegistry) {
-        return new RecordExecutionTimeCommandBusInterceptor(meterRegistry,
-                                                            properties.getMetrics().getCommandBus().isEnabled(),
-                                                            properties.getMetrics().getCommandBus().toLogThresholds(),
-                                                            properties.getTracingProperties().getModuleTag());
+        return new RecordExecutionTimeCommandBusInterceptor(measurementTakerFor(meterRegistry,
+                                                                            properties.getMetrics().getCommandBus().isEnabled(),
+                                                                            properties.getMetrics().getCommandBus().toLogThresholds(),
+                                                                            RecordExecutionTimeCommandBusInterceptor.class),
+                                                       properties.getTracingProperties().getModuleTag());
     }
 
     @Bean
     @ConditionalOnMissingBean
     public RecordExecutionTimeDurableQueueInterceptor measurementDurableQueuesInterceptor(EssentialsComponentsProperties properties,
                                                                                           Optional<MeterRegistry> meterRegistry) {
-        return new RecordExecutionTimeDurableQueueInterceptor(meterRegistry,
-                                                              properties.getMetrics().getDurableQueues().isEnabled(),
-                                                              properties.getMetrics().getDurableQueues().toLogThresholds(),
-                                                              properties.getTracingProperties().getModuleTag());
+        return new RecordExecutionTimeDurableQueueInterceptor(measurementTakerFor(meterRegistry,
+                                                                              properties.getMetrics().getDurableQueues().isEnabled(),
+                                                                              properties.getMetrics().getDurableQueues().toLogThresholds(),
+                                                                              RecordExecutionTimeDurableQueueInterceptor.class),
+                                                         properties.getTracingProperties().getModuleTag());
     }
 
     @Bean
@@ -619,4 +624,34 @@ public class EssentialsComponentsConfiguration {
     public SchedulerApi noOpSchedulerApi() {
         return new NoOpSchedulerApi();
     }
+
+    /**
+     * Assembles the {@link MeasurementTaker} for one metrics subsystem.
+     * <p>
+     * This is where {@code Optional<MeterRegistry>} is allowed to live and is unwrapped on the spot: an
+     * {@code Optional} injection point is idiomatic in a {@code @Bean} method, and nothing downstream sees it. The
+     * per-subsystem {@link LogThresholds} are why there is one taker per subsystem rather than a single global one —
+     * they differ per subsystem by design. A disabled subsystem gets {@link MeasurementTaker#none()}, which the
+     * interceptors detect via {@link MeasurementTaker#isRecording()} and skip all context assembly.
+     *
+     * @param meterRegistry the optionally-present Micrometer registry
+     * @param enabled       whether this subsystem records at all
+     * @param thresholds    the log-level thresholds for this subsystem
+     * @param loggerOwner   the class the logging recorder logs under
+     * @return the taker, or {@link MeasurementTaker#none()} when disabled
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private static MeasurementTaker measurementTakerFor(Optional<MeterRegistry> meterRegistry,
+                                                        boolean enabled,
+                                                        LogThresholds thresholds,
+                                                        Class<?> loggerOwner) {
+        if (!enabled) {
+            return MeasurementTaker.none();
+        }
+        return MeasurementTaker.builder()
+                               .setLoggingRecorder(loggerOwner, thresholds)
+                               .setMeterRegistry(meterRegistry)
+                               .build();
+    }
+
 }

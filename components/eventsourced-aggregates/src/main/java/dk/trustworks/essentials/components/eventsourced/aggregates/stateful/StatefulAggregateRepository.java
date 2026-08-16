@@ -619,7 +619,9 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
          * @param aggregateIdType                   the concrete aggregate ID type
          * @param aggregateImplementationType       the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
          * @param aggregateSnapshotRepository       optional (may be null) {@link AggregateSnapshotRepository}
+         * @deprecated Use {@link StatefulAggregateRepository#builder()} or one of the {@code from(...)} factory methods. This constructor declares more than five parameters; it is unchanged and remains the implementation those paths delegate to.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         protected <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
                                                                                                       CONFIG aggregateEventStreamConfiguration,
                                                                                                       StatefulAggregateInstanceFactory statefulAggregateInstanceFactory,
@@ -648,7 +650,9 @@ public interface StatefulAggregateRepository<ID, EVENT_TYPE, AGGREGATE_IMPL_TYPE
          * @param aggregateIdType                  the concrete aggregate ID type
          * @param aggregateImplementationType      the concrete aggregate type (MUST be a subtype of {@link StatefulAggregate})
          * @param aggregateSnapshotRepository      optional (may be null) {@link AggregateSnapshotRepository}
+         * @deprecated Use {@link StatefulAggregateRepository#builder()} or one of the {@code from(...)} factory methods. This constructor declares more than five parameters; it is unchanged and remains the implementation those paths delegate to.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         protected <CONFIG extends AggregateEventStreamConfiguration> DefaultStatefulAggregateRepository(ConfigurableEventStore<CONFIG> eventStore,
                                                                                                       AggregateType aggregateType,
                                                                                                       StatefulAggregateInstanceFactory statefulAggregateInstanceFactory,

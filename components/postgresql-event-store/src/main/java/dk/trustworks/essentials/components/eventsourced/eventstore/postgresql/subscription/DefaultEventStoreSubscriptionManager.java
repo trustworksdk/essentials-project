@@ -374,17 +374,11 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         requireNonNull(eventHandler, "No eventHandler provided");
         return addEventStoreSubscription(subscriberId,
                                          forAggregateType,
-                                         new NonExclusiveAsynchronousSubscription(eventStore,
-                                                                                  durableSubscriptionRepository,
-                                                                                  forAggregateType,
-                                                                                  subscriberId,
-                                                                                  onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                                                                                  onlyIncludeEventsForTenant,
-                                                                                  eventHandler,
-                                                                                  eventStoreSubscriptionObserver,
-                                                                                  eventStoreSubscriptionManagerSettings,
-                                                                                  this::unsubscribe,
-                                                                                  eventStorePollingOptimizerFactory));
+                                         new NonExclusiveAsynchronousSubscription(subscriptionContext(subscriberId, forAggregateType, onlyIncludeEventsForTenant),
+                                                                                  DurableSubscriptionContext.fromFixedGlobalOrder(durableSubscriptionRepository,
+                                                                                                                                 onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                                                                 eventStoreSubscriptionManagerSettings),
+                                                                                  eventHandler));
     }
 
     @Override
@@ -400,19 +394,13 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         requireNonNull(eventHandler, "No eventHandler provided");
         return addEventStoreSubscription(subscriberId,
                                          forAggregateType,
-                                         new NonExclusiveBatchedAsynchronousSubscription(eventStore,
-                                                                                         durableSubscriptionRepository,
-                                                                                         forAggregateType,
-                                                                                         subscriberId,
-                                                                                         onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                                                                                         onlyIncludeEventsForTenant,
+                                         new NonExclusiveBatchedAsynchronousSubscription(subscriptionContext(subscriberId, forAggregateType, onlyIncludeEventsForTenant),
+                                                                                         DurableSubscriptionContext.fromFixedGlobalOrder(durableSubscriptionRepository,
+                                                                                                                                        onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                                                                        eventStoreSubscriptionManagerSettings),
                                                                                          maxBatchSize,
                                                                                          maxLatency,
-                                                                                         eventHandler,
-                                                                                         eventStoreSubscriptionObserver,
-                                                                                         eventStoreSubscriptionManagerSettings,
-                                                                                         this::unsubscribe,
-                                                                                         eventStorePollingOptimizerFactory));
+                                                                                         eventHandler));
     }
 
     @Override
@@ -427,19 +415,13 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         requireNonNull(eventHandler, "No eventHandler provided");
         return addEventStoreSubscription(subscriberId,
                                          forAggregateType,
-                                         new ExclusiveAsynchronousSubscription(eventStore,
+                                         new ExclusiveAsynchronousSubscription(subscriptionContext(subscriberId, forAggregateType, onlyIncludeEventsForTenant),
+                                                                               new DurableSubscriptionContext(durableSubscriptionRepository,
+                                                                                                              onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
+                                                                                                              eventStoreSubscriptionManagerSettings),
                                                                                fencedLockManager,
-                                                                               durableSubscriptionRepository,
-                                                                               forAggregateType,
-                                                                               subscriberId,
-                                                                               onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder,
-                                                                               onlyIncludeEventsForTenant,
                                                                                fencedLockAwareSubscriber,
-                                                                               eventHandler,
-                                                                               eventStoreSubscriptionObserver,
-                                                                               eventStoreSubscriptionManagerSettings,
-                                                                               this::unsubscribe,
-                                                                               eventStorePollingOptimizerFactory));
+                                                                               eventHandler));
     }
 
     @Override
@@ -452,16 +434,9 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
 
         return addEventStoreSubscription(subscriberId,
                                          forAggregateType,
-                                         new ExclusiveInTransactionSubscription(eventStore,
+                                         new ExclusiveInTransactionSubscription(subscriptionContext(subscriberId, forAggregateType, onlyIncludeEventsForTenant),
                                                                                 fencedLockManager,
-                                                                                forAggregateType,
-                                                                                subscriberId,
-                                                                                onlyIncludeEventsForTenant,
-                                                                                eventHandler,
-                                                                                eventStoreSubscriptionObserver,
-                                                                                this::unsubscribe,
-                                                                                eventStorePollingOptimizerFactory
-                                         ));
+                                                                                eventHandler));
     }
 
     @Override
@@ -473,14 +448,8 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
         requireNonNull(eventHandler, "No eventHandler provided");
         return addEventStoreSubscription(subscriberId,
                                          forAggregateType,
-                                         new NonExclusiveInTransactionSubscription(eventStore,
-                                                                                   forAggregateType,
-                                                                                   subscriberId,
-                                                                                   onlyIncludeEventsForTenant,
-                                                                                   eventHandler,
-                                                                                   eventStoreSubscriptionObserver,
-                                                                                   this::unsubscribe,
-                                                                                   eventStorePollingOptimizerFactory));
+                                         new NonExclusiveInTransactionSubscription(subscriptionContext(subscriberId, forAggregateType, onlyIncludeEventsForTenant),
+                                                                                   eventHandler));
     }
 
     /**
@@ -502,4 +471,30 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     public boolean hasSubscription(SubscriberId subscriberId, AggregateType aggregateType) {
         return subscribers.containsKey(Pair.of(subscriberId, aggregateType));
     }
+
+    /**
+     * Assembles the {@link EventStoreSubscriptionContext} shared by every subscription this manager creates. This is
+     * the one place the seven shared arguments are named, which is the point of the context: adding one is an edit
+     * here rather than in all five subscription constructors.
+     *
+     * @param subscriberId               the durable identity of the subscriber
+     * @param forAggregateType           the aggregate type being subscribed to
+     * @param onlyIncludeEventsForTenant the tenant restriction, or empty for all tenants
+     * @return the context
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private EventStoreSubscriptionContext subscriptionContext(SubscriberId subscriberId,
+                                                              AggregateType forAggregateType,
+                                                              Optional<Tenant> onlyIncludeEventsForTenant) {
+        return EventStoreSubscriptionContext.builder()
+                                            .setEventStore(eventStore)
+                                            .setAggregateType(forAggregateType)
+                                            .setSubscriberId(subscriberId)
+                                            .setOnlyIncludeEventsForTenant(onlyIncludeEventsForTenant)
+                                            .setEventStoreSubscriptionObserver(eventStoreSubscriptionObserver)
+                                            .setUnsubscribeCallback(this::unsubscribe)
+                                            .setEventStorePollingOptimizerFactory(eventStorePollingOptimizerFactory)
+                                            .build();
+    }
+
 }

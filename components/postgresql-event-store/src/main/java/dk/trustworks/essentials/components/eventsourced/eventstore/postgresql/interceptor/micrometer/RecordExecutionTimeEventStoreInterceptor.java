@@ -21,10 +21,11 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.in
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.operations.*;
 import dk.trustworks.essentials.shared.measurement.*;
 import io.micrometer.core.instrument.MeterRegistry;
-import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.stream.Stream;
+
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * An interceptor that records execution time for event store operations using the {@link MeasurementTaker} API.
@@ -39,27 +40,47 @@ public class RecordExecutionTimeEventStoreInterceptor implements EventStoreInter
     private final       String           moduleTag;
 
     /**
-     * Constructs a new interceptor.
+     * Constructs a new interceptor recording to the supplied {@link MeasurementTaker}.
+     * <p>
+     * There is no separate "enabled" flag: pass {@link MeasurementTaker#none()} to switch recording off. The
+     * interceptor branches on {@link MeasurementTaker#isRecording()}, so a disabled interceptor still skips assembling
+     * the measurement context — which matters here, since this sits on every event-store operation.
      *
+     * @param measurementTaker where event store operation times are recorded. {@link MeasurementTaker#none()} disables recording
+     * @param moduleTag        Optional {@value #MODULE_TAG_NAME} Tag value. May be {@code null}, in which case the tag is omitted
+     */
+    public RecordExecutionTimeEventStoreInterceptor(MeasurementTaker measurementTaker,
+                                                    String moduleTag) {
+        this.measurementTaker = requireNonNull(measurementTaker, "No measurementTaker provided - use MeasurementTaker.none() to disable recording");
+        this.recordExecutionTimeEnabled = measurementTaker.isRecording();
+        this.moduleTag = moduleTag;
+    }
+
+    /**
      * @param meterRegistryOptional      an Optional MeterRegistry to enable Micrometer metrics
      * @param recordExecutionTimeEnabled whether to record execution times or not
      * @param thresholds                 the logging thresholds configuration
      * @param moduleTag                  Optional {@value #MODULE_TAG_NAME} Tag value
+     * @deprecated Use {@link #RecordExecutionTimeEventStoreInterceptor(MeasurementTaker, String)}. Assemble the
+     *         {@link MeasurementTaker} once — typically one per metrics subsystem in the Spring Boot starter — rather
+     *         than having every interceptor re-derive one from an {@code Optional<MeterRegistry>}. Pass
+     *         {@link MeasurementTaker#none()} where {@code recordExecutionTimeEnabled} was {@code false}. This
+     *         constructor delegates and behaves identically, except that the logging recorder is now named after this
+     *         class rather than after the runtime subclass.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public RecordExecutionTimeEventStoreInterceptor(Optional<MeterRegistry> meterRegistryOptional,
                                                     boolean recordExecutionTimeEnabled,
                                                     LogThresholds thresholds,
                                                     String moduleTag) {
-        this.recordExecutionTimeEnabled = recordExecutionTimeEnabled;
-        this.moduleTag = moduleTag;
-        this.measurementTaker = MeasurementTaker.builder()
-                                                .addRecorder(
-                                                        new LoggingMeasurementRecorder(
-                                                                LoggerFactory.getLogger(this.getClass()),
-                                                                thresholds))
-                                                .withOptionalMicrometerMeasurementRecorder(meterRegistryOptional)
-                                                .build();
+        this(recordExecutionTimeEnabled
+             ? MeasurementTaker.builder()
+                               .setLoggingRecorder(RecordExecutionTimeEventStoreInterceptor.class, thresholds)
+                               .setMeterRegistry(meterRegistryOptional)
+                               .build()
+             : MeasurementTaker.none(),
+             moduleTag);
     }
 
     @Override

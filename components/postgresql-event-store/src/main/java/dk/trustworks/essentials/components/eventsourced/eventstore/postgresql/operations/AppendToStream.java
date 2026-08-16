@@ -59,7 +59,12 @@ public final class AppendToStream<ID> {
      * </ul>
      */
     public final ID             aggregateId;
-    private      Optional<Long> appendEventsAfterEventOrder;
+    /**
+     * Held nullable rather than as an {@code Optional} field: {@code Optional} is not {@link java.io.Serializable}
+     * and costs an allocation per access, and this operation object is created on every append. The public accessor
+     * still returns {@code Optional}, so the API is unchanged.
+     */
+    private      Long           appendEventsAfterEventOrder;
     private      List<?>        eventsToAppend;
 
     /**
@@ -171,11 +176,31 @@ public final class AppendToStream<ID> {
      *                                    to resolve the {@link EventOrder} of the last persisted event for this aggregate instance.
      * @param eventsToAppend              the events to persist/append
      */
-    public AppendToStream(AggregateType aggregateType, ID aggregateId, Optional<Long> appendEventsAfterEventOrder, List<?> eventsToAppend) {
+    public AppendToStream(AggregateType aggregateType, ID aggregateId, Long appendEventsAfterEventOrder, List<?> eventsToAppend) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.aggregateId = requireNonNull(aggregateId, "No aggregateId provided");
-        this.appendEventsAfterEventOrder = requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder provided");
+        this.appendEventsAfterEventOrder = appendEventsAfterEventOrder;
         this.eventsToAppend = requireNonNull(eventsToAppend, "No eventsToAppend provided");
+    }
+
+    /**
+     * @param aggregateType               the aggregate type that the underlying {@link AggregateEventStream} is associated with
+     * @param aggregateId                 the identifier of the aggregate we want to persist events related to
+     * @param appendEventsAfterEventOrder append the events after this event order. {@link Optional#empty()} lets the
+     *                                    {@link EventStore} resolve the last persisted event order itself
+     * @param eventsToAppend              the events to persist/append
+     * @deprecated Use {@link #AppendToStream(AggregateType, Object, Long, List)}, passing {@code null} where you
+     *         passed {@link Optional#empty()}, or {@link #builder()}. {@link #getAppendEventsAfterEventOrder()} still
+     *         returns an {@code Optional}, so reading code is unaffected. This constructor delegates and behaves
+     *         identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public AppendToStream(AggregateType aggregateType, ID aggregateId, Optional<Long> appendEventsAfterEventOrder, List<?> eventsToAppend) {
+        this(aggregateType,
+             aggregateId,
+             requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder provided").orElse(null),
+             eventsToAppend);
     }
 
     /**
@@ -187,7 +212,7 @@ public final class AppendToStream<ID> {
      *                                    to resolve the {@link EventOrder} of the last persisted event for this aggregate instance.
      */
     public AppendToStream setAppendEventsAfterEventOrder(Optional<Long> appendEventsAfterEventOrder) {
-        this.appendEventsAfterEventOrder = requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder option provided");
+        this.appendEventsAfterEventOrder = requireNonNull(appendEventsAfterEventOrder, "No appendEventsAfterEventOrder option provided").orElse(null);
         return this;
     }
 
@@ -200,7 +225,7 @@ public final class AppendToStream<ID> {
      *                                    to resolve the {@link EventOrder} of the last persisted event for this aggregate instance.
      */
     public AppendToStream setAppendEventsAfterEventOrder(Long appendEventsAfterEventOrder) {
-        this.appendEventsAfterEventOrder = Optional.ofNullable(appendEventsAfterEventOrder);
+        this.appendEventsAfterEventOrder = appendEventsAfterEventOrder;
         return this;
     }
 
@@ -213,7 +238,7 @@ public final class AppendToStream<ID> {
      *                                    to resolve the {@link EventOrder} of the last persisted event for this aggregate instance.
      */
     public AppendToStream setAppendEventsAfterEventOrder(EventOrder appendEventsAfterEventOrder) {
-        this.appendEventsAfterEventOrder = Optional.ofNullable(appendEventsAfterEventOrder).map(NumberType::value);
+        this.appendEventsAfterEventOrder = appendEventsAfterEventOrder != null ? appendEventsAfterEventOrder.value() : null;
         return this;
     }
 
@@ -226,7 +251,7 @@ public final class AppendToStream<ID> {
      *                                    to resolve the {@link EventOrder} of the last persisted event for this aggregate instance.
      */
     public AppendToStream setAppendEventsAfterEventOrder(GlobalEventOrder appendEventsAfterEventOrder) {
-        this.appendEventsAfterEventOrder = Optional.ofNullable(appendEventsAfterEventOrder).map(NumberType::longValue);
+        this.appendEventsAfterEventOrder = appendEventsAfterEventOrder != null ? appendEventsAfterEventOrder.longValue() : null;
         return this;
     }
 
@@ -287,7 +312,7 @@ public final class AppendToStream<ID> {
      * to resolve the {@link EventOrder} of the last persisted event for this aggregate instance.
      */
     public Optional<Long> getAppendEventsAfterEventOrder() {
-        return appendEventsAfterEventOrder;
+        return Optional.ofNullable(appendEventsAfterEventOrder);
     }
 
     /**

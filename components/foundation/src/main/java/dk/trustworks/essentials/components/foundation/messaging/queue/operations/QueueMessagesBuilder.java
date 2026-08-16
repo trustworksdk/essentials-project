@@ -73,6 +73,7 @@ public final class QueueMessagesBuilder {
      * Builder an {@link QueueMessages} instance from the builder properties
      * @return the {@link QueueMessages} instance
      */
+    @SuppressWarnings("removal")
     public QueueMessages build() {
         return new QueueMessages(queueName, messages, deliveryDelay);
     }

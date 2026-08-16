@@ -81,7 +81,9 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
      * @param policy the decision policy applied to the aggregates during processing
      * @param coordinator the coordinator responsible for managing the overall processing workflow
      * @param meterRegistryOptional an optional registry used to track and measure processing metrics
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultClosingBooksScheduledScanProcessor(AggregateType aggregateType,
                                                      ClosingBooksOpenGenerationRepository<ID> generationRepository,
                                                      ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader,
@@ -110,7 +112,9 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
      * @param clock the clock used to derive the scan-eligibility cut-off and deferral deadlines
      * @param scanRetryDelay how long a generation the scan could not process is skipped for, so that one broken
      *                       generation costs one attempt per window instead of the whole batch on every poll
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultClosingBooksScheduledScanProcessor(AggregateType aggregateType,
                                                      ClosingBooksOpenGenerationRepository<ID> generationRepository,
                                                      ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader,
@@ -222,4 +226,131 @@ public class DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> implements
             measurementSupport.incrementProcessOutcome(aggregateType, "keep_open");
         }
     }
+
+    /**
+     * Creates a builder for a {@link DefaultClosingBooksScheduledScanProcessor}.
+     *
+     * @param <ID> the aggregate id type
+     * @return a new builder
+     */
+    public static <ID, AGGREGATE> Builder<ID, AGGREGATE> builder() {
+        return new Builder<>();
+    }
+
+    /**
+     * Builder for {@link DefaultClosingBooksScheduledScanProcessor}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder<ID, AGGREGATE> {
+        private AggregateType aggregateType;
+        private ClosingBooksOpenGenerationRepository<ID> generationRepository;
+        private ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader;
+        private ClosingBooksDecisionPolicy<ID, AGGREGATE> policy;
+        private ClosingBooksCoordinator<ID> coordinator;
+        private MeterRegistry meterRegistryOptional;
+        private Clock clock;
+        private Duration scanRetryDelay;
+
+        /**
+         * @param aggregateType required
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setAggregateType(AggregateType aggregateType) {
+            this.aggregateType = aggregateType;
+            return this;
+        }
+
+        /**
+         * @param generationRepository required
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setGenerationRepository(ClosingBooksOpenGenerationRepository<ID> generationRepository) {
+            this.generationRepository = generationRepository;
+            return this;
+        }
+
+        /**
+         * @param aggregateLoader required
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setAggregateLoader(ClosingBooksAggregateLoader<AGGREGATE> aggregateLoader) {
+            this.aggregateLoader = aggregateLoader;
+            return this;
+        }
+
+        /**
+         * @param policy required
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setPolicy(ClosingBooksDecisionPolicy<ID, AGGREGATE> policy) {
+            this.policy = policy;
+            return this;
+        }
+
+        /**
+         * @param coordinator required
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setCoordinator(ClosingBooksCoordinator<ID> coordinator) {
+            this.coordinator = coordinator;
+            return this;
+        }
+
+        /**
+         * @param meterRegistryOptional optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setMeterRegistry(MeterRegistry meterRegistryOptional) {
+            this.meterRegistryOptional = meterRegistryOptional;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry}.
+         *
+         * @param meterRegistryOptional the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder<ID, AGGREGATE> setMeterRegistry(Optional<MeterRegistry> meterRegistryOptional) {
+            requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
+            return setMeterRegistry(meterRegistryOptional.orElse(null));
+        }
+
+        /**
+         * @param clock required
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setClock(Clock clock) {
+            this.clock = clock;
+            return this;
+        }
+
+        /**
+         * @param scanRetryDelay required
+         * @return this builder
+         */
+        public Builder<ID, AGGREGATE> setScanRetryDelay(Duration scanRetryDelay) {
+            this.scanRetryDelay = scanRetryDelay;
+            return this;
+        }
+
+        /**
+         * @return the new {@link DefaultClosingBooksScheduledScanProcessor}
+         */
+        @SuppressWarnings("removal")
+        public DefaultClosingBooksScheduledScanProcessor<ID, AGGREGATE> build() {
+            return new DefaultClosingBooksScheduledScanProcessor<>(aggregateType,
+                                                                                generationRepository,
+                                                                                aggregateLoader,
+                                                                                policy,
+                                                                                coordinator,
+                                                                                Optional.ofNullable(meterRegistryOptional),
+                                                                                clock,
+                                                                                scanRetryDelay);
+        }
+    }
+
 }

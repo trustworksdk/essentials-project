@@ -25,6 +25,22 @@ import java.util.List;
 import java.util.function.Consumer;
 
 public final class MongoDurableQueueConsumer extends DefaultDurableQueueConsumer<MongoDurableQueues, SpringMongoTransactionAwareUnitOfWork, SpringMongoTransactionAwareUnitOfWorkFactory> {
+    /**
+     * @param consumeFromQueue what to consume — the queue, consumer name, parallelism and redelivery policy
+     * @param dependencies     what to consume it with — see {@link DurableQueueConsumerDependencies#builder()}
+     */
+    public MongoDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
+                                     DurableQueueConsumerDependencies<MongoDurableQueues, SpringMongoTransactionAwareUnitOfWork, SpringMongoTransactionAwareUnitOfWorkFactory> dependencies) {
+        super(consumeFromQueue, dependencies);
+    }
+
+    /**
+     * @deprecated Use {@link #MongoDurableQueueConsumer(ConsumeFromQueue, DurableQueueConsumerDependencies)}. The five collaborator
+     *         arguments are identical for every {@code DurableQueues} implementation, so they belong in one
+     *         {@link DurableQueueConsumerDependencies} bundle rather than being repeated positionally here and in
+     *         every sibling implementation. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public MongoDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
                                      SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                                      MongoDurableQueues durableQueues,

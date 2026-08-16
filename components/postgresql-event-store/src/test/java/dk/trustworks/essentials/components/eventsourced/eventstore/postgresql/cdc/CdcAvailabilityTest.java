@@ -28,7 +28,7 @@ class CdcAvailabilityTest {
     @Test
     void failed_increments_reason_tagged_failure_counter() {
         var meterRegistry = new SimpleMeterRegistry();
-        var availability = new CdcAvailability(Optional.of(meterRegistry));
+        var availability = new CdcAvailability(meterRegistry);
 
         availability.failed("slot_a", "wal2json missing");
 
@@ -44,7 +44,7 @@ class CdcAvailabilityTest {
     @Test
     void active_and_inactive_update_snapshot_and_active_gauge() {
         var meterRegistry = new SimpleMeterRegistry();
-        var availability = new CdcAvailability(Optional.of(meterRegistry));
+        var availability = new CdcAvailability(meterRegistry);
 
         availability.active("slot_a");
         var activeSnapshot = availability.snapshot();
@@ -67,7 +67,7 @@ class CdcAvailabilityTest {
         // subscription legitimately begins on polling. Reporting that as a fallback made a healthy boot claim
         // "CDC has fallen back to polling N times" with no reason and no error.
         var meterRegistry = new SimpleMeterRegistry();
-        var availability = new CdcAvailability(Optional.of(meterRegistry));
+        var availability = new CdcAvailability(meterRegistry);
 
         availability.fallbackUsed();
         availability.fallbackUsed();
@@ -84,7 +84,7 @@ class CdcAvailabilityTest {
     @Test
     void polling_after_cdc_has_been_active_counts_as_a_real_fallback() {
         var meterRegistry = new SimpleMeterRegistry();
-        var availability = new CdcAvailability(Optional.of(meterRegistry));
+        var availability = new CdcAvailability(meterRegistry);
 
         availability.fallbackUsed();              // warm-up, before CDC ever came up
         availability.active("slot_a");

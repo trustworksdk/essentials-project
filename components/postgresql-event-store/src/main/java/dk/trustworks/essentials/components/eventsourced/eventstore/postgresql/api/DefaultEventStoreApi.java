@@ -77,8 +77,10 @@ public class DefaultEventStoreApi implements EventStoreApi {
      *                                       runs no subscription manager
      * @param subscriptionStatisticsRegistry the registry holding the statistics collected in this instance.
      *                                       {@link Optional#empty()} when statistics collection is disabled
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultEventStoreApi(EssentialsSecurityProvider essentialsSecurityProvider,
                                 EventStore eventStore,
                                 DurableSubscriptionRepository durableSubscriptionRepository,
@@ -213,4 +215,109 @@ public class DefaultEventStoreApi implements EventStoreApi {
                                        .orElse(null)
                : null;
     }
+
+    /**
+     * Creates a builder for a {@link DefaultEventStoreApi}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link DefaultEventStoreApi}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private EssentialsSecurityProvider essentialsSecurityProvider;
+        private EventStore eventStore;
+        private DurableSubscriptionRepository durableSubscriptionRepository;
+        private EventStoreSubscriptionManager eventStoreSubscriptionManager;
+        private SubscriptionStatisticsRegistry subscriptionStatisticsRegistry;
+
+        /**
+         * @param essentialsSecurityProvider required
+         * @return this builder
+         */
+        public Builder setEssentialsSecurityProvider(EssentialsSecurityProvider essentialsSecurityProvider) {
+            this.essentialsSecurityProvider = essentialsSecurityProvider;
+            return this;
+        }
+
+        /**
+         * @param eventStore required
+         * @return this builder
+         */
+        public Builder setEventStore(EventStore eventStore) {
+            this.eventStore = eventStore;
+            return this;
+        }
+
+        /**
+         * @param durableSubscriptionRepository required
+         * @return this builder
+         */
+        public Builder setDurableSubscriptionRepository(DurableSubscriptionRepository durableSubscriptionRepository) {
+            this.durableSubscriptionRepository = durableSubscriptionRepository;
+            return this;
+        }
+
+        /**
+         * @param eventStoreSubscriptionManager optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setEventStoreSubscriptionManager(EventStoreSubscriptionManager eventStoreSubscriptionManager) {
+            this.eventStoreSubscriptionManager = eventStoreSubscriptionManager;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setEventStoreSubscriptionManager}.
+         *
+         * @param eventStoreSubscriptionManager the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setEventStoreSubscriptionManager(Optional<EventStoreSubscriptionManager> eventStoreSubscriptionManager) {
+            requireNonNull(eventStoreSubscriptionManager, "No eventStoreSubscriptionManager provided");
+            return setEventStoreSubscriptionManager(eventStoreSubscriptionManager.orElse(null));
+        }
+
+        /**
+         * @param subscriptionStatisticsRegistry optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setSubscriptionStatisticsRegistry(SubscriptionStatisticsRegistry subscriptionStatisticsRegistry) {
+            this.subscriptionStatisticsRegistry = subscriptionStatisticsRegistry;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setSubscriptionStatisticsRegistry}.
+         *
+         * @param subscriptionStatisticsRegistry the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setSubscriptionStatisticsRegistry(Optional<SubscriptionStatisticsRegistry> subscriptionStatisticsRegistry) {
+            requireNonNull(subscriptionStatisticsRegistry, "No subscriptionStatisticsRegistry provided");
+            return setSubscriptionStatisticsRegistry(subscriptionStatisticsRegistry.orElse(null));
+        }
+
+        /**
+         * @return the new {@link DefaultEventStoreApi}
+         */
+        @SuppressWarnings("removal")
+        public DefaultEventStoreApi build() {
+            return new DefaultEventStoreApi(essentialsSecurityProvider,
+                                            eventStore,
+                                            durableSubscriptionRepository,
+                                            Optional.ofNullable(eventStoreSubscriptionManager),
+                                            Optional.ofNullable(subscriptionStatisticsRegistry));
+        }
+    }
+
 }

@@ -38,6 +38,10 @@ public class DefaultCdcApi implements CdcApi {
     private final Optional<WalReplicationTailer> tailer;
     private final Optional<CdcDispatcher>    dispatcher;
 
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultCdcApi(EssentialsSecurityProvider securityProvider,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          CdcAvailability availability,
@@ -75,4 +79,131 @@ public class DefaultCdcApi implements CdcApi {
                 dispatcher.map(CdcDispatcher::getStatus).map(ApiCdcDispatcherStatus::from).orElse(null)
         );
     }
+
+    /**
+     * Creates a builder for a {@link DefaultCdcApi}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link DefaultCdcApi}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private EssentialsSecurityProvider securityProvider;
+        private EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+        private CdcAvailability availability;
+        private CdcProperties properties;
+        private String configuredSlotName;
+        private WalReplicationTailer tailer;
+        private CdcDispatcher dispatcher;
+
+        /**
+         * @param securityProvider required
+         * @return this builder
+         */
+        public Builder setSecurityProvider(EssentialsSecurityProvider securityProvider) {
+            this.securityProvider = securityProvider;
+            return this;
+        }
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder setUnitOfWorkFactory(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param availability required
+         * @return this builder
+         */
+        public Builder setAvailability(CdcAvailability availability) {
+            this.availability = availability;
+            return this;
+        }
+
+        /**
+         * @param properties required
+         * @return this builder
+         */
+        public Builder setProperties(CdcProperties properties) {
+            this.properties = properties;
+            return this;
+        }
+
+        /**
+         * @param configuredSlotName required
+         * @return this builder
+         */
+        public Builder setConfiguredSlotName(String configuredSlotName) {
+            this.configuredSlotName = configuredSlotName;
+            return this;
+        }
+
+        /**
+         * @param tailer optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setTailer(WalReplicationTailer tailer) {
+            this.tailer = tailer;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setTailer}.
+         *
+         * @param tailer the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setTailer(Optional<WalReplicationTailer> tailer) {
+            requireNonNull(tailer, "No tailer provided");
+            return setTailer(tailer.orElse(null));
+        }
+
+        /**
+         * @param dispatcher optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setDispatcher(CdcDispatcher dispatcher) {
+            this.dispatcher = dispatcher;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setDispatcher}.
+         *
+         * @param dispatcher the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setDispatcher(Optional<CdcDispatcher> dispatcher) {
+            requireNonNull(dispatcher, "No dispatcher provided");
+            return setDispatcher(dispatcher.orElse(null));
+        }
+
+        /**
+         * @return the new {@link DefaultCdcApi}
+         */
+        @SuppressWarnings("removal")
+        public DefaultCdcApi build() {
+            return new DefaultCdcApi(securityProvider,
+                                     unitOfWorkFactory,
+                                     availability,
+                                     properties,
+                                     configuredSlotName,
+                                     Optional.ofNullable(tailer),
+                                     Optional.ofNullable(dispatcher));
+        }
+    }
+
 }

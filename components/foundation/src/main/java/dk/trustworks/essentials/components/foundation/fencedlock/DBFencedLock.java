@@ -59,6 +59,10 @@ public class DBFencedLock implements FencedLock {
     private transient DBFencedLockManager<? extends UnitOfWork, DBFencedLock> fencedLockManager;
     private transient List<LockCallback>  lockCallbacks;
 
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DBFencedLock(DBFencedLockManager<? extends UnitOfWork, DBFencedLock> fencedLockManager,
                         LockName lockName,
                         Long currentToken,
@@ -166,4 +170,96 @@ public class DBFencedLock implements FencedLock {
                 ", lockLastConfirmedTimestamp=" + lockLastConfirmedTimestamp +
                 '}';
     }
+
+    /**
+     * Creates a builder for a {@link DBFencedLock}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link DBFencedLock}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private DBFencedLockManager<? extends UnitOfWork, DBFencedLock> fencedLockManager;
+        private LockName lockName;
+        private Long currentToken;
+        private String lockedByBusInstanceId;
+        private OffsetDateTime lockAcquiredTimestamp;
+        private OffsetDateTime lockLastConfirmedTimestamp;
+
+        /**
+         * @param fencedLockManager required
+         * @return this builder
+         */
+        public Builder setFencedLockManager(DBFencedLockManager<? extends UnitOfWork, DBFencedLock> fencedLockManager) {
+            this.fencedLockManager = fencedLockManager;
+            return this;
+        }
+
+        /**
+         * @param lockName required
+         * @return this builder
+         */
+        public Builder setLockName(LockName lockName) {
+            this.lockName = lockName;
+            return this;
+        }
+
+        /**
+         * @param currentToken required
+         * @return this builder
+         */
+        public Builder setCurrentToken(Long currentToken) {
+            this.currentToken = currentToken;
+            return this;
+        }
+
+        /**
+         * @param lockedByBusInstanceId required
+         * @return this builder
+         */
+        public Builder setLockedByBusInstanceId(String lockedByBusInstanceId) {
+            this.lockedByBusInstanceId = lockedByBusInstanceId;
+            return this;
+        }
+
+        /**
+         * @param lockAcquiredTimestamp required
+         * @return this builder
+         */
+        public Builder setLockAcquiredTimestamp(OffsetDateTime lockAcquiredTimestamp) {
+            this.lockAcquiredTimestamp = lockAcquiredTimestamp;
+            return this;
+        }
+
+        /**
+         * @param lockLastConfirmedTimestamp required
+         * @return this builder
+         */
+        public Builder setLockLastConfirmedTimestamp(OffsetDateTime lockLastConfirmedTimestamp) {
+            this.lockLastConfirmedTimestamp = lockLastConfirmedTimestamp;
+            return this;
+        }
+
+        /**
+         * @return the new {@link DBFencedLock}
+         */
+        @SuppressWarnings("removal")
+        public DBFencedLock build() {
+            return new DBFencedLock(fencedLockManager,
+                                    lockName,
+                                    currentToken,
+                                    lockedByBusInstanceId,
+                                    lockAcquiredTimestamp,
+                                    lockLastConfirmedTimestamp);
+        }
+    }
+
 }

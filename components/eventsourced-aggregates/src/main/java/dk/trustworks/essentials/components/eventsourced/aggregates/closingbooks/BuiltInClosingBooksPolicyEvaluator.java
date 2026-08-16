@@ -64,7 +64,9 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
      * @param meterRegistry      an optional meter registry for instrumentation and metrics; must not be null.
      * @param eventCountProvider a function that provides the event count for the given aggregate; must not be null.
      * @throws IllegalArgumentException if any required parameter is null.
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
                                               ClosingBooksDefaultPolicyType defaultPolicy,
                                               long eventThreshold,
@@ -100,7 +102,9 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
      * @param eventCountProvider        a function that provides the event count for the given aggregate; must not be null.
      * @param aggregateTypeWithPeriodId the class type representing aggregates with a closing books period identifier; must not be null.
      * @throws IllegalArgumentException if any required parameter is null.
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public <T extends HasClosingBooksPeriodId> BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
                                                                                   ClosingBooksDefaultPolicyType defaultPolicy,
                                                                                   long eventThreshold,
@@ -139,7 +143,9 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
      * @param currentPeriodIdProvider a function that provides the current period identifier for the given aggregate;
      *                                required when using a time-boundary closing books policy. May be null otherwise.
      * @throws IllegalArgumentException if any required parameter is null.
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public BuiltInClosingBooksPolicyEvaluator(AggregateType aggregateType,
                                               ClosingBooksDefaultPolicyType defaultPolicy,
                                               long eventThreshold,
@@ -262,4 +268,153 @@ public final class BuiltInClosingBooksPolicyEvaluator<AGGREGATE> {
         }
         return evaluation;
     }
+
+    /**
+     * Creates a builder for a {@link BuiltInClosingBooksPolicyEvaluator}.
+     *
+     * @param <AGGREGATE> the aggregate id type
+     * @return a new builder
+     */
+    public static <AGGREGATE> Builder<AGGREGATE> builder() {
+        return new Builder<>();
+    }
+
+    /**
+     * Builder for {@link BuiltInClosingBooksPolicyEvaluator}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder<AGGREGATE> {
+        private AggregateType aggregateType;
+        private ClosingBooksDefaultPolicyType defaultPolicy;
+        private long eventThreshold;
+        private ClosingBooksTimeBoundary timeBoundary;
+        private ZoneId zoneId;
+        private Integer intervalDays;
+        private Clock clock;
+        private MeterRegistry meterRegistry;
+        private ToLongFunction<AGGREGATE> eventCountProvider;
+        private Function<AGGREGATE, String> currentPeriodIdProvider;
+
+        /**
+         * @param aggregateType required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setAggregateType(AggregateType aggregateType) {
+            this.aggregateType = aggregateType;
+            return this;
+        }
+
+        /**
+         * @param defaultPolicy required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setDefaultPolicy(ClosingBooksDefaultPolicyType defaultPolicy) {
+            this.defaultPolicy = defaultPolicy;
+            return this;
+        }
+
+        /**
+         * @param eventThreshold required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setEventThreshold(long eventThreshold) {
+            this.eventThreshold = eventThreshold;
+            return this;
+        }
+
+        /**
+         * @param timeBoundary required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setTimeBoundary(ClosingBooksTimeBoundary timeBoundary) {
+            this.timeBoundary = timeBoundary;
+            return this;
+        }
+
+        /**
+         * @param zoneId required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setZoneId(ZoneId zoneId) {
+            this.zoneId = zoneId;
+            return this;
+        }
+
+        /**
+         * @param intervalDays required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setIntervalDays(Integer intervalDays) {
+            this.intervalDays = intervalDays;
+            return this;
+        }
+
+        /**
+         * @param clock required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setClock(Clock clock) {
+            this.clock = clock;
+            return this;
+        }
+
+        /**
+         * @param meterRegistry optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setMeterRegistry(MeterRegistry meterRegistry) {
+            this.meterRegistry = meterRegistry;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry}.
+         *
+         * @param meterRegistry the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder<AGGREGATE> setMeterRegistry(Optional<MeterRegistry> meterRegistry) {
+            requireNonNull(meterRegistry, "No meterRegistry provided");
+            return setMeterRegistry(meterRegistry.orElse(null));
+        }
+
+        /**
+         * @param eventCountProvider required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setEventCountProvider(ToLongFunction<AGGREGATE> eventCountProvider) {
+            this.eventCountProvider = eventCountProvider;
+            return this;
+        }
+
+        /**
+         * @param currentPeriodIdProvider required
+         * @return this builder
+         */
+        public Builder<AGGREGATE> setCurrentPeriodIdProvider(Function<AGGREGATE, String> currentPeriodIdProvider) {
+            this.currentPeriodIdProvider = currentPeriodIdProvider;
+            return this;
+        }
+
+        /**
+         * @return the new {@link BuiltInClosingBooksPolicyEvaluator}
+         */
+        @SuppressWarnings("removal")
+        public BuiltInClosingBooksPolicyEvaluator<AGGREGATE> build() {
+            return new BuiltInClosingBooksPolicyEvaluator<>(aggregateType,
+                                                                     defaultPolicy,
+                                                                     eventThreshold,
+                                                                     timeBoundary,
+                                                                     zoneId,
+                                                                     intervalDays,
+                                                                     clock,
+                                                                     Optional.ofNullable(meterRegistry),
+                                                                     eventCountProvider,
+                                                                     currentPeriodIdProvider);
+        }
+    }
+
 }

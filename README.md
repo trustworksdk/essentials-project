@@ -8,12 +8,12 @@
  ║     ███████╗███████║███████║███████╗██║ ╚████║   ██║   ██║██║  ██║███████╗███████║     ║
  ║     ╚══════╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝     ║
  ║                                                                                        ║
- ║                     Java 17+ Building Blocks for Strongly-Typed Code                   ║
+ ║                     Java 21+ Building Blocks for Strongly-Typed Code                   ║
  ║                                                                                        ║
  ╚════════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> High-level, strongly-typed building blocks for Java 17+ applications—framework-independent core with seamless integrations
+> High-level, strongly-typed building blocks for Java 21+ applications—framework-independent core with seamless integrations
 
 📖 **LLM Context:** [LLM.md](LLM/LLM.md)
 
@@ -43,7 +43,7 @@
 
 ## What is Essentials?
 
-Essentials is a set of Java 17+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
+Essentials is a set of Java 21+ building blocks designed to help you write **strongly-typed, self-documenting code** without framework lock-in.
 
 **Core Modules:** Zero-dependency utilities providing **semantic types**, immutable value objects, functional primitives, and reactive patterns.
 
@@ -722,9 +722,23 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 ## Version Compatibility
 
-| Essentials Version | Java | Spring Boot | Notes |
-|--------------------|------|-------------|-------|
-| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 17+ | 3.3.x | Under active development |
+| Essentials Version | Java | Spring Boot | Jackson | Kotlin | Notes |
+|--------------------|------|-------------|---------|--------|-------|
+| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 21+ | 4.0.x | 3 (default) / 2 | 2.2+ | Under active development |
+
+**Java 21 is a hard floor, not a recommendation.** Artifacts are compiled with `--release 21`, so the class files
+carry major version 65 and a Java 17 runtime rejects them with `UnsupportedClassVersionError`. Building the project
+itself requires JDK 21–25 (`maven-enforcer` pins `[21,26)`); CI builds on JDK 25.
+
+**Spring Boot 4.0.x.** The starters resolve `org.springframework.boot:spring-boot:4.0.7`. Spring Boot 3.x is no longer
+supported — 4.0 moved to Jackson 3 and Jakarta EE 11, so a 3.x application cannot consume these starters unchanged.
+
+**Jackson.** Jackson 3 (`tools.jackson.core`) is the default because that is what Spring Boot 4 ships. Jackson 2
+(`com.fasterxml.jackson.core`) is still supported — see [Choosing the Jackson Major](#-choosing-the-jackson-major),
+including the two payload-class changes that bite silently on the way in.
+
+**Kotlin.** Kotlin artifacts are compiled at language level 2.2, which sets the emitted `@Metadata` binary version —
+a Kotlin 2.1 compiler rejects them as an incompatible binary version. The stdlib API level is held one behind, at 2.1.
 
 ### Migration Note
 
@@ -732,6 +746,20 @@ public class ImmutableOrder extends ImmutableValueObject {
 > As of May 8th 2025, [Trustworks](https://www.trustworks.dk) has assumed responsibility for further development.
 >
 > **Compatibility:** Trustworks' Essentials release version **0.40.24** remains API and functionally compatible with Cloud Create's version **0.40.24** (released May 5th 2025). Migration requires only updating module names and package references from `dk.cloudcreate` to `dk.trustworks`.
+
+### Construction ergonomics — deprecations ahead of the next major
+
+Wide constructors and `Optional` constructor parameters are being replaced by builders, cohesive parameter objects and
+neutral defaults. **Nothing has been removed**: every affected constructor still exists and still behaves identically,
+now marked `@Deprecated(forRemoval = true)` with a better path alongside it. Upgrading and changing nothing gives you
+deprecation warnings and no errors; the removals happen at the next major.
+
+There is one behaviour change in this release — `PostgresqlDurableQueues` constructors that do not name a
+`TransactionalMode` now default to `SingleOperationTransaction` rather than `FullyTransactional`, closing a
+long-standing divergence with its builder.
+
+See **[docs/MIGRATION-NEXT_MAJOR.md](docs/MIGRATION-NEXT_MAJOR.md)** for the per-class before-and-after tables, and
+`docs/constructor-ergonomics-and-optional-policy.md` for the rationale.
 
 ---
 

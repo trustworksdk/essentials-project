@@ -22,6 +22,20 @@ package dk.trustworks.essentials.shared.reflection.invocation;
 @FunctionalInterface
 public interface NoMatchingMethodsHandler {
     /**
+     * The neutral default: silently ignores an argument that matched no method.
+     * <p>
+     * This is what {@link PatternMatchingMethodInvoker} has always fallen back to when handed
+     * {@code Optional.empty()}, expressed as a value instead of an absence — so a caller with nothing special to do
+     * passes {@code NoMatchingMethodsHandler.ignore()} rather than an empty {@code Optional}.
+     *
+     * @return a handler that does nothing — never {@code null}
+     */
+    static NoMatchingMethodsHandler ignore() {
+        return argument -> {
+        };
+    }
+
+    /**
      * This method will be called if {@link PatternMatchingMethodInvoker#invoke(Object)} or {@link PatternMatchingMethodInvoker#invoke(Object, NoMatchingMethodsHandler)} is called with an argument that doesn't match any methods
      *
      * @param argument the argument provided to {@link PatternMatchingMethodInvoker#invoke(Object)} or {@link PatternMatchingMethodInvoker#invoke(Object, NoMatchingMethodsHandler)} which didn't result in any matching methods

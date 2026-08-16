@@ -39,7 +39,12 @@ public final class LoadEventsByGlobalOrder {
     public final AggregateType          aggregateType;
     private      LongRange              globalEventOrderRange;
     private      List<GlobalEventOrder> includeAdditionalGlobalOrders;
-    private      Optional<Tenant>       onlyIncludeEventIfItBelongsToTenant;
+    /**
+     * Held nullable rather than as an {@code Optional} field: {@code Optional} is not {@link java.io.Serializable}
+     * and costs an allocation per access, and this operation object is created on every subscription poll. The public
+     * accessor still returns {@code Optional}, so the API is unchanged.
+     */
+    private      Tenant                 onlyIncludeEventIfItBelongsToTenant;
 
     /**
      * Create a new builder that produces a new {@link LoadEventsByGlobalOrder} instance
@@ -62,11 +67,33 @@ public final class LoadEventsByGlobalOrder {
     public LoadEventsByGlobalOrder(AggregateType aggregateType,
                                    LongRange globalEventOrderRange,
                                    List<GlobalEventOrder> includeAdditionalGlobalOrders,
-                                   Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+                                   Tenant onlyIncludeEventIfItBelongsToTenant) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.globalEventOrderRange = requireNonNull(globalEventOrderRange, "No globalOrderRange provided");
         this.includeAdditionalGlobalOrders = includeAdditionalGlobalOrders;
-        this.onlyIncludeEventIfItBelongsToTenant = requireNonNull(onlyIncludeEventIfItBelongsToTenant, "No onlyIncludeEventIfItBelongsToTenant option provided");
+        this.onlyIncludeEventIfItBelongsToTenant = onlyIncludeEventIfItBelongsToTenant;
+    }
+
+    /**
+     * @param aggregateType                       the aggregate type that the underlying events are associated with
+     * @param globalEventOrderRange               the range of {@link GlobalEventOrder}'s to include in the stream
+     * @param includeAdditionalGlobalOrders       a list of additional global orders to include. May be null or empty
+     * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}
+     * @deprecated Use {@link #LoadEventsByGlobalOrder(AggregateType, LongRange, List, Tenant)}, passing {@code null}
+     *         for "all tenants", or {@link #builder()}. {@link #getOnlyIncludeEventIfItBelongsToTenant()} still
+     *         returns an {@code Optional}, so reading code is unaffected. This constructor delegates and behaves
+     *         identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public LoadEventsByGlobalOrder(AggregateType aggregateType,
+                                   LongRange globalEventOrderRange,
+                                   List<GlobalEventOrder> includeAdditionalGlobalOrders,
+                                   Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
+        this(aggregateType,
+             globalEventOrderRange,
+             includeAdditionalGlobalOrders,
+             requireNonNull(onlyIncludeEventIfItBelongsToTenant, "No onlyIncludeEventIfItBelongsToTenant option provided").orElse(null));
     }
 
     /**
@@ -87,7 +114,7 @@ public final class LoadEventsByGlobalOrder {
      * @return if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      */
     public Optional<Tenant> getOnlyIncludeEventIfItBelongsToTenant() {
-        return onlyIncludeEventIfItBelongsToTenant;
+        return Optional.ofNullable(onlyIncludeEventIfItBelongsToTenant);
     }
 
     /**
@@ -118,7 +145,7 @@ public final class LoadEventsByGlobalOrder {
      * @param onlyIncludeEventIfItBelongsToTenant if {@link Optional#isPresent()} then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      */
     public LoadEventsByGlobalOrder setOnlyIncludeEventIfItBelongsToTenant(Optional<Tenant> onlyIncludeEventIfItBelongsToTenant) {
-        this.onlyIncludeEventIfItBelongsToTenant = requireNonNull(onlyIncludeEventIfItBelongsToTenant, "No onlyIncludeEventIfItBelongsToTenant option provided");
+        this.onlyIncludeEventIfItBelongsToTenant = requireNonNull(onlyIncludeEventIfItBelongsToTenant, "No onlyIncludeEventIfItBelongsToTenant option provided").orElse(null);
         return this;
     }
 
@@ -126,7 +153,7 @@ public final class LoadEventsByGlobalOrder {
      * @param onlyIncludeEventIfItBelongsToTenant if non-null then only include events that belong to the specified {@link Tenant}, otherwise all Events matching the criteria are returned
      */
     public LoadEventsByGlobalOrder setOnlyIncludeEventIfItBelongsToTenant(Tenant onlyIncludeEventIfItBelongsToTenant) {
-        this.onlyIncludeEventIfItBelongsToTenant = Optional.ofNullable(onlyIncludeEventIfItBelongsToTenant);
+        this.onlyIncludeEventIfItBelongsToTenant = onlyIncludeEventIfItBelongsToTenant;
         return this;
     }
 

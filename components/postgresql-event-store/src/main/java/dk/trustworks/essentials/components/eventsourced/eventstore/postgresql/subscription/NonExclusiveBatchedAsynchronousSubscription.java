@@ -52,6 +52,35 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
     private BaseSubscriber<PersistedEvent> subscription;
     private final EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings;
 
+    /**
+     * @param context        the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
+     * @param durableContext the resume-point arguments shared by the asynchronous subscriptions
+     * @param maxBatchSize   the maximum number of events delivered in one batch. Must be greater than 0
+     * @param maxLatency     how long to wait for a batch to fill before delivering a partial one
+     * @param eventHandler   the handler invoked for each batch of persisted events
+     */
+    public NonExclusiveBatchedAsynchronousSubscription(EventStoreSubscriptionContext context,
+                                                       DurableSubscriptionContext durableContext,
+                                                       int maxBatchSize,
+                                                       Duration maxLatency,
+                                                       BatchedPersistedEventHandler eventHandler) {
+        super(context);
+        requireNonNull(durableContext, "No durableContext provided");
+        this.durableSubscriptionRepository = durableContext.durableSubscriptionRepository();
+        this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = durableContext.resolveOnFirstSubscriptionGlobalOrder(context.aggregateType());
+        this.eventStoreSubscriptionManagerSettings = durableContext.eventStoreSubscriptionManagerSettings();
+        requireTrue(maxBatchSize > 0, "maxBatchSize must be greater than 0");
+        this.maxBatchSize = maxBatchSize;
+        this.maxLatency = requireNonNull(maxLatency, "No maxLatency provided");
+        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
+    }
+
+    /**
+     * @deprecated Use {@link #NonExclusiveBatchedAsynchronousSubscription(EventStoreSubscriptionContext, DurableSubscriptionContext, int, Duration, BatchedPersistedEventHandler)}.
+     *         The shared arguments are now two context values. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public NonExclusiveBatchedAsynchronousSubscription(EventStore eventStore,
                                                        DurableSubscriptionRepository durableSubscriptionRepository,
                                                        AggregateType aggregateType,
@@ -108,7 +137,7 @@ public class NonExclusiveBatchedAsynchronousSubscription extends AbstractEventSt
                             resumePoint.getResumeFromAndIncluding(),
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize()),
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
-                            onlyIncludeEventsForTenant,
+                            onlyIncludeEventsForTenant(),
                             Optional.of(subscriberId),
                             Optional.of(eventStorePollingOptimizerFactory))
                     .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())

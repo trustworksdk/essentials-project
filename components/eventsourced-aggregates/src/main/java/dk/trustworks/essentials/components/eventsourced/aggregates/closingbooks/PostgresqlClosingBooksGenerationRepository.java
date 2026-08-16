@@ -88,7 +88,9 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
      * @param tableName an optional name of the table to be used for storage; if not provided, a default table
      *                  name is used
      * @throws IllegalArgumentException if the {@code unitOfWorkFactory} parameter is null
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                       Optional<String> tableName) {
         this(unitOfWorkFactory,
@@ -107,7 +109,9 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
      * @param logicalAggregateIdSerializer the serializer used for logical aggregate ID serialization and
      *                                      deserialization; must not be null
      * @throws IllegalArgumentException if any of the required parameters are null
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlClosingBooksGenerationRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                       Optional<String> tableName,
                                                       ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer) {
@@ -447,4 +451,76 @@ public class PostgresqlClosingBooksGenerationRepository<ID> implements ClosingBo
     private static <ID> ClosingBooksIdSerializer<ID> defaultLogicalAggregateIdSerializer() {
         return (ClosingBooksIdSerializer<ID>) ClosingBooksIdSerializer.stringBased();
     }
+
+    /**
+     * Creates a builder for a {@link PostgresqlClosingBooksGenerationRepository}.
+     *
+     * @param <ID> the aggregate id type
+     * @return a new builder
+     */
+    public static <ID> Builder<ID> builder() {
+        return new Builder<>();
+    }
+
+    /**
+     * Builder for {@link PostgresqlClosingBooksGenerationRepository}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder<ID> {
+        private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+        private String tableName;
+        private ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer;
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder<ID> setUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param tableName optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder<ID> setTableName(String tableName) {
+            this.tableName = tableName;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setTableName}.
+         *
+         * @param tableName the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder<ID> setTableName(Optional<String> tableName) {
+            requireNonNull(tableName, "No tableName provided");
+            return setTableName(tableName.orElse(null));
+        }
+
+        /**
+         * @param logicalAggregateIdSerializer required
+         * @return this builder
+         */
+        public Builder<ID> setLogicalAggregateIdSerializer(ClosingBooksIdSerializer<ID> logicalAggregateIdSerializer) {
+            this.logicalAggregateIdSerializer = logicalAggregateIdSerializer;
+            return this;
+        }
+
+        /**
+         * @return the new {@link PostgresqlClosingBooksGenerationRepository}
+         */
+        @SuppressWarnings("removal")
+        public PostgresqlClosingBooksGenerationRepository<ID> build() {
+            return new PostgresqlClosingBooksGenerationRepository<>(unitOfWorkFactory,
+                                                                      Optional.ofNullable(tableName),
+                                                                      logicalAggregateIdSerializer);
+        }
+    }
+
 }

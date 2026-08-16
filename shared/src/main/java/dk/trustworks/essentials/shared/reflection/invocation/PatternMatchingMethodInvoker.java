@@ -154,8 +154,48 @@ public final class PatternMatchingMethodInvoker<ARGUMENT_COMMON_ROOT_TYPE> {
         this(invokeMethodsOn,
              methodPatternMatcher,
              invocationStrategy,
-             Optional.empty(),
-             Optional.empty());
+             NoMatchingMethodsHandler.ignore(),
+             InvocationTracker.noOp());
+    }
+
+    /**
+     * Creates a builder for a {@link PatternMatchingMethodInvoker}, as an alternative to the constructors when more
+     * than the three required arguments are being supplied.
+     *
+     * @param <ARGUMENT_COMMON_ROOT_TYPE> The method argument common root type — see the class Javadoc
+     * @return a new builder with {@link NoMatchingMethodsHandler#ignore()} and {@link InvocationTracker#noOp()}
+     *         already in place as defaults
+     */
+    public static <ARGUMENT_COMMON_ROOT_TYPE> PatternMatchingMethodInvokerBuilder<ARGUMENT_COMMON_ROOT_TYPE> builder() {
+        return new PatternMatchingMethodInvokerBuilder<>();
+    }
+
+    /**
+     * @param invokeMethodsOn                 The object that contains the methods that we will perform pattern matching and invoke methods on
+     * @param methodPatternMatcher            The strategy that determines the methods that can be invoked as well as determine which type of argument the
+     *                                        given method supports and how the method later is going to be invoked
+     * @param invocationStrategy              When {@link #invoke(Object)} or {@link #invoke(Object, NoMatchingMethodsHandler)} is called this strategy determines which Methods, among all the methods that match the argument,
+     *                                        will be invoked
+     * @param defaultNoMatchingMethodsHandler handler that will be called if {@link #invoke(Object)} is called with an argument that doesn't match any methods.
+     *                                        Use {@link NoMatchingMethodsHandler#ignore()} to ignore unmatched arguments
+     * @param invocationTracker               tracker notified of every dispatched method invocation. Use {@link InvocationTracker#noOp()} to track nothing
+     */
+    public PatternMatchingMethodInvoker(Object invokeMethodsOn,
+                                        MethodPatternMatcher<ARGUMENT_COMMON_ROOT_TYPE> methodPatternMatcher,
+                                        InvocationStrategy invocationStrategy,
+                                        NoMatchingMethodsHandler defaultNoMatchingMethodsHandler,
+                                        InvocationTracker invocationTracker) {
+        this.invokeMethodsOn = requireNonNull(invokeMethodsOn, "You must provide an object where methods will be invoked on - aka invokeMethodsOn");
+        this.methodPatternMatcher = requireNonNull(methodPatternMatcher, "You must provide a methodPatternMatcher");
+        this.invocationStrategy = requireNonNull(invocationStrategy, "You must provide an invocationStrategy");
+        this.defaultNoMatchingMethodsHandler = requireNonNull(defaultNoMatchingMethodsHandler, "No defaultNoMatchingMethodsHandler instance provided");
+        this.invocationTracker = requireNonNull(invocationTracker, "No invocationTracker instance provided");
+
+        log = LoggerFactory.getLogger(invokeMethodsOn.getClass());
+        resolveInvokableMethods();
+        if (this.invocationTracker instanceof LoggerAwareInvocationTracker i) {
+            i.setLogger(log);
+        }
     }
 
     /**
@@ -165,25 +205,26 @@ public final class PatternMatchingMethodInvoker<ARGUMENT_COMMON_ROOT_TYPE> {
      * @param invocationStrategy              When {@link #invoke(Object)} or {@link #invoke(Object, NoMatchingMethodsHandler)} is called this strategy determines which Methods, among all the methods that match the argument,
      *                                        will be invoked
      * @param defaultNoMatchingMethodsHandler default consumer that will be called if {@link #invoke(Object)} is called with an argument that doesn't match any methods
+     * @param invocationTracker               optional tracker notified of every dispatched method invocation
+     * @deprecated Use {@link #PatternMatchingMethodInvoker(Object, MethodPatternMatcher, InvocationStrategy, NoMatchingMethodsHandler, InvocationTracker)}
+     *         with {@link NoMatchingMethodsHandler#ignore()} / {@link InvocationTracker#noOp()} in place of the empty
+     *         {@code Optional}s, or {@link #builder()}. The two {@code Optional} parameters only ever selected those
+     *         two neutral defaults, so nothing is lost; this constructor delegates and behaves identically.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public PatternMatchingMethodInvoker(Object invokeMethodsOn,
                                         MethodPatternMatcher<ARGUMENT_COMMON_ROOT_TYPE> methodPatternMatcher,
                                         InvocationStrategy invocationStrategy,
                                         Optional<NoMatchingMethodsHandler> defaultNoMatchingMethodsHandler,
                                         Optional<InvocationTracker> invocationTracker) {
-        requireNonNull(defaultNoMatchingMethodsHandler, "No defaultNoMatchingMethodsHandler instance provided");
-        this.invokeMethodsOn = requireNonNull(invokeMethodsOn, "You must provide an object where methods will be invoked on - aka invokeMethodsOn");
-        this.methodPatternMatcher = requireNonNull(methodPatternMatcher, "You must provide a methodPatternMatcher");
-        this.invocationStrategy = requireNonNull(invocationStrategy, "You must provide an invocationStrategy");
-        this.defaultNoMatchingMethodsHandler = defaultNoMatchingMethodsHandler.orElseGet(() -> argument -> {
-        });
-        this.invocationTracker = invocationTracker.orElse(new InvocationTracker.NoOpInvocationTracker());
-
-        log = LoggerFactory.getLogger(invokeMethodsOn.getClass());
-        resolveInvokableMethods();
-        if (this.invocationTracker instanceof LoggerAwareInvocationTracker i) {
-            i.setLogger(log);
-        }
+        this(invokeMethodsOn,
+             methodPatternMatcher,
+             invocationStrategy,
+             requireNonNull(defaultNoMatchingMethodsHandler, "No defaultNoMatchingMethodsHandler instance provided")
+                     .orElseGet(NoMatchingMethodsHandler::ignore),
+             requireNonNull(invocationTracker, "No invocationTracker instance provided")
+                     .orElseGet(InvocationTracker::noOp));
     }
 
     private void resolveInvokableMethods() {

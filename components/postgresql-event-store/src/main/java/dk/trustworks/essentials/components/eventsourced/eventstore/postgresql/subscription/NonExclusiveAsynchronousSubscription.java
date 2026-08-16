@@ -49,6 +49,28 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
     private BaseSubscriber<PersistedEvent> subscription;
     private final EventStoreSubscriptionManagerSettings eventStoreSubscriptionManagerSettings;
 
+    /**
+     * @param context        the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
+     * @param durableContext the resume-point arguments shared by the asynchronous subscriptions
+     * @param eventHandler   the handler invoked for each persisted event
+     */
+    public NonExclusiveAsynchronousSubscription(EventStoreSubscriptionContext context,
+                                                DurableSubscriptionContext durableContext,
+                                                PersistedEventHandler eventHandler) {
+        super(context);
+        requireNonNull(durableContext, "No durableContext provided");
+        this.durableSubscriptionRepository = durableContext.durableSubscriptionRepository();
+        this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = durableContext.resolveOnFirstSubscriptionGlobalOrder(context.aggregateType());
+        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
+        this.eventStoreSubscriptionManagerSettings = durableContext.eventStoreSubscriptionManagerSettings();
+    }
+
+    /**
+     * @deprecated Use {@link #NonExclusiveAsynchronousSubscription(EventStoreSubscriptionContext, DurableSubscriptionContext, PersistedEventHandler)}.
+     *         The shared arguments are now two context values. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public NonExclusiveAsynchronousSubscription(EventStore eventStore,
                                                 DurableSubscriptionRepository durableSubscriptionRepository,
                                                 AggregateType aggregateType,
@@ -97,7 +119,7 @@ public class NonExclusiveAsynchronousSubscription extends AbstractEventStoreSubs
                             resumePoint.getResumeFromAndIncluding(),
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize()),
                             Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
-                            onlyIncludeEventsForTenant,
+                            onlyIncludeEventsForTenant(),
                             Optional.of(subscriberId),
                             Optional.of(eventStorePollingOptimizerFactory))
                     .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())

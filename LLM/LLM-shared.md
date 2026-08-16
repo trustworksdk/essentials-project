@@ -1,6 +1,6 @@
 # Shared - LLM Reference
 
-> Zero-dependency utilities and functional primitives for Java 17+. See [README.md](../shared/README.md) for detailed explanations.
+> Zero-dependency utilities and functional primitives for Java 21+. See [README.md](../shared/README.md) for detailed explanations.
 
 ## TOC
 - [Quick Facts](#quick-facts)

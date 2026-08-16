@@ -133,6 +133,59 @@ public final class CdcDispatcher implements Lifecycle {
      * @param availability             the availability handler for the dispatcher
      * @param meterRegistry            optional metrics registry
      */
+    /**
+     * @param dependencies the collaborators the dispatcher runs with — see {@link CdcDispatcherDependencies#builder()}
+     * @param settings     which slot's inbox to drain, how, and whether to run at all
+     */
+    public CdcDispatcher(CdcDispatcherDependencies dependencies,
+                         CdcDispatcherSettings settings) {
+        requireNonNull(dependencies, "dependencies cannot be null - see CdcDispatcherDependencies.builder()");
+        requireNonNull(settings, "settings cannot be null");
+        var cdcDispatcherProperties = settings.cdcDispatcherProperties();
+
+        this.inbox = dependencies.inbox();
+        this.unitOfWorkFactory = dependencies.unitOfWorkFactory();
+        this.eventStreamGapHandler = dependencies.eventStreamGapHandler();
+        this.logicalDecodingPlugin = dependencies.logicalDecodingPlugin();
+        this.cdcPoisonNotifier = dependencies.cdcPoisonNotifier();
+        this.onEvents = dependencies.onEvents();
+        this.slotName = settings.slotName();
+        this.pollInterval = cdcDispatcherProperties.getPollInterval();
+        this.batchSize = cdcDispatcherProperties.getBatchSize();
+        // Round seconds *up* so any positive sub-second budget still applies a 1s timeout
+        // rather than silently degrading to "no timeout". Zero (default) means no framework
+        // timeout — the query inherits whatever PG/JDBC/pool defaults provide.
+        var configuredQueryTimeout = cdcDispatcherProperties.getQueryTimeout();
+        this.queryTimeoutSeconds = configuredQueryTimeout == null || configuredQueryTimeout.isZero() || configuredQueryTimeout.isNegative()
+                                   ? 0
+                                   : (int) Math.max(1L, (configuredQueryTimeout.toMillis() + 999L) / 1000L);
+        this.poisonPolicy = cdcDispatcherProperties.getPoisonPolicy();
+        this.dispatchedRowPolicy = cdcDispatcherProperties.getDispatchedRowPolicy();
+        this.deliveryMode = settings.deliveryMode();
+        this.availability = dependencies.availability();
+        this.meterRegistry = dependencies.meterRegistry();
+        warnOnDispatcherKnobsIgnoredInDirectMode(cdcDispatcherProperties);
+        initMetrics();
+    }
+
+    /**
+     * @param inbox                   the CDC inbox repository
+     * @param unitOfWorkFactory       the unit-of-work factory
+     * @param eventStreamGapHandler   the gap handler
+     * @param logicalDecodingPlugin   the decoding plugin
+     * @param cdcPoisonNotifier       optional poison-row notifier
+     * @param onEvents                where decoded batches are published
+     * @param slotName                the replication slot whose inbox is drained
+     * @param cdcDispatcherProperties poll/batch/timeout and policy settings
+     * @param deliveryMode            INBOX or DIRECT
+     * @param availability            the CDC availability tracker
+     * @param meterRegistry           optional Micrometer registry
+     * @deprecated Use {@link #CdcDispatcher(CdcDispatcherDependencies, CdcDispatcherSettings)}. Eleven positional
+     *         arguments — two of them {@code Optional} — are now two cohesive values. This constructor delegates and
+     *         behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public CdcDispatcher(CdcInboxRepository inbox,
                          HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
@@ -144,31 +197,17 @@ public final class CdcDispatcher implements Lifecycle {
                          CdcDeliveryMode deliveryMode,
                          CdcAvailability availability,
                          Optional<MeterRegistry> meterRegistry) {
-        this.inbox = requireNonNull(inbox, "inbox cannot be null");
-        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
-        this.eventStreamGapHandler = requireNonNull(eventStreamGapHandler, "eventStreamGapHandler cannot be null");
-        this.logicalDecodingPlugin = requireNonNull(logicalDecodingPlugin, "logicalDecodingPlugin cannot be null");
-        this.cdcPoisonNotifier = requireNonNull(cdcPoisonNotifier.orElse(new CdcPoisonNotifier.NoOpCdcPoisonNotifier()), "cdcPoisonNotifier cannot be null");
-        this.onEvents = requireNonNull(onEvents, "onEvents cannot be null");
-        this.slotName = requireNonNull(slotName, "slotName cannot be null");
-        PostgresqlUtil.checkIsValidTableOrColumnName(slotName);
-        this.pollInterval = requireNonNull(cdcDispatcherProperties.getPollInterval(), "pollInterval cannot be null");
-        requireTrue(cdcDispatcherProperties.getBatchSize() >= 1, "batchSize has to be 1 or greater");
-        this.batchSize = cdcDispatcherProperties.getBatchSize();
-        // Round seconds *up* so any positive sub-second budget still applies a 1s timeout
-        // rather than silently degrading to "no timeout". Zero (default) means no framework
-        // timeout — the query inherits whatever PG/JDBC/pool defaults provide.
-        var configuredQueryTimeout = cdcDispatcherProperties.getQueryTimeout();
-        this.queryTimeoutSeconds = configuredQueryTimeout == null || configuredQueryTimeout.isZero() || configuredQueryTimeout.isNegative()
-                                   ? 0
-                                   : (int) Math.max(1L, (configuredQueryTimeout.toMillis() + 999L) / 1000L);
-        this.poisonPolicy = requireNonNull(cdcDispatcherProperties.getPoisonPolicy(), "poisonPolicy cannot be null");
-        this.dispatchedRowPolicy = requireNonNull(cdcDispatcherProperties.getDispatchedRowPolicy(), "dispatchedRowPolicy cannot be null");
-        this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
-        this.availability = requireNonNull(availability, "availability cannot be null");
-        this.meterRegistry = meterRegistry.orElse(null);
-        warnOnDispatcherKnobsIgnoredInDirectMode(cdcDispatcherProperties);
-        initMetrics();
+        this(CdcDispatcherDependencies.builder()
+                                      .setInbox(inbox)
+                                      .setUnitOfWorkFactory(unitOfWorkFactory)
+                                      .setEventStreamGapHandler(eventStreamGapHandler)
+                                      .setLogicalDecodingPlugin(logicalDecodingPlugin)
+                                      .setCdcPoisonNotifier(requireNonNull(cdcPoisonNotifier, "cdcPoisonNotifier cannot be null"))
+                                      .setOnEvents(onEvents)
+                                      .setAvailability(availability)
+                                      .setMeterRegistry(requireNonNull(meterRegistry, "meterRegistry cannot be null"))
+                                      .build(),
+             new CdcDispatcherSettings(slotName, cdcDispatcherProperties, deliveryMode));
     }
 
     /**

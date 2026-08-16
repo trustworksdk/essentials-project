@@ -81,6 +81,13 @@ public final class RedeliveryPolicy {
         return new FixedBackoffBuilder();
     }
 
+    /**
+     * @deprecated Use {@link #builder()}, or one of the {@link #exponentialBackoff()} / {@link #linearBackoff()} /
+     *         {@link #fixedBackoff()} shortcuts. Seven positional arguments — four of them {@code Duration}s and two
+     *         {@code double}s — are unreadable at a call site and silently transposable. This constructor is unchanged
+     *         and remains the implementation the builders delegate to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public RedeliveryPolicy(Duration initialRedeliveryDelay,
                             Duration followupRedeliveryDelay,
                             double followupRedeliveryDelayMultiplier,
