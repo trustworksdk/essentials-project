@@ -72,7 +72,11 @@ public final class ConsumeFromQueue {
      * @param parallelConsumers   the number of parallel consumers (if number > 1 then you will effectively have competing consumers on the current node)
      * @param queueMessageHandler the message handler that will receive {@link QueuedMessage}'s. See {@link PatternMatchingQueuedMessageHandler}
      * @param pollingInterval     the interval with which the consumer poll the queue db for new messages to process
+     * @deprecated Use {@link #builder()}. These overloads telescope over the same arguments and one of them takes an
+     *         {@code Optional} parameter; the builder names every argument and needs no overload per combination.
+     *         Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public ConsumeFromQueue(String consumerName,
                             QueueName queueName,
                             RedeliveryPolicy redeliveryPolicy,
@@ -98,7 +102,11 @@ public final class ConsumeFromQueue {
      * @param consumerExecutorService the optional {@link ScheduledExecutorService} that's responsible for scheduling the <code>parallelConsumers</code>. Also see {@link ThreadFactoryBuilder}
      * @param queueMessageHandler     the message handler that will receive {@link QueuedMessage}'s. See {@link PatternMatchingQueuedMessageHandler}
      * @param pollingInterval         the interval with which the consumer poll the queue db for new messages to process
+     * @deprecated Use {@link #builder()}. These overloads telescope over the same arguments and one of them takes an
+     *         {@code Optional} parameter; the builder names every argument and needs no overload per combination.
+     *         Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public ConsumeFromQueue(String consumerName,
                             QueueName queueName,
                             RedeliveryPolicy redeliveryPolicy,
@@ -126,7 +134,11 @@ public final class ConsumeFromQueue {
      * @param consumerExecutorService the optional {@link ScheduledExecutorService} that's responsible for scheduling the <code>parallelConsumers</code>. Also see {@link ThreadFactoryBuilder}
      * @param queueMessageHandler     the message handler that will receive {@link QueuedMessage}'s. See {@link PatternMatchingQueuedMessageHandler}
      * @param pollingInterval         the interval with which the consumer poll the queue db for new messages to process
+     * @deprecated Use {@link #builder()}. These overloads telescope over the same arguments and one of them takes an
+     *         {@code Optional} parameter; the builder names every argument and needs no overload per combination.
+     *         Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public ConsumeFromQueue(String consumerName,
                             QueueName queueName,
                             RedeliveryPolicy redeliveryPolicy,

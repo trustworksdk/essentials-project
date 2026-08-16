@@ -49,6 +49,10 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
         this(unitOfWorkFactory, Optional.empty());
     }
 
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                     Optional<String> tableName) {
         this(unitOfWorkFactory, tableName, Optional.empty());
@@ -61,8 +65,10 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
      * @param tableName               An optional custom table name to use for storing aggregate snapshot jobs. Defaults to a predefined name if not provided.
      * @param meterRegistryOptional   An optional {@link MeterRegistry} for metric collection and monitoring. Can be empty if metric support is not required.
      * @throws IllegalArgumentException If {@code unitOfWorkFactory} or {@code tableName} are null.
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlAggregateSnapshotJobRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                                     Optional<String> tableName,
                                                     Optional<MeterRegistry> meterRegistryOptional) {
@@ -264,4 +270,87 @@ public class PostgresqlAggregateSnapshotJobRepository implements AggregateSnapsh
                                             rs.getString("last_error"));
         }
     }
+
+    /**
+     * Creates a builder for a {@link PostgresqlAggregateSnapshotJobRepository}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link PostgresqlAggregateSnapshotJobRepository}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload for Spring {@code @Bean} methods.
+     */
+    public static final class Builder {
+        private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+        private String tableName;
+        private MeterRegistry meterRegistryOptional;
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder setUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param tableName optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setTableName(String tableName) {
+            this.tableName = tableName;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setTableName(String)}.
+         *
+         * @param tableName the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setTableName(Optional<String> tableName) {
+            requireNonNull(tableName, "No tableName provided");
+            return setTableName(tableName.orElse(null));
+        }
+
+        /**
+         * @param meterRegistryOptional optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setMeterRegistry(MeterRegistry meterRegistryOptional) {
+            this.meterRegistryOptional = meterRegistryOptional;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry(MeterRegistry)}.
+         *
+         * @param meterRegistryOptional the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setMeterRegistry(Optional<MeterRegistry> meterRegistryOptional) {
+            requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
+            return setMeterRegistry(meterRegistryOptional.orElse(null));
+        }
+
+        /**
+         * @return the new {@link PostgresqlAggregateSnapshotJobRepository}
+         */
+        @SuppressWarnings("removal")
+        public PostgresqlAggregateSnapshotJobRepository build() {
+            return new PostgresqlAggregateSnapshotJobRepository(unitOfWorkFactory,
+                                                                Optional.ofNullable(tableName),
+                                                                Optional.ofNullable(meterRegistryOptional));
+        }
+    }
+
 }

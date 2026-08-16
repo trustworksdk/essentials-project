@@ -92,7 +92,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param durableQueues                the underlying Durable Queues provider
      * @param commandQueueName             Set the name of the {@link DurableQueues} that will be used queuing commands sent using {@link DurableLocalCommandBus#sendAndDontWait(Object)}
      * @param commandQueueRedeliveryPolicy Set the {@link RedeliveryPolicy} used when handling queued commnds sent using{@link DurableLocalCommandBus#sendAndDontWait(Object)}
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   QueueName commandQueueName,
                                   RedeliveryPolicy commandQueueRedeliveryPolicy) {
@@ -112,7 +117,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param durableQueues               the underlying Durable Queues provider
      * @param sendAndDontWaitErrorHandler Exception handler that will handle errors that occur during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}. If this handler doesn't rethrow the exeption,
      *                                    then the message will not be retried by the underlying {@link DurableQueues}
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler) {
         super(sendAndDontWaitErrorHandler,
@@ -130,7 +140,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param commandQueueName            Set the name of the {@link DurableQueues} that will be used queuing commands sent using {@link DurableLocalCommandBus#sendAndDontWait(Object)}
      * @param sendAndDontWaitErrorHandler Exception handler that will handle errors that occur during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}. If this handler doesn't rethrow the exeption,
      *                                    then the message will not be retried by the underlying {@link DurableQueues}
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   QueueName commandQueueName,
                                   SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler) {
@@ -150,7 +165,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      *
      * @param durableQueues the underlying Durable Queues provider
      * @param interceptors  all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   List<CommandBusInterceptor> interceptors) {
         super(new RethrowingSendAndDontWaitErrorHandler(), interceptors);
@@ -167,7 +187,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param durableQueues    the underlying Durable Queues provider
      * @param commandQueueName Set the name of the {@link DurableQueues} that will be used queuing commands sent using {@link DurableLocalCommandBus#sendAndDontWait(Object)}
      * @param interceptors     all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   QueueName commandQueueName,
                                   List<CommandBusInterceptor> interceptors) {
@@ -187,7 +212,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param sendAndDontWaitErrorHandler Exception handler that will handle errors that occur during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}. If this handler doesn't rethrow the exeption,
      *                                    then the message will not be retried by the underlying {@link DurableQueues}
      * @param interceptors                all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler,
                                   List<CommandBusInterceptor> interceptors) {
@@ -206,7 +236,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param sendAndDontWaitErrorHandler      Exception handler that will handle errors that occur during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}. If this handler doesn't rethrow the exeption,
      *                                         then the message will not be retried by the underlying {@link DurableQueues}
      * @param interceptors                     all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   int parallelSendAndDontWaitConsumers,
                                   QueueName commandQueueName,
@@ -235,7 +270,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param sendAndDontWaitErrorHandler Exception handler that will handle errors that occur during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}. If this handler doesn't rethrow the exeption,
      *                                    then the message will not be retried by the underlying {@link DurableQueues}
      * @param interceptors                all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   QueueName commandQueueName,
                                   SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler,
@@ -256,7 +296,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      *
      * @param durableQueues the underlying Durable Queues provider
      * @param interceptors  all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   CommandBusInterceptor... interceptors) {
         this(durableQueues,
@@ -274,7 +319,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param commandQueueName {The strategy for selecting which {@link DurableQueues}
      *                         {@link QueueName} to use for a given combination of command and command handler
      * @param interceptors     all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   QueueName commandQueueName,
                                   CommandBusInterceptor... interceptors) {
@@ -294,7 +344,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param sendAndDontWaitErrorHandler Exception handler that will handle errors that occur during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}. If this handler doesn't rethrow the exeption,
      *                                    then the message will not be retried by the underlying {@link DurableQueues}
      * @param interceptors                all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   SendAndDontWaitErrorHandler sendAndDontWaitErrorHandler,
                                   CommandBusInterceptor... interceptors) {
@@ -313,7 +368,12 @@ public final class DurableLocalCommandBus extends AbstractCommandBus implements 
      * @param sendAndDontWaitErrorHandler      Exception handler that will handle errors that occur during {@link CommandBus#sendAndDontWait(Object)}/{@link CommandBus#sendAndDontWait(Object, Duration)}. If this handler doesn't rethrow the exeption,
      *                                         then the message will not be retried by the underlying {@link DurableQueues}
      * @param interceptors                     all the {@link CommandBusInterceptor}'s
+     * @deprecated Use {@link #builder()}. Thirteen constructors over the same seven collaborators is a telescoping ladder:
+     *         adding one option doubles it, and no call site can be read without counting positions. The builder
+     *         replaces every combination, and {@link #DurableLocalCommandBus(DurableQueues)} remains for the
+     *         all-defaults case. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DurableLocalCommandBus(DurableQueues durableQueues,
                                   int parallelSendAndDontWaitConsumers,
                                   QueueName commandQueueName,

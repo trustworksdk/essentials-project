@@ -54,6 +54,35 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
     private volatile boolean active;
 
+    /**
+     * @param context                   the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
+     * @param durableContext            the resume-point arguments shared by the asynchronous subscriptions
+     * @param fencedLockManager         the lock manager that decides which node owns this subscription
+     * @param fencedLockAwareSubscriber callback notified when this node acquires or loses the subscription's lock
+     * @param eventHandler              the handler invoked for each persisted event
+     */
+    public ExclusiveAsynchronousSubscription(EventStoreSubscriptionContext context,
+                                             DurableSubscriptionContext durableContext,
+                                             FencedLockManager fencedLockManager,
+                                             FencedLockAwareSubscriber fencedLockAwareSubscriber,
+                                             PersistedEventHandler eventHandler) {
+        super(context);
+        requireNonNull(durableContext, "No durableContext provided");
+        this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
+        this.durableSubscriptionRepository = durableContext.durableSubscriptionRepository();
+        this.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder = durableContext.onFirstSubscriptionSubscribeFromAndIncludingGlobalOrder();
+        this.fencedLockAwareSubscriber = requireNonNull(fencedLockAwareSubscriber, "No fencedLockAwareSubscriber provided");
+        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
+        this.eventStoreSubscriptionManagerSettings = durableContext.eventStoreSubscriptionManagerSettings();
+        this.lockName = LockName.of(msg("[{}-{}]", context.subscriberId(), context.aggregateType()));
+    }
+
+    /**
+     * @deprecated Use {@link #ExclusiveAsynchronousSubscription(EventStoreSubscriptionContext, DurableSubscriptionContext, FencedLockManager, FencedLockAwareSubscriber, PersistedEventHandler)}.
+     *         Thirteen positional arguments are now five. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public ExclusiveAsynchronousSubscription(EventStore eventStore,
                                              FencedLockManager fencedLockManager,
                                              DurableSubscriptionRepository durableSubscriptionRepository,
@@ -135,7 +164,7 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
                         resumePoint.getResumeFromAndIncluding(),
                         Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize()),
                         Optional.of(eventStoreSubscriptionManagerSettings.eventStorePollingInterval()),
-                        onlyIncludeEventsForTenant,
+                        onlyIncludeEventsForTenant(),
                         Optional.of(subscriberId),
                         Optional.of(eventStorePollingOptimizerFactory))
                 .limitRate(eventStoreSubscriptionManagerSettings.eventStorePollingBatchSize())

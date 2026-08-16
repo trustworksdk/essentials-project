@@ -733,6 +733,20 @@ public class ImmutableOrder extends ImmutableValueObject {
 >
 > **Compatibility:** Trustworks' Essentials release version **0.40.24** remains API and functionally compatible with Cloud Create's version **0.40.24** (released May 5th 2025). Migration requires only updating module names and package references from `dk.cloudcreate` to `dk.trustworks`.
 
+### Construction ergonomics — deprecations ahead of the next major
+
+Wide constructors and `Optional` constructor parameters are being replaced by builders, cohesive parameter objects and
+neutral defaults. **Nothing has been removed**: every affected constructor still exists and still behaves identically,
+now marked `@Deprecated(forRemoval = true)` with a better path alongside it. Upgrading and changing nothing gives you
+deprecation warnings and no errors; the removals happen at the next major.
+
+There is one behaviour change in this release — `PostgresqlDurableQueues` constructors that do not name a
+`TransactionalMode` now default to `SingleOperationTransaction` rather than `FullyTransactional`, closing a
+long-standing divergence with its builder.
+
+See **[docs/MIGRATION-NEXT_MAJOR.md](docs/MIGRATION-NEXT_MAJOR.md)** for the per-class before-and-after tables, and
+`docs/constructor-ergonomics-and-optional-policy.md` for the rationale.
+
 ---
 
 ## Security

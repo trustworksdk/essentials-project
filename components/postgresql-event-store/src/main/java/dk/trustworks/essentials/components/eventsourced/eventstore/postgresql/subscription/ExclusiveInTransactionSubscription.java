@@ -47,6 +47,27 @@ public class ExclusiveInTransactionSubscription extends AbstractEventStoreSubscr
 
     private volatile boolean active;
 
+    /**
+     * @param context           the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
+     * @param fencedLockManager the lock manager that decides which node owns this subscription
+     * @param eventHandler      the handler invoked, inside the event store's unit of work, for each persisted event
+     */
+    public ExclusiveInTransactionSubscription(EventStoreSubscriptionContext context,
+                                              FencedLockManager fencedLockManager,
+                                              TransactionalPersistedEventHandler eventHandler) {
+        super(context);
+        this.fencedLockManager = requireNonNull(fencedLockManager, "No fencedLockManager provided");
+        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
+        this.lockName = LockName.of(msg("[{}-{}]", context.subscriberId(), context.aggregateType()));
+    }
+
+    /**
+     * @deprecated Use {@link #ExclusiveInTransactionSubscription(EventStoreSubscriptionContext, FencedLockManager, TransactionalPersistedEventHandler)}.
+     *         The six shared arguments are now one {@link EventStoreSubscriptionContext}. This constructor delegates and
+     *         behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public ExclusiveInTransactionSubscription(EventStore eventStore,
                                               FencedLockManager fencedLockManager,
                                               AggregateType aggregateType,

@@ -42,7 +42,7 @@ class AggregateSnapshotMeasurementSupport {
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     AggregateSnapshotMeasurementSupport(Optional<MeterRegistry> meterRegistryOptional) {
         this.measurementTaker = MeasurementTaker.builder()
-                                                .withOptionalMicrometerMeasurementRecorder(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"))
+                                                .setMeterRegistry(requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided"))
                                                 .build();
     }
 

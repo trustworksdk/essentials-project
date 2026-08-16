@@ -82,8 +82,10 @@ public class ClosingBooksCoordinator<ID> {
      * @param unitOfWorkFactory     The factory for creating instances of {@code HandleAwareUnitOfWork}.
      * @param clock                 The clock used to timestamp policy evaluations and rollovers.
      * @param meterRegistryOptional Optional Micrometer registry. When empty, no metrics are recorded.
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public ClosingBooksCoordinator(AggregateType aggregateType,
                                    ClosingBooksGenerationRepository<ID> generationRepository,
                                    ClosingBooksStreamIdGenerator<ID> streamIdGenerator,
@@ -215,4 +217,109 @@ public class ClosingBooksCoordinator<ID> {
         measurementSupport.incrementGenerationsOpened(aggregateType);
         return generation;
     }
+
+    /**
+     * Creates a builder for a {@link ClosingBooksCoordinator}.
+     *
+     * @param <ID> the aggregate id type
+     * @return a new builder
+     */
+    public static <ID> Builder<ID> builder() {
+        return new Builder<>();
+    }
+
+    /**
+     * Builder for {@link ClosingBooksCoordinator}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder<ID> {
+        private AggregateType aggregateType;
+        private ClosingBooksGenerationRepository<ID> generationRepository;
+        private ClosingBooksStreamIdGenerator<ID> streamIdGenerator;
+        private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+        private Clock clock;
+        private MeterRegistry meterRegistryOptional;
+
+        /**
+         * @param aggregateType required
+         * @return this builder
+         */
+        public Builder<ID> setAggregateType(AggregateType aggregateType) {
+            this.aggregateType = aggregateType;
+            return this;
+        }
+
+        /**
+         * @param generationRepository required
+         * @return this builder
+         */
+        public Builder<ID> setGenerationRepository(ClosingBooksGenerationRepository<ID> generationRepository) {
+            this.generationRepository = generationRepository;
+            return this;
+        }
+
+        /**
+         * @param streamIdGenerator required
+         * @return this builder
+         */
+        public Builder<ID> setStreamIdGenerator(ClosingBooksStreamIdGenerator<ID> streamIdGenerator) {
+            this.streamIdGenerator = streamIdGenerator;
+            return this;
+        }
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder<ID> setUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param clock required
+         * @return this builder
+         */
+        public Builder<ID> setClock(Clock clock) {
+            this.clock = clock;
+            return this;
+        }
+
+        /**
+         * @param meterRegistryOptional optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder<ID> setMeterRegistry(MeterRegistry meterRegistryOptional) {
+            this.meterRegistryOptional = meterRegistryOptional;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry}.
+         *
+         * @param meterRegistryOptional the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder<ID> setMeterRegistry(Optional<MeterRegistry> meterRegistryOptional) {
+            requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
+            return setMeterRegistry(meterRegistryOptional.orElse(null));
+        }
+
+        /**
+         * @return the new {@link ClosingBooksCoordinator}
+         */
+        @SuppressWarnings("removal")
+        public ClosingBooksCoordinator<ID> build() {
+            return new ClosingBooksCoordinator<>(aggregateType,
+                                                   generationRepository,
+                                                   streamIdGenerator,
+                                                   unitOfWorkFactory,
+                                                   clock,
+                                                   Optional.ofNullable(meterRegistryOptional));
+        }
+    }
+
 }

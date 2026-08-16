@@ -191,6 +191,7 @@ public final class ClosingBooksSetupBuilder<LOGICAL_ID, STREAM_ID> {
      * @return the assembled {@link ClosingBooksSetup}
      * @throws IllegalArgumentException if a required setter was not called
      */
+    @SuppressWarnings("removal")
     public ClosingBooksSetup<LOGICAL_ID, STREAM_ID> build() {
         requireNonNull(logicalAggregateIdSerializer,
                        "No logicalAggregateIdSerializer provided - call setLogicalAggregateIdType(...) or setLogicalAggregateIdSerializer(...)");

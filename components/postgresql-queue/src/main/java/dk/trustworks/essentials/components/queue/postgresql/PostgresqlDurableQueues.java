@@ -101,6 +101,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final List<DurableQueuesInterceptor>                                          interceptors                     = new CopyOnWriteArrayList<>();
     private final Optional<MultiTableChangeListener<TableChangeNotification>>             multiTableChangeListener;
     private final Function<ConsumeFromQueue, QueuePollingOptimizer>                       queuePollingOptimizerFactory;
+    /**
+     * The {@code messageHandlingTimeout} applied by the constructors that do not take one, matching
+     * {@code PostgresqlDurableQueuesBuilder}'s default. Required by {@link TransactionalMode#SingleOperationTransaction}.
+     */
+    public static final Duration DEFAULT_MESSAGE_HANDLING_TIMEOUT = Duration.ofSeconds(30);
+
     private final TransactionalMode                                                       transactionalMode;
     private       CentralizedMessageFetcher                                               centralizedMessageFetcher;
     /**
@@ -252,13 +258,20 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                    String sharedQueueTableName,
                                    MultiTableChangeListener<TableChangeNotification> multiTableChangeListener,
                                    Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory) {
+        // Deliberately SingleOperationTransaction with the builder's 30s messageHandlingTimeout, NOT
+        // FullyTransactional. Until 0.40.x this constructor chain produced FullyTransactional while
+        // PostgresqlDurableQueues.builder() produced SingleOperationTransaction, so the same component behaved
+        // differently depending on how it was created — recorded as a live hazard in the module's CLAUDE.md.
+        // Converging on the builder's defaults closes that; FullyTransactional is the side that is documented as
+        // broken for retries and dead-lettering. This is a behaviour change for existing constructor callers and is
+        // called out in the migration guide.
         this(unitOfWorkFactory,
              jsonSerializer,
              sharedQueueTableName,
              multiTableChangeListener,
              queuePollingOptimizerFactory,
-             TransactionalMode.FullyTransactional,
-             null);
+             TransactionalMode.SingleOperationTransaction,
+             DEFAULT_MESSAGE_HANDLING_TIMEOUT);
     }
 
     /**
@@ -300,7 +313,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @param messageHandlingTimeout       Only required if <code>transactionalMode</code> is {@link TransactionalMode#SingleOperationTransaction}.<br>
      *                                     The parameter defines the timeout for messages being delivered, but haven't yet been acknowledged.
      *                                     After this timeout the message delivery will be reset and the message will again be a candidate for delivery
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    JSONSerializer jsonSerializer,
                                    String sharedQueueTableName,
@@ -376,7 +391,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *                                                 </ul>
      * @param useOrderedUnorderedQuery                 a boolean flag that determines whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
      *                                                 performance for mixed, ordered and unordered message processing scenarios
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    JSONSerializer jsonSerializer,
                                    String sharedQueueTableName,
@@ -424,7 +441,9 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @param batchedFetchSwitchThreshold              only consulted when {@code useBatchedFetch} is {@code true}: per-queue fetch for active
      *                                                 queue counts &lt;= threshold, batched fetch above it
      * @param batchedFetchWarnRowsThreshold            warning threshold for the number of rows returned by a single batched fetch
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                    JSONSerializer jsonSerializer,
                                    String sharedQueueTableName,

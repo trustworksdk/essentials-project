@@ -157,15 +157,22 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- ArchUnit drives EssentialsArchitectureTest. This module sits at the
-             downstream end of the core dependency chain, so its test classpath
-             transitively contains shared, types, reactive, foundation-types,
-             foundation and postgresql-event-store — giving ArchUnit visibility of
-             the whole module graph to verify coupling direction in one place. -->
+        <!-- ArchUnit drives EssentialsArchitectureTest and EssentialsConstructionErgonomicsTest. This module sits at
+             the downstream end of the core dependency chain, so its test classpath transitively contains shared,
+             types, reactive, foundation-types, foundation, postgresql-event-store and postgresql-queue — giving
+             ArchUnit visibility of the whole module graph to verify coupling direction in one place. -->
         <dependency>
             <groupId>com.tngtech.archunit</groupId>
             <artifactId>archunit-junit5</artifactId>
             <version>${archunit-junit5.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- For the shared architecture rule definitions (EssentialsConstructionRules) only. foundation-test is the
+             one place upstream of every implementation module where a rule usable by all of them can live. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation-test</artifactId>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

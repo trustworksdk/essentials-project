@@ -37,6 +37,10 @@ public class DefaultAggregateLifecycleStatisticsApi implements AggregateLifecycl
     private final AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry;
     private final Optional<MeterRegistry> meterRegistry;
 
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultAggregateLifecycleStatisticsApi(EssentialsSecurityProvider securityProvider,
                                                   AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
                                                   AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
@@ -227,4 +231,86 @@ public class DefaultAggregateLifecycleStatisticsApi implements AggregateLifecycl
     private void validateReadAccess(Object principal) {
         validateHasAnyEssentialsSecurityRoles(securityProvider, principal, SUBSCRIPTION_READER, ESSENTIALS_ADMIN);
     }
+
+    /**
+     * Creates a builder for a {@link DefaultAggregateLifecycleStatisticsApi}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link DefaultAggregateLifecycleStatisticsApi}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private EssentialsSecurityProvider securityProvider;
+        private AggregateSnapshotPolicyRegistry snapshotPolicyRegistry;
+        private AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry;
+        private MeterRegistry meterRegistry;
+
+        /**
+         * @param securityProvider required
+         * @return this builder
+         */
+        public Builder setSecurityProvider(EssentialsSecurityProvider securityProvider) {
+            this.securityProvider = securityProvider;
+            return this;
+        }
+
+        /**
+         * @param snapshotPolicyRegistry required
+         * @return this builder
+         */
+        public Builder setSnapshotPolicyRegistry(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry) {
+            this.snapshotPolicyRegistry = snapshotPolicyRegistry;
+            return this;
+        }
+
+        /**
+         * @param closingBooksPolicyRegistry required
+         * @return this builder
+         */
+        public Builder setClosingBooksPolicyRegistry(AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry) {
+            this.closingBooksPolicyRegistry = closingBooksPolicyRegistry;
+            return this;
+        }
+
+        /**
+         * @param meterRegistry optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setMeterRegistry(MeterRegistry meterRegistry) {
+            this.meterRegistry = meterRegistry;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry}.
+         *
+         * @param meterRegistry the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setMeterRegistry(Optional<MeterRegistry> meterRegistry) {
+            requireNonNull(meterRegistry, "No meterRegistry provided");
+            return setMeterRegistry(meterRegistry.orElse(null));
+        }
+
+        /**
+         * @return the new {@link DefaultAggregateLifecycleStatisticsApi}
+         */
+        @SuppressWarnings("removal")
+        public DefaultAggregateLifecycleStatisticsApi build() {
+            return new DefaultAggregateLifecycleStatisticsApi(securityProvider,
+                                                              snapshotPolicyRegistry,
+                                                              closingBooksPolicyRegistry,
+                                                              Optional.ofNullable(meterRegistry));
+        }
+    }
+
 }

@@ -172,15 +172,17 @@ public class TradingAccountClosingBooksPolicy {
     }
 
     private BuiltInClosingBooksPolicyEvaluator<TradingAccount> evaluator(ClosingBooksSettings currentSettings) {
-        return new BuiltInClosingBooksPolicyEvaluator<>(TradingAccounts.AGGREGATE_TYPE,
-                                                        currentSettings.mode(),
-                                                        currentSettings.eventThreshold(),
-                                                        currentSettings.timeBoundary(),
-                                                        currentSettings.zoneId(),
-                                                        currentSettings.intervalDays(),
-                                                        clock,
-                                                        meterRegistry,
-                                                        account -> account.eventOrderOfLastAppliedEvent().longValue() + 1,
-                                                        account -> account.periodId().toString());
+        return BuiltInClosingBooksPolicyEvaluator.<TradingAccount>builder()
+                                                 .setAggregateType(TradingAccounts.AGGREGATE_TYPE)
+                                                 .setDefaultPolicy(currentSettings.mode())
+                                                 .setEventThreshold(currentSettings.eventThreshold())
+                                                 .setTimeBoundary(currentSettings.timeBoundary())
+                                                 .setZoneId(currentSettings.zoneId())
+                                                 .setIntervalDays(currentSettings.intervalDays())
+                                                 .setClock(clock)
+                                                 .setMeterRegistry(meterRegistry)
+                                                 .setEventCountProvider(account -> account.eventOrderOfLastAppliedEvent().longValue() + 1)
+                                                 .setCurrentPeriodIdProvider(account -> account.periodId().toString())
+                                                 .build();
     }
 }

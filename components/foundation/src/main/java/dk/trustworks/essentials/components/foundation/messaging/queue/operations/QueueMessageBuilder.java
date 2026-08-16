@@ -108,6 +108,7 @@ public final class QueueMessageBuilder {
      *
      * @return the {@link QueueMessage} instance
      */
+    @SuppressWarnings("removal")
     public QueueMessage build() {
         return new QueueMessage(queueName,
                                 new Message(payload, metaData),

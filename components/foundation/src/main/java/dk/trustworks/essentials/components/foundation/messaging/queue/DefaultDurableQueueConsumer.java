@@ -77,13 +77,20 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
      */
     private final    ConcurrentMap<Thread, OrderedMessage> orderedMessageDeliveryThreads = new ConcurrentHashMap<>();
 
-    public DefaultDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
-                                       UOW_FACTORY unitOfWorkFactory,
-                                       DURABLE_QUEUES durableQueues,
-                                       Consumer<DurableQueueConsumer> removeDurableQueueConsumer,
-                                       long pollingIntervalMs,
-                                       QueuePollingOptimizer queuePollingOptimizer,
-                                       List<DurableQueuesInterceptor> interceptors) {
+    /**
+     * @param consumeFromQueue what to consume — the queue, consumer name, parallelism and redelivery policy
+     * @param dependencies     what to consume it with — see {@link DurableQueueConsumerDependencies#builder()}
+     */
+    protected DefaultDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
+                                          DurableQueueConsumerDependencies<DURABLE_QUEUES, UOW, UOW_FACTORY> dependencies) {
+        requireNonNull(dependencies, "dependencies is missing - see DurableQueueConsumerDependencies.builder()");
+        var unitOfWorkFactory          = dependencies.unitOfWorkFactory();
+        var durableQueues              = dependencies.durableQueues();
+        var removeDurableQueueConsumer = dependencies.removeDurableQueueConsumer();
+        var pollingIntervalMs          = dependencies.pollingIntervalMs();
+        var queuePollingOptimizer      = dependencies.queuePollingOptimizer();
+        var interceptors               = dependencies.interceptors();
+
         this.consumeFromQueue = requireNonNull(consumeFromQueue, "consumeFromQueue is missing");
         this.interceptors = new CopyOnWriteArrayList<>(requireNonNull(interceptors, "interceptors is missing"));
         consumeFromQueue.validate();
@@ -130,6 +137,38 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                  consumeFromQueue.getParallelConsumers(),
                  pollingIntervalMs);
 
+    }
+
+    /**
+     * @param consumeFromQueue           what to consume
+     * @param unitOfWorkFactory          the {@link UnitOfWorkFactory}, required only in {@link TransactionalMode#FullyTransactional}
+     * @param durableQueues              the {@link DurableQueues} instance this consumer belongs to
+     * @param removeDurableQueueConsumer callback invoked when the consumer stops
+     * @param pollingIntervalMs          how often to poll for new messages
+     * @param queuePollingOptimizer      the polling optimizer, or {@code null} for {@link QueuePollingOptimizer#None()}
+     * @param interceptors               the interceptor chain applied to every queue operation
+     * @deprecated Use {@link #DefaultDurableQueueConsumer(ConsumeFromQueue, DurableQueueConsumerDependencies)}. The
+     *         five collaborator arguments are the same for every {@link DurableQueues} implementation, so they belong
+     *         in one {@link DurableQueueConsumerDependencies} bundle rather than being repeated positionally in each
+     *         subclass. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    public DefaultDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
+                                       UOW_FACTORY unitOfWorkFactory,
+                                       DURABLE_QUEUES durableQueues,
+                                       Consumer<DurableQueueConsumer> removeDurableQueueConsumer,
+                                       long pollingIntervalMs,
+                                       QueuePollingOptimizer queuePollingOptimizer,
+                                       List<DurableQueuesInterceptor> interceptors) {
+        this(consumeFromQueue,
+             DurableQueueConsumerDependencies.<DURABLE_QUEUES, UOW, UOW_FACTORY>builder()
+                                             .setUnitOfWorkFactory(unitOfWorkFactory)
+                                             .setDurableQueues(durableQueues)
+                                             .setRemoveDurableQueueConsumer(removeDurableQueueConsumer)
+                                             .setPollingIntervalMs(pollingIntervalMs)
+                                             .setQueuePollingOptimizer(queuePollingOptimizer)
+                                             .setInterceptors(interceptors)
+                                             .build());
     }
 
     @Override

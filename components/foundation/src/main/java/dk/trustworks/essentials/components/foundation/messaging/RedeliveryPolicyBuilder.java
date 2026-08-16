@@ -56,6 +56,8 @@ public final class RedeliveryPolicyBuilder {
         return this;
     }
 
+    @SuppressWarnings("removal")
+
     public RedeliveryPolicy build() {
         return new RedeliveryPolicy(initialRedeliveryDelay,
                                     followupRedeliveryDelay,

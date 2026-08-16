@@ -41,6 +41,10 @@ public class DefaultAggregateLifecycleApi implements AggregateLifecycleApi {
     private final ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
     private final JSONEventSerializer jsonSerializer;
 
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultAggregateLifecycleApi(EssentialsSecurityProvider securityProvider,
                                         AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
                                         AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
@@ -214,4 +218,131 @@ public class DefaultAggregateLifecycleApi implements AggregateLifecycleApi {
     private void validateReadAccess(Object principal) {
         validateHasAnyEssentialsSecurityRoles(securityProvider, principal, SUBSCRIPTION_READER, ESSENTIALS_ADMIN);
     }
+
+    /**
+     * Creates a builder for a {@link DefaultAggregateLifecycleApi}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link DefaultAggregateLifecycleApi}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private EssentialsSecurityProvider securityProvider;
+        private AggregateSnapshotPolicyRegistry snapshotPolicyRegistry;
+        private AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry;
+        private AggregateClosingBooksGenerationAccessProvider closingBooksGenerationAccessProvider;
+        private AggregateSnapshotStore snapshotStore;
+        private ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore;
+        private JSONEventSerializer jsonSerializer;
+
+        /**
+         * @param securityProvider required
+         * @return this builder
+         */
+        public Builder setSecurityProvider(EssentialsSecurityProvider securityProvider) {
+            this.securityProvider = securityProvider;
+            return this;
+        }
+
+        /**
+         * @param snapshotPolicyRegistry required
+         * @return this builder
+         */
+        public Builder setSnapshotPolicyRegistry(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry) {
+            this.snapshotPolicyRegistry = snapshotPolicyRegistry;
+            return this;
+        }
+
+        /**
+         * @param closingBooksPolicyRegistry required
+         * @return this builder
+         */
+        public Builder setClosingBooksPolicyRegistry(AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry) {
+            this.closingBooksPolicyRegistry = closingBooksPolicyRegistry;
+            return this;
+        }
+
+        /**
+         * @param closingBooksGenerationAccessProvider optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setClosingBooksGenerationAccessProvider(AggregateClosingBooksGenerationAccessProvider closingBooksGenerationAccessProvider) {
+            this.closingBooksGenerationAccessProvider = closingBooksGenerationAccessProvider;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setClosingBooksGenerationAccessProvider}.
+         *
+         * @param closingBooksGenerationAccessProvider the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setClosingBooksGenerationAccessProvider(Optional<AggregateClosingBooksGenerationAccessProvider> closingBooksGenerationAccessProvider) {
+            requireNonNull(closingBooksGenerationAccessProvider, "No closingBooksGenerationAccessProvider provided");
+            return setClosingBooksGenerationAccessProvider(closingBooksGenerationAccessProvider.orElse(null));
+        }
+
+        /**
+         * @param snapshotStore optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setSnapshotStore(AggregateSnapshotStore snapshotStore) {
+            this.snapshotStore = snapshotStore;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setSnapshotStore}.
+         *
+         * @param snapshotStore the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setSnapshotStore(Optional<AggregateSnapshotStore> snapshotStore) {
+            requireNonNull(snapshotStore, "No snapshotStore provided");
+            return setSnapshotStore(snapshotStore.orElse(null));
+        }
+
+        /**
+         * @param eventStore required
+         * @return this builder
+         */
+        public Builder setEventStore(ConfigurableEventStore<? extends AggregateEventStreamConfiguration> eventStore) {
+            this.eventStore = eventStore;
+            return this;
+        }
+
+        /**
+         * @param jsonSerializer required
+         * @return this builder
+         */
+        public Builder setJsonSerializer(JSONEventSerializer jsonSerializer) {
+            this.jsonSerializer = jsonSerializer;
+            return this;
+        }
+
+        /**
+         * @return the new {@link DefaultAggregateLifecycleApi}
+         */
+        @SuppressWarnings("removal")
+        public DefaultAggregateLifecycleApi build() {
+            return new DefaultAggregateLifecycleApi(securityProvider,
+                                                    snapshotPolicyRegistry,
+                                                    closingBooksPolicyRegistry,
+                                                    Optional.ofNullable(closingBooksGenerationAccessProvider),
+                                                    Optional.ofNullable(snapshotStore),
+                                                    eventStore,
+                                                    jsonSerializer);
+        }
+    }
+
 }

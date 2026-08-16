@@ -99,7 +99,9 @@ public final class LocalEventBus implements EventBus {
      * @param onErrorHandler         the error handler which will be called if any asynchronous subscriber/consumer fails to handle an event
      * @param overflowMaxRetries     the maximum number of retries for events that overflow the Flux
      * @param queuedTaskCapFactor    the factor to calculate queued task capacity from the backpressureBufferSize
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public LocalEventBus(String busName, int parallelThreads, int backpressureBufferSize, OnErrorHandler onErrorHandler, int overflowMaxRetries, double queuedTaskCapFactor) {
         this.busName = requireNonNull(busName, "busName was null");
         this.listenerScheduler = Schedulers.newBoundedElastic(parallelThreads, (int) (backpressureBufferSize * queuedTaskCapFactor), busName, 60, true);

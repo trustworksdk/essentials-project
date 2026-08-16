@@ -85,14 +85,44 @@ public final class CdcSlotMetrics implements Lifecycle {
     private final AtomicInteger walStatusCode        = new AtomicInteger(WalReplicationTailer.SlotState.WalStatus.UNKNOWN.code());
     private final AtomicLong    inactiveSinceSeconds = new AtomicLong(0);
 
+    /**
+     * @param tailer         the tailer whose slot is being measured
+     * @param meterRegistry  the registry to register the slot gauges on, or {@code null} for no metrics.
+     *                       Nullable rather than {@code Optional}: this class registers Micrometer {@code Gauge}s and
+     *                       {@code Counter}s directly, which a {@code MeasurementTaker} — a timing facade — cannot express,
+     *                       so the registry itself stays the currency here
+     * @param slotName       the replication slot name
+     * @param slotProperties the slot configuration, including whether metrics are enabled at all
+     */
+    public CdcSlotMetrics(WalReplicationTailer tailer,
+                          MeterRegistry meterRegistry,
+                          String slotName,
+                          CdcSlotProperties slotProperties) {
+        this.tailer = requireNonNull(tailer, "tailer cannot be null");
+        this.meterRegistry = meterRegistry;
+        this.slotName = requireNonNull(slotName, "slotName cannot be null");
+        this.slotProperties = requireNonNull(slotProperties, "slotProperties cannot be null");
+    }
+
+    /**
+     * @param tailer         the tailer whose slot is being measured
+     * @param meterRegistry  an Optional registry to register the slot gauges on
+     * @param slotName       the replication slot name
+     * @param slotProperties the slot configuration
+     * @deprecated Use {@link #CdcSlotMetrics(WalReplicationTailer, MeterRegistry, String, CdcSlotProperties)}, passing
+     *         {@code null} for "no metrics". The {@code Optional} was unwrapped to a nullable field on the first line
+     *         of the body, so it never bought anything. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public CdcSlotMetrics(WalReplicationTailer tailer,
                           Optional<MeterRegistry> meterRegistry,
                           String slotName,
                           CdcSlotProperties slotProperties) {
-        this.tailer = requireNonNull(tailer, "tailer cannot be null");
-        this.meterRegistry = meterRegistry.orElse(null);
-        this.slotName = requireNonNull(slotName, "slotName cannot be null");
-        this.slotProperties = requireNonNull(slotProperties, "slotProperties cannot be null");
+        this(tailer,
+             requireNonNull(meterRegistry, "meterRegistry cannot be null").orElse(null),
+             slotName,
+             slotProperties);
     }
 
     @Override

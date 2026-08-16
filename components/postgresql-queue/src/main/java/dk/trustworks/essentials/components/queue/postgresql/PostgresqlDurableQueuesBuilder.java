@@ -255,6 +255,8 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
+    @SuppressWarnings("removal")
+
     public PostgresqlDurableQueues build() {
         return new PostgresqlDurableQueues(unitOfWorkFactory,
                                            jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),

@@ -22,7 +22,6 @@ import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.reactive.*;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import dk.trustworks.essentials.shared.functional.*;
-import dk.trustworks.essentials.shared.network.Network;
 import org.slf4j.*;
 import reactor.core.publisher.Mono;
 
@@ -63,7 +62,12 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     private final String                                      lockManagerInstanceId;
 
     private final UnitOfWorkFactory<? extends UOW> unitOfWorkFactory;
-    private final Optional<EventBus>               eventBus;
+    /**
+     * Where {@link FencedLockEvents} are published, or {@code null} to publish nowhere. Held nullable rather than as
+     * an {@code Optional} field: {@link #notify(FencedLockEvents)} is on the lock confirmation path and an
+     * {@code Optional} field costs an allocation per access without buying anything a null check does not.
+     */
+    private final EventBus                         eventBus;
     private final ReentrantLock                    reentrantLock = new ReentrantLock(true);
     private final boolean                          releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation;
 
@@ -83,38 +87,26 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     private   ScheduledFuture<?>       confirmationScheduledFuture;
 
     /**
-     * @param lockStorage                                                    the lock storage used for the lock manager
-     * @param unitOfWorkFactory                                              the {@link UnitOfWork} factory
-     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
-     * @param lockTimeOut                                                    the period between {@link FencedLock#getLockLastConfirmedTimestamp()} and the current time before the lock is marked as timed out
-     * @param lockConfirmationInterval                                       how often should the locks be confirmed. MUST is less than the <code>lockTimeOut</code>
-     * @param releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation Should {@link FencedLock}'s acquired by this {@link FencedLockManager} be released in case calls to {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)} fails
-     *                                                                       with an exception where {@link IOExceptionUtil#isIOException(Throwable)} returns true -
-     *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
-     *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
-     * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
+     * @param lockStorage       the lock storage used for the lock manager
+     * @param unitOfWorkFactory the {@link UnitOfWork} factory
+     * @param settings          the lock timing and identity configuration — see {@link FencedLockManagerSettings#builder()}.
+     *                          The {@code lockConfirmationInterval < lockTimeOut} invariant is validated when the settings are created,
+     *                          not here
+     * @param eventBus          {@link LocalEventBus} where {@link FencedLockEvents} will be published, or {@code null} to publish nowhere
      */
     protected DBFencedLockManager(FencedLockStorage<UOW, LOCK> lockStorage,
                                   UnitOfWorkFactory<? extends UOW> unitOfWorkFactory,
-                                  Optional<String> lockManagerInstanceId,
-                                  Duration lockTimeOut,
-                                  Duration lockConfirmationInterval,
-                                  boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
-                                  Optional<EventBus> eventBus) {
-        requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided");
+                                  FencedLockManagerSettings settings,
+                                  EventBus eventBus) {
+        requireNonNull(settings, "No settings provided - see FencedLockManagerSettings.builder()");
 
         this.lockStorage = requireNonNull(lockStorage, "No lockStorage provided");
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
-        this.lockManagerInstanceId = requireNonNull(lockManagerInstanceId.orElseGet(Network::hostName), "Couldn't resolve a LockManager instanceId");
-        this.lockTimeOut = requireNonNull(lockTimeOut, "No lockTimeOut value provided");
-        this.lockConfirmationInterval = requireNonNull(lockConfirmationInterval, "No lockConfirmationInterval value provided");
-        if (lockConfirmationInterval.compareTo(lockTimeOut) >= 1) {
-            throw new IllegalArgumentException(msg("lockConfirmationInterval {} duration MUST not be larger than the lockTimeOut {} duration, because locks will then always timeout",
-                                                   lockConfirmationInterval,
-                                                   lockTimeOut));
-        }
-        this.releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation;
-        this.eventBus = requireNonNull(eventBus, "No eventBus option provided");
+        this.lockManagerInstanceId = settings.lockManagerInstanceId();
+        this.lockTimeOut = settings.lockTimeOut();
+        this.lockConfirmationInterval = settings.lockConfirmationInterval();
+        this.releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation = settings.releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation();
+        this.eventBus = eventBus;
 
         locksAcquiredByThisLockManager = new ConcurrentHashMap<>();
         asyncLockAcquirings = new ConcurrentHashMap<>();
@@ -130,6 +122,44 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                         e -> {
                             throw new IllegalStateException(msg("[{}] Failed to initialize lock storage", this.lockManagerInstanceId), e);
                         });
+    }
+
+    /**
+     * @param lockStorage                                                    the lock storage used for the lock manager
+     * @param unitOfWorkFactory                                              the {@link UnitOfWork} factory
+     * @param lockManagerInstanceId                                          The unique name for this lock manager instance. If left {@link Optional#empty()} then the machines hostname is used
+     * @param lockTimeOut                                                    the period between {@link FencedLock#getLockLastConfirmedTimestamp()} and the current time before the lock is marked as timed out
+     * @param lockConfirmationInterval                                       how often should the locks be confirmed. MUST is less than the <code>lockTimeOut</code>
+     * @param releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation Should {@link FencedLock}'s acquired by this {@link FencedLockManager} be released in case calls to {@link FencedLockStorage#confirmLockInDB(DBFencedLockManager, UnitOfWork, DBFencedLock, OffsetDateTime)} fails
+     *                                                                       with an exception where {@link IOExceptionUtil#isIOException(Throwable)} returns true -
+     *                                                                       If releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation is true, then {@link FencedLock}'s will be released locally,
+     *                                                                       otherwise we will retain the {@link FencedLock}'s as locked.
+     * @param eventBus                                                       optional {@link LocalEventBus} where {@link FencedLockEvents} will be published
+     * @deprecated Use {@link #DBFencedLockManager(FencedLockStorage, UnitOfWorkFactory, FencedLockManagerSettings, EventBus)}.
+     *         The four configuration arguments in the middle are now one {@link FencedLockManagerSettings} value —
+     *         build it with {@link FencedLockManagerSettings#builder()} — and the {@code Optional<EventBus>} is a
+     *         plain nullable argument. This constructor delegates and behaves identically; note only that the
+     *         {@code lockConfirmationInterval < lockTimeOut} check now fires when the settings are created rather
+     *         than here, which is strictly earlier.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    protected DBFencedLockManager(FencedLockStorage<UOW, LOCK> lockStorage,
+                                  UnitOfWorkFactory<? extends UOW> unitOfWorkFactory,
+                                  Optional<String> lockManagerInstanceId,
+                                  Duration lockTimeOut,
+                                  Duration lockConfirmationInterval,
+                                  boolean releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation,
+                                  Optional<EventBus> eventBus) {
+        this(lockStorage,
+             unitOfWorkFactory,
+             FencedLockManagerSettings.builder()
+                                      .setLockManagerInstanceId(requireNonNull(lockManagerInstanceId, "No lockManagerInstanceId option provided"))
+                                      .setLockTimeOut(lockTimeOut)
+                                      .setLockConfirmationInterval(lockConfirmationInterval)
+                                      .setReleaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation(releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation)
+                                      .build(),
+             requireNonNull(eventBus, "No eventBus option provided").orElse(null));
     }
 
     @Override
@@ -164,7 +194,9 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     }
 
     protected void notify(FencedLockEvents event) {
-        eventBus.ifPresent(localEventBus -> localEventBus.publish(event));
+        if (eventBus != null) {
+            eventBus.publish(event);
+        }
     }
 
     public void pause() {

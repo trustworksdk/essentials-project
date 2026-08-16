@@ -33,6 +33,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
@@ -50,27 +51,46 @@ public class MeasurementEventStoreSubscriptionObserver implements EventStoreSubs
     private final        String           moduleTag;
 
     /**
-     * Constructs a new observer with the provided MeasurementTaker.
+     * Constructs a new observer recording to the supplied {@link MeasurementTaker}.
+     * <p>
+     * There is no separate "enabled" flag: pass {@link MeasurementTaker#none()} to switch recording off. The observer
+     * branches on {@link MeasurementTaker#isRecording()}, so a disabled observer still skips assembling the
+     * measurement context.
      *
+     * @param measurementTaker where subscription timings are recorded. {@link MeasurementTaker#none()} disables recording
+     * @param moduleTag        Optional {@value #MODULE_TAG_NAME} Tag value. May be {@code null}, in which case the tag is omitted
+     */
+    public MeasurementEventStoreSubscriptionObserver(MeasurementTaker measurementTaker,
+                                                     String moduleTag) {
+        this.measurementTaker = requireNonNull(measurementTaker, "No measurementTaker provided - use MeasurementTaker.none() to disable recording");
+        this.recordExecutionTimeEnabled = measurementTaker.isRecording();
+        this.moduleTag = moduleTag;
+    }
+
+    /**
      * @param meterRegistryOptional      an Optional MeterRegistry to enable Micrometer metrics
      * @param recordExecutionTimeEnabled whether to record execution times or not
      * @param thresholds                 the logging thresholds configuration
      * @param moduleTag                  Optional {@value #MODULE_TAG_NAME} Tag value
+     * @deprecated Use {@link #MeasurementEventStoreSubscriptionObserver(MeasurementTaker, String)}. Assemble the
+     *         {@link MeasurementTaker} once — typically one per metrics subsystem in the Spring Boot starter — rather
+     *         than re-deriving one from an {@code Optional<MeterRegistry>}. Pass {@link MeasurementTaker#none()} where
+     *         {@code recordExecutionTimeEnabled} was {@code false}. This constructor delegates and behaves
+     *         identically.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public MeasurementEventStoreSubscriptionObserver(Optional<MeterRegistry> meterRegistryOptional,
                                                      boolean recordExecutionTimeEnabled,
                                                      LogThresholds thresholds,
                                                      String moduleTag) {
-        this.recordExecutionTimeEnabled = recordExecutionTimeEnabled;
-        this.measurementTaker = MeasurementTaker.builder()
-                                                .addRecorder(
-                                                        new LoggingMeasurementRecorder(
-                                                                log,
-                                                                thresholds))
-                                                .withOptionalMicrometerMeasurementRecorder(meterRegistryOptional)
-                                                .build();
-        this.moduleTag = moduleTag;
+        this(recordExecutionTimeEnabled
+             ? MeasurementTaker.builder()
+                               .setLoggingRecorder(log, thresholds)
+                               .setMeterRegistry(meterRegistryOptional)
+                               .build()
+             : MeasurementTaker.none(),
+             moduleTag);
     }
 
 

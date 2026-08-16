@@ -103,6 +103,16 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
         </dependency>
+        <!--
+            Only needed by the architecture/ rule definitions. Optional so that consuming modules opt in explicitly:
+            a module that wants the construction guard declares archunit-junit5 itself alongside its thin *Test.
+        -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit-junit5.version}</version>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 
     <build>

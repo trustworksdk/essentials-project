@@ -44,7 +44,12 @@ public final class FetchStream<ID> {
      */
     public final ID               aggregateId;
     private      LongRange        eventOrderRange;
-    private      Optional<Tenant> tenant;
+    /**
+     * Held nullable rather than as an {@code Optional} field: {@code Optional} is not {@link java.io.Serializable}
+     * and costs an allocation per access, and this operation object is created per event-store fetch. The public
+     * accessor still returns {@code Optional}, so the API is unchanged.
+     */
+    private      Tenant           tenant;
 
     /**
      * Create a new builder that produces a new {@link FetchStream} instance
@@ -68,11 +73,29 @@ public final class FetchStream<ID> {
      * @param eventOrderRange the range of {@link EventOrder}'s to include in the {@link AggregateEventStream}
      * @param tenant          only return events belonging to the specified tenant (if {@link Optional#isPresent()})
      */
-    public FetchStream(AggregateType aggregateType, ID aggregateId, LongRange eventOrderRange, Optional<Tenant> tenant) {
+    public FetchStream(AggregateType aggregateType, ID aggregateId, LongRange eventOrderRange, Tenant tenant) {
         this.aggregateType = requireNonNull(aggregateType, "No aggregateType provided");
         this.aggregateId = requireNonNull(aggregateId, "No aggregateId provided");
         this.eventOrderRange = requireNonNull(eventOrderRange, "No eventOrderRange provided");
-        this.tenant = requireNonNull(tenant, "No tenant provided");
+        this.tenant = tenant;
+    }
+
+    /**
+     * @param aggregateType   the aggregate type that the underlying {@link AggregateEventStream} is associated with
+     * @param aggregateId     the identifier of the aggregate we want to fetch the {@link AggregateEventStream} for
+     * @param eventOrderRange the range of {@link EventOrder}'s to include in the {@link AggregateEventStream}
+     * @param tenant          only return events belonging to the specified tenant (if {@link Optional#isPresent()})
+     * @deprecated Use {@link #FetchStream(AggregateType, Object, LongRange, Tenant)}, passing {@code null} for "all
+     *         tenants", or {@link #builder()}. {@link #getTenant()} still returns an {@code Optional}, so reading code
+     *         is unaffected. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    public FetchStream(AggregateType aggregateType, ID aggregateId, LongRange eventOrderRange, Optional<Tenant> tenant) {
+        this(aggregateType,
+             aggregateId,
+             eventOrderRange,
+             requireNonNull(tenant, "No tenant provided").orElse(null));
     }
 
     /**
@@ -100,7 +123,7 @@ public final class FetchStream<ID> {
      * @return only return events belonging to the specified tenant (if {@link Optional#isPresent()})
      */
     public Optional<Tenant> getTenant() {
-        return tenant;
+        return Optional.ofNullable(tenant);
     }
 
     /**
@@ -115,7 +138,7 @@ public final class FetchStream<ID> {
      * @param tenant only return events belonging to the specified tenant (if {@link Optional#isPresent()})
      */
     public FetchStream setTenant(Optional<Tenant> tenant) {
-        this.tenant = requireNonNull(tenant, "No tenant provided");
+        this.tenant = requireNonNull(tenant, "No tenant provided").orElse(null);
         return this;
     }
 
@@ -123,7 +146,7 @@ public final class FetchStream<ID> {
      * @param tenant only return events belonging to the specified tenant (if {@link Optional#isPresent()})
      */
     public FetchStream setTenant(Tenant tenant) {
-        this.tenant = Optional.ofNullable(tenant);
+        this.tenant = tenant;
         return this;
     }
 

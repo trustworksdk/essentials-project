@@ -199,7 +199,11 @@ public class WalReplicationTailer implements Lifecycle {
      * @param availability          CDC availability state machine
      * @param meterRegistry         optional metrics registry
      * @param errorHandler          optional error handler
+     * @deprecated Use {@link #WalReplicationTailer(CdcTailerDependencies, CdcTailerSettings, CdcDelivery)}. Fifteen
+     *         positional arguments are now three cohesive values. This constructor delegates and behaves identically.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public WalReplicationTailer(
             DataSource replicationDataSource,
             Jdbi jdbi,
@@ -223,13 +227,32 @@ public class WalReplicationTailer implements Lifecycle {
     }
 
     /**
-     * Extended constructor that also accepts an {@code eventStreamTableNamesSupplier} used by
-     * the {@code onStreamStarted} diagnostic logging to verify publication membership against
-     * the configured event-stream tables, and a {@code recreateSlotOnStart} flag that force-
-     * drops-and-recreates the replication slot at first connection. Exists as a separate
-     * overload to preserve backward-compat with existing test wiring; production auto-config
-     * should call this form.
+     * @param replicationDataSource         the replication-enabled DataSource
+     * @param jdbi                          the Jdbi instance
+     * @param unitOfWorkFactory             the unit-of-work factory
+     * @param slotName                      the replication slot name
+     * @param inboxRepository               the CDC inbox repository
+     * @param tailerProperties              poll/backoff timing settings
+     * @param pgSlotMode                    how the slot is created/managed
+     * @param cdcMode                       AUTO or REQUIRE
+     * @param deliveryMode                  INBOX or DIRECT
+     * @param logicalDecodingPlugin         the WAL decoding plugin
+     * @param directOnEvents                consumer for decoded events in DIRECT mode
+     * @param walMessageFilter              optional pre-decode payload filter
+     * @param availability                  the CDC availability tracker
+     * @param meterRegistry                 optional Micrometer registry
+     * @param errorHandler                  optional replication error handler
+     * @param eventStreamTableNamesSupplier optional supplier of event-stream table names
+     * @param recreateSlotOnStart           force-drop and recreate the slot on first connection
+     * @deprecated Use {@link #WalReplicationTailer(CdcTailerDependencies, CdcTailerSettings, CdcDelivery)}. Seventeen
+     *         positional arguments — five of them {@code Optional} — are now three cohesive values: the collaborators,
+     *         the configuration, and the delivery target. Note that {@code deliveryMode} + {@code inboxRepository} +
+     *         {@code directOnEvents} collapse into the single sealed {@link CdcDelivery}, which is what makes
+     *         "DIRECT with no consumer" impossible to express rather than merely rejected at runtime. This
+     *         constructor delegates and behaves identically.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public WalReplicationTailer(
             DataSource replicationDataSource,
             Jdbi jdbi,
@@ -248,44 +271,85 @@ public class WalReplicationTailer implements Lifecycle {
             Optional<WalReplicationTailerErrorHandler> errorHandler,
             Optional<Supplier<Set<String>>> eventStreamTableNamesSupplier,
             boolean recreateSlotOnStart) {
-        this.replicationDataSource = requireNonNull(replicationDataSource, "replicationDataSource cannot be null");
-        requireNonNull(jdbi, "jdbi cannot be null");
-        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "unitOfWorkFactory cannot be null");
-        this.slotName = requireNonNull(slotName, "slotName cannot be null");
-        PostgresqlUtil.checkIsValidTableOrColumnName(slotName);
-        this.inboxRepository = requireNonNull(inboxRepository, "inboxRepository cannot be null");
-        this.tailerProperties = requireNonNull(tailerProperties, "tailerProperties cannot be null");
-        this.pgSlotMode = requireNonNull(pgSlotMode, "pgSlotMode cannot be null");
-        this.cdcMode = requireNonNull(cdcMode, "cdcMode cannot be null");
-        this.deliveryMode = requireNonNull(deliveryMode, "deliveryMode cannot be null");
-        this.logicalDecodingPlugin = requireNonNull(logicalDecodingPlugin, "logicalDecodingPlugin cannot be null");
-        this.directOnEvents = directOnEvents.orElse(null);
-        this.eventStreamTableNamesSupplier = eventStreamTableNamesSupplier.orElse(Set::of);
-        this.recreateSlotOnStart = recreateSlotOnStart;
-        this.availability = requireNonNull(availability, "availability cannot be null");
-        if (this.deliveryMode == CdcDeliveryMode.DIRECT) {
-            requireNonNull(this.directOnEvents, "directOnEvents cannot be null in DIRECT delivery mode");
+        this(CdcTailerDependencies.builder()
+                                  .setReplicationDataSource(replicationDataSource)
+                                  .setJdbi(jdbi)
+                                  .setUnitOfWorkFactory(unitOfWorkFactory)
+                                  .setLogicalDecodingPlugin(logicalDecodingPlugin)
+                                  .setAvailability(availability)
+                                  .setMeterRegistry(requireNonNull(meterRegistry, "meterRegistry cannot be null"))
+                                  .setErrorHandler(requireNonNull(errorHandler, "errorHandler cannot be null"))
+                                  .setWalMessageFilter(requireNonNull(walMessageFilter, "walMessageFilter cannot be null"))
+                                  .setEventStreamTableNamesSupplier(requireNonNull(eventStreamTableNamesSupplier, "eventStreamTableNamesSupplier cannot be null"))
+                                  .build(),
+             new CdcTailerSettings(slotName, tailerProperties, pgSlotMode, cdcMode, recreateSlotOnStart),
+             toDelivery(deliveryMode, inboxRepository, directOnEvents));
+    }
+
+    /**
+     * Reconstructs the sealed {@link CdcDelivery} from the old enum-plus-collaborators triple, preserving the exact
+     * failure the deprecated constructors used to produce for "DIRECT with no consumer".
+     */
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+    private static CdcDelivery toDelivery(CdcDeliveryMode deliveryMode,
+                                          CdcInboxRepository inboxRepository,
+                                          Optional<Consumer<List<PersistedEvent>>> directOnEvents) {
+        requireNonNull(deliveryMode, "deliveryMode cannot be null");
+        requireNonNull(directOnEvents, "directOnEvents cannot be null");
+        if (deliveryMode == CdcDeliveryMode.DIRECT) {
+            return CdcDelivery.direct(requireNonNull(directOnEvents.orElse(null),
+                                                     "directOnEvents cannot be null in DIRECT delivery mode"));
         }
-        requireNonNull(tailerProperties.getPollInterval(), "pollInterval cannot be null");
-        requireNonNull(tailerProperties.getPollBackoffInterval(), "pollBackoffInterval cannot be null");
-        requireNonNull(tailerProperties.getMaxPollBackoffInterval(), "maxPollBackInterval cannot be null");
-        requireNonNull(tailerProperties.getReplicationStatusInterval(), "replicationStatusInterval cannot be null");
-        requireTrue(tailerProperties.getJitterRatio() >= 0.0 && tailerProperties.getJitterRatio() <= 0.5, "jitterRatio must be in [0.0..0.5]");
-        requireTrue(tailerProperties.getBackOffFactor() > 1, "backOffFactor must be > 1");
+        return CdcDelivery.inbox(inboxRepository);
+    }
+
+    /**
+     * The tailer's single construction path: what it runs with, what it runs under, and where what it reads goes.
+     *
+     * @param dependencies the collaborators the tailer runs with — see {@link CdcTailerDependencies#builder()}
+     * @param settings     the slot and timing configuration the tailer runs under
+     * @param delivery     where decoded WAL payloads go. Being sealed, choosing {@link CdcDelivery.Direct} and
+     *                     supplying its consumer is one act, so the old
+     *                     {@code "directOnEvents cannot be null in DIRECT delivery mode"} check is unrepresentable
+     */
+    public WalReplicationTailer(CdcTailerDependencies dependencies,
+                                CdcTailerSettings settings,
+                                CdcDelivery delivery) {
+        requireNonNull(dependencies, "dependencies cannot be null - see CdcTailerDependencies.builder()");
+        requireNonNull(settings, "settings cannot be null");
+        requireNonNull(delivery, "delivery cannot be null - see CdcDelivery.inbox(..) / CdcDelivery.direct(..)");
+
+        this.replicationDataSource = dependencies.replicationDataSource();
+        this.unitOfWorkFactory = dependencies.unitOfWorkFactory();
+        this.logicalDecodingPlugin = dependencies.logicalDecodingPlugin();
+        this.availability = dependencies.availability();
+        this.meterRegistry = dependencies.meterRegistry();
+        this.errorHandler = dependencies.errorHandler();
+        this.eventStreamTableNamesSupplier = dependencies.eventStreamTableNamesSupplier();
+
+        this.slotName = settings.slotName();
+        this.tailerProperties = settings.tailerProperties();
+        this.pgSlotMode = settings.pgSlotMode();
+        this.cdcMode = settings.cdcMode();
+        this.recreateSlotOnStart = settings.recreateSlotOnStart();
+
+        this.deliveryMode = delivery.mode();
+        this.inboxRepository = delivery instanceof CdcDelivery.Inbox inbox ? inbox.inboxRepository() : null;
+        this.directOnEvents = delivery instanceof CdcDelivery.Direct direct ? direct.onEvents() : null;
+
+        var tailerProperties = this.tailerProperties;
         var configuredIdleLsnPushInterval = tailerProperties.getIdleLsnPushInterval();
         this.idleLsnPushIntervalNanos = configuredIdleLsnPushInterval != null
                                         && !configuredIdleLsnPushInterval.isZero()
                                         && !configuredIdleLsnPushInterval.isNegative()
                                         ? configuredIdleLsnPushInterval.toNanos()
                                         : DEFAULT_IDLE_LSN_PUSH_INTERVAL_NANOS;
-        this.meterRegistry = meterRegistry.orElse(null);
-        this.errorHandler = errorHandler.orElseGet(DefaultWalReplicationTailerErrorHandler::new);
-        this.walMessageFilter = walMessageFilter
-                .or(() -> logicalDecodingPlugin.defaultRawPayloadFilter(this.eventStreamTableNamesSupplier))
-                .orElseGet(RegexWalMessageFilter::new);
+        this.walMessageFilter = Optional.ofNullable(dependencies.walMessageFilter())
+                                        .or(() -> this.logicalDecodingPlugin.defaultRawPayloadFilter(this.eventStreamTableNamesSupplier))
+                                        .orElseGet(RegexWalMessageFilter::new);
         initMetrics();
-        if (deliveryMode == CdcDeliveryMode.INBOX) {
-            unitOfWorkFactory.usingUnitOfWork(inboxRepository::createTableAndIndexes);
+        if (this.deliveryMode == CdcDeliveryMode.INBOX) {
+            this.unitOfWorkFactory.usingUnitOfWork(this.inboxRepository::createTableAndIndexes);
         }
     }
 

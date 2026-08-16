@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.shared.measurement;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.*;
 
 import java.time.Duration;
 import java.util.*;
@@ -47,6 +48,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * </pre>
  */
 public class MeasurementTaker {
+    /**
+     * @see #none()
+     */
+    private static final MeasurementTaker NONE = new MeasurementTaker(List.of());
+
     private final List<MeasurementRecorder> recorders;
 
     private MeasurementTaker(List<MeasurementRecorder> recorders) {
@@ -61,6 +67,45 @@ public class MeasurementTaker {
      */
     public static Builder builder() {
         return new Builder();
+    }
+
+    /**
+     * The no-op {@link MeasurementTaker}: a shared, immutable instance with zero {@link MeasurementRecorder}s, which
+     * runs the measured block and records nothing.
+     * <p>
+     * This is the <b>neutral default</b> that makes {@code Optional<MeterRegistry>} unnecessary in constructors. A
+     * component that wants to be measurable takes a plain {@code MeasurementTaker}; a caller with nothing to measure
+     * to passes {@code MeasurementTaker.none()} rather than {@code Optional.empty()}, and the component needs no
+     * branch for the absent case. The instance is cached because "no metrics configured" is the common case and it
+     * carries no state.
+     *
+     * @return the shared no-op MeasurementTaker — never {@code null}
+     */
+    public static MeasurementTaker none() {
+        return NONE;
+    }
+
+    /**
+     * Whether this {@link MeasurementTaker} has any {@link MeasurementRecorder} at all — i.e. whether measuring
+     * anything can have an effect.
+     * <p>
+     * {@link #record(MeasurementContext, Supplier)} and {@link #recordTime(MeasurementContext, Duration)} are already
+     * safe on a taker with no recorders, so this is <em>not</em> needed for correctness. It exists for hot paths that
+     * would otherwise pay to assemble a {@link MeasurementContext} — building the tag map, resolving handler names —
+     * only to hand it to nobody. Such a caller can branch on this instead of on a separate
+     * {@code recordExecutionTimeEnabled} flag:
+     * <pre>{@code
+     * if (measurementTaker.isRecording()) {
+     *     return measurementTaker.context("essentials.queue.handle").tag(…).record(chain::proceed);
+     * }
+     * return chain.proceed();
+     * }</pre>
+     *
+     * @return {@code true} if at least one recorder is configured; {@code false} for {@link #none()} and for any
+     *         taker built with no recorders
+     */
+    public boolean isRecording() {
+        return !recorders.isEmpty();
     }
 
     /**
@@ -126,19 +171,81 @@ public class MeasurementTaker {
         }
 
         /**
+         * Configures a {@link MicrometerMeasurementRecorder} for the given {@link MeterRegistry}.
+         * <p>
+         * A {@code null} registry means "no Micrometer metrics" and is accepted deliberately: this is the plain-value
+         * setter that lets a caller hold a nullable field instead of an {@code Optional} one. Use
+         * {@link #setMeterRegistry(Optional)} at a Spring {@code @Bean} boundary, where an {@code Optional} injection
+         * point is idiomatic.
+         *
+         * @param meterRegistry the MeterRegistry to record to, or {@code null} for no Micrometer recording
+         * @return this builder instance for fluent chaining
+         */
+        public Builder setMeterRegistry(MeterRegistry meterRegistry) {
+            if (meterRegistry != null) {
+                addRecorder(new MicrometerMeasurementRecorder(meterRegistry));
+            }
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry(MeterRegistry)}, for Spring {@code @Bean} methods that
+         * receive an {@code Optional<MeterRegistry>} injection point and unwrap it on the spot.
+         *
+         * @param meterRegistry an Optional MeterRegistry instance — empty means no Micrometer recording
+         * @return this builder instance for fluent chaining
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setMeterRegistry(Optional<MeterRegistry> meterRegistry) {
+            requireNonNull(meterRegistry, "No meterRegistry provided");
+            return setMeterRegistry(meterRegistry.orElse(null));
+        }
+
+        /**
+         * Configures a {@link LoggingMeasurementRecorder} logging under the given class's logger name.
+         * <p>
+         * This is the half of the assembly that was being hand-written at every call site, always as
+         * {@code addRecorder(new LoggingMeasurementRecorder(LoggerFactory.getLogger(getClass()), thresholds))}.
+         * Pass {@code getClass()} to keep logging under the runtime type, exactly as those sites did.
+         *
+         * @param loggerOwner the class whose name the logger is created under
+         * @param thresholds  the thresholds deciding which log level each measured duration is reported at
+         * @return this builder instance for fluent chaining
+         */
+        public Builder setLoggingRecorder(Class<?> loggerOwner, LogThresholds thresholds) {
+            requireNonNull(loggerOwner, "No loggerOwner provided");
+            return setLoggingRecorder(LoggerFactory.getLogger(loggerOwner), thresholds);
+        }
+
+        /**
+         * Configures a {@link LoggingMeasurementRecorder} against an already-resolved {@link Logger}.
+         *
+         * @param logger     the logger to report measurements to
+         * @param thresholds the thresholds deciding which log level each measured duration is reported at
+         * @return this builder instance for fluent chaining
+         */
+        public Builder setLoggingRecorder(Logger logger, LogThresholds thresholds) {
+            requireNonNull(logger, "No logger provided");
+            requireNonNull(thresholds, "No thresholds provided");
+            return addRecorder(new LoggingMeasurementRecorder(logger, thresholds));
+        }
+
+        /**
          * Optionally configures a MeterRegistry.
          * If the provided {@code Optional<MeterRegistry>} is non-empty,
          * a {@link MicrometerMeasurementRecorder} is added.
          *
          * @param meterRegistryOptional an Optional MeterRegistry instance
          * @return this builder instance for fluent chaining
+         * @deprecated Use {@link #setMeterRegistry(MeterRegistry)}, or {@link #setMeterRegistry(Optional)} at a Spring
+         *         {@code @Bean} boundary. Renamed to match the project-wide {@code setXxx} builder convention; the
+         *         behaviour is unchanged and this method delegates.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
         public Builder withOptionalMicrometerMeasurementRecorder(Optional<MeterRegistry> meterRegistryOptional) {
             requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
-            meterRegistryOptional.ifPresent(registry ->
-                                                    addRecorder(new MicrometerMeasurementRecorder(registry)));
-            return this;
+            return setMeterRegistry(meterRegistryOptional);
         }
 
         /**

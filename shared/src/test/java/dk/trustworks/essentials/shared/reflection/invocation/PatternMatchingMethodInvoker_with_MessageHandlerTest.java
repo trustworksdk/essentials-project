@@ -20,7 +20,6 @@ import dk.trustworks.essentials.shared.reflection.invocation.test_subjects.*;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
-import java.util.Optional;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,8 +33,8 @@ class PatternMatchingMethodInvoker_with_MessageHandlerTest {
         var patternMatchingInvoker = new PatternMatchingMethodInvoker<>(testSubject,
                                                                         new MessageHandlerPatternMatcher(),
                                                                         InvocationStrategy.InvokeMostSpecificTypeMatched,
-                                                                        Optional.of(noMatchingMethodsHandler),
-                                                                        Optional.empty());
+                                                                        noMatchingMethodsHandler,
+                                                                        InvocationTracker.noOp());
 
         // When
         var orderCreatedMessage   = new Message(new OrderCreated("1"));
@@ -65,8 +64,8 @@ class PatternMatchingMethodInvoker_with_MessageHandlerTest {
         var patternMatchingInvoker = new PatternMatchingMethodInvoker<>(testSubject,
                                                                         new MessageHandlerPatternMatcher(),
                                                                         InvocationStrategy.InvokeMostSpecificTypeMatched,
-                                                                        Optional.empty(),
-                                                                        Optional.empty());
+                                                                        NoMatchingMethodsHandler.ignore(),
+                                                                        InvocationTracker.noOp());
 
         // And
         var orderCreatedMessage   = new Message(new OrderCreated("1"));
@@ -108,8 +107,8 @@ class PatternMatchingMethodInvoker_with_MessageHandlerTest {
         var patternMatchingInvoker = new PatternMatchingMethodInvoker<>(testSubject,
                                                                         new MessageHandlerPatternMatcher(),
                                                                         InvocationStrategy.InvokeAllMatches,
-                                                                        Optional.of(noMatchingMethodsHandler),
-                                                                        Optional.empty());
+                                                                        noMatchingMethodsHandler,
+                                                                        InvocationTracker.noOp());
 
         // And
         var orderCreatedMessage  = new Message(new OrderCreated("1"));
@@ -144,8 +143,8 @@ class PatternMatchingMethodInvoker_with_MessageHandlerTest {
         var patternMatchingInvoker = new PatternMatchingMethodInvoker<>(testSubject,
                                                                         new MessageHandlerPatternMatcher(),
                                                                         InvocationStrategy.InvokeAllMatches,
-                                                                        Optional.empty(),
-                                                                        Optional.empty());
+                                                                        NoMatchingMethodsHandler.ignore(),
+                                                                        InvocationTracker.noOp());
 
         // And
         var orderCreatedMessage  = new Message(new OrderCreated("1"));

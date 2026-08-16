@@ -24,6 +24,8 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.atomic.*;
 
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+
 /**
  * The CdcAvailability class is responsible for tracking and reporting the state
  * of Change Data Capture (CDC) availability. It provides methods to update and
@@ -91,12 +93,33 @@ public final class CdcAvailability {
     private final Sinks.Many<State> stateSink = Sinks.many().replay().latest();
     private final Flux<State>       stateChangesFlux;
 
+    /**
+     * Creates an availability tracker that publishes no metrics.
+     */
     public CdcAvailability() {
-        this(Optional.empty());
+        this((MeterRegistry) null);
     }
 
+    /**
+     * @param meterRegistry an Optional registry to publish the CDC availability gauge and counters on
+     * @deprecated Use {@link #CdcAvailability(MeterRegistry)}, passing {@code null} for "no metrics", or the no-arg
+     *         {@link #CdcAvailability()}. The {@code Optional} was unwrapped to a nullable field on the first line of
+     *         the body, so it never bought anything. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public CdcAvailability(Optional<MeterRegistry> meterRegistry) {
-        this.meterRegistry = meterRegistry.orElse(null);
+        this(requireNonNull(meterRegistry, "meterRegistry cannot be null").orElse(null));
+    }
+
+    /**
+     * @param meterRegistry the registry to publish the CDC availability gauge and counters on, or {@code null} for no
+     *                      metrics. Nullable rather than {@code Optional}: this class registers Micrometer
+     *                      {@code Gauge}s and {@code Counter}s directly, which a {@code MeasurementTaker} — a timing
+     *                      facade — cannot express, so the registry itself stays the currency here
+     */
+    public CdcAvailability(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
         if (this.meterRegistry != null) {
             Gauge.builder("essentials.cdc.active", state, s -> s.get() == State.ACTIVE ? 1.0 : 0.0)
                  .register(this.meterRegistry);

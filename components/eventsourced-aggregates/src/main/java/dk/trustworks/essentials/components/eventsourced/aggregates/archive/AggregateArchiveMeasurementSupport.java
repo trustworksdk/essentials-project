@@ -41,7 +41,7 @@ class AggregateArchiveMeasurementSupport {
     AggregateArchiveMeasurementSupport(Optional<MeterRegistry> meterRegistryOptional) {
         this.meterRegistryOptional = requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
         this.measurementTaker = MeasurementTaker.builder()
-                                                .withOptionalMicrometerMeasurementRecorder(meterRegistryOptional)
+                                                .setMeterRegistry(meterRegistryOptional)
                                                 .build();
     }
 

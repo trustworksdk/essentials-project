@@ -19,7 +19,6 @@ package dk.trustworks.essentials.components.foundation.postgresql.micrometer;
 import dk.trustworks.essentials.shared.measurement.*;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.jdbi.v3.core.statement.*;
-import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -44,20 +43,48 @@ public class RecordSqlExecutionTimeLogger implements SqlLogger {
     public static final int              TRUNCATE_SQL_AFTER_LENGTH = 50;
     public static final String           DOT_DOT_DOT               = "...";
 
+    /**
+     * Constructs a new SQL execution-time logger recording to the supplied {@link MeasurementTaker}.
+     * <p>
+     * There is no separate "enabled" flag: pass {@link MeasurementTaker#none()} to switch recording off. The logger
+     * branches on {@link MeasurementTaker#isRecording()}, so a disabled logger still skips rendering and truncating
+     * the SQL — which matters, since this runs after every statement JDBI executes.
+     *
+     * @param measurementTaker where query durations are recorded. {@link MeasurementTaker#none()} disables recording
+     * @param moduleTag        Optional {@value #MODULE_TAG_NAME} Tag value. May be {@code null}, in which case the tag is omitted
+     */
+    public RecordSqlExecutionTimeLogger(MeasurementTaker measurementTaker,
+                                        String moduleTag) {
+        this.measurementTaker = requireNonNull(measurementTaker, "No measurementTaker provided - use MeasurementTaker.none() to disable recording");
+        this.recordExecutionTimeEnabled = measurementTaker.isRecording();
+        this.moduleTag = moduleTag;
+    }
+
+    /**
+     * @param meterRegistryOptional      an Optional MeterRegistry to enable Micrometer metrics
+     * @param recordExecutionTimeEnabled whether to record execution times or not
+     * @param thresholds                 the logging thresholds configuration
+     * @param moduleTag                  Optional {@value #MODULE_TAG_NAME} Tag value
+     * @deprecated Use {@link #RecordSqlExecutionTimeLogger(MeasurementTaker, String)}. Assemble the
+     *         {@link MeasurementTaker} once — typically one per metrics subsystem in the Spring Boot starter — rather
+     *         than re-deriving one from an {@code Optional<MeterRegistry>}. Pass {@link MeasurementTaker#none()} where
+     *         {@code recordExecutionTimeEnabled} was {@code false}. This constructor delegates and behaves
+     *         identically, except that the logging recorder is now named after this class rather than after the
+     *         runtime subclass.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public RecordSqlExecutionTimeLogger(Optional<MeterRegistry> meterRegistryOptional,
                                         boolean recordExecutionTimeEnabled,
                                         LogThresholds thresholds,
                                         String moduleTag) {
-        requireNonNull(meterRegistryOptional, "meterRegistryOptional cannot be null");
-        this.recordExecutionTimeEnabled = recordExecutionTimeEnabled;
-        this.moduleTag = moduleTag;
-        this.measurementTaker = MeasurementTaker.builder()
-                                                .addRecorder(
-                                                        new LoggingMeasurementRecorder(
-                                                                LoggerFactory.getLogger(this.getClass()),
-                                                                thresholds))
-                                                .withOptionalMicrometerMeasurementRecorder(meterRegistryOptional)
-                                                .build();
+        this(recordExecutionTimeEnabled
+             ? MeasurementTaker.builder()
+                               .setLoggingRecorder(RecordSqlExecutionTimeLogger.class, thresholds)
+                               .setMeterRegistry(requireNonNull(meterRegistryOptional, "meterRegistryOptional cannot be null"))
+                               .build()
+             : MeasurementTaker.none(),
+             moduleTag);
     }
 
     @Override

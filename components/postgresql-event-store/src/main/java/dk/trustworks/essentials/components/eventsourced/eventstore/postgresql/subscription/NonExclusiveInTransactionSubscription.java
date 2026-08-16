@@ -43,6 +43,23 @@ import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 public class NonExclusiveInTransactionSubscription extends AbstractEventStoreSubscription {
     private final TransactionalPersistedEventHandler eventHandler;
 
+    /**
+     * @param context      the arguments shared by every subscription — see {@link EventStoreSubscriptionContext#builder()}
+     * @param eventHandler the handler invoked, inside the event store's unit of work, for each persisted event
+     */
+    public NonExclusiveInTransactionSubscription(EventStoreSubscriptionContext context,
+                                                 TransactionalPersistedEventHandler eventHandler) {
+        super(context);
+        this.eventHandler = requireNonNull(eventHandler, "No eventHandler provided");
+    }
+
+    /**
+     * @deprecated Use {@link #NonExclusiveInTransactionSubscription(EventStoreSubscriptionContext, TransactionalPersistedEventHandler)}.
+     *         The six shared arguments are now one {@link EventStoreSubscriptionContext}. This constructor delegates and
+     *         behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
+    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     public NonExclusiveInTransactionSubscription(EventStore eventStore,
                                                  AggregateType aggregateType,
                                                  SubscriberId subscriberId,

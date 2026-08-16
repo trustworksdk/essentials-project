@@ -27,6 +27,22 @@ import java.util.function.Consumer;
 @SuppressWarnings("unchecked")
 public final class PostgresqlDurableQueueConsumer extends DefaultDurableQueueConsumer<PostgresqlDurableQueues, HandleAwareUnitOfWork, UnitOfWorkFactory<HandleAwareUnitOfWork>> {
 
+    /**
+     * @param consumeFromQueue what to consume — the queue, consumer name, parallelism and redelivery policy
+     * @param dependencies     what to consume it with — see {@link DurableQueueConsumerDependencies#builder()}
+     */
+    public PostgresqlDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
+                                          DurableQueueConsumerDependencies<PostgresqlDurableQueues, HandleAwareUnitOfWork, UnitOfWorkFactory<HandleAwareUnitOfWork>> dependencies) {
+        super(consumeFromQueue, dependencies);
+    }
+
+    /**
+     * @deprecated Use {@link #PostgresqlDurableQueueConsumer(ConsumeFromQueue, DurableQueueConsumerDependencies)}. The five collaborator
+     *         arguments are identical for every {@code DurableQueues} implementation, so they belong in one
+     *         {@link DurableQueueConsumerDependencies} bundle rather than being repeated positionally here and in
+     *         every sibling implementation. This constructor delegates and behaves identically.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     @SuppressWarnings("rawtypes")
     public PostgresqlDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
                                           HandleAwareUnitOfWorkFactory unitOfWorkFactory,

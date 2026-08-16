@@ -51,6 +51,10 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
         this(unitOfWorkFactory, Optional.empty());
     }
 
+    /**
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PostgresqlAggregateArchiveRegistry(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                               Optional<String> tableName) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
@@ -265,4 +269,64 @@ public class PostgresqlAggregateArchiveRegistry implements AggregateArchiveRegis
                                          rs.getObject("archived_ts", OffsetDateTime.class),
                                          rs.getString("archive_error"));
     }
+
+    /**
+     * Creates a builder for a {@link PostgresqlAggregateArchiveRegistry}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link PostgresqlAggregateArchiveRegistry}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
+        private String tableName;
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder setUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param tableName optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setTableName(String tableName) {
+            this.tableName = tableName;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setTableName}.
+         *
+         * @param tableName the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setTableName(Optional<String> tableName) {
+            requireNonNull(tableName, "No tableName provided");
+            return setTableName(tableName.orElse(null));
+        }
+
+        /**
+         * @return the new {@link PostgresqlAggregateArchiveRegistry}
+         */
+        @SuppressWarnings("removal")
+        public PostgresqlAggregateArchiveRegistry build() {
+            return new PostgresqlAggregateArchiveRegistry(unitOfWorkFactory,
+                                                          Optional.ofNullable(tableName));
+        }
+    }
+
 }

@@ -149,6 +149,21 @@ public class AggregateEventStreamConfiguration {
      * @param eventMetadataJsonColumnType The SQL column type for the {@link JSONEventSerializer} serialized {@link EventMetaData}
      * @param tenantSerializer            The serializer for the {@link Tenant} value (or {@link TenantSerializer.TenantIdSerializer.NoSupportForMultiTenancySerializer} if it's a single tenant application)
      */
+    /**
+     * Creates a builder for an {@link AggregateEventStreamConfiguration}.
+     *
+     * @return a new builder
+     */
+    public static AggregateEventStreamConfigurationBuilder builder() {
+        return new AggregateEventStreamConfigurationBuilder();
+    }
+
+    /**
+     * @deprecated Use {@link #builder()}. Ten positional arguments, five of them consecutive column-type enums of only
+     *         two distinct types, cannot be checked by the compiler and cannot be read at the call site. This
+     *         constructor is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public AggregateEventStreamConfiguration(AggregateType aggregateType,
                                              int queryFetchSize,
                                              JSONEventSerializer jsonSerializer,

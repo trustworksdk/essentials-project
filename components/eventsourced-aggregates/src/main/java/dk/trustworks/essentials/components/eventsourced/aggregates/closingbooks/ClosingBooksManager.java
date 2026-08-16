@@ -75,7 +75,9 @@ public class ClosingBooksManager implements Lifecycle {
      * @param lockName            The {@code LockName} used to identify the specific lock managed by {@code FencedLockManager}.
      * @param meterRegistryOptional An {@code Optional} containing the {@code MeterRegistry} for metrics and monitoring
      *                             support. This can be empty if metrics are not enabled.
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public ClosingBooksManager(List<ClosingBooksScheduledScanProcessor> processors,
                                ClosingBooksManagerSettings settings,
                                FencedLockManager fencedLockManager,
@@ -167,4 +169,97 @@ public class ClosingBooksManager implements Lifecycle {
     public boolean isStarted() {
         return started.get();
     }
+
+    /**
+     * Creates a builder for a {@link ClosingBooksManager}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link ClosingBooksManager}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private List<ClosingBooksScheduledScanProcessor> processors;
+        private ClosingBooksManagerSettings settings;
+        private FencedLockManager fencedLockManager;
+        private LockName lockName;
+        private MeterRegistry meterRegistryOptional;
+
+        /**
+         * @param processors required
+         * @return this builder
+         */
+        public Builder setProcessors(List<ClosingBooksScheduledScanProcessor> processors) {
+            this.processors = processors;
+            return this;
+        }
+
+        /**
+         * @param settings required
+         * @return this builder
+         */
+        public Builder setSettings(ClosingBooksManagerSettings settings) {
+            this.settings = settings;
+            return this;
+        }
+
+        /**
+         * @param fencedLockManager required
+         * @return this builder
+         */
+        public Builder setFencedLockManager(FencedLockManager fencedLockManager) {
+            this.fencedLockManager = fencedLockManager;
+            return this;
+        }
+
+        /**
+         * @param lockName required
+         * @return this builder
+         */
+        public Builder setLockName(LockName lockName) {
+            this.lockName = lockName;
+            return this;
+        }
+
+        /**
+         * @param meterRegistryOptional optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setMeterRegistry(MeterRegistry meterRegistryOptional) {
+            this.meterRegistryOptional = meterRegistryOptional;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry}.
+         *
+         * @param meterRegistryOptional the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setMeterRegistry(Optional<MeterRegistry> meterRegistryOptional) {
+            requireNonNull(meterRegistryOptional, "No meterRegistryOptional provided");
+            return setMeterRegistry(meterRegistryOptional.orElse(null));
+        }
+
+        /**
+         * @return the new {@link ClosingBooksManager}
+         */
+        @SuppressWarnings("removal")
+        public ClosingBooksManager build() {
+            return new ClosingBooksManager(processors,
+                                           settings,
+                                           fencedLockManager,
+                                           lockName,
+                                           Optional.ofNullable(meterRegistryOptional));
+        }
+    }
+
 }

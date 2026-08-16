@@ -56,7 +56,10 @@ public final class QueueMessage {
      * @param causeOfEnqueuing the optional reason for the message being queued
      * @param deliveryDelay    the Optional delay for the first delivery of the message to the {@link DurableQueueConsumer}
      * @see OrderedMessage
+     * @deprecated Use {@link #builder()}, whose {@code setCauseOfEnqueuing}/{@code setDeliveryDelay} setters accept both
+     *         plain values and {@code Optional}s. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public QueueMessage(QueueName queueName, Message message, Optional<Exception> causeOfEnqueuing, Optional<Duration> deliveryDelay) {
         this.queueName = requireNonNull(queueName, "No queueName provided");
         this.message = requireNonNull(message, "No message provided");
@@ -75,7 +78,10 @@ public final class QueueMessage {
      * @param causeOfEnqueuing the optional reason for the message being queued
      * @param deliveryDelay    the Optional delay for the first delivery of the message to the {@link DurableQueueConsumer}
      * @see OrderedMessage
+     * @deprecated Use {@link #builder()}, whose {@code setCauseOfEnqueuing}/{@code setDeliveryDelay} setters accept both
+     *         plain values and {@code Optional}s. Behaviour is unchanged.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public QueueMessage(QueueName queueName, Message message, Exception causeOfEnqueuing, Duration deliveryDelay) {
         this(queueName,
              message,

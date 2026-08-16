@@ -215,6 +215,21 @@ public final class SeparateTablePerAggregateTypeEventStreamConfigurationFactory 
      * @param eventMetadataJsonColumnType The SQL column type for the {@link JSONEventSerializer} serialized {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.persistence.EventMetaData}
      * @param tenantSerializer            The serializer for the {@link Tenant} value (or {@link dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.serializer.TenantSerializer.NoSupportForMultiTenancySerializer} if it's a single tenant application)
      */
+    /**
+     * Creates a builder for a {@link SeparateTablePerAggregateTypeEventStreamConfigurationFactory}.
+     *
+     * @return a new builder
+     */
+    public static SeparateTablePerAggregateTypeEventStreamConfigurationFactoryBuilder builder() {
+        return new SeparateTablePerAggregateTypeEventStreamConfigurationFactoryBuilder();
+    }
+
+    /**
+     * @deprecated Use {@link #builder()}. Ten positional arguments — five of them consecutive column-type enums of
+     *         only two distinct types — cannot be checked by the compiler and cannot be read at the call site. This
+     *         constructor is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public SeparateTablePerAggregateTypeEventStreamConfigurationFactory(Function<AggregateType, String> resolveEventStreamTableName,
                                                                         EventStreamTableColumnNames eventStreamTableColumnNames,
                                                                         int queryFetchSize,

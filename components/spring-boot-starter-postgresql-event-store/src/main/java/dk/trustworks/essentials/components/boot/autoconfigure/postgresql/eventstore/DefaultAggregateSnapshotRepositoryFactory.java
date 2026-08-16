@@ -57,7 +57,9 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
      * @param jobRepository the optional repository for managing aggregate snapshot jobs
      * @param meterRegistry the optional meter registry for monitoring and metrics
      * @throws IllegalArgumentException if any of the provided parameters is null
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultAggregateSnapshotRepositoryFactory(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore,
                                                      EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                                                      JSONEventSerializer jsonSerializer,
@@ -117,4 +119,153 @@ public class DefaultAggregateSnapshotRepositoryFactory implements AggregateSnaps
         };
         return Optional.of(repository);
     }
+
+    /**
+     * Creates a builder for a {@link DefaultAggregateSnapshotRepositoryFactory}.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Builder for {@link DefaultAggregateSnapshotRepositoryFactory}, obtained from {@link #builder()}.
+     * <p>
+     * The previously-{@code Optional} constructor parameters are plain nullable fields here, each with a
+     * plain-value setter and an {@code Optional} overload.
+     */
+    public static final class Builder {
+        private ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore;
+        private EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory;
+        private JSONEventSerializer jsonSerializer;
+        private AggregateSnapshotStore snapshotStore;
+        private AggregateSnapshotConfigurationResolver resolver;
+        private DurableAsyncSnapshotSettings durableSettings;
+        private EssentialsEventStoreProperties properties;
+        private AggregateSnapshotJobRepository jobRepository;
+        private MeterRegistry meterRegistry;
+
+        /**
+         * @param eventStore required
+         * @return this builder
+         */
+        public Builder setEventStore(ConfigurableEventStore<SeparateTablePerAggregateEventStreamConfiguration> eventStore) {
+            this.eventStore = eventStore;
+            return this;
+        }
+
+        /**
+         * @param unitOfWorkFactory required
+         * @return this builder
+         */
+        public Builder setUnitOfWorkFactory(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory) {
+            this.unitOfWorkFactory = unitOfWorkFactory;
+            return this;
+        }
+
+        /**
+         * @param jsonSerializer required
+         * @return this builder
+         */
+        public Builder setJsonSerializer(JSONEventSerializer jsonSerializer) {
+            this.jsonSerializer = jsonSerializer;
+            return this;
+        }
+
+        /**
+         * @param snapshotStore required
+         * @return this builder
+         */
+        public Builder setSnapshotStore(AggregateSnapshotStore snapshotStore) {
+            this.snapshotStore = snapshotStore;
+            return this;
+        }
+
+        /**
+         * @param resolver required
+         * @return this builder
+         */
+        public Builder setResolver(AggregateSnapshotConfigurationResolver resolver) {
+            this.resolver = resolver;
+            return this;
+        }
+
+        /**
+         * @param durableSettings required
+         * @return this builder
+         */
+        public Builder setDurableSettings(DurableAsyncSnapshotSettings durableSettings) {
+            this.durableSettings = durableSettings;
+            return this;
+        }
+
+        /**
+         * @param properties required
+         * @return this builder
+         */
+        public Builder setProperties(EssentialsEventStoreProperties properties) {
+            this.properties = properties;
+            return this;
+        }
+
+        /**
+         * @param jobRepository optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setJobRepository(AggregateSnapshotJobRepository jobRepository) {
+            this.jobRepository = jobRepository;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setJobRepository}.
+         *
+         * @param jobRepository the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setJobRepository(Optional<AggregateSnapshotJobRepository> jobRepository) {
+            requireNonNull(jobRepository, "No jobRepository provided");
+            return setJobRepository(jobRepository.orElse(null));
+        }
+
+        /**
+         * @param meterRegistry optional — {@code null} selects the default
+         * @return this builder
+         */
+        public Builder setMeterRegistry(MeterRegistry meterRegistry) {
+            this.meterRegistry = meterRegistry;
+            return this;
+        }
+
+        /**
+         * {@code Optional} overload of {@link #setMeterRegistry}.
+         *
+         * @param meterRegistry the value, or empty for the default
+         * @return this builder
+         */
+        @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+        public Builder setMeterRegistry(Optional<MeterRegistry> meterRegistry) {
+            requireNonNull(meterRegistry, "No meterRegistry provided");
+            return setMeterRegistry(meterRegistry.orElse(null));
+        }
+
+        /**
+         * @return the new {@link DefaultAggregateSnapshotRepositoryFactory}
+         */
+        @SuppressWarnings("removal")
+        public DefaultAggregateSnapshotRepositoryFactory build() {
+            return new DefaultAggregateSnapshotRepositoryFactory(eventStore,
+                                                                 unitOfWorkFactory,
+                                                                 jsonSerializer,
+                                                                 snapshotStore,
+                                                                 resolver,
+                                                                 durableSettings,
+                                                                 properties,
+                                                                 Optional.ofNullable(jobRepository),
+                                                                 Optional.ofNullable(meterRegistry));
+        }
+    }
+
 }
