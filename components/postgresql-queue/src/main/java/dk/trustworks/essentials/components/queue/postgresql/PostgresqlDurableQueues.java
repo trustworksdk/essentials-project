@@ -75,49 +75,57 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code sharedQueueTableName} value.<br>
  */
 public final class PostgresqlDurableQueues implements BatchMessageFetchingCapableDurableQueues {
-    private static final Logger log                               = LoggerFactory.getLogger(PostgresqlDurableQueues.class);
-    public static final  String DEFAULT_DURABLE_QUEUES_TABLE_NAME = "durable_queues";
+    private static final Logger  log                                       = LoggerFactory.getLogger(PostgresqlDurableQueues.class);
+    public static final  String  DEFAULT_DURABLE_QUEUES_TABLE_NAME         = "durable_queues";
     /**
      * Batched fetching is opt-in. See {@link PostgresqlDurableQueuesBuilder#setUseBatchedFetch(boolean)}.
      */
-    static final boolean DEFAULT_USE_BATCHED_FETCH = false;
+    static final         boolean DEFAULT_USE_BATCHED_FETCH                 = false;
     /**
      * Queue-count threshold above which batched fetching is used, once it has been opted in to.
      * The value comes from the queue-fetch-strategy benchmark - see BENCHMARK-queue-fetch-strategy.md.
      */
-    static final int     DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD = 4;
+    static final         int     DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD    = 4;
     /**
      * Row count above which a single batched fetch is logged as a warning.
      */
-    static final int     DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD = 5000;
-    private static final Object NO_PAYLOAD                        = new Object();
+    static final         int     DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD = 5000;
+    /**
+     * Use the separate ordered/unordered fetch queries (and their partial indexes) rather than the single
+     * unified query.
+     * <p>
+     * On by default.
+     */
+    static final         boolean DEFAULT_USE_ORDERED_UNORDERED_QUERY       = true;
 
-    private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>           unitOfWorkFactory;
-    private final JSONSerializer                                                          jsonSerializer;
-    private final String                                                                  sharedQueueTableName;
-    private final ConcurrentMap<QueueName, CentralizedMessageFetcherDurableQueueConsumer> durableQueueConsumers            = new ConcurrentHashMap<>();
-    private final ConcurrentMap<QueueName, PostgresqlDurableQueueConsumer>                traditionalDurableQueueConsumers = new ConcurrentHashMap<>();
-    private final QueuedMessageRowMapper                                                  queuedMessageMapper;
-    private final List<DurableQueuesInterceptor>                                          interceptors                     = new CopyOnWriteArrayList<>();
-    private final Optional<MultiTableChangeListener<TableChangeNotification>>             multiTableChangeListener;
-    private final Function<ConsumeFromQueue, QueuePollingOptimizer>                       queuePollingOptimizerFactory;
+    private static final Object NO_PAYLOAD = new Object();
+
+    private final       HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>           unitOfWorkFactory;
+    private final       JSONSerializer                                                          jsonSerializer;
+    private final       String                                                                  sharedQueueTableName;
+    private final       ConcurrentMap<QueueName, CentralizedMessageFetcherDurableQueueConsumer> durableQueueConsumers            = new ConcurrentHashMap<>();
+    private final       ConcurrentMap<QueueName, PostgresqlDurableQueueConsumer>                traditionalDurableQueueConsumers = new ConcurrentHashMap<>();
+    private final       QueuedMessageRowMapper                                                  queuedMessageMapper;
+    private final       List<DurableQueuesInterceptor>                                          interceptors                     = new CopyOnWriteArrayList<>();
+    private final       Optional<MultiTableChangeListener<TableChangeNotification>>             multiTableChangeListener;
+    private final       Function<ConsumeFromQueue, QueuePollingOptimizer>                       queuePollingOptimizerFactory;
     /**
      * The {@code messageHandlingTimeout} applied by the constructors that do not take one, matching
      * {@code PostgresqlDurableQueuesBuilder}'s default. Required by {@link TransactionalMode#SingleOperationTransaction}.
      */
-    public static final Duration DEFAULT_MESSAGE_HANDLING_TIMEOUT = Duration.ofSeconds(30);
+    public static final Duration                                                                DEFAULT_MESSAGE_HANDLING_TIMEOUT = Duration.ofSeconds(30);
 
-    private final TransactionalMode                                                       transactionalMode;
-    private       CentralizedMessageFetcher                                               centralizedMessageFetcher;
+    private final TransactionalMode         transactionalMode;
+    private       CentralizedMessageFetcher centralizedMessageFetcher;
     /**
      * Flag indicating whether to use the {@link CentralizedMessageFetcher} or the legacy
      * {@link DefaultDurableQueueConsumer} approach for handling messages
      */
-    private final boolean                                                                 useCentralizedMessageFetcher;
-    private final boolean                                                                 useOrderedUnorderedQuery;
-    private final boolean                                                                 useBatchedFetch;
-    private final int                                                                     batchedFetchSwitchThreshold;
-    private final int                                                                     batchedFetchWarnRowsThreshold;
+    private final boolean                   useCentralizedMessageFetcher;
+    private final boolean                   useOrderedUnorderedQuery;
+    private final boolean                   useBatchedFetch;
+    private final int                       batchedFetchSwitchThreshold;
+    private final int                       batchedFetchWarnRowsThreshold;
 
     private final DurableQueuesSql           durableQueuesSql;
     private final DurableQueuesSerialization durableQueuesSerialization;
@@ -333,7 +341,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              true,  // Use centralized message fetcher by default
              Duration.ofMillis(20), // With a 20ms polling interval by default
              null,
-             true,
+             DEFAULT_USE_ORDERED_UNORDERED_QUERY,
              DEFAULT_USE_BATCHED_FETCH,
              DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
              DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD);
@@ -576,6 +584,16 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     DurableQueuesSql getDurableQueuesSql() {
         return durableQueuesSql;
+    }
+
+    /**
+     * Whether the separate ordered/unordered fetch queries are in use, as opposed to the single unified
+     * query.
+     * {@link PostgresqlDurableQueuesBuilder#setUseOrderedUnorderedQuery(boolean)}.
+     * <p>
+     */
+    public boolean isUseOrderedUnorderedQuery() {
+        return useOrderedUnorderedQuery;
     }
 
     /**
@@ -1074,11 +1092,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                            requireTrue(orderedMessage.getOrder() >= 0, msg("[Index: {}] - OrderedMessage requires an order >= 0", indexedMessage._1));
 
                                                            batch.bind("deliveryMode", QueuedMessage.DeliveryMode.IN_ORDER)
-                                                                .bind("key", orderedMessage.getKey())
+                                                                .bindByType("key", orderedMessage.getKey(), String.class)
                                                                 .bind("order", orderedMessage.getOrder());
                                                        } else {
                                                            batch.bind("deliveryMode", QueuedMessage.DeliveryMode.NORMAL)
-                                                                .bindNull("key", Types.VARCHAR)
+                                                                .bindByType("key", null, String.class)
                                                                 .bind("order", -1L);
                                                        }
 
@@ -1167,10 +1185,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
                                                    var rowsUpdated = unitOfWorkFactory.getRequiredUnitOfWork().handle()
-                                                           .createUpdate(durableQueuesSql.getMarkAsDeadLetterMessageDirectSql())
-                                                           .bind("lastDeliveryError", operation.getCauseForBeingMarkedAsDeadLetter())
-                                                           .bind("id", operation.queueEntryId)
-                                                           .execute();
+                                                                                      .createUpdate(durableQueuesSql.getMarkAsDeadLetterMessageDirectSql())
+                                                                                      .bind("lastDeliveryError", operation.getCauseForBeingMarkedAsDeadLetter())
+                                                                                      .bind("id", operation.queueEntryId)
+                                                                                      .execute();
                                                    if (rowsUpdated > 0) {
                                                        log.debug("Marked message with id '{}' as Dead Letter Message (direct, no return)", operation.queueEntryId);
                                                        return true;
@@ -1621,8 +1639,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                         continue;
                     }
 
-                    var                 excluded = excludeKeysPerQueue.getOrDefault(queueName, Collections.emptySet());
-                    List<QueuedMessage> messagesForQueue;
+                    var                  excluded = excludeKeysPerQueue.getOrDefault(queueName, Collections.emptySet());
+                    List<QueuedMessage>  messagesForQueue;
                     MessageMappingResult mappingResult;
 
                     if (useOrderedUnorderedQuery) {
@@ -1719,22 +1737,22 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(activeQueues);
 
-                var now = Instant.now();
+                var now              = Instant.now();
                 var batchedSqlResult = durableQueuesSql.buildBatchedSqlStatement(excludeKeysPerQueue, availableWorkerSlotsPerQueue, activeQueues);
                 var query = uow.handle()
                                .createQuery(batchedSqlResult.getSql())
                                .bind("now", now);
-                
+
                 // Bind single-value parameters (queue names)
                 for (var entry : batchedSqlResult.getSingleValueBindings().entrySet()) {
                     query.bind(entry.getKey(), entry.getValue());
                 }
-                
+
                 // Bind list parameters (exclude keys)
                 for (var entry : batchedSqlResult.getListBindings().entrySet()) {
                     query.bindList(entry.getKey(), entry.getValue());
                 }
-                
+
                 var mappingResult = mapQueryResultsWithExceptionHandling(query);
                 // No de-duplication is applied here: the batched statement numbers all candidates for a queue in
                 // a single window and updates each row at most once, so a QueueEntryId cannot appear twice.
@@ -1754,7 +1772,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                              mappingResult.failedMappings().stream()
                                           .map(failed -> failed.queueEntryId().toString())
                                           .collect(Collectors.joining(", ")));
-                    
+
                     // Log individual failures for debugging
                     for (var failedMapping : mappingResult.failedMappings()) {
                         log.error("[{}] Marking Message as DeadLetterMessage due to issues "
@@ -1808,8 +1826,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @return MessageMappingResult containing successful messages and failed mappings
      */
     private MessageMappingResult mapQueryResultsWithExceptionHandling(org.jdbi.v3.core.statement.Query query) {
-        List<QueuedMessage> successfulMessages = new ArrayList<>();
-        List<MessageMappingResult.FailedMessageMapping> failedMappings = new ArrayList<>();
+        List<QueuedMessage>                             successfulMessages = new ArrayList<>();
+        List<MessageMappingResult.FailedMessageMapping> failedMappings     = new ArrayList<>();
 
         // Use a custom row mapper that handles exceptions
         var customMapper = new RowMapper<QueuedMessage>() {
@@ -1819,7 +1837,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     // Use the existing mapper to process the row
                     return queuedMessageMapper.map(rs, ctx);
                 } catch (Exception e) {
-                    QueueName queueName = QueueName.of(rs.getString("queue_name"));
+                    QueueName    queueName    = QueueName.of(rs.getString("queue_name"));
                     QueueEntryId queueEntryId = QueueEntryId.of(rs.getString("id"));
                     failedMappings.add(new MessageMappingResult.FailedMessageMapping(queueName, queueEntryId, e));
                     return null;
