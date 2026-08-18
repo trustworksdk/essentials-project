@@ -162,8 +162,8 @@ branches, so the prepared binder sees one argument type whether or not the value
 |---|---|---|---|---|
 | 1 | Flip `PostgresqlDurableQueuesBuilder.useOrderedUnorderedQuery` default to `true` | §1 — up to 5.4× on mixed traffic, and removes a Spring-vs-builder divergence | One line; behaviour change for direct-builder users | **Done** — branch `queue_fix` |
 | 2 | Fix `queueMessages` mixed-batch binding, with a regression test | §3 — public API throws | Low | **Done** — branch `queue_fix` |
-| 3 | Add a state predicate to the ordered barrier, or replace it with a per-key cursor | §2b — the blocker for batched ordered acks and for cross-node ordering | Design work; correctness-sensitive | Open |
-| 4 | Batch acknowledgement at a level that removes the per-message unit of work | §2a — the operation is the cost, not the statement | Medium; changes recovery timing | Open |
+| 3 | ~~Add a state predicate to the ordered barrier~~, or replace it with a per-key cursor | §2b — the blocker for batched ordered acks and for cross-node ordering | **High** — see §5 | Open |
+| 4 | Batch acknowledgement at a level that removes the per-message unit of work | §2a — the operation is the cost, not the statement | **Medium-high** — see §5 | Open |
 | 5 | New two-table implementation | API, per-table indexes, partitioning, retention — **not** raw fetch speed, which (1) already delivers | Large | Open |
 
 ### What items 1 and 2 changed
@@ -183,7 +183,102 @@ branches, so the prepared binder sees one argument type whether or not the value
   batch whose **first** message is ordered failed. Unordered-first already worked and — checked explicitly in
   the test — did not silently null out the later ordered messages' keys.
 
-## 5. What has not been measured
+## 5. Risk assessment for items 3 and 4 against the current design
+
+### 5.1 Correction: the barrier's missing state predicate is load-bearing
+
+Item 3 was originally worded as "add a state predicate to the ordered barrier". **That option should be
+struck.** Working through what each predecessor state means shows there is no state that can safely be
+excluded:
+
+| Predecessor row state | Must it block its successors? | Why |
+|---|---|---|
+| Ready (`next_delivery_ts <= now`) | Yes | It is next in line |
+| In flight (`is_being_delivered = TRUE`) | Yes | Concurrent delivery of two messages for one key is the thing ordering forbids |
+| Awaiting retry (`next_delivery_ts` in the future) | Yes | Otherwise a successor overtakes a predecessor that is still failing |
+| Dead-lettered (`is_dead_letter_message = TRUE`) | Yes | Ordering past a poisoned message is undefined — and the enqueue path already depends on this: `getQueueMessageSqlOptimized` marks a newly queued ordered message dead-on-arrival when a lower-order sibling is already dead-lettered |
+
+Adding any state predicate silently downgrades ordered delivery to "mostly ordered". The
+`is_dead_letter_message = FALSE` variant is the most tempting and the most damaging: successors would stream
+past a poisoned message, contradicting the enqueue-side barrier above. Note also that the fetch-side blocking
+behaviour for each of those four states does not appear to be pinned by a test, so such a change could pass
+CI.
+
+**Cheapest useful next step, whatever is eventually built:** add tests that pin all four blocking states.
+They are the invariants any redesign must preserve, and they look under-covered today.
+
+### 5.2 Item 3 as a per-key cursor — high risk
+
+Only the cursor variant is viable, and it is redesign-scale rather than a retrofit:
+
+- **Gaps are legal, and the current barrier is gap-tolerant by construction.** `key_order` has no unique
+  index and no contiguity requirement — `OrderedMessage.of(payload, key, order)` accepts any `long`. "Nothing
+  lower exists" copes with arbitrary gaps; a "next expected order" cursor wedges on the first one forever.
+  Gaps arise from sparse user-chosen orders, `deleteMessage`, `purgeQueue`, and admin dead-letter deletion. A
+  correct cursor must therefore track *highest completed*, not *next expected* — a subtler design than it
+  first appears.
+- **Duplicate `(queue_name, key, key_order)` is currently possible.** With no unique constraint, strict `<`
+  lets two same-order siblings through concurrently today. That is already a latent ordering hole; a cursor
+  turns it from wrong into ambiguous.
+- **It introduces a second source of truth** that must be maintained atomically across acknowledge, retry,
+  dead-letter, resurrect, delete, purge, and the stuck-message reset. Miss one path and a key wedges
+  permanently — which surfaces as "the queue silently stopped for one customer", the worst failure shape
+  available. Note `getResetMessagesStuckBeingDeliveredSql` has no `queue_name` filter at all; it resets
+  globally, so it is easy to overlook when reasoning per-queue.
+- **Migration is not free.** Existing tables hold live ordered messages, the cursor must be back-filled, and
+  there is no version negotiation between nodes — so a rolling deploy has old and new consumers running
+  against the same table simultaneously. That implies either downtime or a dual-write phase.
+- **Two consumer implementations plus a second backend.** `CentralizedMessageFetcher` and
+  `DefaultDurableQueueConsumer` both need it, and the Mongo implementation orders differently, so the
+  SPI-level guarantee changes shape per backend.
+
+The payoff is real — it is the only route to cross-node ordering, which today rests on the per-JVM
+`inProcessOrderedKeys` set — but note the *performance* payoff is unmeasured: turning the correlated
+`NOT EXISTS` into a lookup matters most at table sizes this exercise never reached (§6).
+
+**Recommendation: do not retrofit this into the current schema.** Fold it into item 5, where the schema can
+be changed properly, rather than paying the migration risk without the design freedom.
+
+### 5.3 Item 4 as batched acknowledgement — medium-high risk, and it depends on item 3
+
+- **The duplicate-delivery window widens, governed by a global timer.**
+  `resetMessagesStuckBeingDelivered` resets any row with
+  `is_being_delivered = TRUE AND delivery_ts <= now - messageHandlingTimeout` (30 s by default), with no
+  `queue_name` filter. Today the ack lands milliseconds after the handler returns. With batching, a
+  handled-but-unflushed row sits in exactly that state for the flush interval plus any flush backlog, flush
+  failure, or GC pause. Exceed the timeout and successfully-handled messages are redelivered. At-least-once
+  permits it; handlers that are not genuinely idempotent will nonetheless start breaking. This makes
+  correctness *tuning-coupled*, a new failure class for this component — and the same family as the
+  duplicate-consumption bug already documented in `CentralizedMessageFetcher.calculateAvailableWorkerSlotsPerQueue`.
+- **A crash multiplies redeliveries by the batch size.** An in-memory buffer lost to JVM death redelivers
+  every message in it — 200 instead of ~1, at the default batch size used in these runs.
+- **It is measurably harmful for ordered messages today**: 0.82×, for the reason in §2b. So item 4 is either
+  gated behind item 3, or the ack path must become delivery-mode-aware and batch only unordered messages.
+  Either way, **4 depends on 3**, and that dependency was not obvious before measuring.
+- **`FullyTransactional` mode must opt out** — there the ack participates in the caller's unit of work, and
+  deferring it breaks that coupling outright. Manageable, since that mode is already documented as broken for
+  retries and dead-lettering, but it is another mode-conditional branch.
+- **Admin and statistics views skew.** `getTotalMessagesQueuedFor` counts every non-dead-letter row
+  regardless of `is_being_delivered`, so handled messages appear as still queued for the flush window; any
+  alerting tuned on those numbers needs revisiting.
+- **The real win needs an API change, not an interceptor.** §2a's 1.13× is a lower bound precisely because
+  `acknowledgeMessageAsHandled` wraps the interceptor chain in a unit of work. Capturing the rest means
+  moving the ack out of that per-message unit of work — a change to the `DurableQueues` contract or the
+  consumer call site, and therefore subject to the stable-API rule.
+
+### 5.4 Summary
+
+| Item | Risk | Blast radius if wrong | Reversible |
+|---|---|---|---|
+| 3 (per-key cursor) | **High** | Silent ordering violation, or a permanently wedged key | Poorly — schema plus migration |
+| 4 (batched ack) | **Medium-high** | Duplicate delivery under load, pause, or crash | Yes — feature flag, default off |
+
+Neither is a small change against the current design. If one is to be attempted first, item 4 is the safer
+bet, scoped to unordered messages only, behind a flag defaulting to off, with the flush interval validated
+against `messageHandlingTimeout` at construction so a misconfiguration fails fast rather than producing
+duplicates in production. Item 3 belongs with item 5.
+
+## 6. What has not been measured
 
 - **Table size.** Every figure above is at 4000 rows. The correlated `NOT EXISTS` and the index-versus-seqscan
   crossover are exactly the things that change with table size, so §1's ratios should be re-taken at 10⁵–10⁶
