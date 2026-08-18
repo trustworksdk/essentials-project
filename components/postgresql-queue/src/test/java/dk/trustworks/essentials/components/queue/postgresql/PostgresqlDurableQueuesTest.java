@@ -56,6 +56,42 @@ class PostgresqlDurableQueuesTest {
         assertThat(durableQueues.getSharedQueueTableName()).isEqualTo(overriddenTableName);
     }
 
+    /**
+     * The builder and the Spring starter used to disagree about this: the starter defaulted it to
+     * {@code true} while {@code PostgresqlDurableQueuesBuilder}'s uninitialised {@code boolean} field left it
+     * {@code false}, so non-Spring callers silently got the unified fetch query — measured up to 5.4x slower
+     * on a backlog mixing ordered and unordered messages. Both construction paths are pinned here so they
+     * cannot drift apart again unnoticed.
+     */
+    @Test
+    void useOrderedUnorderedQueryDefaultsToTrueOnEveryConstructionPath() {
+        var viaBuilder = PostgresqlDurableQueues.builder()
+                                                .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                                .setJsonSerializer(mock(JSONSerializer.class))
+                                                .build();
+        assertThat(viaBuilder.isUseOrderedUnorderedQuery()).isTrue();
+
+        var viaConstructor = new PostgresqlDurableQueues(
+                mock(HandleAwareUnitOfWorkFactory.class),
+                mock(JSONSerializer.class),
+                PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME,
+                null,
+                null,
+                TransactionalMode.FullyTransactional,
+                Duration.ofSeconds(30));
+        assertThat(viaConstructor.isUseOrderedUnorderedQuery()).isTrue();
+    }
+
+    @Test
+    void useOrderedUnorderedQueryCanStillBeTurnedOff() {
+        var durableQueues = PostgresqlDurableQueues.builder()
+                                                   .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                                   .setJsonSerializer(mock(JSONSerializer.class))
+                                                   .setUseOrderedUnorderedQuery(false)
+                                                   .build();
+        assertThat(durableQueues.isUseOrderedUnorderedQuery()).isFalse();
+    }
+
     @Test
     void initializeWithInvalidOverriddenTableName() {
         assertThatThrownBy(() ->

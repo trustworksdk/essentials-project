@@ -90,6 +90,18 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * Row count above which a single batched fetch is logged as a warning.
      */
     static final int     DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD = 5000;
+    /**
+     * Use the separate ordered/unordered fetch queries (and their partial indexes) rather than the single
+     * unified query.
+     * <p>
+     * On by default. The unified query applies the ordered per-key barrier — a correlated {@code NOT EXISTS}
+     * against the same table — to every candidate row, including unordered ones where {@code key IS NULL}
+     * makes it vacuously true, and sorts by {@code key_order} which is a constant {@code -1} for those rows.
+     * On a backlog mixing both kinds that measured 5.4x slower than the split queries; see
+     * {@code docs/durable-queues-redesign-measurements.md}. Pure-ordered traffic is indifferent, since it
+     * needs the barrier either way.
+     */
+    static final boolean DEFAULT_USE_ORDERED_UNORDERED_QUERY = true;
     private static final Object NO_PAYLOAD                        = new Object();
 
     private final HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork>           unitOfWorkFactory;
@@ -333,7 +345,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              true,  // Use centralized message fetcher by default
              Duration.ofMillis(20), // With a 20ms polling interval by default
              null,
-             true,
+             DEFAULT_USE_ORDERED_UNORDERED_QUERY,
              DEFAULT_USE_BATCHED_FETCH,
              DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
              DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD);
@@ -567,6 +579,22 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     public String getSharedQueueTableName() {
         return sharedQueueTableName;
+    }
+
+    /**
+     * Whether the separate ordered/unordered fetch queries are in use, as opposed to the single unified
+     * query. Fixed at construction — see
+     * {@link PostgresqlDurableQueuesBuilder#setUseOrderedUnorderedQuery(boolean)}.
+     * <p>
+     * Exposed because the setting materially changes fetch performance on mixed backlogs while being
+     * invisible at runtime, which is precisely how the builder and the Spring starter came to disagree about
+     * its default. Benchmarks and diagnostics should report the value they actually got rather than the one
+     * they believe they configured.
+     *
+     * @return {@code true} if the ordered/unordered query split is in use
+     */
+    public boolean isUseOrderedUnorderedQuery() {
+        return useOrderedUnorderedQuery;
     }
 
     /**
@@ -1073,12 +1101,20 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                            requireNonNull(orderedMessage.getKey(), msg("[Index: {}] - OrderedMessage requires a non null key", indexedMessage._1));
                                                            requireTrue(orderedMessage.getOrder() >= 0, msg("[Index: {}] - OrderedMessage requires an order >= 0", indexedMessage._1));
 
+                                                           // bindByType rather than bind/bindNull - see the note on the else-branch below
                                                            batch.bind("deliveryMode", QueuedMessage.DeliveryMode.IN_ORDER)
-                                                                .bind("key", orderedMessage.getKey())
+                                                                .bindByType("key", orderedMessage.getKey(), String.class)
                                                                 .bind("order", orderedMessage.getOrder());
                                                        } else {
+                                                           // The key MUST be bound with the same declared type as the ordered branch above, and never
+                                                           // via bindNull: JDBI's PreparedBatch prepares a single binder from the first row's argument
+                                                           // types and reuses it for every subsequent row. bindNull produces a NullArgument, so a batch
+                                                           // whose first message is ordered (String argument) and which later contains an unordered one
+                                                           // failed with "ClassCastException: NullArgument cannot be cast to String". bindByType with an
+                                                           // explicit String type yields the same argument type whether or not the value is null.
+                                                           // Pinned by PostgresqlDurableQueuesMixedBatchIT.
                                                            batch.bind("deliveryMode", QueuedMessage.DeliveryMode.NORMAL)
-                                                                .bindNull("key", Types.VARCHAR)
+                                                                .bindByType("key", null, String.class)
                                                                 .bind("order", -1L);
                                                        }
 

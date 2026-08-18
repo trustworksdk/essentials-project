@@ -67,7 +67,11 @@ public final class PostgresqlDurableQueuesBuilder {
     private int                                        batchedFetchSwitchThreshold              = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
 
-    private boolean useOrderedUnorderedQuery;
+    /**
+     * Use the separate ordered/unordered fetch queries rather than the single unified query. Default is
+     * {@code true} — see {@link #setUseOrderedUnorderedQuery(boolean)}.
+     */
+    private boolean useOrderedUnorderedQuery = PostgresqlDurableQueues.DEFAULT_USE_ORDERED_UNORDERED_QUERY;
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
@@ -244,8 +248,14 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
-     * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
-     * performance for mixed, ordered and unordered message processing scenarios
+     * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}
+     * (the default) separate fetch queries and partial indexes are used for ordered and unordered messages;
+     * when {@code false} a single unified query serves both.
+     * <p>
+     * Leave this on unless you have a measured reason not to. The unified query applies the ordered per-key
+     * barrier to every candidate row, including unordered ones that cannot need it, which measured 5.4x
+     * slower on a backlog containing both kinds — see {@code docs/durable-queues-redesign-measurements.md}.
+     * Pure-ordered traffic is indifferent, since it needs the barrier either way.
      *
      * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
      * @return this builder instance
