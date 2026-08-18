@@ -97,6 +97,18 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * On by default. The unified query applies the ordered per-key barrier — a correlated {@code NOT EXISTS}
      * against the same table — to every candidate row, including unordered ones where {@code key IS NULL}
      * makes it vacuously true, and sorts by {@code key_order} which is a constant {@code -1} for those rows.
+     * On a backlog mixing both kinds that measured 5.4x slower than the split queries; see
+     * {@code docs/durable-queues-redesign-measurements.md}. Pure-ordered traffic is indifferent, since it
+     * needs the barrier either way.
+     */
+    static final boolean DEFAULT_USE_ORDERED_UNORDERED_QUERY = true;
+    /**
+     * Use the separate ordered/unordered fetch queries (and their partial indexes) rather than the single
+     * unified query.
+     * <p>
+     * On by default. The unified query applies the ordered per-key barrier — a correlated {@code NOT EXISTS}
+     * against the same table — to every candidate row, including unordered ones where {@code key IS NULL}
+     * makes it vacuously true, and sorts by {@code key_order} which is a constant {@code -1} for those rows.
      * On a backlog mixing both kinds that measured 5.4x slower than the split queries. Pure-ordered traffic
      * is indifferent, since it needs the barrier either way.
      */

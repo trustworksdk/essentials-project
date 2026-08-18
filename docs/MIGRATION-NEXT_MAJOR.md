@@ -118,7 +118,8 @@ preferred path, silently got the single unified query.
 That query applies the ordered per-key barrier — a correlated `NOT EXISTS` against the same table — to every
 candidate row, including unordered ones where `key IS NULL` makes it vacuously true, and orders by
 `key_order`, a constant `-1` for those rows. On a backlog mixing both kinds it measured **5.4× slower**;
-pure-ordered traffic is indifferent, since it needs the barrier either way.
+pure-ordered traffic is indifferent, since it needs the barrier either way. See
+`docs/durable-queues-redesign-measurements.md`.
 
 **No action needed for Spring applications** — they were already on `true`. **If you build
 `PostgresqlDurableQueues` directly and deliberately want the unified query**, say so explicitly:

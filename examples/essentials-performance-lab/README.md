@@ -10,8 +10,10 @@ This module is a Spring Boot example app intended to:
 Initial scaffold:
 
 - `catalog` scenario (prints effective config)
-- working scenario:
+- working scenarios:
   - `baseline-polling-vs-cdc` (fixed-seed append + subscription run with JSON metrics output)
+  - `virtual-threads-queue` (platform vs virtual threads for the DurableQueues consumer worker pool)
+  - `queue-design-ab` (batched vs per-message ack, swept over the ordered-message fraction)
 - placeholder scenarios:
   - `cdc-hybrid`
   - `durable-queues`
@@ -239,6 +241,104 @@ mvn -pl examples/essentials-performance-lab -Dtest=BaselineComparisonScenarioSmo
 ```
 
 This smoke test does not require `wal2json`; CDC path is exercised in `auto` fallback semantics for robustness.
+
+## Virtual threads vs platform threads (`virtual-threads-queue`)
+
+A/Bs the `DurableQueues` consumer worker pool — today's default
+`Executors.newScheduledThreadPool(parallelConsumers)` against a virtual-thread-per-task executor — across a
+`parallelConsumers` sweep, with everything else held constant.
+
+The comparison is single-variable because with the default `useCentralizedMessageFetcher=true` the worker
+pool does not bound concurrency: `CentralizedMessageFetcher.calculateAvailableWorkerSlotsPerQueue()` does,
+via `maxParallelConsumers - activeWorkers`. Both arms admit exactly `parallelConsumers` messages in flight
+and differ only in the kind of thread that runs them.
+
+Two handler shapes are measured, and reporting either alone would mislead:
+
+- `SLEEP` — the handler blocks without holding a pooled JDBC connection (the external-HTTP-call shape).
+- `DB` — the handler blocks inside a unit of work via `pg_sleep`, holding a Hikari connection throughout
+  (the read-or-write-the-database shape).
+
+Because virtual threads cannot be passed through the public builder at all —
+`ConsumeFromQueue`'s executor knob is typed `ScheduledExecutorService`, and the JDK has no virtual-thread
+implementation of that interface — the scenario supplies
+`VirtualThreadScheduledExecutorAdapter`. Its javadoc explains why the periodic
+`scheduleAtFixedRate`/`scheduleWithFixedDelay` methods deliberately throw.
+
+### Smoke test (always on)
+
+```bash
+mvn verify -pl examples/essentials-performance-lab -Dit.test=VirtualThreadsQueueScenarioSmokeIT
+```
+
+A tiny sweep that asserts the harness works — every case drains, both arms and both handler shapes are
+exercised, and the JSON carries the per-case and paired-comparison structure. It deliberately asserts
+nothing about which arm is faster; at that size the numbers are noise and a performance assertion would be a
+flake generator.
+
+### Measurement run (opt-in)
+
+```bash
+mvn verify -pl examples/essentials-performance-lab \
+  -Dbenchmark.run=true -Dit.test=VirtualThreadsQueueBenchmarkIT \
+  -Dvt.parallelConsumers=8,32,128 \
+  -Dvt.handlerMode=SLEEP \
+  -Dvt.repetitions=5 \
+  -Dvt.poolSize=100
+```
+
+Knobs: `vt.parallelConsumers`, `vt.messagesPerCase`, `vt.handlerDelay`, `vt.handlerMode`
+(`SLEEP`/`DB`/`BOTH`), `vt.repetitions`, `vt.poolSize` (Hikari maximum pool size). Output lands in
+`target/perf-lab-benchmark/virtual-threads-queue.json`.
+
+**Always run more than one repetition.** A single sample of this workload has a spread wide enough to
+reverse the sign of the platform-versus-virtual difference — the first pass at one repetition showed a
+consistent virtual-thread penalty, and a second single-sample pass of the same configuration showed a
+1.8× virtual-thread win. The scenario reduces repetitions to a median, reports the observed range beside it,
+and sets `speedupWithinNoise` when the two arms' ranges overlap (null below two repetitions, where there is
+no spread to judge against).
+
+**Sweep `vt.poolSize` before reading anything into a thread-type delta.** Whether throughput moves when the
+connection pool moves is what separates a connection-bound workload from a thread-bound one, and this
+workload is the former. See `docs/jdk21-features-and-virtual-threads.md` for the measured results and the
+resulting recommendations.
+
+## Queue design levers (`queue-design-ab`)
+
+Sizes the two changes a `DurableQueues` redesign would make, before committing to one:
+
+- **Ack batching** — every handled message currently issues its own `DELETE ... WHERE id = :id` in its own
+  transaction. The `BATCHED` arm defers and groups them via `BatchingAcknowledgeInterceptor` (a perf-lab
+  prototype, not a shipping proposal).
+- **Ordered-message mix** — swept via `qd.orderedFractions`, since the ordered fetch path carries a per-key
+  barrier the unordered path does not.
+
+`useOrderedUnorderedQuery` is fixed when `PostgresqlDurableQueues` is constructed, so it is a per-JVM
+parameter rather than an in-run arm: set `-Dqd.orderedUnorderedQuery` and compare two runs. Note it defaults
+to `true` in the Spring starter but `false` in `PostgresqlDurableQueuesBuilder`.
+
+There is no artificial handler delay here — the handler does nothing, so the measurement is the queue's own
+per-message database cost rather than a simulated workload.
+
+```bash
+# smoke (always on)
+mvn verify -pl examples/essentials-performance-lab -Dit.test=QueueDesignAbScenarioSmokeIT
+
+# measurement run (opt-in), one per flag setting
+mvn verify -pl examples/essentials-performance-lab \
+  -Dbenchmark.run=true -Dit.test=QueueDesignAbBenchmarkIT \
+  -Dqd.repetitions=5 -Dqd.poolSize=100 -Dqd.orderedUnorderedQuery=true
+```
+
+Knobs: `qd.orderedFractions`, `qd.parallelConsumers`, `qd.messagesPerCase`, `qd.repetitions`,
+`qd.orderedKeyCount`, `qd.ackFlushInterval`, `qd.ackMaxBatchSize`, `qd.orderedUnorderedQuery`, `qd.poolSize`.
+Output: `target/perf-lab-benchmark/queue-design-ab.json`.
+
+Drain completion is measured as "no rows left for the queue", not "last handler returned" — the handler runs
+before the framework acknowledges, so a handler-latch wait stops the clock before the per-message `DELETE`
+that the scenario exists to measure.
+
+Results and the resulting recommendations: `docs/durable-queues-redesign-measurements.md`.
 
 ## Benchmark matrix scripts
 

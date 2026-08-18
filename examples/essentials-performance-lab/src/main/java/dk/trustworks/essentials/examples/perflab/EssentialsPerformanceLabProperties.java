@@ -86,6 +86,101 @@ public class EssentialsPerformanceLabProperties {
      */
     private int poisonFloodCount = 100;
 
+    /**
+     * Comma-separated {@code parallelConsumers} values swept by {@code VirtualThreadsQueueScenario}.
+     * Default {@code 8,32,128} — 8 is a realistic production consumer width, 32 is where a platform-thread
+     * pool starts to look expensive, and 128 is past the point where an OS thread per in-flight message
+     * stops being reasonable.
+     */
+    private String virtualThreadsParallelConsumers = "8,32,128";
+
+    /**
+     * Messages queued up-front per case in {@code VirtualThreadsQueueScenario}. Needs to be large enough
+     * that the fixed cost of starting the consumer and ramping the fetcher's worker slots is small against
+     * the drain window, and small enough that the slowest case (DB-bound, low parallelism) still finishes.
+     */
+    private int virtualThreadsMessagesPerCase = 600;
+
+    /**
+     * Simulated per-message handler work in {@code VirtualThreadsQueueScenario} — a sleep in
+     * {@code SLEEP} mode, a {@code pg_sleep} inside a unit of work in {@code DB} mode. This is the blocking
+     * duration the thread-type comparison is about, so it must dominate the queue's own per-message
+     * overhead.
+     */
+    private Duration virtualThreadsHandlerDelay = Duration.ofMillis(50);
+
+    /**
+     * Which handler shapes {@code VirtualThreadsQueueScenario} runs: {@code SLEEP} (blocks without holding
+     * a pooled JDBC connection), {@code DB} (blocks while holding one), or {@code BOTH} (default). Running
+     * only one of the two produces a misleading headline — see the scenario javadoc.
+     */
+    private String virtualThreadsHandlerMode = "BOTH";
+
+    /**
+     * How many times {@code VirtualThreadsQueueScenario} repeats each (handler mode, parallelism, executor
+     * kind) case. Default {@code 1} keeps the smoke path short; measurement runs need considerably more.
+     * <p>
+     * This is not optional rigour: a single measurement of this workload has a run-to-run spread wide
+     * enough to reverse the sign of the platform-versus-virtual difference, so a one-shot comparison
+     * reports noise as a result. The scenario reduces repetitions to a median and reports the observed
+     * range next to it.
+     */
+    private int virtualThreadsRepetitions = 1;
+
+    /**
+     * Comma-separated ordered-message fractions swept by {@code QueueDesignAbScenario}. {@code 0.0} is a
+     * pure unordered backlog, {@code 1.0} pure ordered; the default {@code 0.0,0.5,1.0} brackets the range
+     * so the cost of the ordered per-key barrier can be read off the difference between the ends.
+     */
+    private String queueDesignOrderedFractions = "0.0,0.5,1.0";
+
+    /**
+     * Parallel consumers used by {@code QueueDesignAbScenario}. Fixed rather than swept — the scenario is
+     * about the per-message database cost, and the parallelism sweep already lives in
+     * {@code VirtualThreadsQueueScenario}.
+     */
+    private int queueDesignParallelConsumers = 32;
+
+    /**
+     * Messages queued up-front per case in {@code QueueDesignAbScenario}. Larger than the virtual-threads
+     * default because there is no artificial handler delay here: with the handler doing nothing, a small
+     * burst drains in a few fetcher ticks and measures ramp-up instead of steady state.
+     */
+    private int queueDesignMessagesPerCase = 4000;
+
+    /**
+     * Repetitions per case in {@code QueueDesignAbScenario}. Default {@code 1} for the smoke path;
+     * measurement runs need more. See {@link #virtualThreadsRepetitions} for why this is not optional.
+     */
+    private int queueDesignRepetitions = 1;
+
+    /**
+     * Number of distinct ordered-message keys. Raised to at least {@code queueDesignParallelConsumers} by
+     * the scenario: the per-key barrier allows one in-flight message per key, so with fewer keys than
+     * consumers the ordered arm measures key contention rather than query cost.
+     */
+    private int queueDesignOrderedKeyCount = 64;
+
+    /**
+     * How often the batched-ack arm flushes buffered acknowledgements. Must stay well below the durable
+     * queues' {@code messageHandlingTimeout} (30s by default), or buffered-but-unflushed messages start
+     * being reset as stuck and redelivered.
+     */
+    private Duration queueDesignAckFlushInterval = Duration.ofMillis(50);
+
+    /**
+     * Flush the batched-ack arm early once this many acknowledgements are buffered, so the batch size does
+     * not grow without bound at high throughput.
+     */
+    private int queueDesignAckMaxBatchSize = 200;
+
+    /**
+     * Recorded verbatim into the scenario output to label which fetch-query strategy the run used. It cannot
+     * be read back from {@code PostgresqlDurableQueues}, and it is fixed at construction, so the benchmark
+     * harness passes the value it set via {@code essentials.durable-queues.use-ordered-unordered-query}.
+     */
+    private String queueDesignUseOrderedUnorderedQueryLabel = "unknown";
+
     public Mode getMode() {
         return mode;
     }
@@ -220,6 +315,110 @@ public class EssentialsPerformanceLabProperties {
 
     public void setPoisonFloodCount(int poisonFloodCount) {
         this.poisonFloodCount = poisonFloodCount;
+    }
+
+    public String getVirtualThreadsParallelConsumers() {
+        return virtualThreadsParallelConsumers;
+    }
+
+    public void setVirtualThreadsParallelConsumers(String virtualThreadsParallelConsumers) {
+        this.virtualThreadsParallelConsumers = virtualThreadsParallelConsumers;
+    }
+
+    public int getVirtualThreadsMessagesPerCase() {
+        return virtualThreadsMessagesPerCase;
+    }
+
+    public void setVirtualThreadsMessagesPerCase(int virtualThreadsMessagesPerCase) {
+        this.virtualThreadsMessagesPerCase = virtualThreadsMessagesPerCase;
+    }
+
+    public Duration getVirtualThreadsHandlerDelay() {
+        return virtualThreadsHandlerDelay;
+    }
+
+    public void setVirtualThreadsHandlerDelay(Duration virtualThreadsHandlerDelay) {
+        this.virtualThreadsHandlerDelay = virtualThreadsHandlerDelay;
+    }
+
+    public String getVirtualThreadsHandlerMode() {
+        return virtualThreadsHandlerMode;
+    }
+
+    public void setVirtualThreadsHandlerMode(String virtualThreadsHandlerMode) {
+        this.virtualThreadsHandlerMode = virtualThreadsHandlerMode;
+    }
+
+    public int getVirtualThreadsRepetitions() {
+        return virtualThreadsRepetitions;
+    }
+
+    public void setVirtualThreadsRepetitions(int virtualThreadsRepetitions) {
+        this.virtualThreadsRepetitions = virtualThreadsRepetitions;
+    }
+
+    public String getQueueDesignOrderedFractions() {
+        return queueDesignOrderedFractions;
+    }
+
+    public void setQueueDesignOrderedFractions(String queueDesignOrderedFractions) {
+        this.queueDesignOrderedFractions = queueDesignOrderedFractions;
+    }
+
+    public int getQueueDesignParallelConsumers() {
+        return queueDesignParallelConsumers;
+    }
+
+    public void setQueueDesignParallelConsumers(int queueDesignParallelConsumers) {
+        this.queueDesignParallelConsumers = queueDesignParallelConsumers;
+    }
+
+    public int getQueueDesignMessagesPerCase() {
+        return queueDesignMessagesPerCase;
+    }
+
+    public void setQueueDesignMessagesPerCase(int queueDesignMessagesPerCase) {
+        this.queueDesignMessagesPerCase = queueDesignMessagesPerCase;
+    }
+
+    public int getQueueDesignRepetitions() {
+        return queueDesignRepetitions;
+    }
+
+    public void setQueueDesignRepetitions(int queueDesignRepetitions) {
+        this.queueDesignRepetitions = queueDesignRepetitions;
+    }
+
+    public int getQueueDesignOrderedKeyCount() {
+        return queueDesignOrderedKeyCount;
+    }
+
+    public void setQueueDesignOrderedKeyCount(int queueDesignOrderedKeyCount) {
+        this.queueDesignOrderedKeyCount = queueDesignOrderedKeyCount;
+    }
+
+    public Duration getQueueDesignAckFlushInterval() {
+        return queueDesignAckFlushInterval;
+    }
+
+    public void setQueueDesignAckFlushInterval(Duration queueDesignAckFlushInterval) {
+        this.queueDesignAckFlushInterval = queueDesignAckFlushInterval;
+    }
+
+    public int getQueueDesignAckMaxBatchSize() {
+        return queueDesignAckMaxBatchSize;
+    }
+
+    public void setQueueDesignAckMaxBatchSize(int queueDesignAckMaxBatchSize) {
+        this.queueDesignAckMaxBatchSize = queueDesignAckMaxBatchSize;
+    }
+
+    public String getQueueDesignUseOrderedUnorderedQueryLabel() {
+        return queueDesignUseOrderedUnorderedQueryLabel;
+    }
+
+    public void setQueueDesignUseOrderedUnorderedQueryLabel(String queueDesignUseOrderedUnorderedQueryLabel) {
+        this.queueDesignUseOrderedUnorderedQueryLabel = queueDesignUseOrderedUnorderedQueryLabel;
     }
 
     public enum Mode {
