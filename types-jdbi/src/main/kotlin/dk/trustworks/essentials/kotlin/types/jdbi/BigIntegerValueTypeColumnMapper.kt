@@ -29,7 +29,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [BigIntegerValueType]'s
  *
- * @param <T> the concrete [BigIntegerValueType] this instance is mapping
+ * @param T the concrete [BigIntegerValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class BigIntegerValueTypeColumnMapper<T : BigIntegerValueType<T>> : ColumnMapper<T?> {

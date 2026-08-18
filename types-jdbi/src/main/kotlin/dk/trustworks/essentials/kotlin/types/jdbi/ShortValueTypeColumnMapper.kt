@@ -28,7 +28,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [ShortValueType]'s
  *
- * @param <T> the concrete [ShortValueType] this instance is mapping
+ * @param T the concrete [ShortValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class ShortValueTypeColumnMapper<T : ShortValueType<T>> : ColumnMapper<T?> {

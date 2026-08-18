@@ -25,9 +25,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [LongValueType]<br>
+ * Base implementation for a value class that implements [LongValueType]
  *
- * @param <T> the concrete [LongValueType] value class
+ * @param T the concrete [LongValueType] value class
  */
 abstract class LongValueTypeArgumentFactory<T : LongValueType<T>> : AbstractArgumentFactory<T>(Types.BIGINT) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

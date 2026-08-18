@@ -25,9 +25,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [IntValueType]<br>
+ * Base implementation for a value class that implements [IntValueType]
  *
- * @param <T> the concrete [IntValueType] value class
+ * @param T the concrete [IntValueType] value class
  */
 abstract class IntValueTypeArgumentFactory<T : IntValueType<T>> : AbstractArgumentFactory<T>(Types.FLOAT) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

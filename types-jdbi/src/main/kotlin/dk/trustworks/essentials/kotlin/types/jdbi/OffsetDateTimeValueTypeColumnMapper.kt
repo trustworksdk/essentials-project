@@ -30,7 +30,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [OffsetDateTimeValueType]'s
  *
- * @param <T> the concrete [OffsetDateTimeValueType] this instance is mapping
+ * @param T the concrete [OffsetDateTimeValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class OffsetDateTimeValueTypeColumnMapper<T : OffsetDateTimeValueType<T>> : ColumnMapper<T?> {

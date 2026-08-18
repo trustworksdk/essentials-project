@@ -28,7 +28,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [BooleanValueType]'s
  *
- * @param <T> the concrete [BooleanValueType] this instance is mapping
+ * @param T the concrete [BooleanValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class BooleanValueTypeColumnMapper<T : BooleanValueType<T>> : ColumnMapper<T?> {

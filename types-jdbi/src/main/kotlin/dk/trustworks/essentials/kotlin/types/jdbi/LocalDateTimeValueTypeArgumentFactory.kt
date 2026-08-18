@@ -26,9 +26,9 @@ import java.sql.Timestamp
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [LocalDateTimeValueType]<br>
+ * Base implementation for a value class that implements [LocalDateTimeValueType]
  *
- * @param <T> the concrete [LocalDateTimeValueType] value class
+ * @param T the concrete [LocalDateTimeValueType] value class
  */
 abstract class LocalDateTimeValueTypeArgumentFactory<T : LocalDateTimeValueType<T>> : AbstractArgumentFactory<T>(Types.TIMESTAMP) {
     override fun build(value: T, config: ConfigRegistry?): Argument {
