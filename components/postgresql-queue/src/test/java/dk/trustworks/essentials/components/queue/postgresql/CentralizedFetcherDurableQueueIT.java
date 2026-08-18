@@ -51,8 +51,6 @@ public class CentralizedFetcherDurableQueueIT {
 
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;
-    // Held so cleanup() can close it - the container is shared by every test in this class, so a pool
-    // left open per test method eventually exhausts PostgreSQL's max_connections.
     private HikariDataSource        dataSource;
 
     @BeforeEach
@@ -72,6 +70,7 @@ public class CentralizedFetcherDurableQueueIT {
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .setUseCentralizedMessageFetcher(true)
                                                .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(20))
+                                               .setUseOrderedUnorderedQuery(false)
                                                .build();
         durableQueues.start();
     }
