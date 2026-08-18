@@ -105,9 +105,35 @@ new WalReplicationTailer(CdcTailerDependencies.builder()
 The `directOnEvents cannot be null in DIRECT delivery mode` runtime check is gone because the state it guarded can no
 longer be constructed.
 
-## ⚠️ One behaviour change in this release
+## ⚠️ Behaviour changes in this release
 
-**`PostgresqlDurableQueues` constructors now default to `SingleOperationTransaction`, not `FullyTransactional`.**
+### `PostgresqlDurableQueues.builder()` now defaults `useOrderedUnorderedQuery` to `true`
+
+The same shape of divergence as the transactional-mode one below, in a different setting.
+`EssentialsComponentsProperties` defaulted the flag to `true` and the deprecated wide constructors passed
+`true`, but `PostgresqlDurableQueuesBuilder`'s uninitialised `boolean` field left it `false` — so Spring
+applications got the split ordered/unordered fetch queries while anyone using the builder, the documented
+preferred path, silently got the single unified query.
+
+That query applies the ordered per-key barrier — a correlated `NOT EXISTS` against the same table — to every
+candidate row, including unordered ones where `key IS NULL` makes it vacuously true, and orders by
+`key_order`, a constant `-1` for those rows. On a backlog mixing both kinds it measured **5.4× slower**;
+pure-ordered traffic is indifferent, since it needs the barrier either way.
+
+**No action needed for Spring applications** — they were already on `true`. **If you build
+`PostgresqlDurableQueues` directly and deliberately want the unified query**, say so explicitly:
+
+```java
+PostgresqlDurableQueues.builder()
+                       .setUnitOfWorkFactory(unitOfWorkFactory)
+                       .setUseOrderedUnorderedQuery(false)
+                       .build();
+```
+
+The flag is now readable at runtime via `PostgresqlDurableQueues.isUseOrderedUnorderedQuery()`, so a
+deployment can verify which fetch strategy it actually got rather than the one it believes it configured.
+
+### `PostgresqlDurableQueues` constructors now default to `SingleOperationTransaction`, not `FullyTransactional`
 
 Until now the constructors that do not take a `TransactionalMode` hardcoded `FullyTransactional`, while
 `PostgresqlDurableQueues.builder()` defaulted to `SingleOperationTransaction` — the same component behaved differently
@@ -203,7 +229,7 @@ All of the following gain a `builder()`; their `Optional`-taking and wide constr
 
 | Deprecated | Replacement |
 |---|---|
-| `PostgresqlDurableQueues` — wide constructors | `PostgresqlDurableQueues.builder()` — **and see the behaviour change above** |
+| `PostgresqlDurableQueues` — wide constructors | `PostgresqlDurableQueues.builder()` — **and see the behaviour changes above** |
 | `MongoDurableQueues` — 9 of 10 constructors | `MongoDurableQueues.builder()` |
 | `PostgresqlDurableQueueConsumer(…)` / `MongoDurableQueueConsumer(…)` — 7 args | `(ConsumeFromQueue, DurableQueueConsumerDependencies)` |
 | `PostgresqlFencedLockManager` / `MongoFencedLockManager` — `Optional`-taking constructors | their existing `builder()` |

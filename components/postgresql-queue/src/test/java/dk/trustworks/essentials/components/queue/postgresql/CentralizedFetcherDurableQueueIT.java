@@ -72,6 +72,11 @@ public class CentralizedFetcherDurableQueueIT {
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .setUseCentralizedMessageFetcher(true)
                                                .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(20))
+                                               // Explicit, not inherited from the builder default: this class is the
+                                               // unified-query half of a pair with CentralizedFetcherDurableQueueIT_WithOrderedUnordered.
+                                               // The default is now true, so relying on it would silently turn the two
+                                               // classes into duplicates and drop all coverage of the unified query.
+                                               .setUseOrderedUnorderedQuery(false)
                                                .build();
         durableQueues.start();
     }
