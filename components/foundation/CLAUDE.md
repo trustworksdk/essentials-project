@@ -78,7 +78,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 
 ## Gotchas
 
-- `lockConfirmationInterval` MUST be strictly less than `lockTimeOut` — `DBFencedLockManager` does not enforce this; violation → spurious lock loss
+- `lockConfirmationInterval` MUST be strictly less than `lockTimeOut` — violation → every lock times out. Enforced: `FencedLockManagerSettings`' constructor throws `IllegalArgumentException`, so it fails at settings-construction, not at runtime
 - `DBFencedLockManager` uses hostname as default `lockManagerInstanceId`; containers without stable hostnames need explicit id
 - `releaseAcquiredLocksInCaseOfIOExceptionsDuringLockConfirmation=false` means locks survive DB blips locally but risk split-brain if the DB actually moved the lock
 - `FencedLock.release()` does NOT stop an `acquireLockAsync` background acquirer — the next tick re-acquires the freed lock with the next token. Use `cancelAsyncLockAcquiring(lockName)` to hand a lock over. `releaseLock` is also not under the manager's `reentrantLock`, so the release and the re-acquire genuinely interleave

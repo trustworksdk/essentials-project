@@ -36,7 +36,7 @@ Shared IT logic is in `components/foundation/src/test/.../fencedlock/DBFencedLoc
 
 ## Gotchas
 
-- `lockConfirmationInterval` MUST be less than `lockTimeOut` — no runtime guard; silent misbehavior if violated
+- `lockConfirmationInterval` MUST be less than `lockTimeOut` — guarded in `FencedLockManagerSettings`' constructor (`IllegalArgumentException`), so it fails when the settings are built, not silently at runtime
 - `fencedLocksTableName` is string-concatenated into SQL — `PostgresqlUtil.checkIsValidTableOrColumnName()` is first-line defense only; never derive from user input
 - `PostgresqlUtil.acquireBootstrapLock()` serializes table creation across nodes — required, do not remove
 - `INSERT ... ON CONFLICT DO NOTHING` used for initial lock row — means first writer wins; `updateLockInDB` uses optimistic CAS on `(last_issued_fence_token, lock_last_confirmed_ts)` to prevent split-brain
