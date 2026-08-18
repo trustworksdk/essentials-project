@@ -21,20 +21,27 @@ import dk.trustworks.essentials.shared.MessageFormatter
 import java.util.*
 
 /**
- * Immutable ISO-3166 2 character country code. Any values provided to the constructor or [.of]
- * will be validated for length, will ensure that the code is in UPPER CASE and finally validate that the country code is known
- * by performing a lookup in the set returned from [Locale.getISOCountries] using
- * [java.util.Locale.IsoCountryCode.PART1_ALPHA2]
+ * Immutable ISO-3166 2 character country code. Any values provided to the constructor or [of]
+ * will be validated for length and validated to be a known country code by performing a lookup
+ * in the set returned from [Locale.getISOCountries] using [java.util.Locale.IsoCountryCode.PART1_ALPHA2].
+ *
+ * The lookup is case insensitive, but the [value] is retained exactly as provided - it is **not**
+ * normalized to UPPER CASE. `CountryCode("dk")` and `CountryCode("DK")` are therefore both valid,
+ * but they are not equal to each other. Pass an UPPER CASE value if you need the two to coincide.
+ *
+ * Note: this differs from the Java [dk.trustworks.essentials.types.CountryCode], which stores the
+ * value UPPER CASE.
  */
 @JvmInline
 value class CountryCode
 /**
  * Create a typed [CountryCode] from a String ISO-3166 2 character country code
  *
- * @param countryCode the ISO-3166 2 character country code with the `countryCode` as UPPER CASE value
- * @throws IllegalArgumentException in case the  ISO-3166 2 character country code is not known or otherwise invalid.
+ * @param value the ISO-3166 2 character country code, retained as-is (see the class documentation
+ *              on casing)
+ * @throws IllegalArgumentException in case the ISO-3166 2 character country code is not known or otherwise invalid.
  */
-    (override val value: String) : StringValueType<CountryCode> {
+constructor(override val value: String) : StringValueType<CountryCode> {
 
     init {
         validate(value)
@@ -70,8 +77,9 @@ value class CountryCode
          * Convert a String ISO-3166 2 character country code to a typed [CountryCode]
          *
          * @param countryCode the ISO-3166 2 character country code
-         * @return the typed [CountryCode] with the `countryCode` as UPPER CASE value
-         * @throws IllegalArgumentException in case the  ISO-3166 2 character country code is not known or otherwise invalid.
+         * @return the typed [CountryCode] with the `countryCode` retained as-is (see the class
+         *         documentation on casing)
+         * @throws IllegalArgumentException in case the ISO-3166 2 character country code is not known or otherwise invalid.
          */
         fun of(countryCode: String): CountryCode {
             return CountryCode(countryCode)

@@ -176,7 +176,7 @@ interface DocumentDbRepository<ENTITY : VersionedEntity<ID, ENTITY>, ID> {
 
     /**
      * Remove an index from the repository.
-     * @param index The name of the index to remove
+     * @param indexName The name of the index to remove
      * @return this [DocumentDbRepository] to allow chaining of method calls
      */
     fun removeIndex(indexName: String): DocumentDbRepository<ENTITY, ID>
@@ -502,10 +502,9 @@ class OptimisticLockingException(message: String) : Exception(message)
  * Serializer for an [Id] annotated property within a [VersionedEntity],
  * where the [Id] property isn't of type [String]/[StringValueType]
  *
- * Serializes a typed id instance to a String
+ * Serializes a typed id instance to its String representation
  *
- * @param id the typed id
- * @return the string version of the id
+ * @param ID the type of the typed id being serialized
  */
 typealias IdSerializer<ID> = (ID) -> String
 

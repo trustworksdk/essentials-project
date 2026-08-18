@@ -28,7 +28,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [DoubleValueType]'s
  *
- * @param <T> the concrete [DoubleValueType] this instance is mapping
+ * @param T the concrete [DoubleValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class DoubleValueTypeColumnMapper<T : DoubleValueType<T>> : ColumnMapper<T?> {

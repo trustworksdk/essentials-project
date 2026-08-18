@@ -28,7 +28,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [ByteValueType]'s
  *
- * @param <T> the concrete [ByteValueType] this instance is mapping
+ * @param T the concrete [ByteValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class ByteValueTypeColumnMapper<T : ByteValueType<T>> : ColumnMapper<T?> {

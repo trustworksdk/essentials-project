@@ -25,9 +25,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [ShortValueType]<br>
+ * Base implementation for a value class that implements [ShortValueType]
  *
- * @param <T> the concrete [ShortValueType] value class
+ * @param T the concrete [ShortValueType] value class
  */
 abstract class ShortValueTypeArgumentFactory<T : ShortValueType<T>> : AbstractArgumentFactory<T>(Types.SMALLINT) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

@@ -28,7 +28,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [InstantValueType]'s
  *
- * @param <T> the concrete [InstantValueType] this instance is mapping
+ * @param T the concrete [InstantValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class InstantValueTypeColumnMapper<T : InstantValueType<T>> : ColumnMapper<T?> {

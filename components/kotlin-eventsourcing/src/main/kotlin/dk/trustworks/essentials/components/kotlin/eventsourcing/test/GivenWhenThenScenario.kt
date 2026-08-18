@@ -197,8 +197,6 @@ class GivenWhenThenScenario<CMD, EVENT>(val decider: Decider<CMD, EVENT>) {
      * ```
      *
      * This step is also known as the **Assert** step in Arrange, Act, Assert
-     * @param expectedEvent The event we expect to be returned from the [Decider.handle] method as a result of
-     * handling the [_whenCommand] using the [_givenEvents] past events
      * @return this [GivenWhenThenScenario] instance
      * @throws DidNotExpectAnEventException
      * @throws ExpectedAnEventButDidGetAnyEventException
@@ -279,11 +277,11 @@ class GivenWhenThenScenario<CMD, EVENT>(val decider: Decider<CMD, EVENT>) {
      * ```
      *
      * This step is also known as the **Assert** step in Arrange, Act, Assert
-     * @param expectedException The exception that we expect the [Decider.handle] to throw
+     * @param expectedExceptionType The type of exception that we expect the [Decider.handle] to throw
      * when handling the [_whenCommand] using the [_givenEvents] past events
      * @return this [GivenWhenThenScenario] instance
-     * @throws ExpectToFailWithAnExceptionButNoneWasThrown
-     * @throws ActualExceptionIsNotEqualToExpectedException
+     * @throws ExpectToFailWithAnExceptionTypeButNoneWasThrown
+     * @throws ActualExceptionTypeIsNotEqualToExpectedException
      */
     fun thenFailsWithExceptionType(expectedExceptionType: KClass<out Exception>): GivenWhenThenScenario<CMD, EVENT> {
         this._expectedExceptionType = expectedExceptionType

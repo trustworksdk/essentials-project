@@ -25,9 +25,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [BigIntegerValueType]<br>
+ * Base implementation for a value class that implements [BigIntegerValueType]
  *
- * @param <T> the concrete [BigIntegerValueType] value class
+ * @param T the concrete [BigIntegerValueType] value class
  */
 abstract class BigIntegerValueTypeArgumentFactory<T : BigIntegerValueType<T>> : AbstractArgumentFactory<T>(Types.NUMERIC) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

@@ -25,9 +25,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [DoubleValueType]<br>
+ * Base implementation for a value class that implements [DoubleValueType]
  *
- * @param <T> the concrete [DoubleValueType] value class
+ * @param T the concrete [DoubleValueType] value class
  */
 abstract class DoubleValueTypeArgumentFactory<T : DoubleValueType<T>> : AbstractArgumentFactory<T>(Types.DOUBLE) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

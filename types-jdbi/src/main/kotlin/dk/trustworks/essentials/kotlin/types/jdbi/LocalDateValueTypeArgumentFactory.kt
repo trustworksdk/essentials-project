@@ -26,9 +26,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [LocalDateValueType]<br>
+ * Base implementation for a value class that implements [LocalDateValueType]
  *
- * @param <T> the concrete [LocalDateValueType] value class
+ * @param T the concrete [LocalDateValueType] value class
  */
 abstract class LocalDateValueTypeArgumentFactory<T : LocalDateValueType<T>> : AbstractArgumentFactory<T>(Types.DATE) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

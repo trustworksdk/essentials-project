@@ -22,15 +22,16 @@ import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver.Companio
 import dk.trustworks.essentials.components.kotlin.eventsourcing.Evolver.Companion.extractEventsAsList
 
 /**
- * A [Decider] or View related interface, which can apply `EVENT`<(s) to a *aggregate/projection/view* `STATE` instance
+ * A [Decider] or View related interface, which can apply `EVENT`(s) to a *aggregate/projection/view* `STATE` instance
  *
- * @param EVENT The type of Events that can be applied in the [.applyEvent]
- * @param STATE The type of *aggregate/projection/view* `STATE` that [.applyEvent] supports
+ * @param EVENT The type of Events that can be applied in the [applyEvent]
+ * @param STATE The type of *aggregate/projection/view* `STATE` that [applyEvent] supports
  */
 fun interface Evolver<EVENT, STATE> {
     /**
-     * Apply the `EVENT` to the *aggregate/projection/view* `STATE` instance<br></br>
-     * **Note: This method is called `evolve` in the decider pattern**<br></br>
+     * Apply the `EVENT` to the *aggregate/projection/view* `STATE` instance
+     *
+     * **Note: This method is called `evolve` in the decider pattern**
      *
      * @param event the `EVENT` to be applied / projected onto the current *aggregate/projection/view* `STATE`
      * @param state the current `STATE` of the *aggregate/projection/view*
@@ -40,13 +41,13 @@ fun interface Evolver<EVENT, STATE> {
 
     companion object {
         /**
-         * Perform a left-fold over the `eventStream` using the `initialState` as the initial state<br></br>
+         * Perform a left-fold over the `eventStream` using the `initialState` as the initial state
          *
          * @param stateEvolver the state evolver (that applies events to the state)
          * @param initialState the initial state provided to the state evolver
          * @param eventStream  the stream of Events supplied one by one (in-order) to the state evolver
-         * @param EVENT      The type of Events that can be applied in the [.applyEvent]
-         * @param STATE      The type of *aggregate/projection/view* `STATE` that [.applyEvent] supports
+         * @param EVENT      The type of Events that can be applied in the [applyEvent]
+         * @param STATE      The type of *aggregate/projection/view* `STATE` that [applyEvent] supports
          * @return the initial state with all events applied to it
          */
         fun <STATE, EVENT> applyEvents(

@@ -29,7 +29,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [FloatValueType]'s
  *
- * @param <T> the concrete [FloatValueType] this instance is mapping
+ * @param T the concrete [FloatValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class FloatValueTypeColumnMapper<T : DoubleValueType<T>> : ColumnMapper<T?> {

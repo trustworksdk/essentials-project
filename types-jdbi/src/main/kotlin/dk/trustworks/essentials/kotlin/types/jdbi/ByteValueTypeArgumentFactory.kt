@@ -25,9 +25,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [ByteValueType]<br>
+ * Base implementation for a value class that implements [ByteValueType]
  *
- * @param <T> the concrete [ByteValueType] value class
+ * @param T the concrete [ByteValueType] value class
  */
 abstract class ByteValueTypeArgumentFactory<T : ByteValueType<T>> : AbstractArgumentFactory<T>(Types.TINYINT) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

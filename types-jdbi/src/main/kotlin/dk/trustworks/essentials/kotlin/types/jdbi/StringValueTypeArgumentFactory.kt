@@ -25,9 +25,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [StringValueType]<br>
+ * Base implementation for a value class that implements [StringValueType]
  *
- * @param <T> the concrete [StringValueType] value class
+ * @param T the concrete [StringValueType] value class
  */
 abstract class StringValueTypeArgumentFactory<T : StringValueType<T>> : AbstractArgumentFactory<T>(Types.VARCHAR) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

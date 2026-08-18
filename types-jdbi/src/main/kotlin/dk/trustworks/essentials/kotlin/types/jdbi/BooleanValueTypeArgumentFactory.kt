@@ -25,9 +25,9 @@ import java.sql.PreparedStatement
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [BooleanValueType]<br>
+ * Base implementation for a value class that implements [BooleanValueType]
  *
- * @param <T> the concrete [BooleanValueType] value class
+ * @param T the concrete [BooleanValueType] value class
  */
 abstract class BooleanValueTypeArgumentFactory<T : BooleanValueType<T>> : AbstractArgumentFactory<T>(Types.BOOLEAN) {
     override fun build(value: T, config: ConfigRegistry?): Argument {

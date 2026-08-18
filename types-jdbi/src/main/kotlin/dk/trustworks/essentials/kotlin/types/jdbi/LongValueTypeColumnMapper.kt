@@ -28,7 +28,7 @@ import kotlin.reflect.full.primaryConstructor
 /**
  * Generic [ColumnMapper] for [LongValueType]'s
  *
- * @param <T> the concrete [LongValueType] this instance is mapping
+ * @param T the concrete [LongValueType] this instance is mapping
  */
 @Suppress("UNCHECKED_CAST")
 abstract class LongValueTypeColumnMapper<T : LongValueType<T>> : ColumnMapper<T?> {

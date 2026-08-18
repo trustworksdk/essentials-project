@@ -26,9 +26,9 @@ import java.sql.Timestamp
 import java.sql.Types
 
 /**
- * Base implementation for a value class that implements [OffsetDateTimeValueType]<br>
+ * Base implementation for a value class that implements [OffsetDateTimeValueType]
  *
- * @param <T> the concrete [OffsetDateTimeValueType] value class
+ * @param T the concrete [OffsetDateTimeValueType] value class
  */
 abstract class OffsetDateTimeValueTypeArgumentFactory<T : OffsetDateTimeValueType<T>> : AbstractArgumentFactory<T>(Types.TIMESTAMP) {
     override fun build(value: T, config: ConfigRegistry?): Argument {
