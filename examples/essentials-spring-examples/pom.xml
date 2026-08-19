@@ -146,6 +146,34 @@
                     -->
                     <configuration>
                         <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                        <systemPropertyVariables>
+                            <!--
+                              The examples' application.properties points OTLP metrics and traces at the
+                              otel-collector from docker-compose.yml (localhost:4318). That collector is not
+                              running during `mvn verify`, so every export step and every context shutdown
+                              burns a connect attempt and dumps a ConnectException stack trace into the test
+                              output. Turn the *exporters* off for tests only - as system properties, so they
+                              outrank application.properties without a test-only copy of it, and without any
+                              @ActiveProfiles/@SpringBootTest(properties=...) on the individual IT classes.
+                              Instrumentation itself stays on: a MeterRegistry and the tracing/observation
+                              handlers are still wired, only the OTLP shipping is gone. Run an IT against a
+                              live collector with -Dmanagement.otlp.metrics.export.enabled=true
+                              -Dmanagement.tracing.export.enabled=true.
+                            -->
+                            <management.otlp.metrics.export.enabled>false</management.otlp.metrics.export.enabled>
+                            <management.tracing.export.enabled>false</management.tracing.export.enabled>
+                        </systemPropertyVariables>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <!-- Same OTLP silencing as failsafe above, for any unit test that boots the Spring context. -->
+                    <configuration>
+                        <systemPropertyVariables>
+                            <management.otlp.metrics.export.enabled>false</management.otlp.metrics.export.enabled>
+                            <management.tracing.export.enabled>false</management.tracing.export.enabled>
+                        </systemPropertyVariables>
                     </configuration>
                 </plugin>
             </plugins>
