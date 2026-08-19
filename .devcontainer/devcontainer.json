@@ -194,8 +194,8 @@
         "GIT_USER_EMAIL": "",
         // Development
         "NODE_ENV": "development",
-        // Java
-        "JAVA_HOME": "/usr/lib/jvm/temurin-jdk",
+        // NOTE: JAVA_HOME is deliberately NOT repeated here — it is declared once
+        // above, next to JAVA_TOOL_OPTIONS, with the rationale for pinning it.
         // Maven — stable, version-independent home (symlinked in the Dockerfile to
         // the pinned apache-maven-${MAVEN_VERSION}). Exposing it here makes it
         // visible to ALL processes, including the JetBrains/Gateway backend (which
