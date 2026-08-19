@@ -100,25 +100,73 @@
         // JetBrains terminal supplies a stale /usr/lib/jvm/msopenjdk-current, which does
         // not exist in this image and makes mvn refuse to start.
         "JAVA_HOME": "/usr/lib/jvm/temurin-jdk",
-        // Cross-tool telemetry opt-out. DO_NOT_TRACK=1 is the cross-tool standard
-        // (https://consoledonottrack.com).
+        // Telemetry opt-out. CodeGraph is telemetry default-on and posts events to
+        // telemetry.getcodegraph.com (→ PostHog, US). Per its docs it shares only
+        // anonymous aggregates — random local machine_id, version, OS/arch, Node
+        // major, CI flag, plus install/index/daily-usage/uninstall events (language
+        // names, coarse file-count & duration buckets, per-tool call counts) — and
+        // explicitly NOT source code, file/dir/repo names or paths, symbol names,
+        // search queries, IPs, hostnames, usernames, emails, or env vars. Restrained,
+        // but default-on to a managed backend, so we disable it in the
+        // container. NOTE: this container has no INSTALL_CODEGRAPH toggle and does
+        // not install CodeGraph — these are pinned pre-emptively so the opt-out is
+        // already in force the day it is added (and if anyone installs it by hand),
+        // and they cost nothing while it is absent. They apply to every process in
+        // the container, including a `codegraph serve --mcp` server Claude Code
+        // might spawn. CODEGRAPH_TELEMETRY=0 is CodeGraph-specific; DO_NOT_TRACK=1
+        // is the cross-tool opt-out standard (https://consoledonottrack.com).
+        // If CodeGraph is ever added to post-create.sh, also run
+        // `codegraph telemetry off` there as a third, persisted opt-out
+        // ("off means off" — no events recorded, no connection opened, no opt-out ping).
+        "CODEGRAPH_TELEMETRY": "0",
         "DO_NOT_TRACK": "1",
+        // CodeGraph also background-checks GitHub for a newer release from the
+        // long-lived `codegraph serve --mcp` process (>= 1.5.0). DO_NOT_TRACK=1
+        // already suppresses it; this is the dedicated switch, pinned explicitly so
+        // the opt-out does not rest on one incidental var.
+        // NOTE (not an env var): `codegraph install` / `codegraph upgrade` offer a
+        // one-time Pro beta-waitlist prompt that POSTs an email to
+        // getcodegraph.com/api/waitlist. Strictly opt-in and TTY-gated, so a
+        // non-interactive install can never trigger it — but do not answer it if
+        // you run those commands by hand.
+        "CODEGRAPH_NO_UPDATE_CHECK": "1",
+
         // Local-first stack: keep everything offline. graphify ships no telemetry
-        // (we also disable its local query log); headroom's only network touch is
-        // an update check, disabled here; CCR originals + state live on the
-        // ~/.headroom named volume (HEADROOM_WORKSPACE_DIR). Harmless when the
-        // tools aren't installed.
+        // (we also disable its local query log — opt-in upstream since #1797, but
+        // pinned off here). headroom is the one that needs additional configuration: since 0.35.0 it
+        // has TWO independent telemetry switches, and they default OPPOSITELY.
+        //   HEADROOM_TELEMETRY — local aggregation only, off by default, fail-CLOSED.
+        //                        Never leaves the machine; we do not set it. Note: may change in the future
+        //   HEADROOM_BEACON    — uploads anonymous session summaries to Headroom Labs
+        //                        (headroom-beacon.workers.dev). ON by default and
+        //                        fail-OPEN (an unrecognised value uploads), and it
+        //                        fires on the MCP path we use: ccr/mcp_server.py
+        //                        beacons after every headroom_compress, per subagent.
+        // DO_NOT_TRACK=1 above does disable the beacon, but resting a default-on
+        // uploader on one incidental var is not a posture. HEADROOM_OFFLINE=1 is the
+        // upstream fail-closed master switch right now (beacon + update check + the managed
+        // licence/usage reporter + HuggingFace downloads, all off together); the
+        // per-feature vars are kept alongside it so the intent survives a refactor.
+        // Note for this install: the offline flag only forces HF/Transformers offline
+        // (we install `[code,mcp]` — no ML extras), and headroom_stats reads its own
+        // counters + the savings ledger, not the telemetry collector.
+        // CCR originals + state live on the ~/.headroom named volume
+        // (HEADROOM_WORKSPACE_DIR). Harmless when the tools are not installed.
+        "HEADROOM_BEACON": "off",
+        "HEADROOM_OFFLINE": "1",
         "GRAPHIFY_QUERY_LOG_DISABLE": "1",
-        // Make the local `graphify update` rebuild authoritative. update (run by
-        // post-create + the post-commit/post-checkout git hooks) resolves symbol
-        // references to their defining file and prunes duplicate/JDK-stdlib stub
-        // nodes, so a fresh rebuild often has FEWER (cleaner) nodes than one left
-        // by the heavier `graphify extract`. Without this flag graphify's node-count
-        // guard refuses to overwrite a larger graph (also fires after code-deleting
-        // refactors), so code changes silently stop landing. Forcing lets the leaner,
-        // better-resolved rebuild win — safe because graphify-out/ is gitignored and
-        // fully rebuildable. Read by CLI + hooks (GRAPHIFY_FORCE=1).
+        // Make the local `graphify update` rebuild AUTHORITATIVE. `update` (run by
+        // post-create and by graphify's own post-commit/post-checkout git hooks)
+        // resolves symbol references to their defining file and prunes duplicate /
+        // JDK-stdlib stub nodes, so a fresh rebuild often has FEWER (cleaner) nodes
+        // than one left behind by the heavier `graphify extract`. Without this flag
+        // graphify's node-count guard refuses to overwrite the larger graph — which
+        // also fires after any code-deleting refactor — and code changes then stop
+        // landing in the graph SILENTLY. Forcing lets the leaner, better-resolved
+        // rebuild win; safe because graphify-out/ is gitignored and fully
+        // rebuildable. Read by both the CLI and the hooks.
         "GRAPHIFY_FORCE": "1",
+
         "HEADROOM_UPDATE_CHECK": "off",
         "HEADROOM_WORKSPACE_DIR": "/home/vscode/.headroom",
         // Expose headroom's 4th MCP tool, headroom_read (default "off" — see

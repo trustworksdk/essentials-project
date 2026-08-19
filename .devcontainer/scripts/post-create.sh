@@ -328,7 +328,15 @@ fi
 if [ "${INSTALL_HEADROOM:-false}" = "true" ]; then
     echo "Setting up headroom (context compression — MCP mode)..."
     export PATH="$HOME/.local/bin:$PATH"
-    # No-network update check + deterministic local state dir (named volume).
+    # No egress + deterministic local state dir (named volume). Defence-in-depth
+    # alongside the containerEnv vars, so `uv tool install`, `headroom mcp install`
+    # and any headroom process this script starts are covered even if the container
+    # env is edited away. HEADROOM_BEACON is the one that matters: since 0.35.0 the
+    # anonymous session-summary upload to Headroom Labs is ON by default and
+    # fail-open, and it fires on the MCP path (after every headroom_compress).
+    # HEADROOM_OFFLINE is upstream's fail-closed master switch for all of it.
+    export HEADROOM_BEACON=off
+    export HEADROOM_OFFLINE=1
     export HEADROOM_UPDATE_CHECK=off
     export HEADROOM_WORKSPACE_DIR="$HOME/.headroom"
     if command -v uv &> /dev/null; then

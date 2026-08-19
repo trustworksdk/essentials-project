@@ -69,9 +69,9 @@ ARG KOTLIN_LS_SHA256_ARM64="c3edd59ef34a7faa4d04f3517afb7a932b19c3f9cf17d1a14e9d
 #   curl -fsSL -H "Accept: application/vnd.github+json" \
 #     https://api.github.com/repos/rtk-ai/rtk/releases/tags/v<ver> \
 #     | python3 -c "import sys,json;[print(a['name'],a.get('digest')) for a in json.load(sys.stdin)['assets']]"
-ARG RTK_VERSION="0.43.0"
-ARG RTK_SHA256_AMD64="ff8a1e7766496e175291a85aeca1dc97c9ff6df33e51e5893d1fbc78fea2a609"
-ARG RTK_SHA256_ARM64="5519f7ca12e5c143a609f0d28a0a77b97413a8dce31c2681f1a41c24519a8731"
+ARG RTK_VERSION="0.45.0"
+ARG RTK_SHA256_AMD64="c4c036fbf181fc55ef329786c8c17e0d427972b053b825944d968a6aafef1ba4"
+ARG RTK_SHA256_ARM64="80a746dd305ef944ff50ef011ae4ce3878dd5ba88dfe35d859d05498191637c3"
 
 # -----------------------------------------------------------------------------
 # JetBrains Configuration
