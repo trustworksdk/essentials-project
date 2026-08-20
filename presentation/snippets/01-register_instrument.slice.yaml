@@ -1,0 +1,29 @@
+schemaVersion: "1.1"
+slice: market_data.register_instrument
+kind: command
+bc: market_data
+owner: market-data-team
+status: live
+summary: Register a new instrument's reference data (symbol and display name).
+generator: essentials
+language: java
+
+handles: [RegisterInstrument]
+publishes: [InstrumentRegistered]
+writes: [Instrument]
+reads: []
+endpoints:
+  - { method: POST, path: /api/admin/instruments, auth: anonymous }
+invariants:
+  - id: INV-RI-1
+    text: "An instrument always starts un-suspended with the supplied symbol and display name"
+    enforcedBy: Instrument
+  - id: INV-RI-2
+    text: "The caller supplies the InstrumentId, so a retried registration addresses the same instrument rather than minting a second one"
+    enforcedBy: RegisterInstrument
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: false }
+  contract: { present: false }
