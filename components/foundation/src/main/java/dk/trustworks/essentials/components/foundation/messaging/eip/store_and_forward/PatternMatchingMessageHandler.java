@@ -16,11 +16,12 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward;
 
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.operation.InvokeMessageHandlerMethod;
 import dk.trustworks.essentials.components.foundation.messaging.queue.Message;
+import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.shared.interceptor.InterceptorChain;
-import dk.trustworks.essentials.shared.reflection.ReflectionException;
+import dk.trustworks.essentials.shared.reflection.*;
 import dk.trustworks.essentials.shared.reflection.invocation.*;
 
 import java.lang.reflect.Method;
@@ -61,6 +62,16 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
     private final Object                               invokeMessageHandlerMethodsOn;
     private final List<MessageHandlerInterceptor>      interceptors;
     private       boolean                              allowUnmatchedMessages = false;
+    /**
+     * Optional - when set, this {@link PatternMatchingMessageHandler} takes over the {@link UnitOfWork} boundary and
+     * opens a {@link UnitOfWork} per {@link MessageHandler} annotated method invocation, according to that method's
+     * {@link MessageHandler#unitOfWork()}.<br>
+     * When left null the historic behaviour applies: methods are invoked as-is, and whoever dispatches the
+     * {@link Message} is responsible for the {@link UnitOfWork}.
+     *
+     * @see #setUnitOfWorkFactory(UnitOfWorkFactory)
+     */
+    private       UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory;
 
     /**
      * Create an {@link PatternMatchingMessageHandler} that can resolve and invoke message handler methods, i.e. methods
@@ -107,6 +118,55 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
         return new PatternMatchingMethodInvoker<>(invokeMessageHandlerMethodsOn,
                                                   new MessageHandlerMethodPatternMatcher(),
                                                   InvocationStrategy.InvokeMostSpecificTypeMatched);
+    }
+
+    /**
+     * Hand this {@link PatternMatchingMessageHandler} the {@link UnitOfWork} boundary, so that it opens a
+     * {@link UnitOfWork} per {@link MessageHandler} annotated method invocation, honouring that method's
+     * {@link MessageHandler#unitOfWork()} mode:
+     * <ul>
+     *   <li>{@link UnitOfWorkMode#REQUIRED} (the default): the method is invoked inside a {@link UnitOfWork}, which
+     *       joins an already active {@link UnitOfWork} if there is one</li>
+     *   <li>{@link UnitOfWorkMode#NONE}: the method is invoked as-is, with no {@link UnitOfWork} opened for it</li>
+     * </ul>
+     * The dispatcher delivering the {@link Message} must not have opened a {@link UnitOfWork} itself, otherwise
+     * {@link UnitOfWorkMode#NONE} cannot take effect - see {@link UnitOfWorkBoundaryOwningMessageConsumer}.
+     * <p>
+     * Leaving the {@link UnitOfWorkFactory} unset keeps the historic behaviour, where the dispatcher owns the
+     * {@link UnitOfWork} and {@link MessageHandler#unitOfWork()} is not honoured.
+     *
+     * @param unitOfWorkFactory the {@link UnitOfWorkFactory} used to open a {@link UnitOfWork} per handler invocation
+     * @return this instance
+     */
+    public PatternMatchingMessageHandler setUnitOfWorkFactory(UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory) {
+        this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
+        return this;
+    }
+
+    /**
+     * Does this handler contain at least one {@link MessageHandler} annotated method declared with
+     * {@link UnitOfWorkMode#NONE}?
+     *
+     * @return see description above
+     * @see UnitOfWorkBoundaryOwningMessageConsumer#hasNonTransactionalMessageHandlers()
+     */
+    public boolean hasNonTransactionalMessageHandlers() {
+        return Methods.methods(invokeMessageHandlerMethodsOn.getClass())
+                      .stream()
+                      .filter(method -> method.getDeclaringClass() != Object.class)
+                      .anyMatch(method -> resolveUnitOfWorkMode(method) == UnitOfWorkMode.NONE);
+    }
+
+    /**
+     * Resolve the {@link UnitOfWorkMode} declared by the given method's {@link MessageHandler} annotation
+     *
+     * @param method the method to resolve the {@link UnitOfWorkMode} for
+     * @return the declared {@link UnitOfWorkMode}, or {@link UnitOfWorkMode#REQUIRED} if the method isn't a
+     * {@link MessageHandler} annotated method
+     */
+    private static UnitOfWorkMode resolveUnitOfWorkMode(Method method) {
+        var messageHandlerAnnotation = method.getAnnotation(MessageHandler.class);
+        return messageHandlerAnnotation != null ? messageHandlerAnnotation.unitOfWork() : UnitOfWorkMode.REQUIRED;
     }
 
     public PatternMatchingMessageHandler addInterceptor(MessageHandlerInterceptor interceptor) {
@@ -262,7 +322,16 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
                                                                                                 operation), e);
                                                           }
                                                       });
-            operationresultinterceptorTypeInterceptorChain.proceed();
+
+            if (unitOfWorkFactory != null && resolveUnitOfWorkMode(methodToInvoke) == UnitOfWorkMode.REQUIRED) {
+                // This handler owns the UnitOfWork boundary - open one around the interceptor chain, matching the
+                // scope the dispatcher used to provide (i.e. interceptors run inside the UnitOfWork)
+                unitOfWorkFactory.usingUnitOfWork(operationresultinterceptorTypeInterceptorChain::proceed);
+            } else {
+                // Either the dispatcher owns the UnitOfWork boundary (historic behaviour), or the method is declared
+                // with UnitOfWorkMode.NONE and must run without one, so it can perform blocking I/O
+                operationresultinterceptorTypeInterceptorChain.proceed();
+            }
         }
     }
 }

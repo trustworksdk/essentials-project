@@ -29,6 +29,7 @@ import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageConsumptionMode.SingleGlobalConsumer;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * The {@link Inbox} supports the transactional Store and Forward pattern from Enterprise Integration Patterns supporting At-Least-Once delivery guarantee.<br>
@@ -227,7 +228,30 @@ public interface Inboxes {
             @Override
             public Inbox setMessageConsumer(Consumer<Message> messageConsumer) {
                 this.messageConsumer = requireNonNull(messageConsumer, "No messageConsumer provided");
+                verifyNonTransactionalMessageHandlersAreSupported();
                 return this;
+            }
+
+            /**
+             * A {@link UnitOfWorkBoundaryOwningMessageConsumer} with handlers that require the absence of an ambient
+             * {@link UnitOfWork} cannot be supported under {@link TransactionalMode#FullyTransactional}, because the
+             * {@link DurableQueues} consumer then wraps message fetching, handling and acknowledgement in one shared
+             * {@link UnitOfWork} that this {@link Inbox} has no way of suspending.<br>
+             * Fail fast at wiring time rather than silently performing the blocking call inside a database transaction.
+             */
+            private void verifyNonTransactionalMessageHandlersAreSupported() {
+                // Only ask the DurableQueues about its TransactionalMode if the consumer actually needs a
+                // UnitOfWork-free window - a plain Consumer<Message> must not cause any interaction with the queues here
+                if (messageConsumer instanceof UnitOfWorkBoundaryOwningMessageConsumer boundaryOwningConsumer
+                        && boundaryOwningConsumer.hasNonTransactionalMessageHandlers()
+                        && durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {
+                    throw new IllegalStateException(msg("Inbox '{}' has a message consumer with one or more @MessageHandler methods declared with UnitOfWorkMode.NONE, " +
+                                                        "which requires the DurableQueues to use TransactionalMode.{} - but it is configured with TransactionalMode.{}, " +
+                                                        "where message fetching, handling and acknowledgement all share a single UnitOfWork",
+                                                        config.inboxName,
+                                                        TransactionalMode.SingleOperationTransaction,
+                                                        TransactionalMode.FullyTransactional));
+                }
             }
 
             @Override
@@ -388,23 +412,54 @@ public interface Inboxes {
                 return durableQueues.consumeFromQueue(inboxQueueName,
                                                       config.redeliveryPolicy,
                                                       config.numberOfParallelMessageConsumers,
-                                                      queuedMessage -> {
-                                                          if (config.messageConsumptionMode == SingleGlobalConsumer) {
-                                                              queuedMessage.getMetaData().put(MessageMetaData.FENCED_LOCK_TOKEN,
-                                                                                              lock.getCurrentToken().toString());
-                                                          }
-                                                          handleMessage(queuedMessage);
-                                                      });
+                                                      createQueuedMessageHandler(lock));
+            }
+
+            /**
+             * Create the {@link QueuedMessageHandler} that forwards queued messages to the {@link #messageConsumer}.<br>
+             * When the consumer owns the {@link UnitOfWork} boundary the handler is marked as a
+             * {@link UnitOfWorkBoundaryOwningQueuedMessageHandler}, so that the {@link DurableQueues} implementation
+             * doesn't wrap the handler invocation in a {@link UnitOfWork} of its own - which is what leaves a
+             * {@link UnitOfWork}-free window for handlers performing blocking I/O.
+             *
+             * @param lock the {@link FencedLock} held when {@link MessageConsumptionMode#SingleGlobalConsumer} is used, otherwise null
+             * @return the {@link QueuedMessageHandler} to consume the {@link Inbox}'s durable queue with
+             */
+            private QueuedMessageHandler createQueuedMessageHandler(FencedLock lock) {
+                if (ownsItsOwnUnitOfWorkBoundary()) {
+                    return (UnitOfWorkBoundaryOwningQueuedMessageHandler) queuedMessage -> forwardToMessageConsumer(queuedMessage, lock);
+                }
+                return queuedMessage -> forwardToMessageConsumer(queuedMessage, lock);
+            }
+
+            private void forwardToMessageConsumer(QueuedMessage queuedMessage, FencedLock lock) {
+                if (config.messageConsumptionMode == SingleGlobalConsumer) {
+                    queuedMessage.getMetaData().put(MessageMetaData.FENCED_LOCK_TOKEN,
+                                                    lock.getCurrentToken().toString());
+                }
+                handleMessage(queuedMessage);
             }
 
             @SuppressWarnings("unchecked")
             private void handleMessage(QueuedMessage queuedMessage) {
-                if (durableQueues.getUnitOfWorkFactory().isPresent()) {
+                if (durableQueues.getUnitOfWorkFactory().isPresent() && !ownsItsOwnUnitOfWorkBoundary()) {
                     durableQueues.getUnitOfWorkFactory().get()
                                  .usingUnitOfWork(() -> messageConsumer.accept(queuedMessage.getMessage()));
                 } else {
+                    // Either there's no UnitOfWorkFactory at all, or the consumer has taken over the
+                    // UnitOfWork boundary and opens/commits its own UnitOfWork(s) per message
                     messageConsumer.accept(queuedMessage.getMessage());
                 }
+            }
+
+            /**
+             * Has the {@link #messageConsumer} taken over responsibility for the {@link UnitOfWork} boundary?
+             *
+             * @return true if the consumer is a {@link UnitOfWorkBoundaryOwningMessageConsumer}
+             * @see UnitOfWorkBoundaryOwningMessageConsumer
+             */
+            private boolean ownsItsOwnUnitOfWorkBoundary() {
+                return messageConsumer instanceof UnitOfWorkBoundaryOwningMessageConsumer;
             }
 
             @Override
