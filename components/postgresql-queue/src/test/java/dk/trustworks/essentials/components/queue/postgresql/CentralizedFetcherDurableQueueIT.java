@@ -51,6 +51,8 @@ public class CentralizedFetcherDurableQueueIT {
 
     private JdbiUnitOfWorkFactory   unitOfWorkFactory;
     private PostgresqlDurableQueues durableQueues;
+    // Held so cleanup() can close it - the container is shared by every test in this class, so a pool
+    // left open per test method eventually exhausts PostgreSQL's max_connections.
     private HikariDataSource        dataSource;
 
     @BeforeEach
@@ -70,6 +72,10 @@ public class CentralizedFetcherDurableQueueIT {
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
                                                .setUseCentralizedMessageFetcher(true)
                                                .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(20))
+                                               // Explicit, not inherited from the builder default: this class is the
+                                               // unified-query half of a pair with CentralizedFetcherDurableQueueIT_WithOrderedUnordered.
+                                               // The default is now true, so relying on it would silently turn the two
+                                               // classes into duplicates and drop all coverage of the unified query.
                                                .setUseOrderedUnorderedQuery(false)
                                                .build();
         durableQueues.start();

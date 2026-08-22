@@ -252,7 +252,10 @@ public final class PostgresqlDurableQueuesBuilder {
      * (the default) separate fetch queries and partial indexes are used for ordered and unordered messages;
      * when {@code false} a single unified query serves both.
      * <p>
-     * Leave this on unless you have a measured reason not to.
+     * Leave this on unless you have a measured reason not to. The unified query applies the ordered per-key
+     * barrier to every candidate row, including unordered ones that cannot need it, which measured 5.4x
+     * slower on a backlog containing both kinds. Pure-ordered traffic is indifferent, since it needs the
+     * barrier either way. See {@code docs/durable-queues-redesign-measurements.md}.
      *
      * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
      * @return this builder instance

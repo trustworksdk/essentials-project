@@ -1,0 +1,332 @@
+/*
+ * Copyright 2021-2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package dk.trustworks.essentials.examples.perflab.queuedesign;
+
+import java.util.List;
+
+/**
+ * Throwaway schema prototypes for the write-cost comparison driven by {@code QueueSchemaWriteCostScenario}.
+ * Deliberately raw DDL and SQL rather than a {@code DurableQueues} implementation: the question is what
+ * index maintenance costs per write, and routing the workload through the real component would bury that
+ * under the per-message connection acquisition already known to dominate.
+ *
+ * Index names are single letters because PostgreSQL truncates identifiers at 63 bytes, and descriptive
+ * suffixes on an already-long generated table name collided after truncation.
+ *
+ * <h2>The hypothesis under test, stated precisely</h2>
+ * An earlier draft of the v2 plan claimed the win was that "no fetch can ever be a HOT update" because the
+ * claim statement mutates columns appearing in index predicates. That framing is wrong, and this prototype is
+ * built to expose why: the v2 unordered table indexes {@code next_delivery_ts} and {@code is_being_delivered}
+ * too, so it cannot produce HOT updates either. Both schemas should show {@code n_tup_hot_upd} at or near
+ * zero for the claim phase.
+ * <p>
+ * The real hypothesis is <strong>index write amplification</strong>. v1 keeps every message in one table
+ * carrying six secondary indexes, three of which exist purely for ordered delivery, so an unordered message
+ * pays maintenance on all six at insert, at claim, and at delete. A split unordered table needs one. If the
+ * effect is real it should appear as a wall-clock difference in the insert and claim phases and as a large
+ * difference in total index bytes.
+ */
+public final class QueueSchemaPrototype {
+
+    private QueueSchemaPrototype() {
+    }
+
+    /**
+     * Columns shared by every variant, matching v1's {@code durable_queues} table so the row width — and
+     * therefore the heap cost — is comparable. The ordered variants add {@code key} and {@code key_order}.
+     */
+    private static final String COMMON_COLUMNS = """
+            id                     TEXT PRIMARY KEY,
+            queue_name             TEXT NOT NULL,
+            message_payload        JSONB NOT NULL,
+            message_payload_type   TEXT NOT NULL,
+            added_ts               TIMESTAMPTZ NOT NULL,
+            next_delivery_ts       TIMESTAMPTZ,
+            delivery_ts            TIMESTAMPTZ DEFAULT NULL,
+            total_attempts         INTEGER DEFAULT 0,
+            redelivery_attempts    INTEGER DEFAULT 0,
+            last_delivery_error    TEXT DEFAULT NULL,
+            is_being_delivered     BOOLEAN DEFAULT FALSE,
+            is_dead_letter_message BOOLEAN NOT NULL DEFAULT FALSE,
+            meta_data              JSONB DEFAULT NULL,
+            delivery_mode          TEXT NOT NULL
+            """;
+
+    /**
+     * v1: one table for both delivery modes, carrying all six secondary indexes copied from
+     * {@code DurableQueuesSql}. {@code fillFactor} of 100 reproduces v1 exactly; a lower value is the cheap
+     * tuning alternative the scenario also measures.
+     */
+    public static List<String> v1SingleTableDdl(String table, int fillFactor) {
+        return List.of(
+                "CREATE TABLE " + table + " (" + COMMON_COLUMNS + ", key TEXT DEFAULT NULL, key_order BIGINT DEFAULT -1) WITH (fillfactor=" + fillFactor + ")",
+                "CREATE INDEX idx_" + table + "_a ON " + table + " (queue_name, key, key_order)",
+                "CREATE INDEX idx_" + table + "_b ON " + table + " (queue_name, is_dead_letter_message, is_being_delivered, next_delivery_ts)",
+                """
+                CREATE INDEX idx_%1$s_c ON %1$s (queue_name, next_delivery_ts, key, key_order)
+                  WHERE is_dead_letter_message = FALSE AND is_being_delivered = FALSE
+                """.formatted(table),
+                """
+                CREATE INDEX idx_%1$s_d ON %1$s (key, queue_name, key_order, next_delivery_ts) INCLUDE (id)
+                  WHERE key IS NOT NULL AND NOT is_dead_letter_message AND NOT is_being_delivered
+                """.formatted(table),
+                """
+                CREATE INDEX idx_%1$s_e ON %1$s (queue_name, next_delivery_ts) INCLUDE (id)
+                  WHERE key IS NULL AND NOT is_dead_letter_message AND NOT is_being_delivered
+                """.formatted(table),
+                """
+                CREATE INDEX idx_%1$s_f ON %1$s (queue_name, key_order, next_delivery_ts) INCLUDE (id)
+                  WHERE key IS NOT NULL AND is_dead_letter_message = FALSE AND is_being_delivered = FALSE
+                """.formatted(table));
+    }
+
+    /**
+     * v2 unordered table: no {@code key}/{@code key_order} columns at all, and exactly one secondary index —
+     * the only access pattern an unordered consumer has.
+     */
+    public static List<String> v2UnorderedTableDdl(String table, int fillFactor) {
+        return List.of(
+                "CREATE TABLE " + table + " (" + COMMON_COLUMNS + ") WITH (fillfactor=" + fillFactor + ")",
+                """
+                CREATE INDEX idx_%1$s_a ON %1$s (queue_name, next_delivery_ts) INCLUDE (id)
+                  WHERE NOT is_dead_letter_message AND NOT is_being_delivered
+                """.formatted(table));
+    }
+
+    /**
+     * v2 ordered table: keeps the three indexes the ordered access patterns need — the per-key barrier lookup,
+     * the ready scan and the head scan — but is never touched by unordered traffic.
+     */
+    public static List<String> v2OrderedTableDdl(String table, int fillFactor) {
+        return List.of(
+                "CREATE TABLE " + table + " (" + COMMON_COLUMNS + ", key TEXT NOT NULL, key_order BIGINT NOT NULL) WITH (fillfactor=" + fillFactor + ")",
+                "CREATE INDEX idx_" + table + "_a ON " + table + " (queue_name, key, key_order)",
+                """
+                CREATE INDEX idx_%1$s_b ON %1$s (key, queue_name, key_order, next_delivery_ts) INCLUDE (id)
+                  WHERE NOT is_dead_letter_message AND NOT is_being_delivered
+                """.formatted(table),
+                """
+                CREATE INDEX idx_%1$s_c ON %1$s (queue_name, key_order, next_delivery_ts) INCLUDE (id)
+                  WHERE NOT is_dead_letter_message AND NOT is_being_delivered
+                """.formatted(table));
+    }
+
+    /**
+     * Insert used by every variant that has no key columns.
+     */
+    public static String insertUnorderedSql(String table) {
+        return "INSERT INTO " + table + " (id, queue_name, message_payload, message_payload_type, added_ts, next_delivery_ts, delivery_mode) "
+                + "VALUES (:id, :queueName, :payload::jsonb, :payloadType, :now, :now, 'NORMAL')";
+    }
+
+    public static String insertOrderedSql(String table, boolean hasKeyColumns) {
+        if (!hasKeyColumns) {
+            throw new IllegalArgumentException("Ordered insert requires a table with key columns");
+        }
+        return "INSERT INTO " + table + " (id, queue_name, message_payload, message_payload_type, added_ts, next_delivery_ts, delivery_mode, key, key_order) "
+                + "VALUES (:id, :queueName, :payload::jsonb, :payloadType, :now, :now, 'IN_ORDER', :key, :keyOrder)";
+    }
+
+    /**
+     * Unordered claim. Same shape as v1's {@code buildUnorderedSqlStatement} — the point of the comparison is
+     * the index maintenance the UPDATE triggers, so the statement itself must not differ between arms.
+     * <p>
+     * {@code keyIsNullPredicate} is required on v1's shared table, where unordered rows must be distinguished
+     * from ordered ones, and absent on v2's unordered table, where every row is unordered by construction.
+     */
+    public static String claimUnorderedSql(String table, boolean keyIsNullPredicate) {
+        return """
+               WITH ready AS (
+                 SELECT id FROM %1$s
+                  WHERE queue_name = :queueName
+                    AND is_dead_letter_message = FALSE
+                    AND is_being_delivered     = FALSE
+                    AND next_delivery_ts      <= :now
+                    %2$s
+                  ORDER BY next_delivery_ts
+                  LIMIT :limit
+                  FOR UPDATE SKIP LOCKED
+               )
+               UPDATE %1$s q
+                  SET total_attempts     = q.total_attempts + 1,
+                      next_delivery_ts   = NULL,
+                      is_being_delivered = TRUE,
+                      delivery_ts        = :now
+                 FROM ready r
+                WHERE q.id = r.id
+               RETURNING q.id
+               """.formatted(table, keyIsNullPredicate ? "AND key IS NULL" : "");
+    }
+
+    /**
+     * Ordered claim, carrying the per-key barrier. {@code keyNotNullPredicate} is needed only where unordered
+     * rows share the table.
+     */
+    public static String claimOrderedSql(String table, boolean keyNotNullPredicate) {
+        return """
+               WITH ready AS (
+                 SELECT id FROM %1$s q1
+                  WHERE q1.queue_name = :queueName
+                    AND q1.is_dead_letter_message = FALSE
+                    AND q1.is_being_delivered     = FALSE
+                    AND q1.next_delivery_ts      <= :now
+                    %2$s
+                    AND NOT EXISTS (SELECT 1 FROM %1$s q2
+                                     WHERE q2.key = q1.key
+                                       AND q2.queue_name = q1.queue_name
+                                       AND q2.key_order < q1.key_order)
+                  ORDER BY q1.key_order, q1.next_delivery_ts
+                  LIMIT :limit
+                  FOR UPDATE SKIP LOCKED
+               )
+               UPDATE %1$s q
+                  SET total_attempts     = q.total_attempts + 1,
+                      next_delivery_ts   = NULL,
+                      is_being_delivered = TRUE,
+                      delivery_ts        = :now
+                 FROM ready r
+                WHERE q.id = r.id
+               RETURNING q.id
+               """.formatted(table, keyNotNullPredicate ? "AND q1.key IS NOT NULL" : "");
+    }
+
+    /**
+     * Acknowledgement, batched so the per-statement overhead does not swamp the index-maintenance signal the
+     * comparison is after.
+     */
+    public static String deleteBatchSql(String table) {
+        return "DELETE FROM " + table + " WHERE id IN (<ids>)";
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Cursor variant: ordered messages with an explicit per-key progress cursor instead of the
+    // correlated NOT EXISTS barrier.
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * Ordered table for the cursor variant. Identical to {@link #v2OrderedTableDdl} minus the two indexes
+     * that exist only to serve the barrier — the cursor drives from the key-state table instead, so the only
+     * lookup needed is "lowest key_order above the cursor for this key".
+     */
+    public static List<String> cursorOrderedTableDdl(String table, int fillFactor) {
+        return List.of(
+                "CREATE TABLE " + table + " (" + COMMON_COLUMNS + ", key TEXT NOT NULL, key_order BIGINT NOT NULL) WITH (fillfactor=" + fillFactor + ")",
+                """
+                CREATE INDEX idx_%1$s_a ON %1$s (queue_name, key, key_order) INCLUDE (id)
+                  WHERE NOT is_dead_letter_message AND NOT is_being_delivered
+                """.formatted(table));
+    }
+
+    /**
+     * The cursor itself: one row per {@code (queue_name, key)} recording how far that key has been handled.
+     * <p>
+     * {@code completed_through} is the <em>highest completed</em> order, not the next expected one. That
+     * distinction is load-bearing: {@code key_order} has neither a uniqueness nor a contiguity guarantee, and
+     * {@code deleteMessage} / {@code purgeQueue} can remove rows, so a next-expected cursor would wedge on the
+     * first gap. "Lowest order above the cursor" is gap-tolerant, which is the property the NOT EXISTS
+     * barrier has for free and which a naive cursor would throw away.
+     */
+    public static List<String> cursorKeyStateDdl(String table) {
+        return List.of(
+                """
+                CREATE TABLE %1$s (
+                  queue_name        TEXT   NOT NULL,
+                  key               TEXT   NOT NULL,
+                  completed_through BIGINT NOT NULL,
+                  PRIMARY KEY (queue_name, key)
+                )
+                """.formatted(table));
+    }
+
+    /**
+     * Seeds one cursor row per key present in the message table, starting below the lowest possible order.
+     * A real implementation would create the row on first enqueue for the key.
+     */
+    public static String seedKeyStateSql(String keyStateTable, String messageTable) {
+        return "INSERT INTO " + keyStateTable + " (queue_name, key, completed_through) "
+                + "SELECT DISTINCT queue_name, key, -1 FROM " + messageTable + " WHERE queue_name = :queueName";
+    }
+
+    /**
+     * Cursor claim. The structural difference from the barrier, and the whole point of the prototype.
+     * <p>
+     * The barrier version evaluates {@code NOT EXISTS (… key_order < mine)} against every candidate row in the
+     * table. This drives from the key-state table instead: one row per key, and a {@code LATERAL} lookup that
+     * walks the {@code (queue_name, key, key_order)} index to the first eligible message for that key. Work is
+     * proportional to the number of keys rather than to the number of queued messages.
+     * <p>
+     * Per-key exclusivity still comes from {@code is_being_delivered}: the only eligible row for a key is the
+     * lowest above its cursor, so while that row is in flight the key yields nothing. The
+     * {@code is_being_delivered = FALSE} guard on the UPDATE is what makes the claim safe against a concurrent
+     * claimer; full multi-node concurrency control is out of scope for this prototype, which runs
+     * single-connection.
+     */
+    public static String claimOrderedViaCursorSql(String messageTable, String keyStateTable) {
+        return """
+               WITH candidate AS (
+                 SELECT head.id
+                   FROM %2$s ks
+                   CROSS JOIN LATERAL (
+                     SELECT m.id
+                       FROM %1$s m
+                      WHERE m.queue_name             = ks.queue_name
+                        AND m.key                    = ks.key
+                        AND m.key_order              > ks.completed_through
+                        AND m.is_dead_letter_message = FALSE
+                        AND m.is_being_delivered     = FALSE
+                        AND m.next_delivery_ts      <= :now
+                      ORDER BY m.key_order
+                      LIMIT 1
+                   ) head
+                  WHERE ks.queue_name = :queueName
+                  LIMIT :limit
+               )
+               UPDATE %1$s q
+                  SET total_attempts     = q.total_attempts + 1,
+                      next_delivery_ts   = NULL,
+                      is_being_delivered = TRUE,
+                      delivery_ts        = :now
+                 FROM candidate c
+                WHERE q.id = c.id
+                  AND q.is_being_delivered = FALSE
+               RETURNING q.id
+               """.formatted(messageTable, keyStateTable);
+    }
+
+    /**
+     * Batched ordered acknowledgement — the thing the barrier design cannot express.
+     * <p>
+     * Under the barrier, a key is unblocked only by its predecessor's row physically disappearing, so
+     * deferring or grouping deletes stalls the key (measured at 0.82x). With a cursor, completion is
+     * <em>recorded</em>: this deletes the handled rows and advances each affected key's cursor to the highest
+     * order just completed, in one statement.
+     */
+    public static String ackOrderedViaCursorSql(String messageTable, String keyStateTable) {
+        return """
+               WITH deleted AS (
+                 DELETE FROM %1$s WHERE id IN (<ids>) RETURNING queue_name, key, key_order
+               ), highest AS (
+                 SELECT queue_name, key, MAX(key_order) AS max_order FROM deleted GROUP BY queue_name, key
+               )
+               UPDATE %2$s ks
+                  SET completed_through = highest.max_order
+                 FROM highest
+                WHERE ks.queue_name = highest.queue_name
+                  AND ks.key        = highest.key
+               """.formatted(messageTable, keyStateTable);
+    }
+}

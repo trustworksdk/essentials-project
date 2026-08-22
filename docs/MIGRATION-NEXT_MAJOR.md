@@ -134,7 +134,7 @@ PostgresqlDurableQueues.builder()
 The flag is now readable at runtime via `PostgresqlDurableQueues.isUseOrderedUnorderedQuery()`, so a
 deployment can verify which fetch strategy it actually got rather than the one it believes it configured.
 
-**`PostgresqlDurableQueues` constructors now default to `SingleOperationTransaction`, not `FullyTransactional`.**
+### `PostgresqlDurableQueues` constructors now default to `SingleOperationTransaction`, not `FullyTransactional`
 
 Until now the constructors that do not take a `TransactionalMode` hardcoded `FullyTransactional`, while
 `PostgresqlDurableQueues.builder()` defaulted to `SingleOperationTransaction` — the same component behaved differently
@@ -230,7 +230,7 @@ All of the following gain a `builder()`; their `Optional`-taking and wide constr
 
 | Deprecated | Replacement |
 |---|---|
-| `PostgresqlDurableQueues` — wide constructors | `PostgresqlDurableQueues.builder()` — **and see the behaviour change above** |
+| `PostgresqlDurableQueues` — wide constructors | `PostgresqlDurableQueues.builder()` — **and see the behaviour changes above** |
 | `MongoDurableQueues` — 9 of 10 constructors | `MongoDurableQueues.builder()` |
 | `PostgresqlDurableQueueConsumer(…)` / `MongoDurableQueueConsumer(…)` — 7 args | `(ConsumeFromQueue, DurableQueueConsumerDependencies)` |
 | `PostgresqlFencedLockManager` / `MongoFencedLockManager` — `Optional`-taking constructors | their existing `builder()` |
