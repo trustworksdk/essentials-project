@@ -32,11 +32,17 @@ Two further corrections of fact:
 - **Line references throughout are against `cdc`@4f5d8a5e and have drifted.** Re-verify with `grep -n`
   before editing, as the footer already warns.
 
-**What is still unmeasured, and gates everything:** every prototype ratio above comes from raw SQL — single
-connection, no consumers, no interceptors, no unit-of-work per message. The measurements doc found that the
-per-message *operation* dominates end to end, so those ratios are an **upper bound** on what a full
-implementation would show. Quantifying that framework overhead is the next measurement, and it bounds I4,
-I5, I6 and the cursor simultaneously.
+**That bound has since been measured too, and it inverts I6's priority.** See
+[`durable-queues-redesign-measurements.md`](durable-queues-redesign-measurements.md) §7. At equal transaction
+granularity the real component costs **1.04×** what hand-written SQL costs — the interceptor chain, operation
+objects, serialization and row mapping together are 4%, so there is nothing to optimise there and this
+document's framing of "framework overhead" as the dilution was wrong. What dilutes is transaction
+granularity, and specifically the acknowledgement: **14.9×** for one transaction per ack instead of one per
+batch. The claim is already batched by the centralized fetcher.
+
+Consequence: inflating the cursor arm's acknowledgement cost by that factor takes its end-to-end win from
+2.64× to **≈1.26×**. **I6 is therefore a precondition for the cursor, not an independent smaller win** —
+batch the acknowledgement first, then the cursor pays off. That is the opposite of the sequencing in §3.
 
 ---
 
@@ -411,13 +417,15 @@ The historical competing-consumer concern ("Don't use … until it properly hand
 
 ### I6 — Batch acknowledge / batch retry (Postgres + foundation)
 
-> **Measured, and the mechanism was misattributed — see §0a.** Removing 96% of the DELETE statements moved
-> throughput **13%**, not the 20–40% estimated below, and that figure is a lower bound only because the
-> prototype could not remove the per-message unit of work. The statement arithmetic is right; the conclusion
-> drawn from it is wrong. What dominates is the per-message *operation* — `acknowledgeMessageAsHandled`
-> wrapping the interceptor chain in its own `UnitOfWork`, and the connection acquisition that comes with it.
-> Batch ack is still worth doing, but on its own it is a 1.13× change, and the UoW-per-message is the lever
-> this plan never named.
+> **Measured twice, and it is the most important item in this document — see §0a.** First measurement:
+> removing 96% of the DELETE statements moved throughput **13%**, not the 20–40% estimated below, because the
+> prototype could not remove the per-message unit of work. Second measurement (measurements doc §7), which
+> could: acknowledging per message rather than per batch costs **14.9×** on drain time. The statement
+> arithmetic below is right; what it attributes the cost to is wrong. The cost is the transaction, not the
+> statement — and it is worth an order of magnitude more than the 1.13× lower bound suggested.
+>
+> This item is also **a precondition for the per-key cursor**, whose 2.64× becomes ≈1.26× if acknowledgement
+> stays per-message. Sequence it first.
 
 **Design:** workers currently issue one DELETE per ack from each worker thread (`CentralizedMessageFetcher.java:344`). Add a small **ack buffer** in the store:
 

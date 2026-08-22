@@ -14,6 +14,7 @@ Initial scaffold:
   - `baseline-polling-vs-cdc` (fixed-seed append + subscription run with JSON metrics output)
   - `virtual-threads-queue` (platform vs virtual threads for the DurableQueues consumer worker pool)
   - `queue-design-ab` (batched vs per-message ack, swept over the ordered-message fraction)
+  - `queue-framework-overhead` (decomposes per-message cost into transaction granularity vs framework overhead)
 - placeholder scenarios:
   - `cdc-hybrid`
   - `durable-queues`
@@ -991,3 +992,42 @@ per-case JSON:
 2. exclusive/non-exclusive subscriber topology matrix
 3. ordered/unordered durable queue matrix
 4. inbox/outbox load profile with mixed command/event workloads
+
+## Framework overhead (`queue-framework-overhead`)
+
+Answers how much of a schema-level prototype result can survive in the production component, by running the
+same workload through progressively more of the stack and holding the SQL constant so that only transaction
+granularity varies.
+
+Five arms. The first three are raw SQL on an identical v1-shaped table, differing only in transaction
+boundaries: `RAW_BATCHED` (batch claim, batch ack — the write-cost prototype's shape),
+`RAW_BATCH_CLAIM_SINGLE_ACK` (today's real shape) and `RAW_SINGLE` (two transactions per message). The last
+two run the real `DurableQueues` — `COMPONENT_SHARED_UOW` with one unit of work per claim batch, `COMPONENT`
+with none, so `SingleOperationTransaction` opens one per operation. Each case builds its own table and drops
+it afterwards, component arms included, because a table that outlives a case leaks its dead tuples into the
+next one.
+
+The output's `decomposition` array is the deliverable. Read `prototypeUpperBoundDeflator` first, then
+`componentTransactionGranularity` (the part fixable by batching acks and widening the unit of work) and
+`frameworkOverheadAtEqualGranularity` (everything else the component does per message).
+
+### Smoke test (always on)
+
+```bash
+mvn verify -pl examples/essentials-performance-lab -Dit.test=QueueFrameworkOverheadScenarioSmokeIT
+```
+
+Asserts that every arm drains its whole workload and that the arms genuinely differ in
+`unitsOfWorkPerMessage`. It asserts nothing about which is faster — at that size the timings are noise.
+
+### Measurement run (opt-in)
+
+```bash
+mvn verify -pl examples/essentials-performance-lab \
+  -Dbenchmark.run=true -Dit.test=QueueFrameworkOverheadBenchmarkIT \
+  -Dfo.messages=20000 -Dfo.repetitions=3
+```
+
+Takes roughly five minutes at the defaults. Run it on an otherwise idle machine: the per-message arms have a
+run-to-run spread near ±40%, dominated by autovacuum timing against the dead tuples the drain itself creates.
+Results and interpretation are in `docs/durable-queues-redesign-measurements.md` §7.

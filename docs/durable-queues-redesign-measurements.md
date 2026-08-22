@@ -22,6 +22,9 @@ the ratios are the result.
 | `queueMessages` with a mixed ordered/unordered list | **Throws `ClassCastException`** — untested path, reachable from the public API | **Fixed** on `queue_fix` |
 | Ack batching, unordered | 1.13× — far smaller than predicted | Open |
 | Ack batching, ordered | **0.82× — actively worse**, and the reason is structural | Open |
+| Framework overhead at equal transaction granularity | **1.04× — the framework is not the problem** | §7 |
+| Transaction granularity, per-message vs per-batch | **118× on drain time** — this is the whole cost | §7 |
+| Consequence for the cursor's 2.64× | **Collapses to ≈1.2–1.3× unless acknowledgement is batched first** | §7 |
 
 ## 1. Ordered/unordered query split — confirmed, and already shipped behind a flag
 
@@ -288,3 +291,89 @@ duplicates in production. Item 3 belongs with item 5.
   `id TEXT PRIMARY KEY` random-insertion cost are untouched by these runs.
 - **Real batched acks.** Only the interceptor-level lower bound was measured — see §2a.
 - **Multi-node.** Single JVM throughout, so nothing here speaks to competing consumers across pods.
+
+## 7. Framework overhead — and it is not what the earlier sections assumed
+
+Harness: scenario `queue-framework-overhead` (`QueueFrameworkOverheadScenario` +
+`QueueFrameworkOverheadBenchmarkIT`). 20 000 unordered messages, claim batch 500, medians of 3 repetitions
+after a discarded warmup, PostgreSQL 17.5 in Testcontainers, Temurin 25 (aarch64). Every case gets a freshly
+created table that is dropped afterwards.
+
+§2a concluded that the per-message *operation* dominates the statement, and the whole v2 discussion has since
+treated "framework overhead" as the thing that would dilute the prototype ratios. That framing was measured
+and it is wrong. The overhead is real and it is large, but it is not the framework.
+
+Each arm issues the same SQL against the same schema and differs only in how many transactions those
+statements are spread across. Drain = claim + ack, 20 000 messages.
+
+| Arm | Claim | Ack | Drain | Transactions per message |
+|---|---|---|---|---|
+| `RAW_BATCHED` — batch claim, batch ack (the write-cost prototype's shape) | 245 ms | 68 ms | **325 ms** | 0.004 |
+| `RAW_BATCH_CLAIM_SINGLE_ACK` — batch claim, ack per message (today's real shape) | 251 ms | 4 577 ms | **4 837 ms** | 1.002 |
+| `RAW_SINGLE` — claim per message, ack per message | 33 583 ms | 4 861 ms | **38 444 ms** | 2.000 |
+| `COMPONENT_SHARED_UOW` — real component, one unit of work per batch | 23 609 ms | 1 328 ms | **24 937 ms** | 0.002 |
+| `COMPONENT` — real component, no outer unit of work (production shape) | 35 216 ms | 4 643 ms | **39 859 ms** | 2.000 |
+
+| Ratio | Result | What it isolates |
+|---|---|---|
+| `frameworkOverheadAtEqualGranularity` | **1.04×** | Everything the component does per message beyond the SQL — interceptor chain, operation objects, serialization, row mapping — against raw SQL at the same transaction granularity |
+| `ackTransactionGranularity` | **14.9×** | One transaction per acknowledgement instead of one per batch |
+| `fullTransactionGranularity` | **118×** | Two transactions per message instead of two per batch |
+| `componentTransactionGranularity` | **1.60×** | The same component code with and without an outer unit of work |
+| `prototypeUpperBoundDeflator` | **123×** | The prototype's transaction shape against the production component's |
+
+**The framework costs 4%.** `COMPONENT` against `RAW_SINGLE` — the real component, interceptors,
+`UnitOfWork` plumbing, JSON serialization and row mapping included, against hand-written SQL doing the same
+work at the same granularity — is 1.04×. Optimising the interceptor chain or the operation objects would buy
+essentially nothing. That is the opposite of what §2a's wording implied and what `I6` in the performance plan
+concluded from it.
+
+**Transaction granularity costs everything else**, and the claim is the expensive half: 33.6 s of
+`RAW_SINGLE`'s 38.4 s is claiming, against 4.9 s acknowledging. A per-message claim is ~1.7 ms where a
+batched one is ~12 µs per message. Two effects compound in it — the round trip and transaction itself, and
+the dead tuples each claim-update and ack-delete leave behind for the next claim's index scan to walk.
+
+**Today's production shape already avoids the worse half.** The centralized fetcher batch-claims, so real
+deployments sit at `RAW_BATCH_CLAIM_SINGLE_ACK`: 4 837 ms, ~8× better than fully per-message but still
+**14.9× worse than batched acknowledgement**. That 14.9× is the headroom `I6` is actually worth — an order of
+magnitude more than the 1.13× §2a measured, which was bounded by the prototype's inability to remove the
+unit of work rather than by the mechanism.
+
+### What this does to the cursor result
+
+The cursor attacks the claim phase, which production already batches, so its claim win should largely
+survive. But its *total* is diluted by an acknowledgement cost that it does not touch and that production
+pays at ~15× the prototype's rate. Taking the design plan's ordered arms and inflating only the ack column
+by 14.9×:
+
+| Ordered workload | Insert | Claim | Ack (prototype) | Ack (×14.9) | Total at production ack cost |
+|---|---|---|---|---|---|
+| v1 barrier | 4 175 ms | 10 647 ms | 702 ms | 10 460 ms | 25 282 ms |
+| cursor | 2 240 ms | 2 646 ms | 1 023 ms | 15 243 ms | 20 129 ms |
+
+**2.64× becomes ≈1.26×.** And the cursor's 46%-more-expensive acknowledgement, a good trade against eight
+seconds of claim time in the prototype, is amplified by the same factor and turns into the dominant term.
+
+This reorders the plan again. Batched acknowledgement is not an independent smaller win to be sequenced after
+the cursor — **it is a precondition for the cursor to pay off at all.** With acks batched, the cursor's 2.64×
+largely stands; without them, a 4.0× claim-phase improvement arrives as roughly 1.2×, which does not justify
+the correctness surface a per-key cursor introduces.
+
+### Caveats that bound §7
+
+- **Run-to-run spread is wide** — ±40% on the per-message arms (`RAW_SINGLE` 27.1–39.1 s across three
+  identical repetitions), because autovacuum timing against the dead tuples the drain itself produces
+  dominates. These are order-of-magnitude results, not three-significant-figure ones. The 1.04× and the 118×
+  are both far outside that spread; the 14.9× is not far outside it and should be re-taken before it is
+  quoted as a target.
+- **Two harness artefacts were found and fixed while measuring**, both of which had inflated the component
+  arms in earlier runs. A single unit of work spanning the whole drain pins the xmin horizon and blocks
+  reclamation, which made that arm degrade 5.7× across three identical repetitions; it now holds one per
+  claim batch. And the component arms originally used the shared `DurableQueues` bean, whose table outlives a
+  case, so accumulated dead tuples landed on whichever case ran later; each component case now builds its own
+  instance on its own table. Both are recorded in the scenario's javadoc.
+- **`unitsOfWorkPerMessage` is counted client-side, not read from the server.** Differencing
+  `pg_stat_database.xact_commit` was tried first and produced values the call pattern cannot produce (0.0 for
+  three arms, 6.56 where only 2.0 is possible) because PostgreSQL flushes backend statistics asynchronously.
+- **Single-threaded, unordered, one node.** No consumer threading, no ordered barrier, no competing consumers.
+  The transaction tax is a per-message constant so none of those should change it, but none of them were run.

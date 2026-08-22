@@ -94,7 +94,7 @@ should not be quietly dropped from the summary.
 
 | Candidate benefit | Status |
 |---|---|
-| **Deferred ordered ack batching** | Structurally unblocked and expressible in one statement — `DELETE … RETURNING` feeding a cursor advance — which the barrier design cannot express at all. But the end-to-end effect of *deferring* acks across time for ordered messages is still unmeasured; only the batched-within-a-round cost above is |
+| **Deferred ordered ack batching** | Structurally unblocked and expressible in one statement — `DELETE … RETURNING` feeding a cursor advance — which the barrier design cannot express at all. **Now measured as a precondition rather than a bonus:** acknowledging per message instead of per batch costs 14.9× on drain time (measurements doc §7), and inflating the cursor arm's ack column by that factor takes the cursor's end-to-end win from 2.64× down to ≈1.26×. The end-to-end effect of *deferring* acks across time for ordered messages is still itself unmeasured |
 | **Independent partitioning and retention** | Not investigated |
 | **Delivery-mode-aware consumer API** | Ergonomics and misuse-resistance; does not require two tables |
 
@@ -145,10 +145,23 @@ The evidence now supports a **narrower and better-targeted change than the origi
 Neither requires the full v2 as drafted below. A defensible scope is: a cursor-backed ordered path plus a
 split unordered table, behind the mode-aware API — which is most of §3 and §4 and none of §8's leasing.
 
-**What is still not known**, and should gate implementation rather than design: how much of the prototype's
-2.64× survives contact with the real component. The prototype is storage-only — single connection, no
-consumers, interceptors or per-message unit of work — and the measurements doc §2a showed the per-message
-operation dominates end to end. The prototype ratios are an upper bound.
+**This is now measured — see measurements doc §7 — and the answer changes the sequencing.** How much of the
+prototype's 2.64× survives contact with the real component depends almost entirely on one thing, and it is
+not the one §2a implied:
+
+- **The framework is not the dilution.** The real component against hand-written SQL at the same transaction
+  granularity is **1.04×**. Interceptor chain, operation objects, serialization and row mapping together cost
+  4%, so there is nothing to win there.
+- **Transaction granularity is the dilution**, and the acknowledgement is the half production still pays per
+  message: **14.9×** against a batched acknowledgement. The claim is already batched by the centralized
+  fetcher, which is the half the cursor improves.
+- **Therefore the cursor's 2.64× arrives as ≈1.26× on today's acknowledgement path**, with the cursor's own
+  46%-more-expensive ack amplified by the same factor into the dominant term. With acknowledgement batched,
+  the 2.64× largely stands.
+
+So batched acknowledgement is not an independent, smaller win to be sequenced after the cursor — it is a
+**precondition for the cursor to be worth its correctness surface at all**. The defensible scope below should
+be read in that order: batch the acknowledgement first, then the cursor.
 
 ## 1. What v2 must keep working
 

@@ -205,6 +205,29 @@ public class EssentialsPerformanceLabProperties {
      */
     private int schemaWriteCostOrderedKeyCount = 1_000;
 
+    /**
+     * Messages drained per case by {@code QueueFrameworkOverheadScenario}. An order of magnitude below
+     * {@link #schemaWriteCostMessages} on purpose: the per-message arms pay two transactions per message, so
+     * the same volume would make the run an order of magnitude longer without sharpening a ratio that is
+     * already stable — this scenario measures a per-message constant, not an effect that only appears at
+     * scale.
+     */
+    private int frameworkOverheadMessages = 20_000;
+
+    /**
+     * Rows claimed per statement by the batch-claiming arms of {@code QueueFrameworkOverheadScenario}, and
+     * the enqueue chunk size for its component arms. Matches
+     * {@link #schemaWriteCostClaimBatchSize} so the {@code RAW_BATCHED} baseline is directly comparable with
+     * the write-cost scenario's arms.
+     */
+    private int frameworkOverheadClaimBatchSize = 500;
+
+    /**
+     * Repetitions per case in {@code QueueFrameworkOverheadScenario}. A discarded warmup case runs per arm
+     * regardless.
+     */
+    private int frameworkOverheadRepetitions = 3;
+
     public Mode getMode() {
         return mode;
     }
@@ -475,6 +498,30 @@ public class EssentialsPerformanceLabProperties {
 
     public void setSchemaWriteCostOrderedKeyCount(int schemaWriteCostOrderedKeyCount) {
         this.schemaWriteCostOrderedKeyCount = schemaWriteCostOrderedKeyCount;
+    }
+
+    public int getFrameworkOverheadMessages() {
+        return frameworkOverheadMessages;
+    }
+
+    public void setFrameworkOverheadMessages(int frameworkOverheadMessages) {
+        this.frameworkOverheadMessages = frameworkOverheadMessages;
+    }
+
+    public int getFrameworkOverheadClaimBatchSize() {
+        return frameworkOverheadClaimBatchSize;
+    }
+
+    public void setFrameworkOverheadClaimBatchSize(int frameworkOverheadClaimBatchSize) {
+        this.frameworkOverheadClaimBatchSize = frameworkOverheadClaimBatchSize;
+    }
+
+    public int getFrameworkOverheadRepetitions() {
+        return frameworkOverheadRepetitions;
+    }
+
+    public void setFrameworkOverheadRepetitions(int frameworkOverheadRepetitions) {
+        this.frameworkOverheadRepetitions = frameworkOverheadRepetitions;
     }
 
     public enum Mode {

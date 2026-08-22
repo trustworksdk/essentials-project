@@ -212,6 +212,16 @@ public final class QueueSchemaPrototype {
         return "DELETE FROM " + table + " WHERE id IN (<ids>)";
     }
 
+    /**
+     * Single-row acknowledgement, matching the statement {@code PostgresqlDurableQueues.acknowledgeMessageAsHandled}
+     * actually issues. Used by {@code QueueFrameworkOverheadScenario} to hold the SQL constant while the
+     * transaction granularity around it varies, so the difference measured is the granularity and not the
+     * statement.
+     */
+    public static String deleteSingleSql(String table) {
+        return "DELETE FROM " + table + " WHERE id = :id";
+    }
+
     // ------------------------------------------------------------------------------------------------
     // Cursor variant: ordered messages with an explicit per-key progress cursor instead of the
     // correlated NOT EXISTS barrier.
