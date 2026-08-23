@@ -155,7 +155,7 @@ second, and they compose:
 | Ordered/unordered split | 6 secondary indexes → 1 for unordered traffic. Measured 1.38× | — |
 | Dead-letter to its own table | **Measured modest (§12)**: 1.0–1.2× on operations and *no* index-size win — one boolean out of one index and four predicates is not the same lever as five whole indexes. Justify it on contract-preserving cleanliness, cheaper DLQ browse/resurrect and 4% smaller heap, not on throughput | Yes — a third table, orthogonal |
 | ~~Partition by `queue_name`~~ | **Rejected on evidence (§12)** — 30% worse acknowledge-by-id, 40% worse claim. The API is keyed by `QueueEntryId` alone, so no by-id operation can name a partition and each probes every one. Not viable without `(queueName, id)` addressing, which is a breaking change to a stable API | — |
-| Per-table autovacuum settings | Nothing structural — it stops dead tuples accumulating faster than they are reclaimed. `pgmq` ships exactly this | Yes, and applicable today |
+| ~~Per-table autovacuum settings~~ | **Measured inert (§13)** — zero autovacuums ran on a default cluster while 440k dead tuples accumulated, because `autovacuum_naptime` binds and it is a *cluster* setting Essentials cannot set. And no degradation appeared to fix: drain cost was flat over 12 cycles in every arm. Ship it if you like; do not call it a performance fix | — |
 
 None of the last three has been measured. All three are arms in the existing
 `QueueSchemaWriteCostScenario`, not new harnesses — which is the cheapest measurement available anywhere in this
@@ -163,12 +163,16 @@ plan.
 
 ### What each one needs
 
-**Per-table autovacuum settings.** `autovacuum_vacuum_scale_factor` down (0.01), `autovacuum_vacuum_cost_delay`
-0, a tuned `autovacuum_vacuum_insert_threshold`, applied in `initializeQueueTables()`. No contract change, no
-migration, no API surface. This is the single cheapest item in the plan and it is also the one whose absence
-distorted several measurements here: run-to-run spreads of 1.13–2.99× in §7 were dominated by autovacuum timing
-against dead tuples the drain itself produced. **Worth doing first regardless of anything else**, partly because
-it makes every subsequent measurement quieter.
+**Per-table autovacuum settings — measured, and they do not pay (§13).** Zero autovacuums ran on a
+default-naptime cluster across twelve cycles and 440 000 dead tuples, in every arm including the aggressive one:
+the per-table threshold is not what binds, `autovacuum_naptime` is, and that is a cluster setting Essentials
+cannot reach from its DDL. Nor was there degradation to prevent — drain cost was flat across all twelve cycles.
+<br><br>
+The bloat concern is not wrong, but its cause is elsewhere. The two damaging effects actually observed were
+**xmin pinning** (a transaction held across a drain, 5.7× degradation, fixed by holding one per batch) and
+autovacuum firing at unpredictable times, which was a *measurement* hazard. So the levers are: do not hold long
+transactions, and document naptime for operators. Shipping the parameters is harmless and helps a tuned cluster;
+it is not a performance fix and must not be sequenced first.
 
 **Dead-letter table.** Contract-preserving — same `DurableQueues` API, different storage. `markAsDeadLetterMessage`
 becomes a move rather than a flag flip, `resurrectDeadLetterMessage` the reverse, and `getDeadLetterMessages`
@@ -194,8 +198,9 @@ Two tracks. The **storage track** (§6) is decided and mostly independent of the
 **ordered track** (§4) is gated on a benchmark. They can proceed in parallel — they touch different things —
 but the storage track is where the cheap, certain wins are.
 
-**S0 — per-table autovacuum settings.** Cheapest item in the plan, no contract change, and it quiets every
-later measurement. Do this first.
+**S0 — ~~per-table autovacuum settings~~ measured and demoted (§13).** Inert on a default cluster; no
+degradation existed to fix. What remains is documentation: naptime guidance for operators, and the standing rule
+not to hold a unit of work across a drain.
 
 **S1 — ~~measure the storage arms~~ done (§12).** Partitioning by `queue_name` is rejected; the dead-letter
 table is a small positive to be justified on grounds other than throughput. The one thing left unmeasured here

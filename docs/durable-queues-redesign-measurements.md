@@ -38,6 +38,8 @@ the ratios are the result.
 | The gate: does run-claiming pay? | **Yes, decisively — and the bigger win is the claim itself at low key counts** | §11 |
 | Dead-letter side table | Real but **modest**: 1.0–1.2×, and no index-size win | §12 |
 | Partitioning by `queue_name` | **Rejected** — 30% worse acknowledge-by-id, 40% worse claim | §12 |
+| Per-table autovacuum settings | **Inert on a default cluster** — zero autovacuums ran, naptime is what binds | §13 |
+| The bloat degradation they were meant to fix | **Did not reproduce** — no drain degradation over 12 cycles, any arm | §13 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 | A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
 | Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
@@ -773,3 +775,65 @@ sequenced ahead of anything with a larger measured effect.
   `pg_total_relation_size`, is what that needed.
 - Two repetitions, and the differences for `DLQ_SPLIT` are small enough (1.04–1.27×) to sit within the spread
   seen elsewhere in this document. Treat its numbers as "small positive", not as figures.
+
+## 13. Per-table autovacuum settings do not pay, and the reason is instructive
+
+Harness: scenario `queue-autovacuum` (`QueueAutovacuumScenario` + `QueueAutovacuumBenchmarkIT`). Twelve
+insert-then-drain cycles against **one** table, 20 000 messages per cycle, batched claim and batched
+acknowledgement so §7's per-message transaction tax does not mask the effect. The signal sought was
+**degradation across cycles** — does cycle 12 cost more than cycle 1 — because that is what dead-tuple
+accumulation would look like and it is the shape that produced this investigation's worst measurement
+artefacts. Run twice, at `autovacuum_naptime` 60s (PostgreSQL's default) and 5s.
+
+| naptime | Arm | First drain | Last drain | Degradation | Peak dead tuples | Autovacuums |
+|---|---|---|---|---|---|---|
+| **60s** | `DEFAULT` | 366 ms | 325 ms | 0.89 | 440 000 | **0** |
+| 60s | `AGGRESSIVE` | 302 ms | 344 ms | 1.14 | 446 500 | **0** |
+| 60s | `MODERATE` | 293 ms | 299 ms | 1.02 | 400 000 | **0** |
+| **5s** | `DEFAULT` | 367 ms | 304 ms | 0.83 | 231 500 | 2 |
+| 5s | `AGGRESSIVE` | 319 ms | 267 ms | 0.84 | 233 500 | 3 |
+| 5s | `MODERATE` | 305 ms | 282 ms | 0.92 | 240 000 | 1 |
+
+`AGGRESSIVE` is `scale_factor 0.01, cost_delay 0, threshold 100` — roughly what `pgmq` ships, and what this
+plan proposed.
+
+### Two negative results
+
+**1. On a default cluster the settings are inert.** Autovacuum ran **zero** times in every arm, including the
+aggressive one, while 440 000 dead tuples accumulated. The per-table threshold is not what binds —
+`autovacuum_naptime` is, and it is a **cluster** setting Essentials cannot touch from its DDL. The change this
+plan called "the cheapest item" and "worth doing first regardless" would have had *no effect whatsoever* on a
+deployment running PostgreSQL defaults. At naptime 5s the settings do bite, and aggressively so — final dead
+tuples 85 215 against the default arm's 159 500 — but that is a cluster the operator has already tuned.
+
+**2. There was no degradation to fix.** Drain cost did not rise across twelve cycles in any arm at either
+naptime: every ratio is between 0.83 and 1.14, and most are below 1. The premise — dead tuples accumulate and
+the claim slowly degrades — did not reproduce in a queue that drains fully each cycle, even with 440 000 dead
+tuples present and no vacuum at all.
+
+### What this says about the bloat concern generally
+
+The bloat worry that started this line of work is not wrong, but this measurement relocates its cause. The two
+genuinely damaging effects observed anywhere in this investigation were both something else:
+
+- **xmin pinning.** A transaction held open across a whole drain blocks reclamation regardless of any setting,
+  and produced a 5.7× degradation across three identical repetitions (§7). That is a code-shape problem, and it
+  is one Essentials controls — the fix was to hold a unit of work per batch rather than per drain.
+- **Autovacuum firing at unpredictable times.** The 1.13–2.99× run-to-run spreads that forced interleaved
+  repetitions in §7 look, in hindsight, like vacuum landing inside some runs and not others — a measurement
+  hazard rather than a production one.
+
+So the actionable levers are: **do not hold long transactions** (already the case after §7's fix), and **tell
+operators about naptime**, since the table-level parameters are the only half Essentials can set and they are
+the half that does not bind. Shipping the storage parameters is harmless and may help a tuned cluster; it should
+not be described as a performance fix, and it should certainly not be sequenced first.
+
+### Caveats
+
+- **The workload drains fully every cycle.** A sustained backlog that never empties — the shape a real bloat
+  incident takes — is not tested here, and is where accumulation might actually degrade the claim. That is the
+  measurement to run if bloat is ever suspected in the field.
+- One run per naptime, twelve cycles each. The negative results are large and consistent (zero autovacuums is
+  not a marginal reading), but the small differences between arms at naptime 5s should not be over-read.
+- `heap_bytes` was recorded but is not reported above: with the table fully drained each cycle it tracks the peak
+  rather than the steady state, and says less than the dead-tuple counts do.

@@ -275,6 +275,14 @@ public class EssentialsPerformanceLabProperties {
 
     private int storageLayoutRepetitions = 2;
 
+    /**
+     * Insert-then-drain cycles against one table in {@code QueueAutovacuumScenario}. The signal is degradation
+     * across cycles, so this must be large enough for dead tuples to accumulate if they are going to.
+     */
+    private int autovacuumCycles = 12;
+
+    private int autovacuumMessagesPerCycle = 20_000;
+
     public Mode getMode() {
         return mode;
     }
@@ -633,6 +641,22 @@ public class EssentialsPerformanceLabProperties {
 
     public void setStorageLayoutRepetitions(int storageLayoutRepetitions) {
         this.storageLayoutRepetitions = storageLayoutRepetitions;
+    }
+
+    public int getAutovacuumCycles() {
+        return autovacuumCycles;
+    }
+
+    public void setAutovacuumCycles(int autovacuumCycles) {
+        this.autovacuumCycles = autovacuumCycles;
+    }
+
+    public int getAutovacuumMessagesPerCycle() {
+        return autovacuumMessagesPerCycle;
+    }
+
+    public void setAutovacuumMessagesPerCycle(int autovacuumMessagesPerCycle) {
+        this.autovacuumMessagesPerCycle = autovacuumMessagesPerCycle;
     }
 
     public int getFrameworkOverheadRepetitions() {
