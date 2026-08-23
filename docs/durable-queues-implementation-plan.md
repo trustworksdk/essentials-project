@@ -62,7 +62,7 @@ other documents.
 
 | Claim | Why it is dead |
 |---|---|
-| Table split is the headline, worth 5.4× | Already realised by `useOrderedUnorderedQuery=true`, now the default. Split's residual value is unordered-only: 1.38× total / 1.62× insert (6 indexes → 1). Ordered: 1.07× |
+| Table split's *throughput* headline, 5.4× | Already realised by `useOrderedUnorderedQuery=true`, now the default. The split's measured residual is unordered-only: 1.38× total / 1.62× insert (6 indexes → 1); ordered 1.07×. **The split itself is still going ahead** — see §6, where throughput is not the reason |
 | `fillfactor` tuning; "the claim update can never be HOT" | Measured dead. `n_tup_hot_upd` was zero in every arm — both schemas index the columns the claim writes, so neither can be HOT. Win is index write amplification |
 | Framework overhead is 1.04× ("the framework costs 4%") | **Withdrawn.** At 9 interleaved reps it reads 0.65×, i.e. confounded: the component claims through the split query while the raw arm uses the v1 six-index claim. The two are within noise; no multiplier is quotable |
 | `componentTransactionGranularity` 1.60× | Inconclusive: 0.79× [0.66–3.84], bounds straddling 1 |
@@ -124,39 +124,97 @@ otherwise be lost.
 
 ---
 
-## 6. Sequence
+## 6. The storage track — the split and the three changes that go with it
+
+**The ordered/unordered table split is a decision, not an open question.** It was scored earlier purely on
+throughput, where its residual is 1.38× total / 1.62× insert for unordered traffic (§3), and that was the wrong
+yardstick. It is also the mode-aware consumer API, per-table index sets, and the ordered table the cursor needs
+regardless — and it is the natural home for the three storage-level changes below.
+
+### Why these belong together
+
+Two levers have measured as significant in this entire investigation: **transaction count per message** (§7 of
+the measurements — 16.5× on ack alone) and **index write amplification** (the split's own 1.38×, and the
+cursor's index-bytes win). Batched acknowledgement attacked the first. Everything in this section attacks the
+second, and they compose:
+
+| Change | What it removes | Independent of the split? |
+|---|---|---|
+| Ordered/unordered split | 6 secondary indexes → 1 for unordered traffic. Measured 1.38× | — |
+| Dead-letter to its own table | `is_dead_letter_message` from every remaining hot index and predicate; stops long-lived DLQ rows fragmenting hot pages; makes DLQ browse and resurrect cheap | Yes — a third table, orthogonal |
+| Partition by `queue_name` | Per-queue index size; turns `purgeQueue` from `DELETE FROM … WHERE queue_name = :queueName` (`DurableQueuesSql:471`, the purge amplification the statistics doc flags) into an O(1) `TRUNCATE` of a partition | Yes |
+| Per-table autovacuum settings | Nothing structural — it stops dead tuples accumulating faster than they are reclaimed. `pgmq` ships exactly this | Yes, and applicable today |
+
+None of the last three has been measured. All three are arms in the existing
+`QueueSchemaWriteCostScenario`, not new harnesses — which is the cheapest measurement available anywhere in this
+plan.
+
+### What each one needs
+
+**Per-table autovacuum settings.** `autovacuum_vacuum_scale_factor` down (0.01), `autovacuum_vacuum_cost_delay`
+0, a tuned `autovacuum_vacuum_insert_threshold`, applied in `initializeQueueTables()`. No contract change, no
+migration, no API surface. This is the single cheapest item in the plan and it is also the one whose absence
+distorted several measurements here: run-to-run spreads of 1.13–2.99× in §7 were dominated by autovacuum timing
+against dead tuples the drain itself produced. **Worth doing first regardless of anything else**, partly because
+it makes every subsequent measurement quieter.
+
+**Dead-letter table.** Contract-preserving — same `DurableQueues` API, different storage. `markAsDeadLetterMessage`
+becomes a move rather than a flag flip, `resurrectDeadLetterMessage` the reverse, and `getDeadLetterMessages`
+stops scanning hot data. Two things to get right: the move must be atomic with the delete from the hot table,
+and `getQueueNameFor(QueueEntryId)` plus the 12 admin-API operations must answer across both tables (the same
+problem the v2 plan flagged for the ordered/unordered split — solve once, for three tables).
+
+**Partitioning.** Note the interaction with the split: partition *within* each table by `queue_name`, not
+instead of splitting. `purgeQueue` becoming `TRUNCATE` is the visible win; smaller per-queue indexes is the
+larger one. Watch for the partition-count ceiling on deployments with many queues, and for the fact that
+`resetMessagesStuckBeingDelivered` and the statistics queries currently scan across queues.
+
+**Statistics trigger.** Already fully designed in `durable-queues-statistics-improvements.md` and unaffected by
+any of the above — the `AFTER DELETE` trigger's `EXCEPTION WHEN OTHERS` subtransaction per acknowledged message
+is the sharpest single item left in the codebase, and it lands on the same acknowledgement path batched
+acknowledgement just optimised.
+
+## 7. Sequence
 
 Ordered by value per unit of risk, with the gate honoured.
 
-**P0 — finish what is shipped.** Nothing new. Decide whether batched acknowledgement's default flips (it is a
-semantic change: the redelivery window widens by one flush interval), and whether batched fetch's default
-flips (needs a throughput measurement, which does not exist). Both are one-line changes behind evidence that
-has not been gathered.
+Two tracks. The **storage track** (§6) is decided and mostly independent of the ordered-path question; the
+**ordered track** (§4) is gated on a benchmark. They can proceed in parallel — they touch different things —
+but the storage track is where the cheap, certain wins are.
 
-**P1 — the cheap defects.** §5's first three. The accessor and the cast must land together. The unique index
-needs a product decision, not just code.
+**S0 — per-table autovacuum settings.** Cheapest item in the plan, no contract change, and it quiets every
+later measurement. Do this first.
 
-**P2 — the statistics trigger.** Independently designed, independently valuable, no interaction with any of the
-above. The subtransaction-per-ack is the sharpest single item left in the codebase.
+**S1 — measure the storage arms.** Dead-letter table and partitioning as arms in
+`QueueSchemaWriteCostScenario`, alongside the split that is already there. Cheap; the harness exists. This is
+what turns three plausible ideas into two or three known quantities.
 
-**P3 — the run-length benchmark.** The gate in §4. Cheap: the prototype SQL exists and the harness exists. This
-decides whether P4 happens at all.
+**S2 — the statistics trigger.** Independently designed, independently valuable, no interaction with the rest.
 
-**P4 — the cursor, only if P3 pays.** In this order, because each step is independently useful and independently
-revertable:
-1. Key-state table plus enqueue-time upsert and reconcile-on-empty-claim, with cursor claiming still off. Inert
-   but exercised.
-2. Cursor claim behind a flag, single-message. Rolling-deploy-safe per §4.
-3. Run claiming, with the prefix guard and caller-side sort.
-4. Ordered acknowledgement batching over runs — the payoff.
+**S3 — the ordered/unordered split**, with the mode-aware consumer API. Carries the measured 1.38× for
+unordered traffic and is a precondition for the cursor's ordered table. Sequence the API decision early: it is
+the part that touches `Inbox`/`Outbox`/`DurableLocalCommandBus` and the 12 admin operations.
 
-**Not planned.** The unordered table split (1.38×, and the cost is a new table plus a mode-aware consumer API —
-revisit only if unordered insert cost becomes the bottleneck). Deferred ordered acknowledgement in any form
-(§2). WAL/CDC delivery for queues (claim and ack mutate rows; the original plan's non-goal, still correct).
+**S4 — dead-letter table and partitioning**, in whichever order S1 says pays more. Solve
+`getQueueNameFor(QueueEntryId)` and the admin surface once, across all tables, rather than per split.
 
----
+**O0 — decide the two shipped defaults.** Batched acknowledgement (a semantic change: the redelivery window
+widens by one flush interval) and batched fetch (needs a throughput measurement that does not exist).
 
-## 7. How to read the evidence
+**O1 — the cheap defects.** §5's first three. The accessor and the cast must land together; the unique index
+needs a product decision.
+
+**O2 — the run-length benchmark.** The gate in §4. Decides whether O3 happens at all.
+
+**O3 — the cursor, only if O2 pays.** Key-state table plus enqueue upsert and reconciliation (inert but
+exercised) → cursor claim behind a flag → run claiming with the prefix guard and caller-side sort → ordered
+acknowledgement over runs.
+
+**Not planned.** Deferred ordered acknowledgement in any form (§2 — impossible under any design considered).
+WAL/CDC delivery for queues: claim and ack mutate rows, so WAL-tailing queue state is strictly worse than
+NOTIFY. Both were non-goals in the original plan and remain correct.
+
+## 8. How to read the evidence
 
 Two habits produced most of the corrections above, and both are worth keeping:
 
