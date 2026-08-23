@@ -96,16 +96,28 @@ other documents.
   `key_order` and the caller must sort; and the ack is **coupled** to the claim — it scans
   `(cursor, min_acknowledged)`, which is sound only for prefix batches.
 
-### The one number that gates implementation
+### The gate is cleared — measurements §11
 
-**Run length has never been benchmarked.** The entire remaining case for the cursor is that a run of N amortises
-one transaction across N ordered messages. Nobody has measured what that is worth, and §7 established that the
-transaction is the cost — so this is the number the decision turns on, not the 2.18× claim.
+Run-claiming pays, and the sweep found something larger than the thing it was looking for.
 
-> **Gate:** sweep run length {1, 4, 16, 64} for the cursor against the barrier baseline, on the ordered
-> workload, reporting transactions per message alongside wall clock. If runs do not pay, the cursor is a 2.18×
-> claim improvement plus an index-size win, which does not justify a schema migration and the plan should stop
-> at §1.
+- **Runs cut round trips where predicted and nowhere else.** 53× fewer at 8 keys, 7.6× at 64, **nothing** at 500
+  or 2 000 — once there is breadth to fill a batch from distinct keys, a run adds no rows. Optimum run length
+  around 16.
+- **The barrier has a pathological regime the cursor does not have.** Its claim costs 222 729 ms at 8 keys and
+  2 500 messages per key, against 1 026 ms for the cursor doing the *identical* number of round trips — **217×**.
+  The correlated `NOT EXISTS` rescans a key's depth per candidate, and the per-row barrier returns only one row
+  per key per round.
+- **The 2.18× in §8 was measured in the barrier's best regime** (1 000 keys, 200 per key). The cursor's advantage
+  is a function of backlog depth per key: 26–217× on the claim when keys are few and deep, ~2.6× when keys are
+  many and shallow.
+
+For an event-sourced workload — `key` is an aggregate id, a busy aggregate accumulates thousands of events —
+few-keys-deep-backlog is the normal case, not the corner. **That is what makes the cursor worth building**, and
+it is a better reason than any previously recorded.
+
+Not settled by the gate: run length interacts with worker parallelism in a way the storage-only harness cannot
+see. A run of 16 to one worker is 16 messages handled sequentially by that worker, so a long run may reduce
+parallelism on a hot key. Pick the default run length with a consumer-level measurement, not from §11.
 
 ---
 
@@ -204,9 +216,11 @@ widens by one flush interval) and batched fetch (needs a throughput measurement 
 **O1 — the cheap defects.** §5's first three. The accessor and the cast must land together; the unique index
 needs a product decision.
 
-**O2 — the run-length benchmark.** The gate in §4. Decides whether O3 happens at all.
+**O2 — ~~the run-length benchmark~~ done, gate cleared (§11).** Remaining question is the default run length,
+which needs a consumer-level measurement: run length trades round trips against per-key parallelism, and the
+storage-only harness cannot see the second.
 
-**O3 — the cursor, only if O2 pays.** Key-state table plus enqueue upsert and reconciliation (inert but
+**O3 — the cursor. The gate passed, so this proceeds.** Key-state table plus enqueue upsert and reconciliation (inert but
 exercised) → cursor claim behind a flag → run claiming with the prefix guard and caller-side sort → ordered
 acknowledgement over runs.
 

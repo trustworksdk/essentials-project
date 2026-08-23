@@ -228,6 +228,33 @@ public class EssentialsPerformanceLabProperties {
      */
     private int frameworkOverheadRepetitions = 3;
 
+    /**
+     * Messages per case in {@code QueueOrderedRunLengthScenario}.
+     */
+    private int runLengthMessages = 50_000;
+
+    /**
+     * Rows claimed per statement. This is the batch capacity the key cardinality is swept against: run length
+     * can only pay when the ready keys are fewer than the batch can hold, because the barrier returns at most
+     * one row per key per round.
+     */
+    private int runLengthClaimBatchSize = 500;
+
+    private int runLengthRepetitions = 2;
+
+    /**
+     * Ordered key counts to sweep, comma-separated. The default brackets the batch size from far below to far
+     * above: at 8 keys the barrier is starved to 8 rows a round, at 2000 there is always breadth to fill the
+     * batch and a run should add nothing.
+     */
+    private String runLengthKeyCounts = "8,64,500,2000";
+
+    /**
+     * Cursor run lengths to sweep, comma-separated. {@code 1} isolates the cursor's own claim cost from the run
+     * effect, which is what makes the rest of the sweep attributable.
+     */
+    private String runLengthRunLengths = "1,4,16,64";
+
     public Mode getMode() {
         return mode;
     }
@@ -514,6 +541,46 @@ public class EssentialsPerformanceLabProperties {
 
     public void setFrameworkOverheadClaimBatchSize(int frameworkOverheadClaimBatchSize) {
         this.frameworkOverheadClaimBatchSize = frameworkOverheadClaimBatchSize;
+    }
+
+    public int getRunLengthMessages() {
+        return runLengthMessages;
+    }
+
+    public void setRunLengthMessages(int runLengthMessages) {
+        this.runLengthMessages = runLengthMessages;
+    }
+
+    public int getRunLengthClaimBatchSize() {
+        return runLengthClaimBatchSize;
+    }
+
+    public void setRunLengthClaimBatchSize(int runLengthClaimBatchSize) {
+        this.runLengthClaimBatchSize = runLengthClaimBatchSize;
+    }
+
+    public int getRunLengthRepetitions() {
+        return runLengthRepetitions;
+    }
+
+    public void setRunLengthRepetitions(int runLengthRepetitions) {
+        this.runLengthRepetitions = runLengthRepetitions;
+    }
+
+    public String getRunLengthKeyCounts() {
+        return runLengthKeyCounts;
+    }
+
+    public void setRunLengthKeyCounts(String runLengthKeyCounts) {
+        this.runLengthKeyCounts = runLengthKeyCounts;
+    }
+
+    public String getRunLengthRunLengths() {
+        return runLengthRunLengths;
+    }
+
+    public void setRunLengthRunLengths(String runLengthRunLengths) {
+        this.runLengthRunLengths = runLengthRunLengths;
     }
 
     public int getFrameworkOverheadRepetitions() {

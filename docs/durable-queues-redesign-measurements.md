@@ -35,6 +35,7 @@ the ratios are the result.
 | The measured cursor prototype | **Not correct** — two faults, both reproduced against the SQL | §8 |
 | Cursor's win once corrected | End-to-end **2.38× → 1.54×**, claim **3.75× → 2.18×** | §8 |
 | Why the cursor is still worth building | **Corrected in §10** — not deferred acks; per-key *runs* | §10 |
+| The gate: does run-claiming pay? | **Yes, decisively — and the bigger win is the claim itself at low key counts** | §11 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 | A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
 | Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
@@ -650,3 +651,68 @@ So the cursor is not the 2.64× or the 2.73× it has been carried as. It is a 2.
 capability the barrier structurally cannot express, whose value depends on a run-length benchmark nobody has
 run. That benchmark is the next thing worth doing, and it should gate the implementation — 16 tests over 8
 consecutive runs cover the mechanics, but not one number in this section is a throughput measurement of runs.
+
+## 11. The gate: run length and key cardinality — the cursor's case, finally
+
+Harness: scenario `queue-ordered-run-length` (`QueueOrderedRunLengthScenario` +
+`QueueOrderedRunLengthBenchmarkIT`). 20 000 ordered messages, claim batch 500, one repetition, PostgreSQL 17.5
+in Testcontainers. Both arms get the same schema, so the comparison is the claim statement and not the indexes.
+Headline metric is **database round trips per message**, because §7 established the transaction is the cost.
+
+§10 left one number outstanding: run-claiming was the cursor's only remaining justification and nobody had
+measured it. The design of the experiment mattered as much as the result — the obvious version is useless,
+because both statements cap their total at `:limit`, so raising the run length changes *which* rows come back
+rather than how many and rounds per message would be identical. Runs can only pay when the ready keys are fewer
+than the batch can hold. So the sweep is over **key cardinality**, with run length as the treatment.
+
+| Keys | Messages/key | Barrier claim | Barrier rounds | Cursor rl=1 claim | Cursor rl=1 rounds | Cursor rl=16 | Cursor rl=64 rounds |
+|---|---|---|---|---|---|---|---|
+| 8 | 2 500 | **222 729 ms** | 5 001 | 1 026 ms | 5 001 | 330 ms total | **95** |
+| 64 | 312 | 10 312 ms | 627 | 402 ms | 627 | 385 ms total | 83 |
+| 500 | 40 | 1 347 ms | 81 | 332 ms | 81 | 352 ms total | 81 |
+| 2 000 | 10 | 1 139 ms | 81 | 443 ms | 87 | 445 ms total | 81 |
+
+### Two effects, and they had been conflated
+
+**Runs reduce round trips exactly where the design predicted, and nowhere else.** At 8 keys, 5 001 rounds fall
+to 95 — a **53×** reduction. At 64 keys, 627 → 83, **7.6×**. At 500 and 2 000 keys, nothing at all: the round
+count is already at its floor of 81 (40 claim plus 40 acknowledge plus the final empty claim), because there is
+enough breadth to fill a 500-row batch from distinct keys and a run adds no rows. The optimum run length here is
+around 16 — 64 buys fewer rounds but slightly worse wall clock, as the statements get larger.
+
+**The larger effect is not runs at all: the barrier's ordered claim degrades catastrophically as messages per
+key grows.** 222 729 ms at 8 keys against 1 139 ms at 2 000 — and the cursor at run length 1, doing the
+*identical* number of round trips, is **217× faster** on the claim. Two compounding causes: the correlated
+`NOT EXISTS (… key_order < mine)` rescans a key's depth for every candidate row, and the per-row barrier can
+only return one row per key per round, so a deep backlog on few keys is drained one message per key per round
+with an increasingly expensive predicate.
+
+### What this does to the cursor's case
+
+The 2.18× recorded in §8 was measured at 1 000 keys and 200 messages per key — which this sweep shows is the
+barrier's *best* regime. The cursor's value is a function of backlog depth per key, not of total volume:
+
+| Workload shape | Cursor's advantage |
+|---|---|
+| Few keys, deep backlog (a hot aggregate with thousands of events) | Claim 26–217×, plus 7.6–53× fewer round trips with runs |
+| Keys ≈ batch size | Claim ~4×, runs add nothing |
+| Many keys, shallow backlog | Claim ~2.6×, runs add nothing |
+
+**The gate passes.** But the honest statement of the payoff is not a single multiplier: it is that the barrier
+has a pathological regime — few keys, deep backlog — and the cursor does not. For an event-sourced workload,
+where `key` is an aggregate id and a busy aggregate accumulates thousands of events, that regime is the normal
+case rather than the corner case, which is what makes this decisive.
+
+### Caveats
+
+- **One repetition.** The barrier's 8-key case alone takes nearly four minutes, so a full multi-repetition sweep
+  is expensive. The large effects (217×, 53×) are far outside any plausible noise; **the small ones at 500 and
+  2 000 keys should not be over-read** — a 2.6× claim ratio at one repetition is a direction, not a figure.
+- **Storage-only, single-connection**, like all the write-cost work: no consumers, no interceptors, no unit of
+  work per message. §7's 16.5× transaction tax applies on top of every number here.
+- **Run length interacts with worker parallelism in a way this does not capture.** A run of 16 handed to one
+  worker is 16 messages handled sequentially by that worker; the throughput consequence depends on the handler's
+  duration and the number of workers, neither of which exists in this harness. A long run could reduce
+  parallelism for a hot key.
+- The barrier arm uses `claimOrderedSql` without the exclude-keys predicate, so it is the cheapest form of the
+  barrier available. Nothing here is stacked against it.
