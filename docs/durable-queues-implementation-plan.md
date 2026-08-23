@@ -130,7 +130,7 @@ otherwise be lost.
 |---|---|
 | ~~`DefaultQueuedMessage.getDeliveryMode()` hardcoded to `NORMAL`~~ | **Fixed.** Now derived from the wrapped `Message`, so it cannot disagree with the persisted column. `DefaultQueuedMessageDeliveryModeTest` |
 | ~~`PostgresqlDurableQueues` casts a `QueuedMessage` to `OrderedMessage`~~ | **Fixed, together with the accessor as required.** The cast is now on the wrapped message. Pinned by `PostgresqlOrderedDeadLetterResurrectionIT`, which covers a path that had no test |
-| Duplicate `(queue_name, key, key_order)` is unconstrained | Two messages with the same key and order never block each other, so per-key serialisation breaks. Evidenced by the negative control in `PostgresqlOrderedMessagesMultiNodeIT`. A unique index closes it; needs a decision on what happens to the loser |
+| ~~Duplicate `(queue_name, key, key_order)` is unconstrained~~ | **Fixed.** `OrderedMessageDuplicateStrategy`, default `REJECT`, enforced by a partial unique index. Default is safe because every framework-produced ordered message keys on aggregate id and orders by `EventOrder`; no evidence in the repo of anyone relying on duplicates. Startup fails loudly on pre-existing duplicates rather than running unprotected. `ALLOW` restores the old behaviour |
 | `useOrderedUnorderedQuery` default documented as `false` in places | Now `true` everywhere. `LLM-postgresql-queue.md` corrected; check other consumers |
 | Statistics `AFTER DELETE` trigger | Per-ack plpgsql invocation, insert, two index updates, and an `EXCEPTION WHEN OTHERS` subtransaction. Fully designed in `durable-queues-statistics-improvements.md`, unimplemented |
 
@@ -247,9 +247,8 @@ rather than per split.
 **O0 — decide the two shipped defaults.** Batched acknowledgement (a semantic change: the redelivery window
 widens by one flush interval) and batched fetch (needs a throughput measurement that does not exist).
 
-**O1 — the cheap defects.** The accessor and the cast are **done**, landed together as required. What remains is
-the unconstrained duplicate `(queue_name, key, key_order)`, which needs a product decision — a unique index
-closes it, but something has to happen to the loser — and the two doc-drift items.
+**O1 — the cheap defects. Done**, apart from the doc-drift sweep. The accessor and the cast landed together as
+required, and the unconstrained duplicate is now `OrderedMessageDuplicateStrategy` with `REJECT` as the default.
 
 **O2 — ~~the run-length benchmark~~ done, gate cleared (§11).** Remaining question is the default run length,
 which needs a consumer-level measurement: run length trades round trips against per-key parallelism, and the

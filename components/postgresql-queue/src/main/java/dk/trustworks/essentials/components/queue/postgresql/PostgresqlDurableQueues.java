@@ -128,6 +128,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     private final boolean                   useCentralizedMessageFetcher;
     private final boolean                   useOrderedUnorderedQuery;
+    private final OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy;
     private final boolean                   useBatchedFetch;
     private final int                       batchedFetchSwitchThreshold;
     private final int                       batchedFetchWarnRowsThreshold;
@@ -485,7 +486,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              useBatchedFetch,
              batchedFetchSwitchThreshold,
              batchedFetchWarnRowsThreshold,
-             BatchedAcknowledgementSettings.disabled());
+             BatchedAcknowledgementSettings.disabled(),
+             OrderedMessageDuplicateStrategy.REJECT);
     }
 
     /**
@@ -509,8 +511,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                             boolean useBatchedFetch,
                             int batchedFetchSwitchThreshold,
                             int batchedFetchWarnRowsThreshold,
-                            BatchedAcknowledgementSettings batchedAcknowledgementSettings) {
+                            BatchedAcknowledgementSettings batchedAcknowledgementSettings,
+                            OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
+        this.orderedMessageDuplicateStrategy = requireNonNull(orderedMessageDuplicateStrategy, "No orderedMessageDuplicateStrategy provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer");
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
@@ -610,6 +614,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             createIndex(durableQueuesSql.getCreateOrderedMessageHeadIndexSql(),
                         handleAwareUnitOfWork.handle());
 
+            if (orderedMessageDuplicateStrategy == OrderedMessageDuplicateStrategy.REJECT) {
+                createOrderedMessageUniqueIndex(handleAwareUnitOfWork.handle());
+            }
+
             multiTableChangeListener.ifPresent(listener -> {
                 ListenNotify.addChangeNotificationTriggerToTable(handleAwareUnitOfWork.handle(),
                                                                  sharedQueueTableName,
@@ -617,6 +625,42 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                  "id", "queue_name", "added_ts", "next_delivery_ts", "delivery_ts", "is_dead_letter_message", "is_being_delivered");
             });
         });
+    }
+
+    /**
+     * Creates the unique ordered-message index, and <b>fails startup</b> rather than continuing without it if the
+     * table already contains duplicates.
+     * <p>
+     * That choice is deliberate. {@code CREATE UNIQUE INDEX} cannot succeed against existing duplicates, and the
+     * tempting alternative - log a warning and carry on - leaves the deployment believing ordering is protected
+     * when it is not. A loud startup failure naming the duplicated keys is actionable; silent degradation is the
+     * failure mode this area has repeatedly punished. An operator who genuinely wants to keep duplicates must say
+     * so with {@link OrderedMessageDuplicateStrategy#ALLOW}.
+     */
+    private void createOrderedMessageUniqueIndex(Handle handle) {
+        // Duplicates are looked for BEFORE attempting the index, not after it fails. A failed statement aborts
+        // the surrounding transaction in PostgreSQL, so the diagnostic query could not run on it - the first
+        // version of this tried exactly that and died with "current transaction is aborted" instead of
+        // reporting the duplicates it had found.
+        var duplicates = handle.createQuery(bind(durableQueuesSql.getFindDuplicateOrderedMessagesSql(),
+                                                 arg("tableName", sharedQueueTableName)))
+                               .map((rs, ctx) -> msg("(queue: '{}', key: '{}', order: {}) x{}",
+                                                     rs.getString("queue_name"),
+                                                     rs.getString("key"),
+                                                     rs.getLong("key_order"),
+                                                     rs.getInt("duplicates")))
+                               .list();
+        if (!duplicates.isEmpty()) {
+            throw new IllegalStateException(msg("Cannot create the unique ordered-message index on '{}' because the table already "
+                                                        + "contains OrderedMessages sharing a key and an order. Ordering does not hold for those "
+                                                        + "keys: the per-key barrier only blocks on a STRICTLY lower key_order, so duplicates never "
+                                                        + "block each other and may be handled concurrently or out of sequence. Up to 10 offending "
+                                                        + "groups: {}. Resolve them, or set orderedMessageDuplicateStrategy to ALLOW to keep the "
+                                                        + "previous behaviour and accept that ordering is not guaranteed for those keys.",
+                                                sharedQueueTableName,
+                                                duplicates));
+        }
+        createIndex(durableQueuesSql.getCreateOrderedMessageUniqueIndexSql(), handle);
     }
 
     private void createIndex(String indexStatement, Handle handle) {

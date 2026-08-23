@@ -309,6 +309,7 @@ public class EssentialsComponentsConfiguration {
                                                     .setUseBatchedAcknowledgement(properties.getDurableQueues().isUseBatchedAcknowledgement())
                                                     .setAcknowledgementMaxBatchSize(properties.getDurableQueues().getAcknowledgementMaxBatchSize())
                                                     .setAcknowledgementFlushInterval(properties.getDurableQueues().getAcknowledgementFlushInterval())
+                                                    .setOrderedMessageDuplicateStrategy(properties.getDurableQueues().getOrderedMessageDuplicateStrategy())
                                                     .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;

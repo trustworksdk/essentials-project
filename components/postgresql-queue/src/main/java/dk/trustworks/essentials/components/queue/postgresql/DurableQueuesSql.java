@@ -809,6 +809,41 @@ public class DurableQueuesSql {
     }
 
     /**
+     * Unique index enforcing at most one ordered message per {@code (queue_name, key, key_order)}.
+     * <p>
+     * Partial on {@code key IS NOT NULL} so unordered messages — which all carry a NULL key and a constant
+     * {@code key_order} of -1 — are untouched by it. Without this, two ordered messages sharing a key and an
+     * order never block each other in the per-key barrier, and that key's ordering guarantee silently does not
+     * hold.
+     *
+     * @return SQL creating the unique ordered-message index
+     */
+    public String getCreateOrderedMessageUniqueIndexSql() {
+        return bind("CREATE UNIQUE INDEX IF NOT EXISTS idx_{:tableName}_ordered_unique ON {:tableName} (queue_name, key, key_order) WHERE key IS NOT NULL",
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * Counts the existing {@code (queue_name, key, key_order)} groups that already have more than one ordered
+     * message, so a failure to create the unique index can be reported with a number and an example rather than
+     * only a constraint-violation stack trace.
+     *
+     * @return SQL returning one row per duplicated group, worst first
+     */
+    public String getFindDuplicateOrderedMessagesSql() {
+        return bind("""
+                    SELECT queue_name, key, key_order, count(*) AS duplicates
+                      FROM {:tableName}
+                     WHERE key IS NOT NULL
+                     GROUP BY queue_name, key, key_order
+                    HAVING count(*) > 1
+                     ORDER BY count(*) DESC
+                     LIMIT 10
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
      * SQL statement for acknowledging several messages as handled in one statement.
      * <p>
      * Same predicate as {@link #getAcknowledgeMessageAsHandledSql()}, widened to a list. The

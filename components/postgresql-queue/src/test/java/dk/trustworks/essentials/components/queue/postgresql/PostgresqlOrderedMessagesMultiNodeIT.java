@@ -181,8 +181,12 @@ class PostgresqlOrderedMessagesMultiNodeIT {
     void control_duplicate_key_order_is_not_serialised_which_proves_the_detector_fires() {
         node1UnitOfWorkFactory = new JdbiUnitOfWorkFactory(newJdbi());
         node2UnitOfWorkFactory = new JdbiUnitOfWorkFactory(newJdbi());
-        node1 = createNode(node1UnitOfWorkFactory, true);
-        node2 = createNode(node2UnitOfWorkFactory, true);
+        // ALLOW is required here, and saying so is part of the point: duplicate (key, key_order) is exactly what
+        // OrderedMessageDuplicateStrategy.REJECT - the default - now prevents, because it is what breaks a key's
+        // ordering guarantee. This control needs the broken state in order to prove the detector can observe it,
+        // so it opts out explicitly.
+        node1 = createNode(node1UnitOfWorkFactory, true, OrderedMessageDuplicateStrategy.ALLOW);
+        node2 = createNode(node2UnitOfWorkFactory, true, OrderedMessageDuplicateStrategy.ALLOW);
 
         var queueName = QueueName.of("MultiNodeDuplicateOrderQueue");
 
@@ -252,10 +256,17 @@ class PostgresqlOrderedMessagesMultiNodeIT {
     }
 
     private PostgresqlDurableQueues createNode(JdbiUnitOfWorkFactory unitOfWorkFactory, boolean useCentralizedMessageFetcher) {
+        return createNode(unitOfWorkFactory, useCentralizedMessageFetcher, OrderedMessageDuplicateStrategy.REJECT);
+    }
+
+    private PostgresqlDurableQueues createNode(JdbiUnitOfWorkFactory unitOfWorkFactory,
+                                               boolean useCentralizedMessageFetcher,
+                                               OrderedMessageDuplicateStrategy duplicateStrategy) {
         var durableQueues = PostgresqlDurableQueues.builder()
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
                                                    .setUseCentralizedMessageFetcher(useCentralizedMessageFetcher)
+                                                   .setOrderedMessageDuplicateStrategy(duplicateStrategy)
                                                    .build();
         durableQueues.start();
         return durableQueues;

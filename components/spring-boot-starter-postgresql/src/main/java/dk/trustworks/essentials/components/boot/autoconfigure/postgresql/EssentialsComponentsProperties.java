@@ -317,6 +317,18 @@ public class EssentialsComponentsProperties {
         private Duration acknowledgementFlushInterval = BatchedAcknowledgementSettings.DEFAULT_FLUSH_INTERVAL;
 
         /**
+         * What to do when two OrderedMessages share a key and an order. Defaults to REJECT, which adds a unique
+         * index over (queue_name, key, key_order) for ordered messages - two such messages never block each other
+         * in the per-key barrier, so that key's ordering guarantee silently does not hold.
+         * <p>
+         * Safe for every ordered message the framework produces: the event processors and subscription manager
+         * key on the aggregate id and order by EventOrder, unique within its stream. On an existing table that
+         * already contains duplicates, startup fails with a message naming them rather than running unprotected;
+         * set ALLOW to keep the previous behaviour.
+         */
+        private OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy = OrderedMessageDuplicateStrategy.REJECT;
+
+        /**
          * Should the Tracing produces only include all operations or only top level operations (default false)
          *
          * @return Should the Tracing produces only include all operations or only top level operations?
@@ -736,6 +748,14 @@ public class EssentialsComponentsProperties {
         /**
          * @return whether acknowledgements are coalesced into batches
          */
+        public OrderedMessageDuplicateStrategy getOrderedMessageDuplicateStrategy() {
+            return orderedMessageDuplicateStrategy;
+        }
+
+        public void setOrderedMessageDuplicateStrategy(OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy) {
+            this.orderedMessageDuplicateStrategy = orderedMessageDuplicateStrategy;
+        }
+
         public boolean isUseBatchedAcknowledgement() {
             return useBatchedAcknowledgement;
         }

@@ -68,6 +68,7 @@ public final class PostgresqlDurableQueuesBuilder {
     private boolean                                    useBatchedAcknowledgement                = false;
     private int                                        acknowledgementMaxBatchSize              = BatchedAcknowledgementSettings.DEFAULT_MAX_BATCH_SIZE;
     private Duration                                   acknowledgementFlushInterval             = BatchedAcknowledgementSettings.DEFAULT_FLUSH_INTERVAL;
+    private OrderedMessageDuplicateStrategy            orderedMessageDuplicateStrategy          = OrderedMessageDuplicateStrategy.REJECT;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
 
     /**
@@ -295,6 +296,26 @@ public final class PostgresqlDurableQueuesBuilder {
         this.acknowledgementFlushInterval = acknowledgementFlushInterval;
         return this;
     }
+    /**
+     * What to do when two {@link OrderedMessage}s share a key and an order. Defaults to
+     * {@link OrderedMessageDuplicateStrategy#REJECT}, which adds a unique index over
+     * {@code (queue_name, key, key_order)} for ordered messages.
+     * <p>
+     * The default is safe for every ordered message the framework itself produces - the event processors and the
+     * subscription manager all key on the aggregate id and order by {@code EventOrder}, which is unique within its
+     * stream. It bites only on application code deriving the order from something not unique, where rejecting is
+     * the correct outcome because the alternative is ordered delivery that is not ordered.
+     * <p>
+     * <b>On an existing table containing duplicates, startup fails</b> with a message naming them, rather than
+     * running unprotected. Set {@link OrderedMessageDuplicateStrategy#ALLOW} to keep the previous behaviour.
+     *
+     * @param orderedMessageDuplicateStrategy the strategy to apply
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setOrderedMessageDuplicateStrategy(OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy) {
+        this.orderedMessageDuplicateStrategy = orderedMessageDuplicateStrategy;
+        return this;
+    }
 
     /**
      * Set warning threshold for batched fetch raw result size.
@@ -344,6 +365,7 @@ public final class PostgresqlDurableQueuesBuilder {
                                            batchedFetchWarnRowsThreshold,
                                            new BatchedAcknowledgementSettings(useBatchedAcknowledgement,
                                                                               acknowledgementMaxBatchSize,
-                                                                              acknowledgementFlushInterval));
+                                                                              acknowledgementFlushInterval),
+                                           orderedMessageDuplicateStrategy);
     }
 }
