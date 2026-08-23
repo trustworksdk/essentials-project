@@ -44,7 +44,7 @@ the ratios are the result.
 | The statistics trigger's `EXCEPTION` block | Mechanism confirmed (one subtransaction per row) but **only 1.03× wall clock, zero SLRU writes** | §14 |
 | The proposed Java-side observer | **1.34× better than the trigger** — worth building, but the write itself is the cost | §14 |
 | B1, the write-once message row | **Rejected** — 12% worse than the split; churn moves rather than disappears | §15 |
-| B3, the index diet | **Pays** — 2 of 6 indexes never scanned, holding 43% of the table's index bytes | §16 |
+| B3, the index diet | **Pays, and shipped** — index set reduced, 28% fewer index bytes | §16, §17 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 | A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
 | Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
@@ -998,3 +998,52 @@ redundant with its siblings, and that is worth confirming before it is dropped r
   to messages-per-key, so index choice may well be too.
 - `pg_stat_user_indexes` is flushed asynchronously; the test waits before reading. Counts are cumulative so a
   wait suffices, unlike the `pg_stat_database` differencing that had to be abandoned in §7.
+
+## 17. The index diet, confirmed at a second shape and acted on
+
+§16 reported two never-scanned indexes at 40 000 messages and 200 ordered keys. Acting on one shape would have
+been unsafe, because §11 established that the ordered claim's plan is highly sensitive to messages-per-key. So
+the usage report was re-run at 12 000 messages and 8 keys, and the second shape changed the conclusion in two
+places.
+
+| Index | 200 keys | 8 keys | Action |
+|---|---|---|---|
+| `idx_*_ordered_ready` | 0 | **0** | **Dropped** — dead in both shapes |
+| `idx_*_ordered_msg` | 0 | **0** | **Conditional** — superseded by the unique index, kept only under `ALLOW` |
+| `idx_*_ready` | 0 | **21** | **Kept** — §16's "dead" was shape-specific |
+| `idx_*_next_msg` | 408 | 365 | Kept |
+| `idx_*_unordered_ready` | 2 469 | 2 936 | Kept |
+| `idx_*_ordered_head` | 4 931 | 4 421 | Kept |
+| `idx_*_ordered_unique` | 145 179 | **3 375 002** | Kept — added for correctness, now also the barrier's index |
+
+### Two things the second shape caught
+
+**`idx_*_ready` is not dead.** It had zero scans at 200 keys and 21 at 8. Dropping it on §16's evidence alone
+would have removed an index something selects. It is kept, and §16's conclusion about it is corrected.
+
+**The unique index added for correctness superseded `idx_*_ordered_msg`.** That index served the per-key barrier
+164 978 times in §16 — before `OrderedMessageDuplicateStrategy` existed. The unique index is
+`(queue_name, key, key_order)` partial on `key IS NOT NULL`, a narrower form of the same columns, and once
+present the planner took it for the barrier at **both** cardinalities, leaving `ordered_msg` at zero. So a change
+made purely for correctness paid for itself in index maintenance — and `ordered_msg` is now created only under
+`ALLOW`, where there is no unique index to serve the barrier.
+
+### Result
+
+Six secondary indexes become five, and the two removed were larger than the one added: `ordered_ready` (3.3 MB)
+and `ordered_msg` (1.9 MB) out, `ordered_unique` (1.7 MB) in — **28% fewer index bytes on the same workload**,
+maintained on every insert, claim and delete, plus an ordering guarantee that did not exist before.
+
+At 8 keys every remaining index is scanned. At 200 keys only `ready` is not, and it is retained on the strength
+of the other shape.
+
+### Caveats
+
+- **Dropping indexes redistributes work rather than removing it.** `next_msg` went from 408 scans to 10 676 at
+  200 keys, picking up paths the dropped indexes had served. Nothing regressed in the suite, but the remaining
+  five now carry more per scan than they did.
+- Two shapes is two, not many. A deployment with a very different volume, key cardinality or sort-order mix could
+  select differently — which is why the diagnostic is committed and parameterised
+  (`-Dindexusage.messages`, `-Dindexusage.orderedKeys`) rather than the finding merely written down.
+- This is not the split. It is the index-set groundwork the split needs — an ordered table should carry the head
+  index and the unique index, not the three it inherited from v1 — and it happens to ship a win on the way.

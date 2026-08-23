@@ -73,8 +73,13 @@ class PostgresqlIndexUsageIT {
      * Large enough that the planner prefers index paths over sequential scans, which is a precondition for the
      * result meaning anything at all.
      */
-    private static final int MESSAGE_COUNT = 40_000;
-    private static final int ORDERED_KEYS  = 200;
+    private static final int MESSAGE_COUNT = Integer.getInteger("indexusage.messages", 40_000);
+    /**
+     * Swept via {@code -Dindexusage.orderedKeys}: §11 showed the ordered claim's plan is highly sensitive to
+     * messages-per-key, so an index that looks dead at one cardinality could be chosen at another. A finding here
+     * is only safe to act on if it survives a second shape.
+     */
+    private static final int ORDERED_KEYS  = Integer.getInteger("indexusage.orderedKeys", 200);
 
     @Container
     private static final PostgreSQLContainer<?> postgreSQLContainer = EssentialsTestContainers.postgres("index-usage-queue-db");

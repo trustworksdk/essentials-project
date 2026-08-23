@@ -262,6 +262,40 @@ acknowledgement over runs.
 WAL/CDC delivery for queues: claim and ack mutate rows, so WAL-tailing queue state is strictly worse than
 NOTIFY. Both were non-goals in the original plan and remain correct.
 
+## 7a. S3 design decision: the split carries no new consumer API
+
+The v2 design plan and the improvements plan both assume the split needs a **declaration** — a
+`QueueType {UNORDERED, ORDERED, MIXED}` and a `configureQueue(QueueName, QueueType)` — so a consumer can say
+which physical table it reads. That is the expensive half of S3: it is new public surface on a stable central
+API, and it propagates into `Inbox`, `Outbox`, `DurableLocalCommandBus` and all 12 admin operations.
+
+**Decision: increment 1 splits storage transparently and adds no declaration API.**
+
+The store routes on write — an `OrderedMessage` goes to the ordered table, anything else to the unordered one —
+because the message already says which it is. Nothing needs to be declared for the *storage* win, and the storage
+win is the entire measured benefit: 1.38× total and 1.62× insert for unordered traffic, all of it from index
+count (six secondary indexes down to one).
+
+What the declaration would actually buy is narrower than it looks: it lets a consumer skip querying the table it
+knows is empty, saving one round trip per poll on a single-mode queue. Three reasons not to buy it yet:
+
+1. **It is measurable, and unmeasured.** The cost it avoids is one extra claim statement per poll cycle. §7 says
+   the transaction is what costs, so this is a real but small effect — and nobody has put a number on it.
+2. **The same saving is available without API surface.** Track per queue whether an ordered message has ever been
+   seen (seeded lazily with one `EXISTS` on first fetch) and skip the ordered statement when it has not. That is
+   already written down as step 4 of I4 in the improvements plan, it is automatic, and it needs no declaration.
+3. **The declaration's other benefit is a misuse guard**, not performance — failing fast when an `OrderedMessage`
+   is queued to a queue declared `UNORDERED`. Worth having eventually; not worth coupling the storage change to.
+
+So the sequence inverts relative to the plans: **split storage first, measure whether the double query matters,
+and add the declaration only if it does.** If it never matters, the split ships with no new public API at all,
+which for a library whose central APIs are stable-by-contract is the better outcome.
+
+Increment 1 is therefore: the two tables with per-mode index sets (**two indexes on the ordered table, not
+three** — see §16), transparent write routing, both tables read by every query operation, and
+`getQueueNameFor(QueueEntryId)` answering across them. The admin surface is increment 2, and is where the
+review boundary sits.
+
 ## 8. Investigation backlog — ideas not yet tried
 
 Everything that has measured as significant reduced to two levers: **transactions per message** (§7: 16.5× on

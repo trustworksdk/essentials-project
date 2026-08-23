@@ -601,13 +601,16 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_is_being_delivered",
                       handleAwareUnitOfWork.handle());
 
-            createIndex(durableQueuesSql.getCreateOrderedMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
+            // idx_*_ordered_ready is deliberately NOT created. It was measured at zero scans across the whole
+            // DurableQueues SPI at two very different ordered-key cardinalities (8 and 200 keys) - the ordered
+            // access paths are served by the head index and the per-key index instead. Dropped rather than
+            // conditioned, because nothing selected it in either shape. See docs §16.
+            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_ordered_ready",
+                      handleAwareUnitOfWork.handle());
+
             createIndex(durableQueuesSql.getCreateNextMessageIndexSql(),
                         handleAwareUnitOfWork.handle());
             createIndex(durableQueuesSql.getCreateNextReadyMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateOrderedMessageReadyIndexSql(),
                         handleAwareUnitOfWork.handle());
             createIndex(durableQueuesSql.getCreateUnorderedMessageReadyIndexSql(),
                         handleAwareUnitOfWork.handle());
@@ -616,6 +619,17 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
             if (orderedMessageDuplicateStrategy == OrderedMessageDuplicateStrategy.REJECT) {
                 createOrderedMessageUniqueIndex(handleAwareUnitOfWork.handle());
+                // The unique index is (queue_name, key, key_order) partial on key IS NOT NULL, which is a
+                // narrower form of idx_*_ordered_msg and supersedes it: with the unique index present the planner
+                // took it for the per-key barrier at both 8 and 200 keys, leaving ordered_msg at zero scans where
+                // it had previously served 164978. So it is redundant here, and dropped for deployments that
+                // already have it.
+                dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_ordered_msg",
+                          handleAwareUnitOfWork.handle());
+            } else {
+                // Under ALLOW there is no unique index to serve the barrier, so the per-key index is still needed.
+                createIndex(durableQueuesSql.getCreateOrderedMessageIndexSql(),
+                            handleAwareUnitOfWork.handle());
             }
 
             multiTableChangeListener.ifPresent(listener -> {
