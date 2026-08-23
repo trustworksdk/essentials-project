@@ -111,9 +111,20 @@ public final class DefaultQueuedMessage implements QueuedMessage {
         return message;
     }
 
+    /**
+     * Derived from the wrapped {@link Message} rather than stored, because the wrapped message is already
+     * authoritative: a storage implementation that persists a delivery mode reconstructs an
+     * {@link OrderedMessage} when it reads {@code IN_ORDER} back, so asking the message cannot disagree with
+     * the database.
+     * <p>
+     * This previously returned {@link DeliveryMode#NORMAL} unconditionally, which made the accessor contradict
+     * both the persisted column and {@code MongoDurableQueues}' own implementation — so any caller trusting it
+     * silently treated every ordered message as unordered. It was found while adding batched acknowledgement,
+     * whose ordered-message exclusion it defeated.
+     */
     @Override
     public DeliveryMode getDeliveryMode() {
-        return DeliveryMode.NORMAL;
+        return message instanceof OrderedMessage ? DeliveryMode.IN_ORDER : DeliveryMode.NORMAL;
     }
 
     @Override

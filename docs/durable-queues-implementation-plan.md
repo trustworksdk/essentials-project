@@ -128,8 +128,8 @@ otherwise be lost.
 
 | Defect | Consequence |
 |---|---|
-| `DefaultQueuedMessage.getDeliveryMode()` hardcoded to `NORMAL` | The accessor contradicts the persisted `delivery_mode` column, and is inconsistent with Mongo's implementation, which reports `IN_ORDER` correctly. Any code trusting it silently treats ordered messages as unordered |
-| `PostgresqlDurableQueues:1298` casts a `QueuedMessage` to `OrderedMessage` | Currently unreachable *because* of the defect above — `isOrderedMessage` is always false. Fixing the accessor without fixing this cast turns a cosmetic bug into a `ClassCastException` on dead-letter resurrection. **Fix together** |
+| ~~`DefaultQueuedMessage.getDeliveryMode()` hardcoded to `NORMAL`~~ | **Fixed.** Now derived from the wrapped `Message`, so it cannot disagree with the persisted column. `DefaultQueuedMessageDeliveryModeTest` |
+| ~~`PostgresqlDurableQueues` casts a `QueuedMessage` to `OrderedMessage`~~ | **Fixed, together with the accessor as required.** The cast is now on the wrapped message. Pinned by `PostgresqlOrderedDeadLetterResurrectionIT`, which covers a path that had no test |
 | Duplicate `(queue_name, key, key_order)` is unconstrained | Two messages with the same key and order never block each other, so per-key serialisation breaks. Evidenced by the negative control in `PostgresqlOrderedMessagesMultiNodeIT`. A unique index closes it; needs a decision on what happens to the loser |
 | `useOrderedUnorderedQuery` default documented as `false` in places | Now `true` everywhere. `LLM-postgresql-queue.md` corrected; check other consumers |
 | Statistics `AFTER DELETE` trigger | Per-ack plpgsql invocation, insert, two index updates, and an `EXCEPTION WHEN OTHERS` subtransaction. Fully designed in `durable-queues-statistics-improvements.md`, unimplemented |
@@ -247,8 +247,9 @@ rather than per split.
 **O0 — decide the two shipped defaults.** Batched acknowledgement (a semantic change: the redelivery window
 widens by one flush interval) and batched fetch (needs a throughput measurement that does not exist).
 
-**O1 — the cheap defects.** §5's first three. The accessor and the cast must land together; the unique index
-needs a product decision.
+**O1 — the cheap defects.** The accessor and the cast are **done**, landed together as required. What remains is
+the unconstrained duplicate `(queue_name, key, key_order)`, which needs a product decision — a unique index
+closes it, but something has to happen to the loser — and the two doc-drift items.
 
 **O2 — ~~the run-length benchmark~~ done, gate cleared (§11).** Remaining question is the default run length,
 which needs a consumer-level measurement: run length trades round trips against per-key parallelism, and the

@@ -1295,12 +1295,18 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                    if (result.isPresent()) {
                                                        var updateResult = result.get();
 
-                                                       var isOrderedMessage = updateResult.getDeliveryMode() == QueuedMessage.DeliveryMode.IN_ORDER;
+                                                       // The cast is on the wrapped Message, not on the QueuedMessage. It used to be the
+                                                       // latter, which cannot succeed - a QueuedMessage is never an OrderedMessage - and was
+                                                       // only unreachable because DefaultQueuedMessage.getDeliveryMode() returned NORMAL
+                                                       // unconditionally, so isOrderedMessage was always false. Fixing that accessor without
+                                                       // fixing this line would have turned a dormant bug into a ClassCastException on every
+                                                       // resurrection of an ordered dead letter.
+                                                       var orderedMessage = updateResult.getMessage() instanceof OrderedMessage ordered ? ordered : null;
                                                        log.debug("[{}] Resurrected Dead Letter {}Message with id '{}' {} and nextDeliveryTimestamp: {}. Message entry after update: {}",
                                                                  updateResult.getQueueName(),
-                                                                 isOrderedMessage ? "Ordered " : "",
+                                                                 orderedMessage != null ? "Ordered " : "",
                                                                  operation.getQueueEntryId(),
-                                                                 isOrderedMessage ? "(key: " + ((OrderedMessage) updateResult).getKey() + ", order: " + ((OrderedMessage) updateResult).getOrder() + ")" : "",
+                                                                 orderedMessage != null ? "(key: " + orderedMessage.getKey() + ", order: " + orderedMessage.getOrder() + ")" : "",
                                                                  nextDeliveryTimestamp,
                                                                  updateResult);
                                                        return result;
