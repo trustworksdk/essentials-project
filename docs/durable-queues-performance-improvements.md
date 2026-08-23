@@ -22,7 +22,7 @@ estimates below.
 | I4 §5: set `fillfactor = 70`, "enables HOT updates and reduces index churn" | **No effect, marginally worse.** `n_tup_hot_upd` was **zero in every arm**, split included — both schemas index `next_delivery_ts` and `is_being_delivered`, so neither *can* produce a HOT update | Drop the `fillfactor` change. The win in a table split is **index write amplification** — fewer indexes maintained per insert/update/delete — not page headroom or HOT |
 | I4: splitting claim paths gives ordered queues batch claim, "×slots per round trip" | Splitting buys **1.07×** on an ordered workload. Insert improves 1.38×, but the ordered claim costs 10.7 s against 2.5 s unordered on identical volume, and the split does not touch it | I4's remaining justification is the **unordered** arm: 1.38× total, 1.62× insert, 6 secondary indexes → 1. Ordered traffic needs a different mechanism |
 | (absent — not an item at all) | A **per-key progress cursor** (`completed_through`, gap-tolerant, driven from the key-state table via `LATERAL`) replacing the correlated `NOT EXISTS` barrier: ordered claim **4.0× faster**, ordered workload **2.64×** end to end, 1 secondary index instead of 3, index bytes more than halved. Ack gets 46% more expensive (702 → 1023 ms) because the cursor row must advance too | **This is the load-bearing change and it is missing from I1–I10.** It is owned by `durable-queues-v2-design-plan.md` §3.2. Treat that document as the design of record for the ordered path |
-| I6: batch ack, "+20–40% on DRAIN", high confidence on the statement arithmetic | Removing **96% of DELETE statements moved throughput 13%** — and that is a lower bound, because the prototype could not remove the per-message unit of work | The bottleneck is the **per-message operation** (`acknowledgeMessageAsHandled` wraps the interceptor chain in its own unit of work), not the statement count. Batch ack is worth doing, but the UoW-per-message is the bigger lever and it is not an item here either |
+| I6: batch ack, "+20–40% on DRAIN", high confidence on the statement arithmetic | Removing 96% of DELETE statements moved throughput 13% with the per-message unit of work still in place; removing the unit of work too is worth **16.5×** [10.3–24.2] | The bottleneck is the per-message **transaction**, not the statement count. I6 is worth an order of magnitude more than its own lower bound suggested — and it is a precondition for the cursor. **Implemented**: `BatchedAcknowledgementBuffer` + `setUseBatchedAcknowledgement` |
 
 Two further corrections of fact:
 
@@ -33,16 +33,21 @@ Two further corrections of fact:
   before editing, as the footer already warns.
 
 **That bound has since been measured too, and it inverts I6's priority.** See
-[`durable-queues-redesign-measurements.md`](durable-queues-redesign-measurements.md) §7. At equal transaction
-granularity the real component costs **1.04×** what hand-written SQL costs — the interceptor chain, operation
-objects, serialization and row mapping together are 4%, so there is nothing to optimise there and this
-document's framing of "framework overhead" as the dilution was wrong. What dilutes is transaction
-granularity, and specifically the acknowledgement: **14.9×** for one transaction per ack instead of one per
-batch. The claim is already batched by the centralized fetcher.
+[`durable-queues-redesign-measurements.md`](durable-queues-redesign-measurements.md) §7. What dilutes the
+prototype ratios is **transaction granularity**, not framework overhead: **16.5×** [10.3–24.2] for one
+transaction per acknowledgement instead of one per batch, and **134×** [93–182] for two per message rather
+than two per batch. The claim is already batched by the centralized fetcher, so the acknowledgement is the
+half production still pays.
 
-Consequence: inflating the cursor arm's acknowledgement cost by that factor takes its end-to-end win from
-2.64× to **≈1.26×**. **I6 is therefore a precondition for the cursor, not an independent smaller win** —
-batch the acknowledgement first, then the cursor pays off. That is the opposite of the sequencing in §3.
+This document's framing of "framework overhead" as the dilution is **not supported** — but neither is the
+opposite claim. A 3-repetition run put the framework's own per-message cost at 1.04× and that figure was
+withdrawn at 9 repetitions, where the comparison is confounded by the component using its split unordered
+query against a raw arm using the v1 six-index claim. The two are within noise of each other; no multiplier
+should be quoted either way.
+
+Consequence: inflating the cursor arm's acknowledgement cost by 16.5× takes its end-to-end win from 2.64× to
+**≈1.21×**. **I6 is therefore a precondition for the cursor, not an independent smaller win** — batch the
+acknowledgement first, then the cursor pays off. That is the opposite of the sequencing in §3.
 
 ---
 
@@ -420,12 +425,17 @@ The historical competing-consumer concern ("Don't use … until it properly hand
 > **Measured twice, and it is the most important item in this document — see §0a.** First measurement:
 > removing 96% of the DELETE statements moved throughput **13%**, not the 20–40% estimated below, because the
 > prototype could not remove the per-message unit of work. Second measurement (measurements doc §7), which
-> could: acknowledging per message rather than per batch costs **14.9×** on drain time. The statement
+> could: acknowledging per message rather than per batch costs **16.5×** on drain time. The statement
 > arithmetic below is right; what it attributes the cost to is wrong. The cost is the transaction, not the
 > statement — and it is worth an order of magnitude more than the 1.13× lower bound suggested.
 >
-> This item is also **a precondition for the per-key cursor**, whose 2.64× becomes ≈1.26× if acknowledgement
+> This item is also **a precondition for the per-key cursor**, whose 2.64× becomes ≈1.21× if acknowledgement
 > stays per-message. Sequence it first.
+>
+> **Implemented** on branch `queue-improvements`: `DurableQueues.acknowledgeMessagesAsHandled(Collection)` with
+> a loop fallback default, a single-statement PostgreSQL override, and `BatchedAcknowledgementBuffer` wired
+> into `CentralizedMessageFetcher` behind `setUseBatchedAcknowledgement`. Ordered messages are excluded — see
+> §2b of the measurements doc for why they cannot be batched until completion is decoupled from row deletion.
 
 **Design:** workers currently issue one DELETE per ack from each worker thread (`CentralizedMessageFetcher.java:344`). Add a small **ack buffer** in the store:
 

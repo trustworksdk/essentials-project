@@ -86,10 +86,21 @@ import java.util.*;
  *     <li>{@code COMPONENT} — no outer unit of work, so {@code TransactionalMode.SingleOperationTransaction}
  *     opens one per operation. This is the production shape.</li>
  * </ul>
- * The pair matters more than either arm alone: it varies transaction granularity across
- * <em>identical component code</em>, which is the cleanest available separation of the two costs. The raw
- * arms bound the same quantity from below, with no framework in the way, and agreement between the two
- * estimates is the evidence that the decomposition is real rather than an artefact of one code path.
+ * <h2>Which comparisons this scenario actually supports</h2>
+ * <b>Raw-to-raw is sound.</b> Those three arms share a schema and a claim statement, so their ratios name
+ * transaction granularity and nothing else. That is where the load-bearing results come from.
+ * <p>
+ * <b>Cross-family is not.</b> The component claims through its own split unordered query and partial covering
+ * index; the raw arms use the v1 six-index claim. So {@code frameworkOverheadAtEqualGranularity} varies the
+ * claim query as well as the framework, and at 9 repetitions it comes out <em>below</em> 1 — the component
+ * looking cheaper than hand-written SQL, which is the signature of a confound rather than a finding. It is
+ * still emitted, labelled, because knowing the two families are within noise of each other is worth
+ * something; it just cannot be read as "the framework costs X".
+ * <p>
+ * <b>{@code componentTransactionGranularity} is inconclusive.</b> The shared-UoW arm holds one transaction
+ * across a claim batch while claiming one message at a time, so it re-creates a milder version of the
+ * xmin-pinning artefact described above. Its spread is the widest of any arm and the ratio's bounds straddle
+ * 1 in both directions.
  *
  * <h2>Unordered only, and why that is the right choice</h2>
  * Per-message transaction cost has nothing to do with the ordered per-key barrier, and running ordered
@@ -166,7 +177,15 @@ public class QueueFrameworkOverheadScenario implements LabScenario {
         var results = new ArrayList<CaseResult>();
         for (var arm : Arm.values()) {
             runCase(runId, arm, warmupMessages, claimBatch, -1, true);
-            for (var repetition = 0; repetition < repetitions; repetition++) {
+        }
+        // Arms alternate WITHIN each repetition rather than each arm running its repetitions consecutively.
+        // The dominant noise source here is autovacuum working through the dead tuples a drain produces, which
+        // is time-correlated: consecutive repetitions of one arm share whatever background state happened to
+        // exist during that stretch, so a slow patch lands entirely on one arm and reads as a property of the
+        // arm. Interleaving spreads every such patch across all five. Same reason QueueSchemaWriteCostScenario
+        // alternates its arms.
+        for (var repetition = 0; repetition < repetitions; repetition++) {
+            for (var arm : Arm.values()) {
                 var result = runCase(runId, arm, messages, claimBatch, repetition, false);
                 results.add(result);
                 log.info("queue-framework-overhead {} rep {} => insert {} ms, claim {} ms, ack {} ms, drain {} ms, {} us/msg, {} uow/msg",
@@ -387,9 +406,16 @@ public class QueueFrameworkOverheadScenario implements LabScenario {
         addRatio(decomposition, "fullTransactionGranularity", rawBatched, rawSingle,
                  "Cost of two transactions per message instead of two per batch. Raw SQL both sides - the granularity tax with no framework in the path.");
         addRatio(decomposition, "componentTransactionGranularity", componentUow, component,
-                 "Same component code, differing only in whether an outer UnitOfWork is held. Isolates the granularity tax inside the real component.");
+                 "Same component code, differing only in whether an outer UnitOfWork is held. INCONCLUSIVE at 9 repetitions: "
+                         + "the shared-UoW arm holds one transaction across a whole claim batch while still claiming one message at a "
+                         + "time, so it pins the xmin horizon for that stretch and blocks reclamation of the dead tuples it is itself "
+                         + "producing. Its spread is the widest of any arm and the ratio's bounds straddle 1. Do not quote it.");
         addRatio(decomposition, "frameworkOverheadAtEqualGranularity", rawSingle, component,
-                 "What the component adds on top of raw SQL at comparable transaction granularity: interceptor chain, operation objects, serialization, row mapping.");
+                 "INTENDED to isolate what the component adds over raw SQL - interceptor chain, operation objects, serialization, row "
+                         + "mapping - but CONFOUNDED and not usable as measured: the component claims through its split unordered query "
+                         + "and partial covering index, while the raw arms use the v1 six-index claim. The two families differ in the "
+                         + "claim query as well as in the framework, which is why this comes out below 1. Comparing raw-to-raw and "
+                         + "component-to-component is sound; comparing across the two is not.");
         addRatio(decomposition, "prototypeUpperBoundDeflator", rawBatched, component,
                  "The factor by which a schema-level prototype ratio must be deflated to describe the production component. This is the bound the cursor and split results need.");
         return decomposition;
@@ -407,6 +433,14 @@ public class QueueFrameworkOverheadScenario implements LabScenario {
         entry.put("baselineDrainMillis", baseline.drain());
         entry.put("candidateDrainMillis", candidate.drain());
         entry.put("drainCostMultiple", baseline.drain() == 0 ? null : (double) candidate.drain() / baseline.drain());
+        // The spread matters as much as the point estimate: a ratio whose bounds straddle 1 is not a result.
+        // Worst case divides the candidate's slowest run by the baseline's fastest, best case the reverse, so
+        // the pair brackets what the repetitions actually support rather than what their medians suggest.
+        entry.put("drainCostMultipleBestCase", baseline.drainMax() == 0 ? null : (double) candidate.drainMin() / baseline.drainMax());
+        entry.put("drainCostMultipleWorstCase", baseline.drainMin() == 0 ? null : (double) candidate.drainMax() / baseline.drainMin());
+        entry.put("baselineDrainRangeMillis", List.of(baseline.drainMin(), baseline.drainMax()));
+        entry.put("candidateDrainRangeMillis", List.of(candidate.drainMin(), candidate.drainMax()));
+        entry.put("samplesPerArm", candidate.samples());
         entry.put("baselineAckMillis", baseline.ack());
         entry.put("candidateAckMillis", candidate.ack());
         entry.put("baselineUnitsOfWorkPerMessage", baseline.unitsOfWorkPerMessage());
@@ -442,6 +476,9 @@ public class QueueFrameworkOverheadScenario implements LabScenario {
                            median(matching.stream().map(CaseResult::claimMillis).sorted().toList()),
                            median(matching.stream().map(CaseResult::ackMillis).sorted().toList()),
                            median(matching.stream().map(CaseResult::drainMillis).sorted().toList()),
+                           matching.stream().mapToLong(CaseResult::drainMillis).min().orElse(0L),
+                           matching.stream().mapToLong(CaseResult::drainMillis).max().orElse(0L),
+                           matching.size(),
                            matching.stream().mapToDouble(CaseResult::unitsOfWorkPerMessage).sorted().skip((matching.size() - 1) / 2).findFirst().orElse(0.0d));
     }
 
@@ -520,7 +557,7 @@ public class QueueFrameworkOverheadScenario implements LabScenario {
         private boolean exhausted;
     }
 
-    private record Medians(String arm, long claim, long ack, long drain, double unitsOfWorkPerMessage) {
+    private record Medians(String arm, long claim, long ack, long drain, long drainMin, long drainMax, int samples, double unitsOfWorkPerMessage) {
     }
 
     public record CaseResult(String arm,
