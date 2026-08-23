@@ -44,6 +44,7 @@ the ratios are the result.
 | The statistics trigger's `EXCEPTION` block | Mechanism confirmed (one subtransaction per row) but **only 1.03× wall clock, zero SLRU writes** | §14 |
 | The proposed Java-side observer | **1.34× better than the trigger** — worth building, but the write itself is the cost | §14 |
 | B1, the write-once message row | **Rejected** — 12% worse than the split; churn moves rather than disappears | §15 |
+| B3, the index diet | **Pays** — 2 of 6 indexes never scanned, holding 43% of the table's index bytes | §16 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 | A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
 | Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
@@ -948,3 +949,52 @@ which ties it to B2 and makes the two a single experiment rather than two.
   guard that fails loudly on a no-op turned that into an error rather than a wrong number — the same class of
   silent-no-op the dead-letter arm had already been protected against, and reusing that protection would have
   avoided it.
+
+## 16. B3, the index diet — two of six indexes are never read
+
+Harness: `PostgresqlIndexUsageIT` in `postgresql-queue`, opt-in via `-Dbenchmark.run=true`. The **real**
+component, not a prototype schema: 40 000 messages split between an unordered and an ordered queue at 200 keys,
+then every operation on the `DurableQueues` SPI driven at least once — enqueue in both modes, delayed enqueue,
+enqueue-as-dead-letter, all the query and count operations, retry, both dead-letter paths, resurrect, delete,
+purge, and real consumers claiming and acknowledging both queues to completion. Then `pg_stat_user_indexes`.
+
+| Index | Scans | Bytes |
+|---|---|---|
+| `idx_durable_queues_ordered_ready` | **0** | 3 317 760 |
+| `idx_durable_queues_ready` | **0** | 2 007 040 |
+| `idx_durable_queues_next_msg` | 411 | 819 200 |
+| `idx_durable_queues_unordered_ready` | 2 474 | 1 835 008 |
+| `idx_durable_queues_ordered_head` | 4 940 | 2 498 560 |
+| `idx_durable_queues_ordered_msg` | **164 978** | 1 900 544 |
+
+**Two of the six were never scanned once, and they hold 5.3 MB of the table's 12.4 MB — 43% of its index bytes**,
+maintained on every insert, claim and delete. That is the same lever as the ordered/unordered split's 1.38×, and
+this part of it needs no new table, no API change and no migration.
+
+`initializeQueueTables()` creates all six unconditionally, regardless of `useOrderedUnorderedQuery`. Since that
+flag now defaults to `true` everywhere, a default deployment maintains indexes built to serve a query it never
+runs.
+
+### Two findings, one expected and one not
+
+**`idx_..._ready` being dead is the expected half.** It serves the unified query, and the split is now the
+default. It cannot simply be deleted — it is needed when `useOrderedUnorderedQuery=false` — so the change is to
+**create the three unified-query indexes only when the flag is false, and the split indexes only when it is
+true**, rather than creating all six either way.
+
+**`idx_..._ordered_ready` being dead is the surprise.** That index was *added for the split ordered path*, and it
+is unused with the split on. The ordered work is done by `ordered_head` (4 940 scans) and above all
+`ordered_msg` (164 978 — by far the most-used index on the table, and consistent with §11's finding that the
+barrier rescans a key's depth for every candidate). So one of the indexes introduced to make the split fast is
+redundant with its siblings, and that is worth confirming before it is dropped rather than merely conditioned.
+
+### Caveats
+
+- **A zero here means "not scanned by any operation in this suite", not "unused".** The suite drives the whole
+  SPI for exactly that reason, but an access pattern it does not produce — a different sort order, a much larger
+  or much smaller table, a different ordered-key cardinality — could shift which index the planner picks. The
+  conditional-creation change is safe regardless; dropping `ordered_ready` outright needs a second workload.
+- One volume (40 000 rows) and one key cardinality (200). §11 showed the ordered claim's plan is highly sensitive
+  to messages-per-key, so index choice may well be too.
+- `pg_stat_user_indexes` is flushed asynchronously; the test waits before reading. Counts are cumulative so a
+  wait suffices, unlike the `pg_stat_database` differencing that had to be abandoned in §7.
