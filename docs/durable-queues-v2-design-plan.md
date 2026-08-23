@@ -1,5 +1,12 @@
 # DurableQueues v2 — design plan
 
+> **Superseded in part — read [`durable-queues-implementation-plan.md`](durable-queues-implementation-plan.md) first.**
+> It consolidates every finding and lists which conclusions here have been withdrawn.
+
+> This document is a historical design exploration. Its headline conclusions — the 4.0x claim, the 2.64x
+> end-to-end figure and the batched-ordered-acknowledgement payoff — have all been withdrawn after measurement.
+> Its evidence ledger is still useful; its recommendations are not.
+
 Proposal for a durable-queue implementation that splits ordered and unordered messages into separate tables
 behind a delivery-mode-aware consumer API.
 

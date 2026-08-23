@@ -1,5 +1,11 @@
 # DurableQueues Performance Improvement Plan
 
+> **Superseded in part — read [`durable-queues-implementation-plan.md`](durable-queues-implementation-plan.md) first.**
+> It consolidates every finding and lists which conclusions here have been withdrawn.
+
+> This is the original I1-I10 plan, written before anything was measured. Section 0a records what the
+> measurements overturned.
+
 **Audience:** An autonomous implementation agent (Opus). This document is self-contained: it describes the current implementation with exact file/line references and verbatim SQL/queries, the bottlenecks, the target designs with code sketches, the phasing, the tests to write, and the acceptance criteria. Where a design decision is left open, the recommended default is stated explicitly — when in doubt, take the recommendation.
 
 **Goal:** drastically reduce (a) **polling overhead** (DB queries issued while queues are idle) and (b) **enqueue→delivery latency** (time from `queueMessage(...)` commit to handler invocation), for both the PostgreSQL and MongoDB `DurableQueues` implementations, without breaking the public `DurableQueues` API or at-least-once delivery and ordered-message (`OrderedMessage`) guarantees.

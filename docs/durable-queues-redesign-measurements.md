@@ -1,5 +1,11 @@
 # DurableQueues redesign — measurements
 
+> **Superseded in part — read [`durable-queues-implementation-plan.md`](durable-queues-implementation-plan.md) first.**
+> It consolidates every finding and lists which conclusions here have been withdrawn.
+
+> This is the evidence of record: every measurement, sections 1-10, including the ones that withdrew earlier
+> conclusions. The plan built on it is in the consolidated document.
+
 Evidence gathered ahead of the proposed new `DurableQueues` implementation that splits ordered and unordered
 messages into two tables behind a delivery-mode-aware consumer API. Two levers were measured, plus two
 defects found on the way.
