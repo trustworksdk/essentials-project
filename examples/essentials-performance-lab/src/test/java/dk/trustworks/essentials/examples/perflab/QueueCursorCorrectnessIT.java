@@ -24,6 +24,7 @@ import org.testcontainers.junit.jupiter.*;
 
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.Comparator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -165,39 +166,30 @@ class QueueCursorCorrectnessIT {
     }
 
     /**
-     * What happens when several of a key's messages are acknowledged in one statement — which the exclusive
-     * claim cannot produce, but a future batching implementation might.
+     * The prefix property is now a <b>requirement</b>, not a nicety, and this pins the consequence of breaking
+     * it.
      * <p>
-     * The answer, established here rather than assumed, is that the cheap clamp degrades <b>conservatively</b>:
-     * it under-advances rather than skipping. Acknowledging orders 5 and 7 together with 6 dead-lettered
-     * between them leaves the cursor at 4, not 7. Nothing is lost — order 6 keeps blocking its key exactly as
-     * the {@code NOT EXISTS} barrier would, and the key resumes when 6 is resurrected or deleted. The cost is
-     * one wasted step, not a message.
+     * The acknowledgement scans {@code (cursor, min_acknowledged)} so that a run can advance the cursor across
+     * its whole length. That makes it sound only for prefix batches — which is all
+     * {@code claimOrderedRunViaSafeCursorSql} produces. Hand it a non-prefix batch, orders 5 and 7 with 6
+     * dead-lettered between them, and it advances to 7 and skips 6.
      * <p>
-     * This matters because it removes a constraint from the design. The interval scan reads the pre-DELETE
-     * snapshot, so rows being acknowledged in the same statement still count as present and pull the clamp
-     * down; that is why the earlier explicit anti-join against the acknowledged set was unnecessary. Removing
-     * it took the acknowledge phase from 128s back to ~280ms at 50k messages. An ordered batching
-     * implementation is therefore free to group by key or not — one message per key per statement is simply
-     * more efficient, not a correctness requirement.
+     * An earlier formulation bounded the scan by {@code max_acknowledged} instead, which was safe for any batch
+     * but could not advance a run at all: every row in the interval was one being deleted, so the clamp pulled
+     * back to the old cursor and the gap scan grew from a stale value. Independent safety and useful runs are
+     * mutually exclusive here, so the coupling is the deliberate choice — and any future ordered
+     * acknowledgement path must preserve the prefix property.
      */
     @Test
-    void acknowledging_several_of_a_keys_messages_at_once_under_advances_rather_than_skipping() {
+    void a_non_prefix_ack_batch_skips_a_blocked_message_which_is_why_the_claim_must_produce_prefixes() {
         givenOrderedMessages("key-a", 5, 6, 7);
         deadLetter("key-a", 6);
 
         acknowledge(QueueSchemaPrototype.ackOrderedViaSafeCursorSql(messageTable, keyStateTable), List.of("key-a#5", "key-a#7"));
 
-        // 4, not 7: the interval (cursor, 7) still sees order 5 in the pre-DELETE snapshot, so the clamp stops
-        // below it. Conservative, and safe.
-        assertThat(completedThrough("key-a")).as("the clamp under-advances rather than skipping the dead-lettered order 6")
-                                             .isEqualTo(4L);
-
-        // And the proof that nothing was lost: resurrect 6 and it is delivered.
-        resurrect("key-a", 6);
-        assertThat(claim(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable), 10))
-                .as("no message is lost - the resurrected dead letter is still reachable")
-                .containsExactly("key-a#6");
+        assertThat(completedThrough("key-a")).as("a non-prefix batch advances past the dead-lettered order 6 - the "
+                                                        + "documented consequence of breaking the coupling, not desired behaviour")
+                                             .isEqualTo(7L);
     }
 
     /**
@@ -292,6 +284,97 @@ class QueueCursorCorrectnessIT {
                 .containsExactly("fresh-key#0");
     }
 
+    /**
+     * The claim in §8's payoff argument, tested: <b>does the cursor actually unlock batched ordered
+     * acknowledgement?</b>
+     * <p>
+     * The argument was that the barrier unblocks a key only when its predecessor's row physically disappears —
+     * so deferring the delete stalls the key, measured at 0.82x — whereas the cursor <em>records</em>
+     * completion and therefore should not care when the row is deleted.
+     * <p>
+     * It does care. Per-key exclusivity in the corrected cursor comes from {@code is_being_delivered}, and a
+     * deferred acknowledgement leaves that flag set, so the key yields nothing until the flush. The stall is
+     * identical to the barrier's; only the mechanism differs. Both are asserted here side by side so the
+     * symmetry is explicit rather than inferred.
+     * <p>
+     * This is not a defect in either design. It follows from per-key ordering with at most one message in
+     * flight: a key's successor may not be delivered until the predecessor's completion is durably recorded,
+     * and any batching defers exactly that record. Ordered throughput per key is therefore bounded by one
+     * committed round trip per message under both designs, and no cursor can change that.
+     */
+    @Test
+    void deferring_an_ordered_ack_stalls_the_key_under_the_cursor_exactly_as_under_the_barrier() {
+        givenOrderedMessages("key-a", 0, 1, 2);
+
+        // Cursor: claim order 0, do not acknowledge - the handler has "finished" but the ack is buffered.
+        var cursorFirst = claim(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable), 10);
+        assertThat(cursorFirst).containsExactly("key-a#0");
+        assertThat(claim(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable), 10))
+                .as("cursor: the key is stalled while the acknowledgement is buffered")
+                .isEmpty();
+
+        // Barrier, same fixture and same buffered-ack situation, for comparison.
+        jdbi.useHandle(handle -> handle.execute("UPDATE " + messageTable + " SET is_being_delivered = FALSE, next_delivery_ts = now()"));
+        var barrierFirst = claim(QueueSchemaPrototype.claimOrderedSql(messageTable, true), 10);
+        assertThat(barrierFirst).containsExactly("key-a#0");
+        assertThat(claim(QueueSchemaPrototype.claimOrderedSql(messageTable, true), 10))
+                .as("barrier: identically stalled - the cursor confers no advantage here")
+                .isEmpty();
+    }
+
+    /**
+     * Where the ordered acknowledgement win actually lives, and why it belongs to the cursor: <b>the barrier can
+     * only ever hand over a key's single head, while the cursor can hand over a run.</b>
+     * <p>
+     * The barrier tests {@code NOT EXISTS (… key_order < mine)} per candidate row, so orders 1 and 2 are
+     * ineligible while 0 is still present no matter how high the limit goes. The cursor tests
+     * {@code key_order > completed_through}, a range, so the next N messages of the key come out of one index
+     * scan.
+     * <p>
+     * That asymmetry is the payoff. One claimer owns a contiguous run, handles it in order, and acknowledges the
+     * whole run in one statement and one transaction — so §7's 16.5x transaction saving reaches ordered traffic,
+     * which under the barrier it cannot. Per-key exclusivity survives because a single claimer owns the run.
+     */
+    @Test
+    void the_barrier_yields_only_a_keys_head_while_the_cursor_yields_a_run() {
+        givenOrderedMessages("key-a", 0, 1, 2);
+
+        // Barrier, limit 3: still only the head. Raising the limit buys nothing.
+        assertThat(claim(QueueSchemaPrototype.claimOrderedSql(messageTable, true), 3))
+                .as("the barrier is a per-row test, so a key can only ever yield its head")
+                .containsExactly("key-a#0");
+
+        // Reset, then the cursor with a run length of 3.
+        jdbi.useHandle(handle -> handle.execute("UPDATE " + messageTable + " SET is_being_delivered = FALSE, next_delivery_ts = now()"));
+        var run = claimRun(QueueSchemaPrototype.claimOrderedRunViaSafeCursorSql(messageTable, keyStateTable), 3, 10);
+        // Sorted by the returned key_order, because UPDATE ... RETURNING does not preserve index order - this
+        // run came back as 1,2,0 before the sort was added, and a consumer handling them as returned would
+        // violate the ordering the design exists to preserve.
+        assertThat(run).as("the cursor is a range test, so it hands over the key's next three")
+                       .containsExactly("key-a#0", "key-a#1", "key-a#2");
+
+        // And the run is acknowledged as one batch: one statement, one transaction, three messages.
+        acknowledge(QueueSchemaPrototype.ackOrderedViaSafeCursorSql(messageTable, keyStateTable), run);
+        assertThat(completedThrough("key-a")).as("the cursor advances across the whole run").isEqualTo(2L);
+        assertThat(claimRun(QueueSchemaPrototype.claimOrderedRunViaSafeCursorSql(messageTable, keyStateTable), 3, 10)).isEmpty();
+    }
+
+    /**
+     * A run must stop at a blocked message rather than stepping over it, or run-claiming would reintroduce the
+     * skipping fault by another route: the run would hand a worker orders 5 and 7 with 6 dead-lettered between
+     * them, and the worker would handle 7 before 6 was ever delivered.
+     */
+    @Test
+    void a_run_stops_at_a_dead_lettered_message_instead_of_stepping_over_it() {
+        givenOrderedMessages("key-a", 5, 6, 7);
+        deadLetter("key-a", 6);
+
+        var run = claimRun(QueueSchemaPrototype.claimOrderedRunViaSafeCursorSql(messageTable, keyStateTable), 5, 10);
+
+        assertThat(run).as("the run must end at the dead-lettered order 6, not jump to 7")
+                       .containsExactly("key-a#5");
+    }
+
     // ---- fixture helpers ----
 
     /**
@@ -346,6 +429,24 @@ class QueueCursorCorrectnessIT {
                                        .bind("now", OffsetDateTime.now())
                                        .bind("id", key + "#" + order)
                                        .execute());
+    }
+
+    /**
+     * Claims a run and returns it sorted by {@code key_order}, which is what a consumer must do:
+     * {@code UPDATE … RETURNING} emits rows in executor order, not index order.
+     */
+    private List<String> claimRun(String sql, int runLength, int limit) {
+        return jdbi.withHandle(handle -> handle.createQuery(sql)
+                                              .bind("queueName", "q")
+                                              .bind("now", OffsetDateTime.now())
+                                              .bind("runLength", runLength)
+                                              .bind("limit", limit)
+                                              .map((rs, ctx) -> new Object[]{rs.getString("id"), rs.getLong("key_order")})
+                                              .list()
+                                              .stream()
+                                              .sorted(Comparator.comparingLong(row -> (Long) row[1]))
+                                              .map(row -> (String) row[0])
+                                              .toList());
     }
 
     private List<String> claim(String sql, int limit) {

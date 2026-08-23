@@ -88,8 +88,11 @@ key's successor while the predecessor is in flight, and its acknowledgement can 
 message and lose it permanently. Both are reproduced by test. Corrected, the cursor's end-to-end win against
 the barrier is **1.54×** rather than 2.38×, and its claim **2.18×** rather than 3.75×; gap-safety also puts
 back the non-partial `(queue_name, key, key_order)` index the design claimed to delete. The case for the
-cursor now rests on it unlocking batched ordered acknowledgement (~2.73× when each design is compared at the
-acknowledgement cost it can actually achieve), not on a faster claim. Read the table below as the original
+cursor rested next on it unlocking batched ordered acknowledgement (~2.73×) — **also withdrawn, see
+measurements §10**: deferring an ordered acknowledgement stalls the key under the cursor exactly as under the
+barrier, because per-key exclusivity comes from `is_being_delivered` either way. What the cursor uniquely
+enables is per-key *runs* — the barrier's per-row `NOT EXISTS` can only ever yield a key's head — whose value
+depends on a run-length benchmark that has not been run. Read the table below as the original
 measurement, not as current guidance.
 
 **This reorders the whole v2 case.** The load-bearing change is the cursor, not the table split:

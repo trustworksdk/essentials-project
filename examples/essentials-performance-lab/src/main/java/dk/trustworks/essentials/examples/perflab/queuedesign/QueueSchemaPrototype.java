@@ -474,6 +474,93 @@ public final class QueueSchemaPrototype {
     }
 
     /**
+     * Per-key <b>run</b> claim: hands one claimer the next {@code :runLength} messages of a key, in order,
+     * rather than only its head.
+     *
+     * <h2>Why this is the cursor's real advantage</h2>
+     * Ordered acknowledgement cannot be batched by deferring it — under either design, a key's successor may
+     * not be delivered until the predecessor's completion is durably recorded, so deferring the record stalls
+     * the key. That is a property of per-key ordering with one message in flight, not of the barrier, and the
+     * cursor does not change it.
+     * <p>
+     * What the cursor does change is how many of a key's messages can be claimed at once. The barrier's
+     * {@code NOT EXISTS (… key_order < mine)} is evaluated per candidate row, so a key can only ever yield its
+     * single head — raising the limit returns nothing extra. The cursor's condition is
+     * {@code key_order > completed_through}, a range rather than a per-row test, so the next N messages of a key
+     * fall out of one index scan.
+     * <p>
+     * That is what makes an ordered acknowledgement batch possible: one claimer owns a contiguous run, handles
+     * it in order, and acknowledges the whole run in one statement and one transaction. Per-key exclusivity is
+     * preserved because a single claimer owns the run, and ordering because it processes in {@code key_order}.
+     * The §7 saving then applies to ordered traffic — which is the payoff the cursor is worth, stated correctly.
+     *
+     * <h2>Two constraints, both found by test rather than by reading</h2>
+     * <ul>
+     *     <li><b>The run must be a prefix, including blocked rows.</b> A first attempt simply filtered
+     *     ineligible rows out of the run, which handed a claimer orders 5 and 7 with 6 dead-lettered between
+     *     them — reintroducing the skipping fault by another route. The {@code bool_and} window truncates the
+     *     run at the first row that cannot be claimed. Note the cost: the inner scan must see ineligible rows,
+     *     so like the acknowledgement clamp it needs the non-partial {@code (queue_name, key, key_order)}
+     *     index.</li>
+     *     <li><b>The caller must sort by {@code key_order}.</b> {@code UPDATE … RETURNING} emits rows in
+     *     executor order, not index order — a run of 0,1,2 came back as 1,2,0. A consumer handling them as
+     *     returned would violate the ordering the whole design exists to preserve, so {@code key_order} is
+     *     returned to make sorting possible and the requirement explicit.</li>
+     * </ul>
+     */
+    public static String claimOrderedRunViaSafeCursorSql(String messageTable, String keyStateTable) {
+        return """
+               WITH candidate AS (
+                 SELECT head.id, head.key_order
+                   FROM %2$s ks
+                   CROSS JOIN LATERAL (
+                     SELECT prefix.id, prefix.key_order
+                       FROM (
+                         SELECT m.id,
+                                m.key_order,
+                                -- TRUE only while every row up to and including this one is claimable. A
+                                -- dead-lettered or not-yet-due row flips it FALSE and it stays FALSE, which
+                                -- truncates the run there.
+                                bool_and(m.is_dead_letter_message = FALSE
+                                         AND m.is_being_delivered = FALSE
+                                         AND m.next_delivery_ts  <= :now)
+                                  OVER (ORDER BY m.key_order ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS prefix_claimable
+                           FROM %1$s m
+                          WHERE m.queue_name = ks.queue_name
+                            AND m.key        = ks.key
+                            AND m.key_order  > ks.completed_through
+                          ORDER BY m.key_order
+                       ) prefix
+                      WHERE prefix.prefix_claimable
+                      ORDER BY prefix.key_order
+                      LIMIT :runLength
+                   ) head
+                  WHERE ks.queue_name = :queueName
+                    AND NOT EXISTS (
+                      SELECT 1
+                        FROM %1$s inflight
+                       WHERE inflight.queue_name         = ks.queue_name
+                         AND inflight.key                = ks.key
+                         AND inflight.is_being_delivered = TRUE
+                    )
+                  LIMIT :limit
+               )
+               UPDATE %1$s q
+                  SET total_attempts     = q.total_attempts + 1,
+                      next_delivery_ts   = NULL,
+                      is_being_delivered = TRUE,
+                      delivery_ts        = :now
+                 FROM candidate c
+                WHERE q.id = c.id
+                  AND q.is_being_delivered = FALSE
+               -- key_order is returned because the caller MUST sort by it. UPDATE ... RETURNING emits rows in
+               -- whatever order the executor produces them - a run of 0,1,2 came back as 1,2,0 - so a consumer
+               -- that handled them as returned would violate the very ordering this design exists to preserve.
+               RETURNING q.id, q.key_order
+               """.formatted(messageTable, keyStateTable);
+    }
+
+    /**
      * Gap-safe cursor advance.
      *
      * <h2>What was wrong with {@link #ackOrderedViaCursorSql}</h2>
@@ -486,20 +573,31 @@ public final class QueueSchemaPrototype {
      * a lower maximum could move a cursor backwards.
      *
      * <h2>The fix</h2>
-     * Advance to the highest acknowledged order, but never past a row that is still present for that key, and
-     * never backwards:
-     * <pre>{@code GREATEST(current, LEAST(max_acknowledged, min_remaining - 1))}</pre>
-     * With per-key exclusivity from the claim above, a batch can hold at most one message per key, so
-     * {@code max_acknowledged} is that single message and the clamp is what keeps a dead-lettered or retried
-     * predecessor blocking. {@code LEFT JOIN} on the remaining-minimum so a key with nothing left still
-     * advances.
+     * Advance to the highest acknowledged order, but never past a row still blocking below the run, and never
+     * backwards:
+     * <pre>{@code GREATEST(current, LEAST(max_acknowledged, lowest_blocking_below_run - 1))}</pre>
+     *
+     * <h2>This statement is coupled to the run claim, deliberately</h2>
+     * The interval scanned is {@code (cursor, min_acknowledged)} — below the run's first element, not below its
+     * last. That is what lets a run of three advance the cursor across all three, and it is sound <b>because
+     * {@link #claimOrderedRunViaSafeCursorSql} only ever produces prefixes</b>: its {@code bool_and} window
+     * truncates at the first row that cannot be claimed, so everything between the cursor and the run's start
+     * is already acknowledged or absent.
+     * <p>
+     * Bounding by {@code max_acknowledged} instead would be independently safe for arbitrary batches, but then a
+     * run cannot advance the cursor at all — every row in the interval is one being deleted, the clamp pulls
+     * back to the cursor's old value, and the gap scan grows from a stale cursor until it degrades. So the two
+     * statements are correct together and neither is safe with an arbitrary batch from elsewhere. Any other
+     * acknowledgement path for ordered messages must preserve the prefix property or it will skip a blocked
+     * message.
      */
     public static String ackOrderedViaSafeCursorSql(String messageTable, String keyStateTable) {
         return """
                WITH deleted AS (
                  DELETE FROM %1$s WHERE id IN (<ids>) RETURNING id, queue_name, key, key_order
                ), highest AS (
-                 SELECT queue_name, key, MAX(key_order) AS max_order FROM deleted GROUP BY queue_name, key
+                 SELECT queue_name, key, MAX(key_order) AS max_order, MIN(key_order) AS min_order
+                   FROM deleted GROUP BY queue_name, key
                ), clamped AS (
                  SELECT h.queue_name,
                         h.key,
@@ -525,7 +623,11 @@ public final class QueueSchemaPrototype {
                       WHERE m.queue_name = h.queue_name
                         AND m.key        = h.key
                         AND m.key_order  > ks.completed_through
-                        AND m.key_order  < h.max_order
+                        -- Bounded by the LOWEST order acknowledged for the key, not the highest. Rows between
+                        -- the cursor and the run's first element are rows the claim could not take, and they
+                        -- must keep blocking. Rows inside the run are excluded automatically, which is what
+                        -- lets a multi-message run advance the cursor across the whole of it.
+                        AND m.key_order  < h.min_order
                    ) gap ON TRUE
                )
                UPDATE %2$s ks

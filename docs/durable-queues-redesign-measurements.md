@@ -28,7 +28,7 @@ the ratios are the result.
 | Consequence for the cursor's 2.64× | **Collapses to ≈1.2× unless acknowledgement is batched first** | §7 |
 | The measured cursor prototype | **Not correct** — two faults, both reproduced against the SQL | §8 |
 | Cursor's win once corrected | End-to-end **2.38× → 1.54×**, claim **3.75× → 2.18×** | §8 |
-| Why the cursor is still worth building | It unlocks batched ordered acks, worth **~2.7×** end to end — not its faster claim | §8 |
+| Why the cursor is still worth building | **Corrected in §10** — not deferred acks; per-key *runs* | §10 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 | A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
 | Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
@@ -579,3 +579,68 @@ Still not addressed:
 - **Everything above is prototype SQL**, not an implementation: no `DurableQueues` code path, no enqueue
   integration, no interaction with `purgeQueue` or `deleteMessage` removing the last message for a key while its
   cursor row remains.
+
+## 10. The §8 payoff argument was wrong, and the real one is narrower
+
+§8 concluded the cursor is worth building because ordered acknowledgement "cannot be batched under the barrier
+at all, while the cursor records completion explicitly and can" — worth roughly 2.73× end to end. **That is
+wrong**, and the correction matters because it was the load-bearing justification.
+
+### Deferring an ordered ack stalls the key under the cursor too
+
+Per-key exclusivity in the corrected cursor comes from `is_being_delivered`. A deferred acknowledgement leaves
+that flag set, so the key yields nothing until the flush — the identical stall the barrier produces by leaving
+the row present. Asserted for both designs side by side in `QueueCursorCorrectnessIT`.
+
+This is not a defect in either design. It follows from per-key ordering with at most one message in flight: a
+key's successor may not be delivered until the predecessor's completion is durably recorded, and *any* batching
+defers exactly that record. **Ordered throughput per key is bounded by one committed round trip per message
+under both designs, and no cursor changes that.** §7's 16.5× does not reach ordered traffic by simply turning
+batching on.
+
+### What the cursor does uniquely enable: per-key runs
+
+The barrier's `NOT EXISTS (… key_order < mine)` is evaluated per candidate row, so a key can only ever yield its
+**head** — raising the claim limit returns nothing extra, which the test asserts. The cursor's condition is
+`key_order > completed_through`, a *range*, so the next N messages of a key fall out of one index scan.
+
+That is the real unlock. One claimer takes a contiguous run, handles it in order, and acknowledges the whole run
+in one statement and one transaction — so §7's saving reaches ordered traffic after all, but through run-claiming
+rather than deferred acknowledgement. Per-key exclusivity survives because a single claimer owns the run.
+
+The payoff therefore scales with run length rather than being a flat 16.5×: a run of N amortises one transaction
+across N messages. It has not been measured, and it should be before it is quoted.
+
+### Three constraints, each found by test after the reasoning failed
+
+1. **A run must be a prefix, including blocked rows.** Filtering ineligible rows out of the run handed a claimer
+   orders 5 and 7 with 6 dead-lettered between them — the skipping fault reintroduced by another route. A
+   `bool_and` window over `ORDER BY key_order` truncates at the first unclaimable row. The scan must therefore
+   see ineligible rows, so it needs the non-partial `(queue_name, key, key_order)` index, like the clamp.
+2. **`UPDATE … RETURNING` does not preserve order.** A run of 0,1,2 came back as 1,2,0. A consumer handling them
+   as returned would violate the ordering the design exists to preserve, so the claim returns `key_order` and the
+   caller must sort.
+3. **The acknowledgement is now coupled to the claim.** For a run to advance the cursor across its whole length,
+   the clamp must scan `(cursor, min_acknowledged)` rather than `(cursor, max_acknowledged)`. That is sound only
+   for prefix batches — which is all the run claim produces. Bounding by the maximum instead is independently
+   safe for any batch but then a run cannot advance the cursor at all: every row in the interval is one being
+   deleted, so the clamp returns the old value and the gap scan grows from a stale cursor until it degrades.
+   Independent safety and useful runs are mutually exclusive, so the coupling is deliberate — and any other
+   ordered acknowledgement path must preserve the prefix property or it will skip a blocked message. Pinned by a
+   test that asserts exactly that consequence.
+
+### Where this leaves the cursor
+
+The honest case is now:
+
+| Claim | Status |
+|---|---|
+| Ordered claim 2.18× faster, 14.0 MB of index against 25.8 MB | Measured (§8) |
+| Deferred ordered ack batching | **Impossible under either design** — the earlier 2.73× is withdrawn |
+| Per-key runs amortising one transaction over N messages | Mechanism demonstrated, **magnitude unmeasured** |
+| Rolling deploy, no flag-day, self-healing backfill | Established (§9) |
+
+So the cursor is not the 2.64× or the 2.73× it has been carried as. It is a 2.18× claim plus a run-claiming
+capability the barrier structurally cannot express, whose value depends on a run-length benchmark nobody has
+run. That benchmark is the next thing worth doing, and it should gate the implementation — 16 tests over 8
+consecutive runs cover the mechanics, but not one number in this section is a throughput measurement of runs.
