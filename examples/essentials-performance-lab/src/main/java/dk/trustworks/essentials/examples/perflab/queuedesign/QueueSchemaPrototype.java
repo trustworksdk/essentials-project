@@ -376,6 +376,39 @@ public final class QueueSchemaPrototype {
     }
 
     /**
+     * Creates the cursor row for a key at enqueue time, which is where a real implementation must do it — the
+     * cursor claim drives <em>from</em> the key-state table, so a key with no row is invisible to every cursor
+     * pod.
+     * <p>
+     * {@code -1} starts the cursor below the lowest possible order, and {@code ON CONFLICT DO NOTHING} makes it
+     * safe to issue on every enqueue: the row must never be reset for a key that is already making progress, or
+     * the whole key would be redelivered.
+     */
+    public static String upsertKeyStateOnEnqueueSql(String keyStateTable) {
+        return "INSERT INTO " + keyStateTable + " (queue_name, key, completed_through) "
+                + "VALUES (:queueName, :key, -1) ON CONFLICT (queue_name, key) DO NOTHING";
+    }
+
+    /**
+     * Idempotent reconciliation: gives a cursor row to every key that has messages but no row.
+     * <p>
+     * This is the safety net the rollout needs, and it is not optional. During a rolling deploy an old pod
+     * enqueues ordered messages without creating cursor rows, so those keys are invisible to cursor pods. While
+     * any barrier pod survives they still get handled; once the fleet is fully migrated they are stranded
+     * silently — no error, no dead letter, just messages that are never claimed. A one-off backfill before the
+     * deploy cannot close that window, because the window is the deploy.
+     * <p>
+     * Cheap enough to run periodically: bounded by the number of distinct keys, not by the backlog, and
+     * {@code ON CONFLICT DO NOTHING} makes repetition free. Running it when a claim comes back empty is the
+     * obvious trigger, and it converges without operator involvement.
+     */
+    public static String reconcileKeyStateSql(String keyStateTable, String messageTable) {
+        return "INSERT INTO " + keyStateTable + " (queue_name, key, completed_through) "
+                + "SELECT DISTINCT m.queue_name, m.key, -1 FROM " + messageTable + " m WHERE m.queue_name = :queueName "
+                + "ON CONFLICT (queue_name, key) DO NOTHING";
+    }
+
+    /**
      * Per-key exclusive cursor claim.
      *
      * <h2>What was wrong with {@link #claimOrderedViaCursorSql}</h2>

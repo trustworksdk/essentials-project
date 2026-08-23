@@ -149,6 +149,56 @@ class QueueCursorMixedRolloutIT {
     }
 
     /**
+     * The end of the rollout, and the case that would strand messages if it were got wrong: a <b>fully
+     * migrated</b> fleet — no barrier pod left — draining a backlog that an old pod enqueued without cursor
+     * rows.
+     * <p>
+     * Every key here is invisible to a cursor claim on arrival, so without recovery the queue would sit
+     * untouched: no error, no dead letter, just messages nobody claims. The pods run reconciliation when a claim
+     * comes back empty, which is the proposed production trigger, and that alone must be enough to drain the
+     * whole backlog.
+     * <p>
+     * This is the counterpart to the mixed test above. That one shows old and new pods can coexist; this one
+     * shows the fleet still converges after the last old pod is gone, which is where a
+     * backfill-before-the-deploy strategy fails — the window it cannot cover is the deploy itself.
+     */
+    @Test
+    void a_fully_migrated_fleet_recovers_messages_an_old_pod_enqueued_without_cursor_rows() throws Exception {
+        var totalMessages = KEY_COUNT * MESSAGES_PER_KEY;
+        givenOrderedBacklogWithoutCursorRows();
+
+        // Nothing is claimable yet - every key lacks a cursor row.
+        var beforeRecovery = withHandle(handle -> handle.createQuery(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable))
+                                                       .bind("queueName", "q")
+                                                       .bind("now", OffsetDateTime.now())
+                                                       .bind("limit", 10)
+                                                       .mapTo(String.class)
+                                                       .list());
+        assertThat(beforeRecovery).as("the backlog starts invisible to cursor pods").isEmpty();
+
+        var handled  = new ConcurrentLinkedQueue<Handled>();
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var podA = executor.submit(() -> drain("cursor-pod-a",
+                                                   QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable),
+                                                   QueueSchemaPrototype.ackOrderedViaSafeCursorSql(messageTable, keyStateTable),
+                                                   handled, totalMessages, true));
+            var podB = executor.submit(() -> drain("cursor-pod-b",
+                                                   QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable),
+                                                   QueueSchemaPrototype.ackOrderedViaSafeCursorSql(messageTable, keyStateTable),
+                                                   handled, totalMessages, true));
+            podA.get(2, TimeUnit.MINUTES);
+            podB.get(2, TimeUnit.MINUTES);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(handled).as("reconciliation on an empty claim must be enough to drain the whole backlog")
+                           .hasSize(totalMessages);
+        assertThat(orderingViolations(handled)).as("and per-key ordering must hold throughout recovery").isEmpty();
+    }
+
+    /**
      * Negative control: the same mixed-pod run with the <em>uncorrected</em> cursor claim, which must produce
      * violations.
      * <p>
@@ -193,6 +243,10 @@ class QueueCursorMixedRolloutIT {
      * keeps the two pods genuinely interleaved instead of one of them sweeping the backlog in a single batch.
      */
     private void drain(String pod, String claimSql, String ackSql, Queue<Handled> handled, int totalMessages) {
+        drain(pod, claimSql, ackSql, handled, totalMessages, false);
+    }
+
+    private void drain(String pod, String claimSql, String ackSql, Queue<Handled> handled, int totalMessages, boolean reconcileOnEmptyClaim) {
         var deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos();
         while (handled.size() < totalMessages && System.nanoTime() < deadline) {
             var claimed = withHandle(handle -> handle.createQuery(claimSql)
@@ -202,6 +256,14 @@ class QueueCursorMixedRolloutIT {
                                                     .mapTo(String.class)
                                                     .list());
             if (claimed.isEmpty()) {
+                if (reconcileOnEmptyClaim) {
+                    // The proposed production trigger. An empty claim is exactly when it is worth asking whether
+                    // a key is invisible for want of a cursor row, and the statement is bounded by key count and
+                    // idempotent, so running it here converges without operator involvement.
+                    withHandle(handle -> handle.createUpdate(QueueSchemaPrototype.reconcileKeyStateSql(keyStateTable, messageTable))
+                                               .bind("queueName", "q")
+                                               .execute());
+                }
                 // The other pod holds every eligible key; yield rather than spin.
                 LockSupport.parkNanos(Duration.ofMillis(2).toNanos());
                 continue;
@@ -244,6 +306,28 @@ class QueueCursorMixedRolloutIT {
             }
         });
         return violations;
+    }
+
+    /**
+     * The backlog an old pod leaves behind: messages inserted with no cursor rows seeded.
+     */
+    private void givenOrderedBacklogWithoutCursorRows() {
+        withHandle(handle -> {
+            for (var order = 0; order < MESSAGES_PER_KEY; order++) {
+                for (var key = 0; key < KEY_COUNT; key++) {
+                    handle.createUpdate(QueueSchemaPrototype.insertOrderedSql(messageTable, true))
+                          .bind("id", "key-" + key + "#" + order)
+                          .bind("queueName", "q")
+                          .bind("payload", "{}")
+                          .bind("payloadType", "Test")
+                          .bind("now", OffsetDateTime.now())
+                          .bind("key", "key-" + key)
+                          .bind("keyOrder", (long) order)
+                          .execute();
+                }
+            }
+            return null;
+        });
     }
 
     private void givenOrderedBacklog() {

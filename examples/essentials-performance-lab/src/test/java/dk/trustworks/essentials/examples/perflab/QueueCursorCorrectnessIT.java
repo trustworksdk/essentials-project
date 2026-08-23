@@ -214,7 +214,106 @@ class QueueCursorCorrectnessIT {
         assertThat(completedThrough("key-a")).isEqualTo(3L);
     }
 
+    /**
+     * The sharp edge of the cursor design: a key with messages but <b>no cursor row is invisible to a cursor
+     * pod entirely</b>. Not delayed, not dead-lettered — never claimed.
+     * <p>
+     * The claim drives from the key-state table, so a key absent from it contributes no candidate. This is the
+     * failure mode a rolling deploy walks into: an old pod enqueues ordered messages without creating cursor
+     * rows, and while any barrier pod survives those keys still get handled, so nothing looks wrong. Once the
+     * fleet is fully migrated they are stranded silently. A one-off backfill before the deploy cannot close the
+     * window, because the window <em>is</em> the deploy.
+     */
+    @Test
+    void a_key_with_no_cursor_row_is_invisible_to_a_cursor_pod() {
+        givenOrderedMessagesWithoutCursorRow("orphan-key", 0, 1, 2);
+
+        var claimed = claim(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable), 10);
+
+        assertThat(claimed).as("the cursor claim drives from key-state, so a key with no row yields nothing at all")
+                           .isEmpty();
+    }
+
+    /**
+     * And the recovery: the idempotent reconciliation statement gives the orphaned key a cursor row, after
+     * which it is claimed normally from its lowest order.
+     * <p>
+     * This is what makes the rollout safe without operator involvement — run it when a claim comes back empty
+     * and the fleet converges on its own. It is bounded by the number of distinct keys rather than by the
+     * backlog, so it is cheap enough to run repeatedly.
+     */
+    @Test
+    void reconciliation_recovers_a_key_that_was_enqueued_without_a_cursor_row() {
+        givenOrderedMessagesWithoutCursorRow("orphan-key", 0, 1, 2);
+        assertThat(claim(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable), 10)).isEmpty();
+
+        jdbi.useHandle(handle -> handle.createUpdate(QueueSchemaPrototype.reconcileKeyStateSql(keyStateTable, messageTable))
+                                       .bind("queueName", "q")
+                                       .execute());
+
+        assertThat(claim(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable), 10))
+                .as("after reconciliation the orphaned key is claimed from its lowest order")
+                .containsExactly("orphan-key#0");
+    }
+
+    /**
+     * Reconciliation must never reset a key that is already making progress. It is intended to run repeatedly
+     * on a live queue, so an {@code INSERT} that overwrote an existing cursor would redeliver every message the
+     * key had already completed.
+     */
+    @Test
+    void reconciliation_does_not_rewind_a_cursor_that_is_already_advanced() {
+        givenOrderedMessages("key-a", 0, 1, 2);
+        jdbi.useHandle(handle -> handle.createUpdate("UPDATE " + keyStateTable + " SET completed_through = 1 WHERE key = 'key-a'").execute());
+
+        jdbi.useHandle(handle -> handle.createUpdate(QueueSchemaPrototype.reconcileKeyStateSql(keyStateTable, messageTable))
+                                       .bind("queueName", "q")
+                                       .execute());
+
+        assertThat(completedThrough("key-a")).as("an existing cursor must survive reconciliation untouched").isEqualTo(1L);
+        assertThat(claim(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable), 10))
+                .as("and delivery resumes where it left off rather than replaying the key")
+                .containsExactly("key-a#2");
+    }
+
+    /**
+     * The enqueue-time upsert is the primary mechanism, with reconciliation only the net beneath it: a key
+     * enqueued through it is claimable immediately, with no reconciliation pass at all.
+     */
+    @Test
+    void a_key_enqueued_with_the_cursor_upsert_is_claimable_without_reconciliation() {
+        givenOrderedMessagesWithoutCursorRow("fresh-key", 0, 1);
+        jdbi.useHandle(handle -> handle.createUpdate(QueueSchemaPrototype.upsertKeyStateOnEnqueueSql(keyStateTable))
+                                       .bind("queueName", "q")
+                                       .bind("key", "fresh-key")
+                                       .execute());
+
+        assertThat(claim(QueueSchemaPrototype.claimOrderedViaSafeCursorSql(messageTable, keyStateTable), 10))
+                .containsExactly("fresh-key#0");
+    }
+
     // ---- fixture helpers ----
+
+    /**
+     * Inserts messages but deliberately skips seeding the cursor row, reproducing what an old pod's enqueue
+     * leaves behind during a rolling deploy.
+     */
+    private void givenOrderedMessagesWithoutCursorRow(String key, long... orders) {
+        jdbi.useHandle(handle -> {
+            for (var order : orders) {
+                handle.createUpdate(QueueSchemaPrototype.insertOrderedSql(messageTable, true))
+                      .bind("id", key + "#" + order)
+                      .bind("queueName", "q")
+                      .bind("payload", "{}")
+                      .bind("payloadType", "Test")
+                      .bind("now", OffsetDateTime.now())
+                      .bind("key", key)
+                      .bind("keyOrder", order)
+                      .execute();
+            }
+        });
+    }
+
 
     private void givenOrderedMessages(String key, long... orders) {
         jdbi.useHandle(handle -> {

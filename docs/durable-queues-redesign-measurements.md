@@ -30,6 +30,8 @@ the ratios are the result.
 | Cursor's win once corrected | End-to-end **2.38× → 1.54×**, claim **3.75× → 2.18×** | §8 |
 | Why the cursor is still worth building | It unlocks batched ordered acks, worth **~2.7×** end to end — not its faster claim | §8 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
+| A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
+| Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
 
 ## 1. Ordered/unordered query split — confirmed, and already shipped behind a flag
 
@@ -538,14 +540,42 @@ It removes the flag-day. The cursor can be rolled out pod by pod, and a rollback
 barrier-only fleet simply ignores a key-state table that has stopped being maintained, and the next cursor pod
 to appear finds it stale-low, which is the benign direction.
 
-Still open, and not addressed by this test:
+### The stranding hazard, and the recovery that closes it
 
-- **Backfill.** A key-state row must exist before a cursor pod can claim for that key. `seedKeyStateSql`'s
-  `INSERT … SELECT DISTINCT` is a prototype; the real path needs to be incremental, idempotent, and safe to run
-  while traffic flows. Creating the row on first enqueue for the key is the obvious design and is untested.
-- **A cursor pod claiming for a key with no cursor row.** The claim drives *from* the key-state table, so a
-  missing row means the key is silently invisible to cursor pods — a message would sit until a barrier pod took
-  it, or forever once the fleet is fully migrated. This is the sharp edge of the backfill and needs its own
-  test.
+The sharp edge of driving the claim *from* the key-state table: **a key with messages but no cursor row is
+invisible to every cursor pod.** Not delayed, not dead-lettered — never claimed, with no error anywhere.
+
+This is what a rolling deploy walks into. An old pod enqueues ordered messages without creating cursor rows;
+while any barrier pod survives those keys still get handled, so nothing looks wrong; once the fleet is fully
+migrated they are stranded. **A backfill run before the deploy cannot close the window, because the window is
+the deploy.**
+
+Both the hazard and its recovery are now tested:
+
+| Case | Result |
+|---|---|
+| Key with messages, no cursor row | Cursor claim yields nothing at all — stranded |
+| After `reconcileKeyStateSql` | Claimed normally from its lowest order |
+| Reconciliation against an advanced cursor | Cursor untouched, delivery resumes where it left off — no replay |
+| Key enqueued via `upsertKeyStateOnEnqueueSql` | Claimable immediately, no reconciliation needed |
+| **Fully migrated fleet, backlog with no cursor rows, two cursor pods reconciling on empty claim** | **Whole backlog drains, per-key ordering intact** |
+
+So the design is: create the cursor row at enqueue (`ON CONFLICT DO NOTHING`, which must never reset a key
+already making progress or the whole key replays), with reconciliation as the net beneath it, triggered when a
+claim comes back empty. That trigger is the right one — an empty claim is exactly when it is worth asking
+whether a key is invisible — and the statement is bounded by distinct-key count rather than backlog size and
+idempotent, so it is cheap to run repeatedly and converges with no operator involvement.
+
+Across the whole cursor set: 10 consecutive runs of 13 tests, plus the 27 earlier runs of the mixed-rollout
+case.
+
+Still not addressed:
+
 - **Ordered acknowledgement batching across the two styles**, which is the payoff in §8 and is not exercised
-  here: both pods acknowledge one message at a time.
+  here: every pod in these tests acknowledges one message at a time.
+- **Reconciliation cost on a large key space.** Bounded by distinct keys, but `SELECT DISTINCT` over the
+  message table at 10⁵–10⁶ keys has not been measured, and an empty claim is a frequent event on an idle queue —
+  it needs a floor on how often it fires.
+- **Everything above is prototype SQL**, not an implementation: no `DurableQueues` code path, no enqueue
+  integration, no interaction with `purgeQueue` or `deleteMessage` removing the last message for a key while its
+  cursor row remains.
