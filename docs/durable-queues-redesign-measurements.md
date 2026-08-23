@@ -29,6 +29,7 @@ the ratios are the result.
 | The measured cursor prototype | **Not correct** — two faults, both reproduced against the SQL | §8 |
 | Cursor's win once corrected | End-to-end **2.38× → 1.54×**, claim **3.75× → 2.18×** | §8 |
 | Why the cursor is still worth building | It unlocks batched ordered acks, worth **~2.7×** end to end — not its faster claim | §8 |
+| Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 
 ## 1. Ordered/unordered query split — confirmed, and already shipped behind a flag
 
@@ -499,3 +500,52 @@ acknowledgement are a single change with a single payoff, not two independent on
 - **The corrected statements are prototype SQL, not an implementation.** Nothing here addresses the key-state
   table's migration, backfill, or the mixed-version rollout in which some pods claim via the barrier and
   others via the cursor.
+
+## 9. Mixed-version rollout — barrier pods and cursor pods can share one table
+
+The largest obstacle to the cursor was never its throughput; it was deployment. A rolling deploy replaces pods
+one at a time, so for a period both claim styles are live against one shared table. If they cannot coexist the
+cursor needs a flag-day migration — every consumer stopped, key-state backfilled, everything restarted — which
+for an intra-service queue means downtime.
+
+`QueueCursorMixedRolloutIT` runs exactly that: one pod claiming through the `NOT EXISTS` barrier and
+acknowledging with a plain delete, knowing nothing about the key-state table, and one pod claiming through the
+corrected cursor and maintaining it, both against the same table, each on its own connection, claiming one
+message at a time so they genuinely interleave. It asserts per key that handlings are strictly increasing in
+`key_order`, never overlap in wall-clock time, and that nothing is duplicated or lost — plus that each pod
+handled at least a tenth of the backlog, since a run where one pod does 199 of 200 would satisfy a
+presence-only check while exercising nothing.
+
+**Result: safe.** 27 consecutive runs, zero violations (15 before a balance assertion was added, 12 after).
+
+The reason it works is that both mechanisms read the same physical rows:
+
+- The barrier blocks a successor while any lower-`key_order` row is still present — which includes a row the
+  cursor pod is holding in flight.
+- The corrected cursor blocks a key while any of its rows has `is_being_delivered = TRUE` — which includes a
+  row the barrier pod is holding.
+- The only unshared state is `completed_through`, and a barrier pod deletes rows without advancing it. That can
+  only leave the cursor **stale-low**, and "lowest order above the cursor" is gap-tolerant by construction, so
+  a stale-low cursor costs a wasted index probe rather than correctness.
+
+A negative control pairs a barrier pod with the **uncorrected** cursor claim and requires violations to appear.
+It finds them on every run, so the ordering-and-overlap detector demonstrably fires and the 27 green runs are
+not an artefact of assertions that cannot fail.
+
+### What this buys, and what it does not
+
+It removes the flag-day. The cursor can be rolled out pod by pod, and a rollback is equally safe — a
+barrier-only fleet simply ignores a key-state table that has stopped being maintained, and the next cursor pod
+to appear finds it stale-low, which is the benign direction.
+
+Still open, and not addressed by this test:
+
+- **Backfill.** A key-state row must exist before a cursor pod can claim for that key. `seedKeyStateSql`'s
+  `INSERT … SELECT DISTINCT` is a prototype; the real path needs to be incremental, idempotent, and safe to run
+  while traffic flows. Creating the row on first enqueue for the key is the obvious design and is untested.
+- **A cursor pod claiming for a key with no cursor row.** The claim drives *from* the key-state table, so a
+  missing row means the key is silently invisible to cursor pods — a message would sit until a barrier pod took
+  it, or forever once the fleet is fully migrated. This is the sharp edge of the backfill and needs its own
+  test.
+- **Ordered acknowledgement batching across the two styles**, which is the payoff in §8 and is not exercised
+  here: both pods acknowledge one message at a time.
