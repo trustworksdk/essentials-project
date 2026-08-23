@@ -844,70 +844,31 @@ public class DurableQueuesSql {
     }
 
     /**
-     * Table DDL for the split <b>unordered</b> queue table: {@link #getCreateQueueTableSql()} without the
-     * {@code key}, {@code key_order} or {@code delivery_mode} columns, none of which mean anything when every row
-     * in the table is unordered by construction.
+     * Table DDL for a split queue table. <b>Identical columns to {@link #getCreateQueueTableSql()}</b>, and that
+     * is deliberate.
+     *
+     * <h2>Why the columns stay</h2>
+     * An earlier version of this dropped {@code key}, {@code key_order} and {@code delivery_mode} from the
+     * unordered table, since no row there needs them. That does not work: every one of v1's statements references
+     * those columns — {@code claimUnorderedSql} filters on {@code key IS NULL}, the row mapper reads
+     * {@code delivery_mode} — so trimming them would mean rewriting and re-testing the whole SQL surface to buy
+     * about nine bytes a row.
      * <p>
-     * Dropping the columns is not cosmetic. It is what allows a single secondary index here where the shared
-     * table needs several, and index count is the whole of the split's measured 1.38x - see
-     * {@code docs/durable-queues-redesign-measurements.md} §1 and §8.
+     * And it buys nothing that was measured. The split's 1.38x total and 1.62x insert are attributed to
+     * <b>index count</b>, six secondary indexes down to one (measurements §1, §8). Column width was never shown
+     * to matter on its own. So the split varies the index set per mode and leaves the columns alone, which lets
+     * each table be driven by v1's existing, tested statements unchanged.
      *
-     * @return DDL creating the unordered queue table
+     * @return DDL creating a split queue table
      */
-    public String getCreateUnorderedQueueTableSql() {
-        return bind("""
-                    CREATE TABLE IF NOT EXISTS {:tableName} (
-                    id                     TEXT PRIMARY KEY,
-                    queue_name             TEXT NOT NULL,
-                    message_payload        JSONB NOT NULL,
-                    message_payload_type   TEXT NOT NULL,
-                    added_ts               TIMESTAMPTZ NOT NULL,
-                    next_delivery_ts       TIMESTAMPTZ,
-                    delivery_ts            TIMESTAMPTZ DEFAULT NULL,
-                    total_attempts         INTEGER DEFAULT 0,
-                    redelivery_attempts    INTEGER DEFAULT 0,
-                    last_delivery_error    TEXT DEFAULT NULL,
-                    is_being_delivered     BOOLEAN DEFAULT FALSE,
-                    is_dead_letter_message BOOLEAN NOT NULL DEFAULT FALSE,
-                    meta_data              JSONB DEFAULT NULL
-                    )
-                    """,
-                    arg("tableName", sharedQueueTableName));
+    public String getCreateSplitQueueTableSql() {
+        return getCreateQueueTableSql();
     }
 
     /**
-     * Table DDL for the split <b>ordered</b> queue table. {@code key} and {@code key_order} become
-     * {@code NOT NULL}, because a row here without them is meaningless - which is a guarantee the shared table
-     * cannot make, since it has to hold both kinds.
-     *
-     * @return DDL creating the ordered queue table
-     */
-    public String getCreateOrderedQueueTableSql() {
-        return bind("""
-                    CREATE TABLE IF NOT EXISTS {:tableName} (
-                    id                     TEXT PRIMARY KEY,
-                    queue_name             TEXT NOT NULL,
-                    message_payload        JSONB NOT NULL,
-                    message_payload_type   TEXT NOT NULL,
-                    added_ts               TIMESTAMPTZ NOT NULL,
-                    next_delivery_ts       TIMESTAMPTZ,
-                    delivery_ts            TIMESTAMPTZ DEFAULT NULL,
-                    total_attempts         INTEGER DEFAULT 0,
-                    redelivery_attempts    INTEGER DEFAULT 0,
-                    last_delivery_error    TEXT DEFAULT NULL,
-                    is_being_delivered     BOOLEAN DEFAULT FALSE,
-                    is_dead_letter_message BOOLEAN NOT NULL DEFAULT FALSE,
-                    meta_data              JSONB DEFAULT NULL,
-                    key                    TEXT   NOT NULL,
-                    key_order              BIGINT NOT NULL
-                    )
-                    """,
-                    arg("tableName", sharedQueueTableName));
-    }
-
-    /**
-     * The unordered table's only ready-scan index. One index, against the shared table's several, because there
-     * is no ordered traffic here to serve.
+     * The unordered split table's only secondary index: the ready scan. One, where the shared table needs
+     * several, because there is no ordered traffic here to serve — and that difference is the whole of the
+     * split's measured win.
      *
      * @return DDL creating the unordered ready index
      */
@@ -920,7 +881,7 @@ public class DurableQueuesSql {
     }
 
     /**
-     * The ordered table's head-scan index.
+     * The ordered split table's head-scan index.
      * <p>
      * Two indexes on this table, not the three v1 carries for ordered traffic: §17 measured
      * {@code idx_*_ordered_ready} at zero scans at both 8 and 200 ordered keys, and {@code idx_*_ordered_msg}
@@ -938,16 +899,21 @@ public class DurableQueuesSql {
     }
 
     /**
-     * The ordered table's per-key index, unique when the duplicate strategy is {@code REJECT}. Non-partial on
-     * key, unlike the shared table's version, because every row here has one.
+     * The ordered split table's per-key index, unique when the duplicate strategy is {@code REJECT}.
+     * <p>
+     * Partial on {@code key IS NOT NULL} like the shared table's version. The columns are the same as v1's, so a
+     * stray unordered row is representable here even though the router never writes one, and a non-partial unique
+     * index would then reject the second such row.
      *
      * @param unique whether to enforce at most one message per {@code (queue_name, key, key_order)}
      * @return DDL creating the ordered per-key index
      */
     public String getCreateSplitOrderedKeyIndexSql(boolean unique) {
-        return bind("CREATE " + (unique ? "UNIQUE " : "") + "INDEX IF NOT EXISTS idx_{:tableName}_key ON {:tableName} (queue_name, key, key_order)",
+        return bind("CREATE " + (unique ? "UNIQUE " : "")
+                            + "INDEX IF NOT EXISTS idx_{:tableName}_key ON {:tableName} (queue_name, key, key_order) WHERE key IS NOT NULL",
                     arg("tableName", sharedQueueTableName));
     }
+
     /**
      * SQL statement for acknowledging several messages as handled in one statement.
      * <p>

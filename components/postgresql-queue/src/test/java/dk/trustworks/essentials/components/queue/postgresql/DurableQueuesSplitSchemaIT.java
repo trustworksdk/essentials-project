@@ -40,10 +40,11 @@ import static org.assertj.core.api.Assertions.*;
  *     keys, and {@code idx_*_ordered_msg} superseded by the unique index once that exists. The ordered table
  *     therefore gets two indexes, not the three v1 carries for ordered traffic. Inheriting v1's set by inspection
  *     is exactly how the redundant one came to exist.</li>
- *     <li><b>The columns each table does not have.</b> The unordered table has no {@code key}, {@code key_order}
- *     or {@code delivery_mode}; the ordered table has {@code key} and {@code key_order} as {@code NOT NULL}. Those
- *     are guarantees the shared table cannot make, because it has to hold both kinds, and they are what let each
- *     table carry a smaller index set.</li>
+ *     <li><b>That the columns are the same as v1's.</b> Trimming them was tried and reverted: every one of v1's
+ *     statements references {@code key}, {@code key_order} or {@code delivery_mode}, so a narrower table would
+ *     mean rewriting the whole SQL surface — and column width was never what the split's win was attributed to.
+ *     Keeping them is what lets each split table be driven by v1's existing, tested statements unchanged, which
+ *     is why it is asserted rather than assumed.</li>
  * </ul>
  */
 @Testcontainers
@@ -69,23 +70,34 @@ class DurableQueuesSplitSchemaIT {
     }
 
     @Test
-    void the_unordered_table_carries_no_ordering_columns_and_exactly_one_secondary_index() {
+    void the_unordered_table_carries_exactly_one_secondary_index() {
         var sql = new DurableQueuesSql(UNORDERED_TABLE);
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-            unitOfWork.handle().execute(sql.getCreateUnorderedQueueTableSql());
+            unitOfWork.handle().execute(sql.getCreateSplitQueueTableSql());
             unitOfWork.handle().execute(sql.getCreateSplitUnorderedReadyIndexSql());
         });
 
-        assertThat(columnsOf(UNORDERED_TABLE)).doesNotContain("key", "key_order", "delivery_mode");
         // The point of the split, in one assertion: one index where the shared table needs several.
         assertThat(secondaryIndexesOf(UNORDERED_TABLE)).containsExactly("idx_" + UNORDERED_TABLE + "_ready");
     }
 
     @Test
-    void the_ordered_table_requires_key_and_key_order_and_carries_two_secondary_indexes() {
+    void both_split_tables_keep_v1s_columns_so_v1s_statements_can_drive_them() {
+        var sql = new DurableQueuesSql(ORDERED_TABLE);
+        unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle().execute(sql.getCreateSplitQueueTableSql()));
+
+        // Every one of these is referenced by v1's existing statements - claimUnorderedSql filters on
+        // `key IS NULL`, the row mapper reads delivery_mode - so their presence is what makes reuse possible.
+        assertThat(columnsOf(ORDERED_TABLE)).contains("key", "key_order", "delivery_mode",
+                                                     "is_being_delivered", "is_dead_letter_message",
+                                                     "next_delivery_ts", "total_attempts", "redelivery_attempts");
+    }
+
+    @Test
+    void the_ordered_table_carries_two_secondary_indexes() {
         var sql = new DurableQueuesSql(ORDERED_TABLE);
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-            unitOfWork.handle().execute(sql.getCreateOrderedQueueTableSql());
+            unitOfWork.handle().execute(sql.getCreateSplitQueueTableSql());
             unitOfWork.handle().execute(sql.getCreateSplitOrderedHeadIndexSql());
             unitOfWork.handle().execute(sql.getCreateSplitOrderedKeyIndexSql(true));
         });
@@ -93,15 +105,6 @@ class DurableQueuesSplitSchemaIT {
         // Two, not the three v1 carries for ordered traffic - see §17.
         assertThat(secondaryIndexesOf(ORDERED_TABLE))
                 .containsExactlyInAnyOrder("idx_" + ORDERED_TABLE + "_head", "idx_" + ORDERED_TABLE + "_key");
-
-        // NOT NULL is the guarantee the shared table cannot make, so it is asserted against the database rather
-        // than read off the DDL.
-        assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle()
-                                                                                           .execute("INSERT INTO " + ORDERED_TABLE
-                                                                                                            + " (id, queue_name, message_payload, message_payload_type, added_ts, key, key_order)"
-                                                                                                            + " VALUES ('x', 'q', '{}'::jsonb, 'T', now(), NULL, 0)")))
-                .as("an ordered row without a key is meaningless and the table must refuse it")
-                .isNotNull();
     }
 
     /**
@@ -112,14 +115,18 @@ class DurableQueuesSplitSchemaIT {
     void the_ordered_key_index_is_unique_only_under_REJECT() {
         var sql = new DurableQueuesSql(ORDERED_TABLE);
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-            unitOfWork.handle().execute(sql.getCreateOrderedQueueTableSql());
+            unitOfWork.handle().execute(sql.getCreateSplitQueueTableSql());
             unitOfWork.handle().execute(sql.getCreateSplitOrderedKeyIndexSql(true));
         });
 
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> insertOrdered(unitOfWork.handle(), "a", "key-1", 0));
         assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> insertOrdered(unitOfWork.handle(), "b", "key-1", 0)))
                 .as("REJECT must refuse a duplicate key and order")
-                .isNotNull();
+                // Named specifically: asserting merely that "something threw" is how this test previously passed
+                // while the insert was failing on an unrelated null violation.
+                .rootCause()
+                .hasMessageContaining("duplicate key value violates unique constraint")
+                .hasMessageContaining("idx_" + ORDERED_TABLE + "_key");
         // Same key, different order still accepted - the index must not be broader than the defect it closes.
         assertThatNoException().isThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(unitOfWork -> insertOrdered(unitOfWork.handle(), "c", "key-1", 1)));
     }
@@ -128,7 +135,7 @@ class DurableQueuesSplitSchemaIT {
     void the_ordered_key_index_permits_duplicates_under_ALLOW() {
         var sql = new DurableQueuesSql(ORDERED_TABLE);
         unitOfWorkFactory.usingUnitOfWork(unitOfWork -> {
-            unitOfWork.handle().execute(sql.getCreateOrderedQueueTableSql());
+            unitOfWork.handle().execute(sql.getCreateSplitQueueTableSql());
             unitOfWork.handle().execute(sql.getCreateSplitOrderedKeyIndexSql(false));
         });
 
@@ -138,10 +145,16 @@ class DurableQueuesSplitSchemaIT {
         }));
     }
 
+    /**
+     * {@code delivery_mode} is included because it is {@code NOT NULL}, and omitting it made the REJECT test above
+     * pass for the wrong reason: the insert failed on a null violation rather than on the unique index, so the
+     * test would have passed with no unique index at all. Its sibling — the ALLOW case, which expects the insert
+     * to succeed — is what exposed that.
+     */
     private static void insertOrdered(org.jdbi.v3.core.Handle handle, String id, String key, long order) {
         handle.execute("INSERT INTO " + ORDERED_TABLE
-                               + " (id, queue_name, message_payload, message_payload_type, added_ts, key, key_order)"
-                               + " VALUES (?, 'q', '{}'::jsonb, 'T', now(), ?, ?)", id, key, order);
+                               + " (id, queue_name, message_payload, message_payload_type, added_ts, delivery_mode, key, key_order)"
+                               + " VALUES (?, 'q', '{}'::jsonb, 'T', now(), 'IN_ORDER', ?, ?)", id, key, order);
     }
 
     private List<String> columnsOf(String table) {

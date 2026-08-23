@@ -322,6 +322,33 @@ measurements support rather than merely the tidier one.
 Consequence for `getQueueNameFor(QueueEntryId)`, which the v2 plan flagged as the hard one: it is simply the same
 dual lookup, and needs no special handling.
 
+## 7c. S3 design decision: split the indexes, keep the columns — and reuse v1's statements
+
+An earlier version of the split schemas dropped the columns each table does not need: no `key`, `key_order` or
+`delivery_mode` on the unordered table, and `NOT NULL` on the ordered one's. That was reverted, and the reason
+reshapes how S3 gets built.
+
+**Every one of v1's statements references those columns.** `claimUnorderedSql` filters on `key IS NULL`; the row
+mapper reads `delivery_mode` and reconstructs an `OrderedMessage` from it. A narrower table would therefore mean
+rewriting and re-testing the entire SQL surface — nineteen operations' worth — to save roughly nine bytes a row.
+
+**And the columns were never what the win was attributed to.** The split's 1.38× total and 1.62× insert are
+index-count effects (measurements §1, §8): six secondary indexes down to one. Column width was not measured to
+matter on its own.
+
+So the split varies **only the index set** per mode and leaves the columns identical to v1's. That has a large
+consequence for the implementation: **each split table can be driven by v1's existing, tested statements
+unchanged.** The split becomes a composition over two configured storage instances rather than a rewrite, which
+is a materially smaller and lower-risk change than either plan assumed.
+
+One consequence to carry into the next increment, which §7a's no-declaration decision makes sharper than
+expected: consumption has to serve two tables under **one** `parallelConsumers` budget. Registering a consumer
+per table would double in-flight work and break that contract. The fix is that the composite implements
+`BatchMessageFetchingCapableDurableQueues` and owns a single `CentralizedMessageFetcher`, merging results from
+both tables — the fetcher already computes slots as `maxParallelConsumers - activeWorkers` per queue, so one
+fetcher over the composite gets a shared budget for free. The delegates are storage only, with no consumers of
+their own.
+
 ## 8. Investigation backlog — ideas not yet tried
 
 Everything that has measured as significant reduced to two levers: **transactions per message** (§7: 16.5× on
