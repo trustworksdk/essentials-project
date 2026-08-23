@@ -1,0 +1,4 @@
+#
+#Sun Aug 23 14:19:26 UTC 2026
+constructors\ that\ declared\ public\ or\ protected\ and\ not\ a\ record's\ canonical\ constructor\ should\ declare\ at\ most\ 5\ parameters,\ or\ be\ annotated\ @Deprecated(forRemoval\ \=\ true),\ because\ above\ five\ parameters\ the\ arguments\ are\ a\ parameter\ object\ or\ a\ builder,\ not\ a\ signature\ \u2014\ see\ docs/constructor-ergonomics-and-optional-policy.md=3ed49293-29d5-41f9-8397-5acab83b4f35
+constructors\ that\ declared\ public\ or\ protected\ and\ not\ a\ record's\ canonical\ constructor\ should\ not\ declare\ an\ Optional\ parameter,\ or\ be\ annotated\ @Deprecated(forRemoval\ \=\ true),\ because\ Optional\ belongs\ in\ return\ types,\ not\ in\ construction\ \u2014\ see\ docs/constructor-ergonomics-and-optional-policy.md=d9f5fc76-3c6d-4fa4-8d2c-417e38f5e97a

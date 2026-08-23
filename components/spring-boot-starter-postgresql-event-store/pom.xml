@@ -184,6 +184,25 @@
             <version>${spring-boot.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- ArchUnit drives EssentialsConstructionErgonomicsTest. This starter's classpath is a superset of both
+             eventsourced-aggregates' and spring-boot-starter-postgresql's, so most of what it guards is already
+             guarded there and its store duplicates theirs; it earns its place by being the only classpath that also
+             carries spring-postgresql-event-store and this module's own auto-configuration. -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit-junit5.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- For the shared architecture rules and their harness (EssentialsConstructionRules,
+             AbstractEssentialsConstructionErgonomicsTest) only. ArchUnit is optional in foundation-test's POM, hence
+             the explicit declaration above. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation-test</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
