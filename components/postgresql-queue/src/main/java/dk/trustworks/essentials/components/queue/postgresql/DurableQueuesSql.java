@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.foundation.postgresql.PostgresqlUtil;
 
 import java.util.*;
 
+import static dk.trustworks.essentials.shared.FailFast.*;
 import static dk.trustworks.essentials.shared.MessageFormatter.NamedArgumentBinding.arg;
 import static dk.trustworks.essentials.shared.MessageFormatter.bind;
 
@@ -193,11 +194,20 @@ public class DurableQueuesSql {
         private final String                          sql;
         private final Map<String, String>             singleValueBindings;
         private final Map<String, Collection<String>> listBindings;
+        private final Map<String, Integer>            intValueBindings;
 
         public BatchedSqlResult(String sql, Map<String, String> singleValueBindings, Map<String, Collection<String>> listBindings) {
+            this(sql, singleValueBindings, listBindings, Map.of());
+        }
+
+        public BatchedSqlResult(String sql,
+                                Map<String, String> singleValueBindings,
+                                Map<String, Collection<String>> listBindings,
+                                Map<String, Integer> intValueBindings) {
             this.sql = sql;
             this.singleValueBindings = singleValueBindings;
             this.listBindings = listBindings;
+            this.intValueBindings = intValueBindings;
         }
 
         public String getSql() {
@@ -211,13 +221,34 @@ public class DurableQueuesSql {
         public Map<String, Collection<String>> getListBindings() {
             return listBindings;
         }
+
+        /**
+         * Per-queue worker-slot limits. Bound rather than interpolated so that the statement text stays the
+         * same as the slot counts move, which is what lets PostgreSQL reuse a prepared plan — see the note in
+         * {@link DurableQueuesSql#buildBatchedSqlStatement}.
+         */
+        public Map<String, Integer> getIntValueBindings() {
+            return intValueBindings;
+        }
     }
 
     /**
-     * Builds a batched SQL statement for retrieving messages from multiple queues - work in progress (doesn't handle competing consumers yet due to )
+     * Builds a single statement that claims messages across several queues at once, replacing one statement
+     * per queue per poll.
      * <p>
-     * This method now uses parameterized queries to avoid SQL injection vulnerabilities
-     * that could arise from string concatenation of user-provided keys.
+     * <b>Competing consumers are handled</b>, contrary to the "work in progress" note this javadoc used to
+     * carry. Candidates are selected and numbered without locking, and then a second scan re-checks
+     * {@code is_being_delivered = FALSE} under {@code FOR UPDATE SKIP LOCKED}, so a row another instance
+     * claimed between the two steps is dropped rather than claimed twice. That is now established by
+     * experiment rather than by reading: {@code PostgresqlBatchedFetchCompetingConsumersIT} runs two
+     * independent instances against one database over several queues and asserts every message is handled
+     * exactly once, with a negative control proving the duplicate detector fires.
+     * <p>
+     * Keys and queue names are bound rather than concatenated, so a queue name or an ordered-message key
+     * cannot carry SQL into the statement. The per-queue slot limits are bound too — not for safety, since
+     * they are internal integers, but so that the statement text stays stable as the slot counts move and
+     * PostgreSQL can reuse a prepared plan. The text still varies with the <em>number</em> of active queues,
+     * which is unavoidable in a {@code VALUES} list.
      *
      * @param excludeKeysPerQueue          Map of queue names to sets of keys to exclude
      * @param availableWorkerSlotsPerQueue Map of queue names to available worker slots
@@ -227,17 +258,27 @@ public class DurableQueuesSql {
     public BatchedSqlResult buildBatchedSqlStatement(Map<QueueName, Set<String>> excludeKeysPerQueue,
                                                      Map<QueueName, Integer> availableWorkerSlotsPerQueue,
                                                      List<QueueName> activeQueues) {
+        requireNonNull(activeQueues, "No activeQueues provided");
+        // An empty VALUES list is a syntax error rather than an empty result, so this is a caller bug worth
+        // failing on. PostgresqlDurableQueues.fetchNextBatchOfMessagesBatched already returns early in that
+        // case; this guards the other callers of a public method.
+        requireFalse(activeQueues.isEmpty(), "activeQueues must not be empty");
+
         var values              = new StringBuilder();
         var singleValueBindings = new HashMap<String, String>();
         var listBindings        = new HashMap<String, Collection<String>>();
+        var intValueBindings    = new HashMap<String, Integer>();
 
         for (int i = 0; i < activeQueues.size(); i++) {
             var queueName                        = activeQueues.get(i);
-            var availableWorkerSlotsForThisQueue = availableWorkerSlotsPerQueue.get(queueName);
+            // Absent means no slots reported for the queue. Interpolating a null produced the literal "null"
+            // and a syntax error; treating it as zero yields "rn <= 0", which simply selects nothing for it.
+            var availableWorkerSlotsForThisQueue = availableWorkerSlotsPerQueue.getOrDefault(queueName, 0);
             var excludedKeysForThisQueue         = excludeKeysPerQueue.getOrDefault(queueName, Collections.emptySet());
 
             // Add queue name parameter binding as single value
             singleValueBindings.put("queueName" + i, queueName.toString());
+            intValueBindings.put("slots" + i, availableWorkerSlotsForThisQueue);
 
             // Only add parameter binding if there are keys to exclude
             // For empty collections, we'll use a different SQL approach
@@ -247,7 +288,7 @@ public class DurableQueuesSql {
 
             if (i > 0) values.append(",\n    ");
             values.append("(:queueName").append(i).append(", ")
-                  .append(availableWorkerSlotsForThisQueue).append(", ")
+                  .append(":slots").append(i).append("::int, ")
                   .append(excludedKeysForThisQueue.isEmpty() ? "ARRAY[]::text[]" : "ARRAY[<excludeKeys" + i + ">]::text[]")
                   .append(")");
         }
@@ -336,7 +377,7 @@ public class DurableQueuesSql {
                        arg("tableName", sharedQueueTableName),
                        arg("values", values.toString()));
 
-        return new BatchedSqlResult(sql, singleValueBindings, listBindings);
+        return new BatchedSqlResult(sql, singleValueBindings, listBindings, intValueBindings);
     }
 
     /**

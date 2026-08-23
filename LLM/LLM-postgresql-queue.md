@@ -107,6 +107,8 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
 | `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
 | `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
+| `useBatchedFetch` | `boolean` | `false` | One claim statement across all active queues instead of one per queue. Competing consumers verified; throughput unmeasured |
+| `batchedFetchSwitchThreshold` | `int` | 4 | Per-queue fetch for active-queue counts ≤ threshold, batched above it |
 | `useBatchedAcknowledgement` | `boolean` | `false` | Coalesce acks into one statement+transaction per batch. See [Batched Acknowledgement](#batched-acknowledgement) |
 | `acknowledgementMaxBatchSize` | `int` | 64 | Flush once this many acks are pending |
 | `acknowledgementFlushInterval` | `Duration` | 50ms | Flush at least this often. Must be ≤ ¼ of `messageHandlingTimeout` |

@@ -393,6 +393,20 @@ WHERE is_being_delivered = TRUE
 
 ### I5 — Multi-queue single-statement claim (finish `fetchNextBatchOfMessagesBatched`)
 
+> **Correctness gate cleared.** The statement already carried the defence this item asks for — candidates
+> selected unlocked, then re-checked under `FOR UPDATE SKIP LOCKED` — and the "work in progress — doesn't
+> handle competing consumers yet" notes on both the SQL builder and the fetch method were stale rather than
+> accurate. `PostgresqlBatchedFetchCompetingConsumersIT` now establishes it: two independent instances, four
+> queues, 600 messages, every message handled exactly once, plus a negative control that forces a duplicate
+> (a handler outliving `messageHandlingTimeout`) to prove the detector fires. Two defects fixed while there:
+> the per-queue slot limits were interpolated into the statement text rather than bound, so the prepared-plan
+> cache thrashed as slot counts moved; and the builder produced invalid SQL for an empty queue list or a
+> missing slot entry.
+>
+> **Still opt-in.** Correctness is evidenced; the throughput claim below is not. Nothing measured yet justifies
+> flipping the default, and the `LATERAL`-over-`VALUES` rewrite sketched below is unnecessary — the existing
+> `ROW_NUMBER`-based statement passes the gate as written.
+
 **Design:** the commented-out call (`CentralizedMessageFetcher.java:210-221`) and WIP SQL (`PostgresqlDurableQueues.java:1595-1696`, `buildBatchedSqlStatement` at `DurableQueuesSql.java:593+`) attempted one statement for all queues. With I4's split paths the safe version is a `LATERAL` join over a `VALUES` list of (queue, limit) pairs, per claim family:
 
 ```sql

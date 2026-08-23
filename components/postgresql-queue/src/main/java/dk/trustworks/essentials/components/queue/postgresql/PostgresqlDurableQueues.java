@@ -1817,7 +1817,17 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * Work in progress - doesn't handle competing consumers yet
+     * Claims messages for several queues in a single statement, rather than one statement per queue per poll.
+     * <p>
+     * <b>Competing consumers are handled</b> — this method used to be marked "work in progress - doesn't
+     * handle competing consumers yet". The claim statement selects candidates without locking and then
+     * re-checks {@code is_being_delivered = FALSE} on a second scan under {@code FOR UPDATE SKIP LOCKED}, so a
+     * row another instance claimed in between is dropped rather than claimed twice.
+     * {@code PostgresqlBatchedFetchCompetingConsumersIT} establishes this with two independent instances over
+     * several queues, and carries a negative control proving its duplicate detector fires.
+     * <p>
+     * Still opt-in via {@link PostgresqlDurableQueuesBuilder#setUseBatchedFetch(boolean)}: correctness under
+     * competing consumers is now evidenced, but no throughput measurement yet justifies making it the default.
      */
     @Override
     public List<QueuedMessage> fetchNextBatchOfMessagesBatched(Collection<QueueName> queueNames,
@@ -1864,6 +1874,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 // Bind list parameters (exclude keys)
                 for (var entry : batchedSqlResult.getListBindings().entrySet()) {
                     query.bindList(entry.getKey(), entry.getValue());
+                }
+
+                // Bind the per-queue worker-slot limits. Bound rather than interpolated so the statement text
+                // stays stable as the slot counts move and PostgreSQL can reuse a prepared plan.
+                for (var entry : batchedSqlResult.getIntValueBindings().entrySet()) {
+                    query.bind(entry.getKey(), entry.getValue());
                 }
 
                 var mappingResult = mapQueryResultsWithExceptionHandling(query);
