@@ -101,6 +101,11 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
                         // A per-key cursor has nothing to track without keys.
                         continue;
                     }
+                    if (arm == Arm.WRITE_ONCE && mode == ConsumerMode.ORDERED) {
+                        // Ordered exclusivity is the cursor's concern; combining both changes at once would make
+                        // neither attributable.
+                        continue;
+                    }
                     var result = runCase(runId, arm, mode, messages, claimBatch, keyCount, repetition);
                     results.add(result);
                     log.info("queue-schema-write-cost {} rep {} => insert {} ms, claim {} ms, ack {} ms, indexBytes {}",
@@ -147,6 +152,11 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
             case V2_CURSOR -> {
                 var statements = new ArrayList<String>(QueueSchemaPrototype.cursorOrderedTableDdl(table, 100));
                 statements.addAll(QueueSchemaPrototype.cursorKeyStateDdl(keyStateTable));
+                yield statements;
+            }
+            case WRITE_ONCE -> {
+                var statements = new ArrayList<String>(QueueSchemaPrototype.writeOnceMessageTableDdl(table, 100));
+                statements.addAll(QueueSchemaPrototype.inFlightTableDdl(keyStateTable));
                 yield statements;
             }
             case V2_CURSOR_SAFE -> {
@@ -205,6 +215,7 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
         // finish and a truer model of how a consumer actually behaves. The two phases keep separate
         // accumulating timers so their costs stay attributable.
         var claimSql = switch (arm) {
+            case WRITE_ONCE -> QueueSchemaPrototype.claimWriteOnceSql(table, keyStateTable);
             case V2_CURSOR -> QueueSchemaPrototype.claimOrderedViaCursorSql(table, keyStateTable);
             case V2_CURSOR_SAFE -> QueueSchemaPrototype.claimOrderedViaSafeCursorSql(table, keyStateTable);
             default -> mode == ConsumerMode.UNORDERED
@@ -214,6 +225,7 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
         // The cursor arm's acknowledgement deletes the rows and advances the affected cursors in one
         // statement - the operation the barrier design cannot express at all.
         var deleteSql = switch (arm) {
+            case WRITE_ONCE -> QueueSchemaPrototype.ackWriteOnceSql(table, keyStateTable);
             case V2_CURSOR -> QueueSchemaPrototype.ackOrderedViaCursorSql(table, keyStateTable);
             case V2_CURSOR_SAFE -> QueueSchemaPrototype.ackOrderedViaSafeCursorSql(table, keyStateTable);
             default -> QueueSchemaPrototype.deleteBatchSql(table);
@@ -424,7 +436,14 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
          * cursor advance is clamped so it can never pass a row still present for that key. This is the arm
          * that says whether the cursor is worth implementing.
          */
-        V2_CURSOR_SAFE
+        V2_CURSOR_SAFE,
+        /**
+         * B1: the message row is never updated. In-flight state lives in a small side table, so the claim is an
+         * INSERT there rather than an UPDATE here, and the message row is written exactly twice — inserted and
+         * deleted. Unordered only: the ordered path's exclusivity is the cursor's business, and mixing the two
+         * questions would make neither answerable.
+         */
+        WRITE_ONCE
     }
 
     private record TableStats(int indexCount, long heapBytes, long indexBytes, long updates, long hotUpdates) {

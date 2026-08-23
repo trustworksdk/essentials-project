@@ -243,7 +243,28 @@ acknowledgement over runs.
 WAL/CDC delivery for queues: claim and ack mutate rows, so WAL-tailing queue state is strictly worse than
 NOTIFY. Both were non-goals in the original plan and remain correct.
 
-## 8. How to read the evidence
+## 8. Investigation backlog — ideas not yet tried
+
+Everything that has measured as significant reduced to two levers: **transactions per message** (§7: 16.5× on
+acknowledgement, 134× for two-per-message versus two-per-batch) and **index write amplification** (§8, §12: the
+1.38× from six secondary indexes down to one). These are the untried ideas that attack one of those two.
+Anything that attacks neither is in §3 or the "skip" list below.
+
+| # | Idea | Lever | Why it might pay | Cost to test |
+|---|---|---|---|---|
+| ~~**B1**~~ | ~~**Write-once message row.**~~ **Rejected — measured (§15): 12% worse than the split.** The lever was right and the mechanism wrong: churn leaves the message table (8% fewer index bytes) but the in-flight table brings its own two indexes and the acknowledgement gains a second table to delete from, costing 51% there. Kept in the table because its failure is the argument for B4. In-flight state (`is_being_delivered`, claim-time `total_attempts`) moves to a small side table keyed by id; the message row is inserted and deleted, never updated | Both | Today every message is INSERT → UPDATE → DELETE, and the claim writes two *indexed* columns — which is exactly why `n_tup_hot_upd` was zero in every arm measured. Removing the update takes three row versions to two and takes the claim's index churn off the large table entirely. Also makes the stuck-message reset a scan of a small table | One arm in `QueueSchemaWriteCostScenario` |
+| **B2** | **Handler inside the claim transaction, with a savepoint around the handler only.** One transaction per message instead of two | Transactions | The largest remaining win on the dominant lever. This is nominally `FullyTransactional`, which is correctly documented as broken because a rollback loses the attempt increment — but §14 showed a savepoint is cheap when it is per *failure* rather than per row, and failures are rare. **The risk is real and must be measured, not assumed**: it holds a connection and pins the xmin horizon for the handler's duration, which is the mechanism behind §7's 5.7× artefact. The deliverable is a crossover curve against handler duration, not a yes/no | Consumer-level scenario; more work than B1 |
+| **B3** | **Index diet on the current table, no migration.** Drop overlapping indexes: `idx_*_next_msg` and `idx_*_ready` cover much of the same ground | Index writes | Part of the split's 1.38× is available today with no new tables and no API change, since that win *is* index count. Unlike the autovacuum settings (§13) this targets a lever that measured | `pg_stat_user_indexes.idx_scan` under load, then drops |
+| **B4** | **Advisory-lock claim** (`pg_try_advisory_xact_lock(hashtext(id))`) instead of marking the row | Both | **Promoted by B1's failure (§15).** Same idea, without either cost that sank B1: no write on claim *and* no second table in the acknowledgement path. Requires the lock to span the handler, which ties it to B2 — the two are one experiment, not two. Now the most promising untried idea | Consumer-level, with B2 |
+| **B5** | **NOTIFY-driven wake-up replacing the fixed tick** (I1/I2 in the improvements plan) | Neither — *latency* | Everything measured in this investigation is throughput. This is the only remaining item targeting enqueue-to-delivery latency, estimated 400 ms → <10 ms p99 idle with a ~95% cut in idle claim statements. Fully designed, unimplemented, unmeasured | Already specified; implementation, then a PROBE scenario |
+| **B6** | **Hash-partition by `id`**, if partitioning ever returns | Index writes | Recorded so the idea is not re-proposed on the wrong axis. Partitioning by `queue_name` failed (§12) because by-id operations lost the primary key; hashing by `id` prunes for every by-id operation instead — but then the claim, which filters by `queue_name`, scans every partition. Probably net-negative; the point is that `id` is the only defensible axis | Low priority |
+
+**Skip, on evidence:** `fillfactor` and HOT tuning (§3, measured dead), per-table autovacuum parameters (§13,
+inert on a default cluster), partitioning by `queue_name` (§12, rejected), optimising the interceptor chain or
+operation objects (§7, not measurable above noise), deferred ordered acknowledgement in any form (§2, impossible
+under any design considered), and WAL/CDC delivery for queues (claim and acknowledge mutate rows).
+
+## 9. How to read the evidence
 
 Two habits produced most of the corrections above, and both are worth keeping:
 

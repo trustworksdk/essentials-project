@@ -43,6 +43,7 @@ the ratios are the result.
 | Enabling delivery statistics | **2.80× on the acknowledgement path** | §14 |
 | The statistics trigger's `EXCEPTION` block | Mechanism confirmed (one subtransaction per row) but **only 1.03× wall clock, zero SLRU writes** | §14 |
 | The proposed Java-side observer | **1.34× better than the trigger** — worth building, but the write itself is the cost | §14 |
+| B1, the write-once message row | **Rejected** — 12% worse than the split; churn moves rather than disappears | §15 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 | A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
 | Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
@@ -896,3 +897,54 @@ remains the single most effective mitigation shipped.
 - The trigger's other five defects — purge amplification, dialect portability, DDL on a table it does not own,
   the unqualified function name colliding between instances, and the broken `delivery_latency` read path — are
   correctness and design arguments, unaffected by these numbers, and remain the stronger case for the rewrite.
+
+## 15. B1, the write-once message row — rejected
+
+Harness: a `WRITE_ONCE` arm in `QueueSchemaWriteCostScenario`. 50 000 unordered messages, medians of 3.
+
+The idea, from the §8 backlog: every arm measured so far writes a message row three times — `INSERT`, `UPDATE` on
+claim, `DELETE` — and the claim writes `is_being_delivered` and `next_delivery_ts`, both indexed, which is exactly
+why `n_tup_hot_upd` was zero everywhere. Remove `is_being_delivered` from the table, put in-flight state in a
+small side table keyed by id, and the claim becomes an `INSERT` there rather than an `UPDATE` here. Two row
+versions instead of three, and the claim's index churn moves off the large table onto one bounded by concurrency
+rather than by backlog.
+
+| Arm | Insert | Claim | Ack | Total | Index bytes |
+|---|---|---|---|---|---|
+| `V1_SHARED` | 672 ms | 594 ms | 218 ms | 1 484 ms | 10.58 MB |
+| `V2_SPLIT` | 438 ms | **411 ms** | **156 ms** | **1 005 ms** | 9.20 MB |
+| `WRITE_ONCE` | 427 ms | 462 ms | 236 ms | 1 125 ms | **8.45 MB** |
+
+**12% worse overall than the split it was meant to beat.** Claim 12% worse, acknowledgement **51%** worse. The
+8% index-bytes win is real and is the one place the hypothesis held, but it does not come close to paying for the
+rest.
+
+### Why it lost, and what that implies for the variant
+
+The hypothesis was half right. Removing the claim's `UPDATE` genuinely takes churn off the message table — the
+index-bytes figure confirms it. But the churn does not disappear, it relocates: the in-flight table carries its
+own primary key and a `claimed_at` index, both written on every claim and again on every release. And the
+acknowledgement now has to delete from two tables instead of one, which is where the 51% went.
+
+So the lever was correctly identified and the mechanism was wrong: this design pays two new costs to avoid one
+old one.
+
+That sharpens the case for **B4, the advisory-lock claim**, which is the same idea without either new cost —
+`pg_try_advisory_xact_lock(hashtext(id))` marks a message in flight with **no write at all** and **no second
+table in the acknowledgement path**. B1's failure is the argument for trying it: the claim write is worth
+removing, but not at the price of a second table. B4's own constraint is that the lock must span the handler,
+which ties it to B2 and makes the two a single experiment rather than two.
+
+### Caveats
+
+- Unordered only. Ordered exclusivity is the cursor's concern (§8–§11) and combining both changes would make
+  neither attributable.
+- Storage-only and single-connection, like the rest of the write-cost work. In particular the anti-join against
+  the in-flight table was measured with no contention; under concurrency it would also be the point where two
+  claimers collide, and `ON CONFLICT DO NOTHING` makes that benign but not free.
+- One implementation detail cost a run and is worth recording: `COMMON_COLUMNS` is a Java text block, so the
+  compiler has already stripped its incidental indentation, and a `replace` written against the indentation
+  visible in the source matches nothing. The arm would have measured a table that still had the column. Only the
+  guard that fails loudly on a no-op turned that into an error rather than a wrong number — the same class of
+  silent-no-op the dead-letter arm had already been protected against, and reusing that protection would have
+  avoided it.

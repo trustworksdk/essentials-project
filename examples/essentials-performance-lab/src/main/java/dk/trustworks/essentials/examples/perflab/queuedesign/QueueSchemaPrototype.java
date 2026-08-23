@@ -131,13 +131,26 @@ public final class QueueSchemaPrototype {
      * and the arm would quietly measure nothing.
      */
     private static String columnsWithoutDeadLetterFlag() {
-        var kept = Arrays.stream(COMMON_COLUMNS.split("\n"))
-                         .filter(line -> !line.contains("is_dead_letter_message"))
+        return columnsWithout("is_dead_letter_message");
+    }
+
+    /**
+     * {@link #COMMON_COLUMNS} minus whichever column is named, by line filter.
+     * <p>
+     * Deliberately not an exact-string replace: {@code COMMON_COLUMNS} is a text block, so Java has already
+     * stripped its incidental indentation and a replace written against the indentation visible in the source
+     * silently matches nothing. That is not hypothetical — it is how the write-once arm first failed, and only
+     * the guard below turned a silently-measuring-nothing arm into a loud error.
+     */
+    private static String columnsWithout(String columnName) {
+        var lines = COMMON_COLUMNS.split("\n");
+        var kept = Arrays.stream(lines)
+                         .filter(line -> !line.contains(columnName))
                          .toList();
-        if (kept.size() == COMMON_COLUMNS.split("\n").length) {
-            throw new IllegalStateException("is_dead_letter_message not found in COMMON_COLUMNS - the DLQ-split arm would measure nothing");
+        if (kept.size() == lines.length) {
+            throw new IllegalStateException(columnName + " not found in COMMON_COLUMNS - the arm would measure nothing");
         }
-        // The line before the removed one may now carry a trailing comma before the closing paren.
+        // The last kept line may now carry a trailing comma before the closing paren.
         return String.join("\n", kept).replaceAll(",\\s*$", "");
     }
 
@@ -244,6 +257,95 @@ public final class QueueSchemaPrototype {
      */
     public static String deleteByIdSql(String table) {
         return "DELETE FROM " + table + " WHERE id = :id";
+    }
+
+    /**
+     * B1: a message table the claim never writes to.
+     *
+     * <h2>What is removed and why</h2>
+     * Every arm measured so far inserts a message, <em>updates</em> it on claim, then deletes it — three row
+     * versions — and the claim writes {@code is_being_delivered} and {@code next_delivery_ts}, both of which are
+     * indexed. That is precisely why {@code n_tup_hot_upd} was zero in every arm: the update cannot be HOT while
+     * it touches indexed columns, so each claim rewrites entries in every index.
+     * <p>
+     * Here {@code is_being_delivered} does not exist. In-flight state lives in a separate small table keyed by
+     * id, and the claim is an {@code INSERT} into that table rather than an {@code UPDATE} of this one. So the
+     * message row is written exactly twice — inserted and deleted — and the claim's index churn moves off the
+     * large table onto a table whose size is bounded by the number of in-flight messages.
+     * <p>
+     * {@code next_delivery_ts} stays, because the claim still has to read it for delayed delivery and retries,
+     * but the claim no longer <em>writes</em> it. {@code total_attempts} stays too and is written only on the
+     * failure path, so the happy path never touches the row. One secondary index, the same as the split
+     * unordered table, because the ready predicate is now just "due and not in flight".
+     */
+    public static List<String> writeOnceMessageTableDdl(String table, int fillFactor) {
+        return List.of(
+                "CREATE TABLE " + table + " (" + columnsWithout("is_being_delivered") + ") WITH (fillfactor=" + fillFactor + ")",
+                """
+                CREATE INDEX idx_%1$s_a ON %1$s (queue_name, next_delivery_ts) INCLUDE (id)
+                  WHERE NOT is_dead_letter_message
+                """.formatted(table));
+    }
+
+    /**
+     * The in-flight table. Bounded by the number of messages being handled at once rather than by the backlog,
+     * so its indexes stay tiny however large the queue grows.
+     * <p>
+     * {@code claimed_at} is what the stuck-message reset works from, and it becomes a scan of this table instead
+     * of the queue — a side benefit worth noting, since {@code resetMessagesStuckBeingDelivered} currently scans
+     * the large one.
+     */
+    public static List<String> inFlightTableDdl(String table) {
+        return List.of(
+                """
+                CREATE TABLE %1$s (
+                  id         TEXT PRIMARY KEY,
+                  queue_name TEXT        NOT NULL,
+                  claimed_at TIMESTAMPTZ NOT NULL
+                )
+                """.formatted(table),
+                "CREATE INDEX idx_" + table + "_stuck ON " + table + " (claimed_at)");
+    }
+
+    /**
+     * The write-once claim: one statement, and the only row it writes is in the small in-flight table.
+     * <p>
+     * The anti-join is against the in-flight table's primary key, so it costs a probe per candidate against a
+     * table bounded by concurrency rather than by backlog. {@code ON CONFLICT DO NOTHING} makes a lost race
+     * between two claimers benign — the loser simply does not get the row back, which is the same outcome
+     * {@code FOR UPDATE SKIP LOCKED} produces.
+     */
+    public static String claimWriteOnceSql(String messageTable, String inFlightTable) {
+        return """
+               WITH ready AS (
+                 SELECT m.id, m.queue_name
+                   FROM %1$s m
+                  WHERE m.queue_name             = :queueName
+                    AND m.is_dead_letter_message = FALSE
+                    AND m.next_delivery_ts      <= :now
+                    AND NOT EXISTS (SELECT 1 FROM %2$s f WHERE f.id = m.id)
+                  ORDER BY m.next_delivery_ts
+                  LIMIT :limit
+                  FOR UPDATE SKIP LOCKED
+               )
+               INSERT INTO %2$s (id, queue_name, claimed_at)
+               SELECT r.id, r.queue_name, :now FROM ready r
+               ON CONFLICT (id) DO NOTHING
+               RETURNING id
+               """.formatted(messageTable, inFlightTable);
+    }
+
+    /**
+     * Acknowledgement: delete the messages and release the in-flight rows, in one statement so it stays one
+     * transaction. The message table sees its second and final write here.
+     */
+    public static String ackWriteOnceSql(String messageTable, String inFlightTable) {
+        return """
+               WITH released AS (
+                 DELETE FROM %2$s WHERE id IN (<ids>) RETURNING id
+               )
+               DELETE FROM %1$s WHERE id IN (SELECT id FROM released)
+               """.formatted(messageTable, inFlightTable);
     }
 
     /**
