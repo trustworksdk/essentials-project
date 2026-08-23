@@ -49,7 +49,11 @@ about cost, the next two about portability, the last two about correctness.
 per delivered message roughly doubles. None of that work is needed for the queue to be
 correct; it exists only so an admin endpoint can report an average.
 
-**2. `EXCEPTION WHEN OTHERS` costs a subtransaction per row.** In PostgreSQL an exception
+**2. `EXCEPTION WHEN OTHERS` costs a subtransaction per row.** *(Measured — see
+`durable-queues-redesign-measurements.md` §14. The mechanism is confirmed: ~48 000 subtransaction SLRU hits per
+50 000 acknowledged rows, against ~1 000 with the block removed. But it is **1.03×** of wall clock and produced
+**zero** SLRU writes, so "the single most expensive part of the trigger" below is wrong — it is a latent hazard
+under concurrency, not the cost. The trigger's 2.80× comes from the `INSERT` and its two indexes.)* In PostgreSQL an exception
 block inside plpgsql is implemented as an implicit savepoint, so the "make statistics
 failures harmless" guard is the single most expensive part of the trigger. At sustained
 queue throughput this burns subtransaction ids and pushes the subtransaction SLRU toward

@@ -40,6 +40,9 @@ the ratios are the result.
 | Partitioning by `queue_name` | **Rejected** — 30% worse acknowledge-by-id, 40% worse claim | §12 |
 | Per-table autovacuum settings | **Inert on a default cluster** — zero autovacuums ran, naptime is what binds | §13 |
 | The bloat degradation they were meant to fix | **Did not reproduce** — no drain degradation over 12 cycles, any arm | §13 |
+| Enabling delivery statistics | **2.80× on the acknowledgement path** | §14 |
+| The statistics trigger's `EXCEPTION` block | Mechanism confirmed (one subtransaction per row) but **only 1.03× wall clock, zero SLRU writes** | §14 |
+| The proposed Java-side observer | **1.34× better than the trigger** — worth building, but the write itself is the cost | §14 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 | A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
 | Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
@@ -837,3 +840,59 @@ not be described as a performance fix, and it should certainly not be sequenced 
   not a marginal reading), but the small differences between arms at naptime 5s should not be over-read.
 - `heap_bytes` was recorded but is not reported above: with the table fully drained each cycle it tracks the peak
   rather than the steady state, and says less than the dead-tuple counts do.
+
+## 14. The statistics trigger: the mechanism claim is right, the cost claim is not
+
+Harness: scenario `queue-statistics-trigger` (`QueueStatisticsTriggerScenario` +
+`QueueStatisticsTriggerBenchmarkIT`). 50 000 messages, medians of 3, batched acknowledgement — that is the
+framework's own recommended path now, and a per-message acknowledgement would let §7's transaction tax swamp
+what is being measured. The trigger is reproduced exactly as `PostgresqlDurableQueuesStatistics` installs it,
+stats table and both indexes included.
+
+| Arm | Ack | vs. no statistics | Subtransaction SLRU hits | SLRU writes |
+|---|---|---|---|---|
+| `NO_STATISTICS` | 173 ms | — | 0 | 0 |
+| `TRIGGER_AS_SHIPPED` | 485 ms | **2.80×** | ~48 000 | **0** |
+| `TRIGGER_WITHOUT_EXCEPTION` | 470 ms | 2.72× | ~1 000 | 0 |
+| `JAVA_OBSERVER_SIMULATED` | 361 ms | **2.09×** | 0 | 0 |
+
+### The `EXCEPTION WHEN OTHERS` claim: mechanism confirmed, consequence not reached
+
+`durable-queues-statistics-improvements.md` calls this "the single most expensive part of the trigger" and warns
+that at sustained throughput it burns subtransaction ids and pushes the subtransaction SLRU toward overflow,
+degrading unrelated queries.
+
+**The mechanism is exactly as described, and visible**: ~48 000 subtransaction SLRU hits for 50 000 acknowledged
+rows with the block present, against ~1 000 without it. One subtransaction per row, confirmed directly rather
+than inferred.
+
+**The consequence is not reached in this shape.** `blks_written` is zero in every arm — it all stays in the
+shared-memory cache and never spills — and the wall-clock cost of the block is **1.03×**, about 3%, not the
+dominant term. The overflow risk is real in principle, but it needs many backends, long-lived transactions and
+sustained concurrency; a single backend issuing short transactions cannot provoke it. So the claim should be
+restated: the block allocates a subtransaction per row, which is a latent hazard under concurrency, and it is
+*not* what makes the trigger expensive.
+
+### What is actually expensive: the statistics write itself
+
+Enabling delivery statistics costs **2.80×** on the acknowledgement path. Of that, essentially none is the
+exception block and only about a quarter is the plpgsql per-row invocation — the rest is the `INSERT` and
+maintenance on the stats table's two indexes, which any mechanism has to pay.
+
+That is why the proposed Java-side observer is worth building but is not a fix: at **2.09×** it recovers
+**1.34×** against the trigger and leaves the majority of the cost in place. If the cost of statistics matters to
+a deployment, the higher-value levers are reducing what is written — fewer indexes on the stats table, or
+sampling rather than recording every message — and the fact that the whole feature is **off by default**, which
+remains the single most effective mitigation shipped.
+
+### Caveats
+
+- The observer arm is simulated in SQL: `DELETE … RETURNING` feeding an `INSERT … SELECT`, one statement per
+  acknowledged batch. A real Java-side observer would carry the rows through the interceptor chain instead, so it
+  would pay JVM-side costs this does not model and would not get the set-based insert for free.
+- Single backend throughout, which is precisely why the SLRU-overflow half of the claim could not be tested. A
+  concurrency sweep with several backends and long transactions is the measurement that would settle it, and it
+  has not been run.
+- The trigger's other five defects — purge amplification, dialect portability, DDL on a table it does not own,
+  the unqualified function name colliding between instances, and the broken `delivery_latency` read path — are
+  correctness and design arguments, unaffected by these numbers, and remain the stronger case for the rewrite.

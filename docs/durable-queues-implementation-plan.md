@@ -185,10 +185,17 @@ instead of splitting. `purgeQueue` becoming `TRUNCATE` is the visible win; small
 larger one. Watch for the partition-count ceiling on deployments with many queues, and for the fact that
 `resetMessagesStuckBeingDelivered` and the statistics queries currently scan across queues.
 
-**Statistics trigger.** Already fully designed in `durable-queues-statistics-improvements.md` and unaffected by
-any of the above — the `AFTER DELETE` trigger's `EXCEPTION WHEN OTHERS` subtransaction per acknowledged message
-is the sharpest single item left in the codebase, and it lands on the same acknowledgement path batched
-acknowledgement just optimised.
+**Statistics trigger — measured (§14).** Enabling statistics costs **2.80×** on the acknowledgement path, so the
+feature being off by default remains the most effective mitigation shipped. The designed Java-side observer is
+worth building — **1.34×** against the trigger — but it is not a fix: the dominant cost is the `INSERT` plus two
+index updates, which any mechanism pays.
+<br><br>
+The plan previously called the `EXCEPTION WHEN OTHERS` subtransaction "the sharpest single item in the codebase".
+That is **half right**: the mechanism is confirmed — ~48 000 subtransaction SLRU hits per 50 000 rows against
+~1 000 without — but it is only **1.03×** of wall clock and produced **zero** SLRU writes. A latent hazard under
+real concurrency, not the reason the trigger is slow. The stronger case for the rewrite is the other five defects
+in the improvements doc: purge amplification, dialect portability, DDL on a table it does not own, the
+unqualified colliding function name, and the broken `delivery_latency` read path.
 
 ## 7. Sequence
 
@@ -206,7 +213,9 @@ not to hold a unit of work across a drain.
 table is a small positive to be justified on grounds other than throughput. The one thing left unmeasured here
 is the autovacuum setting itself, which S0 should quantify while it is being chosen.
 
-**S2 — the statistics trigger.** Independently designed, independently valuable, no interaction with the rest.
+**S2 — the statistics trigger.** Measured (§14): 1.34× available from the rewrite, and the correctness defects
+are the better justification. Still worth doing, no longer on a performance claim. If statistics cost matters to
+a deployment, drop an index on the stats table or sample — both beat changing the mechanism.
 
 **S3 — the ordered/unordered split**, with the mode-aware consumer API. Carries the measured 1.38× for
 unordered traffic and is a precondition for the cursor's ordered table. Sequence the API decision early: it is

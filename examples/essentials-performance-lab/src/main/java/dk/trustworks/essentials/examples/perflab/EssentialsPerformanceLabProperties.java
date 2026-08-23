@@ -283,6 +283,13 @@ public class EssentialsPerformanceLabProperties {
 
     private int autovacuumMessagesPerCycle = 20_000;
 
+    /**
+     * Messages per case in {@code QueueStatisticsTriggerScenario}.
+     */
+    private int statisticsTriggerMessages = 50_000;
+
+    private int statisticsTriggerRepetitions = 3;
+
     public Mode getMode() {
         return mode;
     }
@@ -657,6 +664,22 @@ public class EssentialsPerformanceLabProperties {
 
     public void setAutovacuumMessagesPerCycle(int autovacuumMessagesPerCycle) {
         this.autovacuumMessagesPerCycle = autovacuumMessagesPerCycle;
+    }
+
+    public int getStatisticsTriggerMessages() {
+        return statisticsTriggerMessages;
+    }
+
+    public void setStatisticsTriggerMessages(int statisticsTriggerMessages) {
+        this.statisticsTriggerMessages = statisticsTriggerMessages;
+    }
+
+    public int getStatisticsTriggerRepetitions() {
+        return statisticsTriggerRepetitions;
+    }
+
+    public void setStatisticsTriggerRepetitions(int statisticsTriggerRepetitions) {
+        this.statisticsTriggerRepetitions = statisticsTriggerRepetitions;
     }
 
     public int getFrameworkOverheadRepetitions() {
