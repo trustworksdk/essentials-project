@@ -209,11 +209,24 @@ but the storage track is where the cheap, certain wins are.
 degradation existed to fix. What remains is documentation: naptime guidance for operators, and the standing rule
 not to hold a unit of work across a drain.
 
-**S1a — the index diet (§16).** Two indexes are never read and hold 43% of the table's index bytes. Make index
-creation conditional on `useOrderedUnorderedQuery` instead of unconditional. Cheapest shippable win in the plan,
-no migration, no contract change — and it is now the thing to do first, in place of the autovacuum settings that
-turned out inert. Confirm `ordered_ready` against a second workload before dropping it outright rather than
-merely conditioning it.
+**S1a — act on the index-usage evidence (§16), but note which half lasts.** The measurement produced two
+findings with very different shelf lives, and they should not be sequenced together.
+
+*Design input to the new tables — do this as part of S3, not before it.* `idx_*_ordered_ready` is dead **in its
+own mode**, and it is carried into the split's ordered table (`_b` in `v2OrderedTableDdl`, one of the three that
+arm was measured with). So **the split's ordered table should ship with two indexes, not three** — which also
+means the split's measured 1.38× was obtained while carrying an index nothing reads. Confirm against a second
+workload first, since §11 showed the ordered plan is highly sensitive to messages-per-key.
+
+*Transitional housekeeping — optional, and bounded by v1's lifetime.* Creating the unified-query indexes only
+when `useOrderedUnorderedQuery` is `false`, rather than unconditionally, removes 43% of index maintenance for
+existing deployments. Its value expires when v1 storage does — but the project deprecates rather than deletes and
+defers removal to a major, so that window is likely a full major cycle rather than a release, for a conditional
+around six existing `createIndex` calls.
+
+*The reusable part is the diagnostic, not the diet.* `PostgresqlIndexUsageIT` drives the whole SPI and reports
+real scan counts. **Point it at each new schema before that schema ships.** Inheriting an index set by inspection
+is exactly how `ordered_ready` came to exist, and the report is what catches it.
 
 **S1 — ~~measure the storage arms~~ done (§12).** Partitioning by `queue_name` is rejected; the dead-letter
 table is a small positive to be justified on grounds other than throughput. The one thing left unmeasured here
