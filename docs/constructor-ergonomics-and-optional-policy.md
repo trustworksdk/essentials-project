@@ -182,11 +182,20 @@ serialised must be checked against both Jackson flavours before it lands.
 
 **A builder can lose a default.** Moving construction from a constructor to a builder moves every default
 from an argument list to field initialisers, and an uninitialised `boolean` field is `false` whether or not
-that was the constructor's default. This has already bitten twice, in both directions:
+that was the constructor's default. This has already bitten three times, in every direction:
 `PostgresqlDurableQueues`' `useOrderedUnorderedQuery` (constructor `true`, builder `false` — a 5.4×
-slowdown on mixed backlogs) and its `TransactionalMode` (constructor `FullyTransactional`, builder
-`SingleOperationTransaction`). Both are documented in the migration guide's behaviour-changes section.
-When converting, diff the *effective* defaults, not the signatures.
+slowdown on mixed backlogs), its `TransactionalMode` (constructor `FullyTransactional`, builder
+`SingleOperationTransaction`), and then the same field again one layer out — `MongoDurableQueues.builder()`
+produced `FullyTransactional` while `PostgresqlDurableQueues.builder()` produced
+`SingleOperationTransaction`, so identical application code got different delivery semantics depending on
+which database module it ran against. All three are in the migration guide's behaviour-changes section.
+When converting, diff the *effective* defaults, not the signatures — and diff them against the *sibling
+implementation*, not only against the constructor you are replacing.
+
+That last one is also why the two defaults now have tests of their own
+(`PostgresqlDurableQueuesBuilderDefaultsTest`, `MongoDurableQueuesBuilderDefaultsTest`). The integration
+suites branch on `getTransactionalMode()` rather than asserting it, so they pass whichever way it drifts —
+a whole cross-database suite is not, by itself, coverage of the value it reads.
 
 **A parameter object can widen an API it was meant to narrow.** A `XxxDependencies` bundle becomes public
 surface of its own, subject to the same stable-API guarantee as the class it serves. Introducing one is a

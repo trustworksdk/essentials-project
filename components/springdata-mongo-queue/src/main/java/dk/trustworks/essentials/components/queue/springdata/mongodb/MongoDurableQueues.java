@@ -91,6 +91,12 @@ public final class MongoDurableQueues implements DurableQueues {
 
     protected static final Logger                                            log                                    = LoggerFactory.getLogger(MongoDurableQueues.class);
     public static final    String                                            DEFAULT_DURABLE_QUEUES_COLLECTION_NAME = "durable_queues";
+    /**
+     * The {@code messageHandlingTimeout} {@link #builder()} applies when none is set. Matches
+     * {@code PostgresqlDurableQueues.DEFAULT_MESSAGE_HANDLING_TIMEOUT} — the two implementations are alternatives for
+     * the same job, so a value that differs between them is a trap, not a tuning decision.
+     */
+    public static final    Duration                                          DEFAULT_MESSAGE_HANDLING_TIMEOUT       = Duration.ofSeconds(30);
     private final          Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory;
 
     protected       SpringMongoTransactionAwareUnitOfWorkFactory        unitOfWorkFactory;
@@ -1880,14 +1886,17 @@ public final class MongoDurableQueues implements DurableQueues {
         private JSONSerializer jsonSerializer;
         private String sharedQueueCollectionName;
         private Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory;
-        // FullyTransactional, not SingleOperationTransaction: this builder already produced FullyTransactional by
-        // delegating to the (mongoTemplate, unitOfWorkFactory, jsonSerializer, sharedQueueCollectionName,
-        // queuePollingOptimizerFactory) constructor, and build() now calls the protected constructor directly.
-        // Restating today's value keeps that a pure refactoring. Note this is the OPPOSITE default to
-        // PostgresqlDurableQueuesBuilder — changing it would be a behaviour change for every existing builder caller
-        // and belongs in its own release note, not here.
-        private TransactionalMode transactionalMode = TransactionalMode.FullyTransactional;
-        private Duration messageHandlingTimeout;
+        // Aligned with PostgresqlDurableQueuesBuilder, which defaults the same way. Until 0.40.x this builder
+        // produced FullyTransactional (it delegated to the constructor taking a unitOfWorkFactory), so the two
+        // implementations disagreed about what "the default queue" means — the same divergence that was closed on the
+        // PostgreSQL side between its constructors and its builder. FullyTransactional is the side documented as
+        // broken for retries and dead-lettering, which is why convergence goes this way. Behaviour change for existing
+        // builder callers; called out in the migration guide.
+        private TransactionalMode transactionalMode = TransactionalMode.SingleOperationTransaction;
+        /**
+         * Only used when {@link #transactionalMode} is {@link TransactionalMode#SingleOperationTransaction}
+         */
+        private Duration messageHandlingTimeout = DEFAULT_MESSAGE_HANDLING_TIMEOUT;
 
         /**
          * @param mongoTemplate required
@@ -1936,9 +1945,12 @@ public final class MongoDurableQueues implements DurableQueues {
 
         /**
          * @param transactionalMode the transactional behaviour mode. Defaults to
-         *                          {@link TransactionalMode#FullyTransactional}, which is what this builder has always
-         *                          produced. With {@link TransactionalMode#SingleOperationTransaction} the consumer
-         *                          MUST acknowledge messages explicitly in a new {@code UnitOfWork}
+         *                          {@link TransactionalMode#SingleOperationTransaction}, matching
+         *                          {@code PostgresqlDurableQueues.builder()}. In that mode the consumer MUST
+         *                          acknowledge messages explicitly in a new {@code UnitOfWork}.
+         *                          {@link TransactionalMode#FullyTransactional} additionally requires
+         *                          {@link #setUnitOfWorkFactory(SpringMongoTransactionAwareUnitOfWorkFactory)} and a
+         *                          MongoDB replica set
          * @return this builder
          */
         public Builder setTransactionalMode(TransactionalMode transactionalMode) {
@@ -1947,9 +1959,10 @@ public final class MongoDurableQueues implements DurableQueues {
         }
 
         /**
-         * @param messageHandlingTimeout only required for {@link TransactionalMode#SingleOperationTransaction}: the
-         *                               timeout for messages that have been delivered but not yet acknowledged. After
-         *                               it elapses the delivery is reset and the message becomes a candidate again
+         * @param messageHandlingTimeout only used for {@link TransactionalMode#SingleOperationTransaction}: the timeout
+         *                               for messages that have been delivered but not yet acknowledged. After it
+         *                               elapses the delivery is reset and the message becomes a candidate again.
+         *                               Defaults to {@link #DEFAULT_MESSAGE_HANDLING_TIMEOUT}
          * @return this builder
          */
         public Builder setMessageHandlingTimeout(Duration messageHandlingTimeout) {

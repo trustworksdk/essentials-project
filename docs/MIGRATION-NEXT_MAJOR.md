@@ -150,6 +150,35 @@ new PostgresqlDurableQueues(unitOfWorkFactory, jsonSerializer, tableName, listen
                             TransactionalMode.FullyTransactional, null);
 ```
 
+### `MongoDurableQueues.builder()` now defaults to `SingleOperationTransaction`, not `FullyTransactional`
+
+The same convergence, one layer out: the two builders now agree. `MongoDurableQueues.builder()` previously produced
+`FullyTransactional` — it delegated to the constructor taking a `SpringMongoTransactionAwareUnitOfWorkFactory` — while
+`PostgresqlDurableQueues.builder()` produced `SingleOperationTransaction`. An application that moved between the two
+database modules therefore got different delivery semantics from identical code, with nothing in either API saying so.
+
+`messageHandlingTimeout` now defaults to `MongoDurableQueues.DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30 seconds), matching
+`PostgresqlDurableQueues.DEFAULT_MESSAGE_HANDLING_TIMEOUT`, so the default mode is usable with nothing but a
+`MongoTemplate`. **If you use `MongoDurableQueues.builder()` and rely on `FullyTransactional`, say so explicitly:**
+
+```java
+MongoDurableQueues.builder()
+                  .setMongoTemplate(mongoTemplate)
+                  .setJsonSerializer(jsonSerializer)
+                  .setSharedQueueCollectionName("durable_queues")
+                  .setTransactionalMode(TransactionalMode.FullyTransactional)
+                  .setUnitOfWorkFactory(unitOfWorkFactory)   // required in this mode
+                  .build();
+```
+
+The **constructors are unaffected** — each still produces the mode its javadoc names, so only builder callers see this.
+In `SingleOperationTransaction` the consumer MUST acknowledge messages explicitly in a new `UnitOfWork`; see
+`DurableQueues#acknowledgeMessageAsHandled`.
+
+Both defaults are now pinned by `PostgresqlDurableQueuesBuilderDefaultsTest` and
+`MongoDurableQueuesBuilderDefaultsTest`, because the integration suites branch on `getTransactionalMode()` rather than
+asserting it and so pass whichever way it drifts.
+
 Everything else in this release is source- and binary-compatible.
 
 ## Per-module reference
@@ -242,7 +271,7 @@ All of the following gain a `builder()`; their `Optional`-taking and wide constr
 | Deprecated | Replacement |
 |---|---|
 | `PostgresqlDurableQueues` — wide constructors | `PostgresqlDurableQueues.builder()` — **and see the behaviour change above** |
-| `MongoDurableQueues` — all 10 constructors, including the `protected` one taking `TransactionalMode` | `MongoDurableQueues.builder()`, which gained `setTransactionalMode(…)` and `setMessageHandlingTimeout(…)` so the mode is reachable without it. The builder's default stays `FullyTransactional` — unchanged, and deliberately **not** aligned with `PostgresqlDurableQueuesBuilder`'s `SingleOperationTransaction`, since that would be a behaviour change for existing callers |
+| `MongoDurableQueues` — all 10 constructors, including the `protected` one taking `TransactionalMode` | `MongoDurableQueues.builder()`, which gained `setTransactionalMode(…)` and `setMessageHandlingTimeout(…)` so the mode is reachable without it — **and see the behaviour change above**: the builder's default moved from `FullyTransactional` to `SingleOperationTransaction`, matching `PostgresqlDurableQueuesBuilder` |
 | `MongoDurableQueues.DurableQueuedMessage(…)` — 16 args | `MongoDurableQueues.DurableQueuedMessage.builder()`; the no-arg constructor Spring Data uses is unchanged |
 | `PostgresqlDurableQueueConsumer(…)` / `MongoDurableQueueConsumer(…)` — 7 args | `(ConsumeFromQueue, DurableQueueConsumerDependencies)` |
 | `PostgresqlFencedLockManager` / `MongoFencedLockManager` — `Optional`-taking constructors | their existing `builder()` |
