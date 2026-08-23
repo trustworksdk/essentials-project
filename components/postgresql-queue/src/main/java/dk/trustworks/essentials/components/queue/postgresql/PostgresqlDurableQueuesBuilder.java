@@ -65,6 +65,9 @@ public final class PostgresqlDurableQueuesBuilder {
     private Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory  = null;
     private boolean                                    useBatchedFetch                          = PostgresqlDurableQueues.DEFAULT_USE_BATCHED_FETCH;
     private int                                        batchedFetchSwitchThreshold              = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
+    private boolean                                    useBatchedAcknowledgement                = false;
+    private int                                        acknowledgementMaxBatchSize              = BatchedAcknowledgementSettings.DEFAULT_MAX_BATCH_SIZE;
+    private Duration                                   acknowledgementFlushInterval             = BatchedAcknowledgementSettings.DEFAULT_FLUSH_INTERVAL;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
 
     /**
@@ -237,6 +240,63 @@ public final class PostgresqlDurableQueuesBuilder {
     }
 
     /**
+     * Coalesce acknowledgements so a batch of handled messages costs one transaction instead of one each.
+     * Only applies when the {@link CentralizedMessageFetcher} is in use.
+     * <p>
+     * This is the largest per-message win available in the queue: the acknowledgement transaction, not its
+     * {@code DELETE}, is the dominant cost, measured at <b>16.5x</b> against a batched acknowledgement
+     * [10.3-24.2x across 9 repetitions]. See
+     * {@code docs/durable-queues-redesign-measurements.md} §7.
+     * <p>
+     * Off by default, because it is a semantic change and not only a faster one: an acknowledgement can sit
+     * buffered for up to {@link #setAcknowledgementFlushInterval(Duration)}, so a crash in that window
+     * redelivers messages that were in fact handled. At-least-once already permits this and handlers are
+     * required to be idempotent, but the window widens, so a deployment should choose it rather than inherit
+     * it from an upgrade.
+     * <p>
+     * Requires {@link TransactionalMode#SingleOperationTransaction} — the recovery path the buffer depends on
+     * does not exist under {@link TransactionalMode#FullyTransactional}, and {@code build()} will reject the
+     * combination. {@link QueuedMessage.DeliveryMode#IN_ORDER} messages are never buffered regardless of this
+     * setting; the per-key barrier reads completion from row absence, so deferring their acknowledgement
+     * stalls the key and measured 0.82x.
+     *
+     * @param useBatchedAcknowledgement whether to coalesce acknowledgements
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setUseBatchedAcknowledgement(boolean useBatchedAcknowledgement) {
+        this.useBatchedAcknowledgement = useBatchedAcknowledgement;
+        return this;
+    }
+
+    /**
+     * Flush the acknowledgement buffer once this many acknowledgements are pending. Only consulted when
+     * {@link #setUseBatchedAcknowledgement(boolean)} is {@code true}.
+     *
+     * @param acknowledgementMaxBatchSize the batch size at which a flush is triggered
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setAcknowledgementMaxBatchSize(int acknowledgementMaxBatchSize) {
+        this.acknowledgementMaxBatchSize = acknowledgementMaxBatchSize;
+        return this;
+    }
+
+    /**
+     * Flush the acknowledgement buffer at least this often, so a trickle of messages is not left buffered.
+     * Only consulted when {@link #setUseBatchedAcknowledgement(boolean)} is {@code true}.
+     * <p>
+     * Must stay well below the {@code messageHandlingTimeout}, or {@code resetMessagesStuckBeingDelivered}
+     * can resurrect a message whose acknowledgement is merely buffered and deliver it twice. The value is
+     * validated against that timeout on construction rather than trusted.
+     *
+     * @param acknowledgementFlushInterval the maximum time an acknowledgement may sit buffered
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setAcknowledgementFlushInterval(Duration acknowledgementFlushInterval) {
+        this.acknowledgementFlushInterval = acknowledgementFlushInterval;
+        return this;
+    }
+
+    /**
      * Set warning threshold for batched fetch raw result size.
      *
      * @param batchedFetchWarnRowsThreshold warning threshold for raw rows returned from batched fetch
@@ -281,6 +341,9 @@ public final class PostgresqlDurableQueuesBuilder {
                                            useOrderedUnorderedQuery,
                                            useBatchedFetch,
                                            batchedFetchSwitchThreshold,
-                                           batchedFetchWarnRowsThreshold);
+                                           batchedFetchWarnRowsThreshold,
+                                           new BatchedAcknowledgementSettings(useBatchedAcknowledgement,
+                                                                              acknowledgementMaxBatchSize,
+                                                                              acknowledgementFlushInterval));
     }
 }

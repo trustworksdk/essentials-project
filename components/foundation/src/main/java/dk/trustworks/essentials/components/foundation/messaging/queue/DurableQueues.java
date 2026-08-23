@@ -711,6 +711,54 @@ public interface DurableQueues extends Lifecycle {
     boolean acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled operation);
 
     /**
+     * Mark several messages as acknowledged in one operation - this deletes them from the Queue.<br>
+     * Note this method MUST be called within an existing {@link UnitOfWork} IF
+     * using {@link TransactionalMode#FullyTransactional}
+     * <p>
+     * Acknowledging in batches exists because the transaction, not the statement, is the dominant per-message
+     * cost: one transaction per acknowledgement measured 16.5x more expensive on drain time than one per
+     * batch [10.3-24.2x across 9 repetitions]. See
+     * {@code docs/durable-queues-redesign-measurements.md} §7.
+     * <p>
+     * <b>Ordered messages must not be acknowledged through this method with a deferred batch.</b> The
+     * per-key barrier infers completion from the <em>absence</em> of a lower-{@code key_order} row, so an
+     * unflushed acknowledgement blocks every later message for that key until the flush. Deferring ordered
+     * acknowledgements measured 0.82x — actively worse. Acknowledging ordered messages here is safe only when
+     * the batch is flushed immediately; see the batching in {@code CentralizedMessageFetcher}, which excludes
+     * them.
+     *
+     * @param queueEntryIds the unique ids of the Messages to acknowledge. Must not be empty
+     * @return the number of messages that were acknowledged
+     */
+    default int acknowledgeMessagesAsHandled(Collection<QueueEntryId> queueEntryIds) {
+        return acknowledgeMessagesAsHandled(new AcknowledgeMessagesAsHandled(queueEntryIds));
+    }
+
+    /**
+     * Mark several messages as acknowledged in one operation - this deletes them from the Queue.<br>
+     * Note this method MUST be called within an existing {@link UnitOfWork} IF
+     * using {@link TransactionalMode#FullyTransactional}
+     * <p>
+     * The default implementation loops over {@link #acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled)},
+     * which is correct but buys none of the benefit — the point of the operation is one transaction for the
+     * whole batch. It is a default so that an existing {@link DurableQueues} implementation keeps compiling
+     * and behaving as before; a storage implementation that can do better should override it.
+     *
+     * @param operation the {@link AcknowledgeMessagesAsHandled} operation
+     * @return the number of messages that were acknowledged
+     */
+    default int acknowledgeMessagesAsHandled(AcknowledgeMessagesAsHandled operation) {
+        requireNonNull(operation, "You must provide a AcknowledgeMessagesAsHandled instance");
+        var acknowledged = 0;
+        for (var queueEntryId : operation.queueEntryIds) {
+            if (acknowledgeMessageAsHandled(new AcknowledgeMessageAsHandled(queueEntryId))) {
+                acknowledged++;
+            }
+        }
+        return acknowledged;
+    }
+
+    /**
      * Delete a message (Queued or Dead Letter Message)<br>
      * Note this method MUST be called within an existing {@link UnitOfWork} IF
      * using {@link TransactionalMode#FullyTransactional}

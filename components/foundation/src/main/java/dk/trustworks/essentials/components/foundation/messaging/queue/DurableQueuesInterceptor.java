@@ -175,6 +175,22 @@ public interface DurableQueuesInterceptor extends Interceptor {
     }
 
     /**
+     * Intercept {@link AcknowledgeMessagesAsHandled} calls
+     * <p>
+     * An interceptor that counts or times acknowledgements must implement <b>both</b> this and
+     * {@link #intercept(AcknowledgeMessageAsHandled, InterceptorChain)}: batched acknowledgement does not go
+     * through the single-message operation, so an interceptor that only handles the latter silently stops
+     * seeing acknowledgements the moment batching is enabled.
+     *
+     * @param operation        the operation
+     * @param interceptorChain the interceptor chain (call {@link InterceptorChain#proceed()} to continue the processing chain)
+     * @return the number of messages that were acknowledged
+     */
+    default int intercept(AcknowledgeMessagesAsHandled operation, InterceptorChain<AcknowledgeMessagesAsHandled, Integer, DurableQueuesInterceptor> interceptorChain) {
+        return interceptorChain.proceed();
+    }
+
+    /**
      * Intercept {@link DeleteMessage} calls
      *
      * @param operation        the operation

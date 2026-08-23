@@ -191,6 +191,9 @@ Prefix: `essentials.durable-queues`
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base interval |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff multiplier |
 | `use-ordered-unordered-query` | `true` | Optimize mixed ordering |
+| `use-batched-acknowledgement` | `false` | Coalesce acks into one transaction per batch. ⚠️ Widens the redelivery window by one flush interval; ordered messages are excluded. Requires `SingleOperationTransaction` |
+| `acknowledgement-max-batch-size` | `64` | Flush once this many acks are pending |
+| `acknowledgement-flush-interval` | `50ms` | Flush at least this often. Must be ≤ ¼ of the message-handling timeout |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |

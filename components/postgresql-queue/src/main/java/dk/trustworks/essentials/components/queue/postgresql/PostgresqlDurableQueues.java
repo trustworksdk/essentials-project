@@ -471,6 +471,45 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                    boolean useBatchedFetch,
                                    int batchedFetchSwitchThreshold,
                                    int batchedFetchWarnRowsThreshold) {
+        this(unitOfWorkFactory,
+             jsonSerializer,
+             sharedQueueTableName,
+             multiTableChangeListener,
+             queuePollingOptimizerFactory,
+             transactionalMode,
+             messageHandlingTimeout,
+             useCentralizedMessageFetcher,
+             centralizedMessageFetcherPollingInterval,
+             centralizedQueuePollingOptimizerFactory,
+             useOrderedUnorderedQuery,
+             useBatchedFetch,
+             batchedFetchSwitchThreshold,
+             batchedFetchWarnRowsThreshold,
+             BatchedAcknowledgementSettings.disabled());
+    }
+
+    /**
+     * Package-private so that batched acknowledgement is reachable from {@link PostgresqlDurableQueuesBuilder}
+     * without widening the deprecated public constructor above, which is slated for removal and must keep its
+     * signature.
+     *
+     * @param batchedAcknowledgementSettings whether and how to coalesce acknowledgements into batches
+     */
+    PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                            JSONSerializer jsonSerializer,
+                            String sharedQueueTableName,
+                            MultiTableChangeListener<TableChangeNotification> multiTableChangeListener,
+                            Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory,
+                            TransactionalMode transactionalMode,
+                            Duration messageHandlingTimeout,
+                            boolean useCentralizedMessageFetcher,
+                            Duration centralizedMessageFetcherPollingInterval,
+                            Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
+                            boolean useOrderedUnorderedQuery,
+                            boolean useBatchedFetch,
+                            int batchedFetchSwitchThreshold,
+                            int batchedFetchWarnRowsThreshold,
+                            BatchedAcknowledgementSettings batchedAcknowledgementSettings) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer");
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
@@ -499,11 +538,32 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
         // Initialize the centralized message fetcher
         if (useCentralizedMessageFetcher) {
+            // Only the centralized fetcher batches acknowledgements. DefaultDurableQueueConsumer acknowledges
+            // from its own per-consumer threads, so a buffer there would have to coordinate across consumers
+            // for no benefit the centralized path does not already give.
+            var acknowledgementSettings = requireNonNull(batchedAcknowledgementSettings, "No batchedAcknowledgementSettings provided");
+            if (acknowledgementSettings.enabled()) {
+                // The buffer's safety argument is that an unflushed acknowledgement's row stays
+                // is_being_delivered = TRUE and is recovered by resetMessagesStuckBeingDelivered. That recovery
+                // only exists under SingleOperationTransaction, so batching cannot be made safe without it.
+                requireTrue(transactionalMode == TransactionalMode.SingleOperationTransaction,
+                            "Batched acknowledgement requires TransactionalMode.SingleOperationTransaction - it relies on "
+                                    + "resetMessagesStuckBeingDelivered to recover acknowledgements lost before a flush, which "
+                                    + "FullyTransactional does not provide");
+            }
+            // The parameter, not the field: messageHandlingTimeoutMs is not assigned until after this block.
+            var acknowledgementBuffer = acknowledgementSettings.enabled()
+                                        ? new BatchedAcknowledgementBuffer(this,
+                                                                           acknowledgementSettings.maxBatchSize(),
+                                                                           acknowledgementSettings.flushInterval(),
+                                                                           requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout provided - required when batched acknowledgement is enabled"))
+                                        : null;
             this.centralizedMessageFetcher = new CentralizedMessageFetcher(this,
                                                                            requireNonNull(centralizedMessageFetcherPollingInterval, "No centralizedMessageFetcherPollingInterval provided").toMillis(),
                                                                            interceptors,
                                                                            this.useBatchedFetch,
-                                                                           this.batchedFetchSwitchThreshold);
+                                                                           this.batchedFetchSwitchThreshold,
+                                                                           acknowledgementBuffer);
             this.centralizedQueuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory != null ? centralizedQueuePollingOptimizerFactory : this::createCentralizedQueuePollingOptimizerFor;
         }
 
@@ -1277,6 +1337,40 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                       })
                 .proceed());
 
+    }
+
+    /**
+     * Acknowledges a whole batch in one statement inside one {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork},
+     * which is the point of the operation: the transaction is the dominant per-message cost, not the
+     * {@code DELETE}. See {@code docs/durable-queues-redesign-measurements.md} §7.
+     * <p>
+     * Unlike the single-message path this does not fall back to checking whether each missing id became a
+     * dead letter. That check costs a query per id and would reintroduce exactly the per-message round trip
+     * being removed; the row count already tells the caller how many were acknowledged, and any id not
+     * deleted is either already gone or now a dead letter, both of which the recovery paths handle.
+     */
+    @Override
+    public int acknowledgeMessagesAsHandled(AcknowledgeMessagesAsHandled operation) {
+        requireNonNull(operation, "You must provide a AcknowledgeMessagesAsHandled instance");
+
+        return unitOfWorkFactory.withUnitOfWork(() -> newInterceptorChainForOperation(operation,
+                                                                                      interceptors,
+                                                                                      (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                                                                      () -> {
+                                                                                          log.debug("Acknowledging-Messages-As-Handled regarding {} messages", operation.queueEntryIds.size());
+                                                                                          var rowsDeleted = unitOfWorkFactory.getRequiredUnitOfWork().handle().createUpdate(durableQueuesSql.getAcknowledgeMessagesAsHandledSql())
+                                                                                                                             .bindList("ids", operation.queueEntryIds)
+                                                                                                                             .execute();
+                                                                                          if (rowsDeleted != operation.queueEntryIds.size()) {
+                                                                                              log.debug("Acknowledged {} of {} messages as handled - the remainder were already deleted or had been marked as Dead-Letter-Messages",
+                                                                                                        rowsDeleted,
+                                                                                                        operation.queueEntryIds.size());
+                                                                                          } else {
+                                                                                              log.debug("Acknowledged {} messages as handled and deleted them", rowsDeleted);
+                                                                                          }
+                                                                                          return rowsDeleted;
+                                                                                      })
+                .proceed());
     }
 
     @Override

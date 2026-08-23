@@ -59,6 +59,13 @@ public class CentralizedMessageFetcher implements Lifecycle {
     private final ConcurrentMap<QueueName, Set<String>> inProcessOrderedKeys;
 
     /**
+     * Coalesces acknowledgements so a batch of handled messages costs one transaction instead of one each.
+     * {@code null} when batching is not enabled, which is the default — see
+     * {@link #CentralizedMessageFetcher(DurableQueues, long, List, boolean, int, BatchedAcknowledgementBuffer)}.
+     */
+    private final BatchedAcknowledgementBuffer acknowledgementBuffer;
+
+    /**
      * Create a new CentralizedMessageFetcher that always uses per-queue fetching.
      *
      * @param durableQueues     the DurableQueues instance to work with
@@ -86,7 +93,32 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                      List<DurableQueuesInterceptor> interceptors,
                                      boolean useBatchedFetch,
                                      int batchedFetchSwitchThreshold) {
+        this(durableQueues, pollingIntervalMs, interceptors, useBatchedFetch, batchedFetchSwitchThreshold, null);
+    }
+
+    /**
+     * Create a new CentralizedMessageFetcher with optional batched acknowledgement
+     *
+     * @param durableQueues               the DurableQueues instance to work with
+     * @param pollingIntervalMs           the polling interval in milliseconds
+     * @param useBatchedFetch             opt in to batched fetching. When {@code false} (the default elsewhere) every poll
+     *                                    uses per-queue fetching regardless of how many queues are active, and
+     *                                    {@code batchedFetchSwitchThreshold} is ignored
+     * @param batchedFetchSwitchThreshold only consulted when {@code useBatchedFetch} is {@code true}: use per-queue fetch
+     *                                    for active queue counts &lt;= threshold, batched fetch above it
+     * @param acknowledgementBuffer       coalesces acknowledgements into batches, or {@code null} to acknowledge each
+     *                                    message in its own transaction as before. {@link QueuedMessage.DeliveryMode#IN_ORDER}
+     *                                    messages are acknowledged immediately either way — see
+     *                                    {@link BatchedAcknowledgementBuffer}
+     */
+    public CentralizedMessageFetcher(DurableQueues durableQueues,
+                                     long pollingIntervalMs,
+                                     List<DurableQueuesInterceptor> interceptors,
+                                     boolean useBatchedFetch,
+                                     int batchedFetchSwitchThreshold,
+                                     BatchedAcknowledgementBuffer acknowledgementBuffer) {
         this.durableQueues = requireNonNull(durableQueues, "No durableQueues provided");
+        this.acknowledgementBuffer = acknowledgementBuffer;
         this.pollingIntervalMs = pollingIntervalMs;
         this.interceptors = requireNonNull(interceptors, "interceptors is missing");
         requireTrue(batchedFetchSwitchThreshold >= 0, "batchedFetchSwitchThreshold must be >= 0");
@@ -155,6 +187,9 @@ public class CentralizedMessageFetcher implements Lifecycle {
     public void start() {
         if (started.compareAndSet(false, true)) {
             log.info("Starting CentralizedMessageFetcher with polling interval {} ms", pollingIntervalMs);
+            if (acknowledgementBuffer != null) {
+                acknowledgementBuffer.start();
+            }
 
             scheduler.scheduleAtFixedRate(() -> {
                 if (!started.get()) {
@@ -180,6 +215,12 @@ public class CentralizedMessageFetcher implements Lifecycle {
         if (started.compareAndSet(true, false)) {
             log.info("Stopping CentralizedMessageFetcher");
             scheduler.shutdownNow();
+            if (acknowledgementBuffer != null) {
+                // After the scheduler, so no further messages are handed out, and stop() performs the final
+                // flush - otherwise every handled-but-unflushed message would be redelivered after the
+                // handling timeout.
+                acknowledgementBuffer.stop();
+            }
         }
     }
 
@@ -361,12 +402,27 @@ public class CentralizedMessageFetcher implements Lifecycle {
                               message.getId());
 
                     try {
-                        boolean acknowledged = durableQueues.acknowledgeMessageAsHandled(message.getId());
-                        if (!acknowledged) {
-                            // Message was already acknowledged or deleted
-                            log.debug("[{}:{}] Message acknowledgment reported message already handled or deleted",
-                                      queueName,
-                                      message.getId());
+                        if (acknowledgementBuffer != null && !(message.getMessage() instanceof OrderedMessage)) {
+                            // Ordered messages are excluded deliberately and must stay excluded: the per-key
+                            // barrier reads completion from the absence of a lower key_order row, so a buffered
+                            // acknowledgement stalls every later message for that key until the next flush.
+                            // Measured at 0.82x - worse than not batching. See BatchedAcknowledgementBuffer.
+                            //
+                            // The discriminator is the wrapped Message, NOT message.getDeliveryMode(): the
+                            // Postgres row mapper produces DefaultQueuedMessage, whose getDeliveryMode() is
+                            // hardcoded to NORMAL regardless of the persisted delivery_mode column. Using it
+                            // here buffered every ordered message, which PostgresqlBatchedAcknowledgementIT
+                            // caught. Mongo's own QueuedMessage implementation does report IN_ORDER, so the
+                            // accessor is inconsistent between backends and cannot be relied on.
+                            acknowledgementBuffer.acknowledge(message.getId());
+                        } else {
+                            boolean acknowledged = durableQueues.acknowledgeMessageAsHandled(message.getId());
+                            if (!acknowledged) {
+                                // Message was already acknowledged or deleted
+                                log.debug("[{}:{}] Message acknowledgment reported message already handled or deleted",
+                                          queueName,
+                                          message.getId());
+                            }
                         }
                     } catch (Exception ex) {
                         // If acknowledgment fails due to connectivity issues, the message will be

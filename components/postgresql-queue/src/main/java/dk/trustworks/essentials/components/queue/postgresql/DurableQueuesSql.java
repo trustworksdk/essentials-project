@@ -768,6 +768,22 @@ public class DurableQueuesSql {
     }
 
     /**
+     * SQL statement for acknowledging several messages as handled in one statement.
+     * <p>
+     * Same predicate as {@link #getAcknowledgeMessageAsHandledSql()}, widened to a list. The
+     * {@code is_dead_letter_message = FALSE} guard is what makes a batch safe: a message that was marked as a
+     * dead letter while its acknowledgement sat in the buffer is skipped rather than deleted, so the batch
+     * cannot destroy a dead letter the operator still needs. The caller learns this from the row count being
+     * lower than the batch size.
+     *
+     * @return SQL statement for acknowledging several messages as handled
+     */
+    public String getAcknowledgeMessagesAsHandledSql() {
+        return bind("DELETE FROM {:tableName} WHERE id IN (<ids>) AND is_dead_letter_message = FALSE",
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
      * SQL statement for getting the delete message sql.
      *
      * @return SQL statement for getting the delete message sql

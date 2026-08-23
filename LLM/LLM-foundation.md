@@ -172,6 +172,10 @@ public interface DurableQueues {
     // Consume
     DurableQueueConsumer consumeFromQueue(ConsumeFromQueue config);
 
+    // Acknowledge (deletes the message)
+    boolean acknowledgeMessageAsHandled(QueueEntryId queueEntryId);
+    int acknowledgeMessagesAsHandled(Collection<QueueEntryId> queueEntryIds);  // One transaction for the batch
+
     // Dead Letter operations
     Optional<QueuedMessage> resurrectDeadLetterMessage(QueueEntryId id, Duration delay);
     Optional<QueuedMessage> markAsDeadLetterMessage(QueueEntryId id, String reason);
@@ -179,6 +183,26 @@ public interface DurableQueues {
     List<QueuedMessage> getDeadLetterMessages(QueueName queueName, QueueingSortOrder order, long startIndex, long pageSize);
 }
 ```
+
+### Batched Acknowledgement
+
+`acknowledgeMessagesAsHandled(Collection)` acknowledges a group in **one** transaction. This matters because
+the transaction, not the `DELETE`, is the dominant per-message cost: one transaction per acknowledgement
+measured **16.5× more expensive** on drain time than one per batch [10.3–24.2× across 9 repetitions] — see
+`docs/durable-queues-redesign-measurements.md` §7.
+
+The default implementation loops over the single-message operation, so an existing `DurableQueues` backend
+keeps working; a backend that can do better overrides it (PostgreSQL issues one
+`DELETE ... WHERE id IN (...)`).
+
+Applications normally do not call this directly — enable it on the store instead
+(`setUseBatchedAcknowledgement(true)` on `PostgresqlDurableQueues.builder()`), which wires
+`BatchedAcknowledgementBuffer` into the `CentralizedMessageFetcher`. ⚠️ Ordered messages are excluded by
+design and the redelivery window widens by one flush interval — see
+[LLM-postgresql-queue.md](./LLM-postgresql-queue.md#batched-acknowledgement).
+
+Interceptors: batched acks arrive as `AcknowledgeMessagesAsHandled`, not `AcknowledgeMessageAsHandled`.
+Implement both `intercept` overloads or an ack-counting interceptor goes blind once batching is on.
 
 ### Pattern Matching Handler
 

@@ -306,6 +306,9 @@ public class EssentialsComponentsConfiguration {
                                                             0.1
                                                     ))
                                                     .setUseOrderedUnorderedQuery(properties.getDurableQueues().isUseOrderedUnorderedQuery())
+                                                    .setUseBatchedAcknowledgement(properties.getDurableQueues().isUseBatchedAcknowledgement())
+                                                    .setAcknowledgementMaxBatchSize(properties.getDurableQueues().getAcknowledgementMaxBatchSize())
+                                                    .setAcknowledgementFlushInterval(properties.getDurableQueues().getAcknowledgementFlushInterval())
                                                     .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;

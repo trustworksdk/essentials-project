@@ -107,6 +107,9 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
 | `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
 | `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
+| `useBatchedAcknowledgement` | `boolean` | `false` | Coalesce acks into one statement+transaction per batch. See [Batched Acknowledgement](#batched-acknowledgement) |
+| `acknowledgementMaxBatchSize` | `int` | 64 | Flush once this many acks are pending |
+| `acknowledgementFlushInterval` | `Duration` | 50ms | Flush at least this often. Must be ≤ ¼ of `messageHandlingTimeout` |
 
 ## Transaction Modes
 
@@ -150,6 +153,38 @@ Per-consumer polling threads.
 | Scalability | Excellent | Good |
 | Complexity | Higher | Lower |
 | Fault Isolation | Lower | Higher |
+
+## Batched Acknowledgement
+
+The acknowledgement is the dominant per-message cost, and the cost is the **transaction**, not the `DELETE`.
+Measured: one transaction per ack is **16.5× more expensive** on drain time than one per batch
+[10.3–24.2× across 9 repetitions]; two transactions per message rather than per batch costs 134×
+(`docs/durable-queues-redesign-measurements.md` §7).
+
+```java
+PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(unitOfWorkFactory)
+    .setUseBatchedAcknowledgement(true)
+    .setAcknowledgementMaxBatchSize(64)
+    .setAcknowledgementFlushInterval(Duration.ofMillis(50))
+    .build();
+```
+
+⚠️ **Constraints — all three are enforced, not advisory:**
+
+| Constraint | Why |
+|---|---|
+| `OrderedMessage` is never buffered | The per-key barrier reads completion from the *absence* of a lower `key_order` row, so a buffered ack stalls the key. Measured 0.82× — worse than not batching. Acknowledged immediately regardless of the setting |
+| Requires `SingleOperationTransaction` | The buffer relies on `resetMessagesStuckBeingDelivered` to recover acks lost before a flush; `FullyTransactional` has no such recovery. Construction fails |
+| `acknowledgementFlushInterval` ≤ ¼ × `messageHandlingTimeout` | Otherwise the stuck-message reset resurrects messages whose ack is merely buffered → duplicate delivery. Constructor throws |
+
+**Semantics**: at-least-once is unchanged, but the redelivery window widens by up to one flush interval — a
+crash in that window redelivers messages that were in fact handled. Handlers must be idempotent (they always
+had to be). Off by default for exactly this reason.
+
+**Interceptors**: batched acks go through `AcknowledgeMessagesAsHandled`, not `AcknowledgeMessageAsHandled`.
+An interceptor that counts or times acks must implement **both** `intercept` overloads or it silently stops
+seeing them.
 
 ## Polling Optimization
 

@@ -300,6 +300,23 @@ public class EssentialsComponentsProperties {
         private boolean useOrderedUnorderedQuery   = true;
 
         /**
+         * Coalesce message acknowledgements so a batch of handled messages costs one transaction instead of
+         * one each. Off by default.
+         * <p>
+         * The acknowledgement transaction, not its {@code DELETE}, is the queue's dominant per-message cost —
+         * measured 16.5x on drain time against a batched acknowledgement. It is nonetheless opt-in because it
+         * widens the redelivery window by up to {@link #acknowledgementFlushInterval}: a crash in that window
+         * redelivers messages that were in fact handled. At-least-once already permits that and handlers must
+         * be idempotent regardless, but it is a semantic change and should be chosen rather than inherited
+         * from an upgrade.
+         * <p>
+         * Ordered messages are never buffered — see {@code BatchedAcknowledgementBuffer}.
+         */
+        private boolean  useBatchedAcknowledgement    = false;
+        private int      acknowledgementMaxBatchSize  = BatchedAcknowledgementSettings.DEFAULT_MAX_BATCH_SIZE;
+        private Duration acknowledgementFlushInterval = BatchedAcknowledgementSettings.DEFAULT_FLUSH_INTERVAL;
+
+        /**
          * Should the Tracing produces only include all operations or only top level operations (default false)
          *
          * @return Should the Tracing produces only include all operations or only top level operations?
@@ -716,6 +733,51 @@ public class EssentialsComponentsProperties {
          *
          * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
          */
+        /**
+         * @return whether acknowledgements are coalesced into batches
+         */
+        public boolean isUseBatchedAcknowledgement() {
+            return useBatchedAcknowledgement;
+        }
+
+        /**
+         * @param useBatchedAcknowledgement whether to coalesce acknowledgements into batches
+         */
+        public void setUseBatchedAcknowledgement(boolean useBatchedAcknowledgement) {
+            this.useBatchedAcknowledgement = useBatchedAcknowledgement;
+        }
+
+        /**
+         * @return the number of pending acknowledgements that triggers a flush
+         */
+        public int getAcknowledgementMaxBatchSize() {
+            return acknowledgementMaxBatchSize;
+        }
+
+        /**
+         * @param acknowledgementMaxBatchSize the number of pending acknowledgements that triggers a flush
+         */
+        public void setAcknowledgementMaxBatchSize(int acknowledgementMaxBatchSize) {
+            this.acknowledgementMaxBatchSize = acknowledgementMaxBatchSize;
+        }
+
+        /**
+         * @return the maximum time an acknowledgement may sit buffered
+         */
+        public Duration getAcknowledgementFlushInterval() {
+            return acknowledgementFlushInterval;
+        }
+
+        /**
+         * @param acknowledgementFlushInterval the maximum time an acknowledgement may sit buffered. Must stay
+         *                                     well below the message-handling timeout, or the stuck-message
+         *                                     reset can resurrect a message whose acknowledgement is merely
+         *                                     buffered; the value is validated on construction
+         */
+        public void setAcknowledgementFlushInterval(Duration acknowledgementFlushInterval) {
+            this.acknowledgementFlushInterval = acknowledgementFlushInterval;
+        }
+
         public void setUseOrderedUnorderedQuery(boolean useOrderedUnorderedQuery) {
             this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
         }
