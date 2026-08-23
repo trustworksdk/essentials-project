@@ -401,7 +401,9 @@ public final class MongoDurableQueues implements DurableQueues {
      *                                     <b>Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.</b>
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     protected MongoDurableQueues(TransactionalMode transactionalMode,
                                  MongoTemplate mongoTemplate,
                                  SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
@@ -1633,6 +1635,35 @@ public final class MongoDurableQueues implements DurableQueues {
         public DurableQueuedMessage() {
         }
 
+        /**
+         * Create a {@link DurableQueuedMessageBuilder} that names every argument.
+         *
+         * @return the builder
+         */
+        public static DurableQueuedMessageBuilder builder() {
+            return new DurableQueuedMessageBuilder();
+        }
+
+        /**
+         * @param id                    the queue entry id
+         * @param queueName             the queue the message belongs to
+         * @param isBeingDelivered      whether the message is currently being delivered
+         * @param messagePayload        the serialized payload
+         * @param messagePayloadType    the payload's type name
+         * @param addedTimestamp        when the message was enqueued
+         * @param nextDeliveryTimestamp when the message next becomes a delivery candidate
+         * @param deliveryTimestamp     when the message was last delivered
+         * @param totalDeliveryAttempts total number of delivery attempts so far
+         * @param redeliveryAttempts    number of redelivery attempts so far
+         * @param lastDeliveryError     the last delivery error, or {@code null}
+         * @param isDeadLetterMessage   whether the message has been dead-lettered
+         * @param metaData              the message meta-data
+         * @param deliveryMode          {@code NORMAL} or {@code IN_ORDER}
+         * @param key                   the ordering key, or {@code null} for an unordered message
+         * @param keyOrder              the order within {@code key}, or {@code -1} for an unordered message
+         * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+         */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public DurableQueuedMessage(QueueEntryId id,
                                     QueueName queueName,
                                     boolean isBeingDelivered,
@@ -1849,6 +1880,14 @@ public final class MongoDurableQueues implements DurableQueues {
         private JSONSerializer jsonSerializer;
         private String sharedQueueCollectionName;
         private Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory;
+        // FullyTransactional, not SingleOperationTransaction: this builder already produced FullyTransactional by
+        // delegating to the (mongoTemplate, unitOfWorkFactory, jsonSerializer, sharedQueueCollectionName,
+        // queuePollingOptimizerFactory) constructor, and build() now calls the protected constructor directly.
+        // Restating today's value keeps that a pure refactoring. Note this is the OPPOSITE default to
+        // PostgresqlDurableQueuesBuilder — changing it would be a behaviour change for every existing builder caller
+        // and belongs in its own release note, not here.
+        private TransactionalMode transactionalMode = TransactionalMode.FullyTransactional;
+        private Duration messageHandlingTimeout;
 
         /**
          * @param mongoTemplate required
@@ -1896,13 +1935,41 @@ public final class MongoDurableQueues implements DurableQueues {
         }
 
         /**
+         * @param transactionalMode the transactional behaviour mode. Defaults to
+         *                          {@link TransactionalMode#FullyTransactional}, which is what this builder has always
+         *                          produced. With {@link TransactionalMode#SingleOperationTransaction} the consumer
+         *                          MUST acknowledge messages explicitly in a new {@code UnitOfWork}
+         * @return this builder
+         */
+        public Builder setTransactionalMode(TransactionalMode transactionalMode) {
+            this.transactionalMode = transactionalMode;
+            return this;
+        }
+
+        /**
+         * @param messageHandlingTimeout only required for {@link TransactionalMode#SingleOperationTransaction}: the
+         *                               timeout for messages that have been delivered but not yet acknowledged. After
+         *                               it elapses the delivery is reset and the message becomes a candidate again
+         * @return this builder
+         */
+        public Builder setMessageHandlingTimeout(Duration messageHandlingTimeout) {
+            this.messageHandlingTimeout = messageHandlingTimeout;
+            return this;
+        }
+
+        /**
          * @return the new {@link MongoDurableQueues}
          */
         @SuppressWarnings("removal")
         public MongoDurableQueues build() {
-            return new MongoDurableQueues(mongoTemplate,
+            return new MongoDurableQueues(transactionalMode,
+                                          mongoTemplate,
                                           unitOfWorkFactory,
+                                          messageHandlingTimeout,
                                           jsonSerializer,
+                                          // Passed through unchanged rather than defaulted: it was already required
+                                          // here (the constructor's requireNonNull rejects null), and quietly giving it
+                                          // a default would turn a fail-fast into a silent fallback collection.
                                           sharedQueueCollectionName,
                                           queuePollingOptimizerFactory);
         }

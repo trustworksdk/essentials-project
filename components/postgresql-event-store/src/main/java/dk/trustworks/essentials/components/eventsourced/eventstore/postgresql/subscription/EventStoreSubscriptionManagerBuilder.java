@@ -115,6 +115,7 @@ public final class EventStoreSubscriptionManagerBuilder {
         return this;
     }
 
+    @SuppressWarnings("removal")
     public DefaultEventStoreSubscriptionManager build() {
         return new DefaultEventStoreSubscriptionManager(eventStore,
                                                         eventStorePollingBatchSize,

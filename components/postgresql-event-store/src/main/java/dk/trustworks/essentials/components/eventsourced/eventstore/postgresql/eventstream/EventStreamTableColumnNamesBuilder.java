@@ -272,6 +272,7 @@ public final class EventStreamTableColumnNamesBuilder {
      *
      * @return an {@link EventStreamTableColumnNames} instance with all the builder values applied
      */
+    @SuppressWarnings("removal")
     public EventStreamTableColumnNames build() {
         return new EventStreamTableColumnNames(globalOrderColumn,
                                                timestampColumn,

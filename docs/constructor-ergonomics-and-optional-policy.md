@@ -129,10 +129,10 @@ guards is decided by its module's POM, not by any code it writes.
 
 | Module | Adds coverage of | Violations |
 |---|---|---|
-| `components/eventsourced-aggregates` | core chain, PostgreSQL event store, aggregates | 22 |
+| `components/eventsourced-aggregates` | core chain, PostgreSQL event store, aggregates | 3 |
 | `components/spring-boot-starter-postgresql` | PostgreSQL queue + fenced lock | 0 |
-| `components/spring-boot-starter-mongodb` | MongoDB queue + fenced lock, `types-springdata-mongo` | 2 |
-| `components/spring-boot-starter-postgresql-event-store` | `spring-postgresql-event-store`, own auto-config | 25 (22 shared, 3 unique) |
+| `components/spring-boot-starter-mongodb` | MongoDB queue + fenced lock, `types-springdata-mongo` | 0 |
+| `components/spring-boot-starter-postgresql-event-store` | `spring-postgresql-event-store`, own auto-config | 3 (all shared) |
 
 The starters are the natural vantage points because a starter exists precisely to pull one complete
 implementation stack onto a single classpath — no module needed a dependency added for the test's sake.
@@ -200,20 +200,18 @@ and a phase that converts something shows up as lines removed.
 
 ## What is left
 
-18 distinct classes still hold a recorded violation, across the four stores. The concentration is in
-`postgresql-event-store` — CDC, the subscription manager, and the persistence strategy — plus:
+**Two classes**, and both are deliberate: `PersistedEvent.DefaultPersistedEvent` and
+`PersistableEvent.DefaultPersistableEvent`. They are in the stores, but they are not work items — see
+Risks. Every other class the four stores ever recorded has been converted; the MongoDB queue that the
+MongoDB starter's guard first exposed is now converted alongside its PostgreSQL counterpart, and the
+event-store starter's own auto-configuration classes with it.
 
-- **`MongoDurableQueues`** (2 violations: a 16-parameter `DurableQueuedMessage` constructor and the
-  7-parameter main one), which was **missed by the sweep its PostgreSQL counterpart went through**.
-  `PostgresqlDurableQueues`' wide constructors are all deprecated with builders alongside; the MongoDB
-  ones are not, and the migration guide has no per-module entry for them. This is a real gap in the
-  bridge release, not a test artifact — it surfaced only when the MongoDB starter brought those classes
-  under a guard for the first time.
-- **`DefaultAggregateLifecycleConfigurationValidator`** and **`CdcHealthIndicator`**, both in the
-  event-store starter's own auto-configuration, likewise newly visible.
-
-`PersistedEvent.DefaultPersistedEvent` and `PersistableEvent.DefaultPersistableEvent` are in the stores but
-are not work items — see Risks.
+Those two are also the reason the sweep is not simply "finished". They cannot be marked
+`@Deprecated(forRemoval = true)` on the way to a fix, because that annotation is a promise to remove the
+constructor at the next major — and removing a Jackson creator whose parameter *names* are the persisted
+wire contract is precisely the thing Risks says not to do casually. Deprecating them would make a promise
+the wire format does not let us keep. They stay frozen, and unfreezing them means deciding what happens to
+persisted data first.
 
 ## See also
 

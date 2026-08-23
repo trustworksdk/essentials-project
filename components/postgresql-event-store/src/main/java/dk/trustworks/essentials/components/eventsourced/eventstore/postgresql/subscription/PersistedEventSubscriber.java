@@ -50,6 +50,15 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
     private final EventStore eventStore;
 
     /**
+     * Create a {@link PersistedEventSubscriberBuilder} that names every argument.
+     *
+     * @return the builder
+     */
+    public static PersistedEventSubscriberBuilder builder() {
+        return new PersistedEventSubscriberBuilder();
+    }
+
+    /**
      * Subscribe with indefinite retries in relation to Exceptions where {@link IOExceptionUtil#isIOException(Throwable)} return true
      *
      * @param eventHandler               The event handler that {@link PersistedEvent}'s are forwarded to
@@ -125,7 +134,9 @@ public class PersistedEventSubscriber extends BaseSubscriber<PersistedEvent> {
      *                                                                                           </pre>
      * @param eventStorePollingBatchSize            The batch size used when polling events from the {@link EventStore}
      * @param eventStore                            The {@link EventStore} to use
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public PersistedEventSubscriber(PersistedEventHandler eventHandler,
                                     EventStoreSubscription eventStoreSubscription,
                                     BiConsumer<PersistedEvent, Throwable> onErrorHandler,
