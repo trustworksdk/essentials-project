@@ -36,6 +36,8 @@ the ratios are the result.
 | Cursor's win once corrected | End-to-end **2.38× → 1.54×**, claim **3.75× → 2.18×** | §8 |
 | Why the cursor is still worth building | **Corrected in §10** — not deferred acks; per-key *runs* | §10 |
 | The gate: does run-claiming pay? | **Yes, decisively — and the bigger win is the claim itself at low key counts** | §11 |
+| Dead-letter side table | Real but **modest**: 1.0–1.2×, and no index-size win | §12 |
+| Partitioning by `queue_name` | **Rejected** — 30% worse acknowledge-by-id, 40% worse claim | §12 |
 | Mixed-version rollout (barrier pods + cursor pods, one table) | **Safe** — 27 consecutive runs, negative control fires | §9 |
 | A key with no cursor row | **Silently invisible to cursor pods** — never claimed, no error | §9 |
 | Recovery | Reconcile-on-empty-claim drains it, and cannot rewind a live cursor | §9 |
@@ -716,3 +718,58 @@ case rather than the corner case, which is what makes this decisive.
   parallelism for a hot key.
 - The barrier arm uses `claimOrderedSql` without the exclude-keys predicate, so it is the cheapest form of the
   barrier available. Nothing here is stacked against it.
+
+## 12. The storage track's last two: dead-letter side table, and partitioning
+
+Harness: scenario `queue-storage-layout` (`QueueStorageLayoutScenario` + `QueueStorageLayoutBenchmarkIT`).
+40 000 unordered messages across 8 queues, 5% dead-lettered before the drain, medians of 2. Multiple queues
+throughout, because a single-queue run gives partitioning one partition and measures nothing.
+**Acknowledgement is by id, one at a time, on purpose** — that is the operation partitioning threatens and the
+hot path §7 measured at 16.5×; batching it would hide the effect the arm exists to expose.
+
+| Arm | Insert | Claim | Ack by id | Dead-letter | Index bytes | Heap bytes |
+|---|---|---|---|---|---|---|
+| `V1_SHARED` | 650 ms | 414 ms | **2 352 ms** | 200 ms | 8.45 MB | 18.7 MB |
+| `DLQ_SPLIT` | 539 ms | 385 ms | **2 260 ms** | 158 ms | 8.36 MB | 17.9 MB |
+| `PARTITIONED` | **430 ms** | 694 ms | **3 057 ms** | 194 ms | n/a | n/a |
+
+### Partitioning by `queue_name` — rejected
+
+**Acknowledgement by id is 30% worse and the claim 40% worse**, to buy a 1.5× insert. Consistent across both
+repetitions (3 033 / 3 080 ms against 2 509 / 2 195 ms), so this is not noise.
+
+The cause was predicted and is structural rather than tunable. PostgreSQL requires the partition key in every
+unique constraint, so `id TEXT PRIMARY KEY` cannot survive — the DDL is rejected outright until the key becomes
+`(id, queue_name)`. And the entire `DurableQueues` API is keyed by `QueueEntryId` **alone**:
+`acknowledgeMessageAsHandled`, `deleteMessage`, `getQueuedMessage`, `markAsDeadLetterMessage`, `retryMessage`.
+None of them can name a partition, so every one degrades from a primary-key lookup to a probe of all eight.
+
+So partitioning on this axis taxes the two operations that matter to accelerate the one that does not.
+**Partitioning by `queue_name` is not viable unless the public API gains `(queueName, id)` addressing** — which
+is a breaking change to a stable central API, for a purge win that can be had far more cheaply.
+
+### Dead-letter side table — real but modest, and not for the reason claimed
+
+1.21× on insert, 1.08× on claim, 1.04× on acknowledge, 1.27× on dead-lettering itself. **And essentially no
+index-size win**: 8.36 MB against 8.45 MB.
+
+That last number is the interesting one, because the argument for this change was index write amplification —
+the lever that *has* measured as significant. It does not apply here at anything like the strength it did for the
+ordered/unordered split. That split removed five whole indexes; this removes one boolean from one index's key
+and from four predicates. Same lever, an order of magnitude less of it.
+
+The change is still defensible — it is contract-preserving, it keeps long-lived dead-letter rows out of the hot
+table's pages (heap 4% smaller at only 5% dead-lettered), and it makes dead-letter browse and resurrect stop
+touching hot data. But it should be justified on those grounds, **not on throughput**, and it should not be
+sequenced ahead of anything with a larger measured effect.
+
+### Two defects in this measurement, stated rather than hidden
+
+- **The purge comparison is void.** Purge runs after the drain, so every arm purged a nearly empty table and all
+  three reported 1 ms. `TRUNCATE`-of-a-partition against `DELETE FROM … WHERE queue_name` is untested. It is
+  also now moot: the arm that would have won it is rejected on the numbers above.
+- **The partitioned arm has no size data.** `pg_table_size`/`pg_indexes_size` against `pg_class` for a
+  partitioned *parent* return 0, since the parent holds no storage. Summing over partitions, or
+  `pg_total_relation_size`, is what that needed.
+- Two repetitions, and the differences for `DLQ_SPLIT` are small enough (1.04–1.27×) to sit within the spread
+  seen elsewhere in this document. Treat its numbers as "small positive", not as figures.

@@ -126,6 +126,127 @@ public final class QueueSchemaPrototype {
     }
 
     /**
+     * {@link #COMMON_COLUMNS} minus the dead-letter flag. Filtered by line rather than by an exact-whitespace
+     * replace, and it fails loudly if the column is not found — a silent no-op would leave the column in place
+     * and the arm would quietly measure nothing.
+     */
+    private static String columnsWithoutDeadLetterFlag() {
+        var kept = Arrays.stream(COMMON_COLUMNS.split("\n"))
+                         .filter(line -> !line.contains("is_dead_letter_message"))
+                         .toList();
+        if (kept.size() == COMMON_COLUMNS.split("\n").length) {
+            throw new IllegalStateException("is_dead_letter_message not found in COMMON_COLUMNS - the DLQ-split arm would measure nothing");
+        }
+        // The line before the removed one may now carry a trailing comma before the closing paren.
+        return String.join("\n", kept).replaceAll(",\\s*$", "");
+    }
+
+    /**
+     * Hot table with dead-letter messages moved out: no {@code is_dead_letter_message} column at all, and
+     * therefore none of it in any index or predicate.
+     * <p>
+     * The claim is that this reduces index write amplification — the lever that has actually measured as
+     * significant — because v1's {@code idx_b} carries the flag as a key column and three more indexes carry it
+     * in their predicates. The secondary claim is that long-lived dead-letter rows stop occupying pages in the
+     * hot table, which only shows up when there are some.
+     */
+    public static List<String> dlqSplitHotTableDdl(String table, int fillFactor) {
+        return List.of(
+                "CREATE TABLE " + table + " (" + columnsWithoutDeadLetterFlag() + ", key TEXT DEFAULT NULL, key_order BIGINT DEFAULT -1) WITH (fillfactor=" + fillFactor + ")",
+                "CREATE INDEX idx_" + table + "_a ON " + table + " (queue_name, key, key_order)",
+                "CREATE INDEX idx_" + table + "_b ON " + table + " (queue_name, is_being_delivered, next_delivery_ts)",
+                """
+                CREATE INDEX idx_%1$s_c ON %1$s (queue_name, next_delivery_ts, key, key_order)
+                  WHERE is_being_delivered = FALSE
+                """.formatted(table),
+                """
+                CREATE INDEX idx_%1$s_d ON %1$s (key, queue_name, key_order, next_delivery_ts) INCLUDE (id)
+                  WHERE key IS NOT NULL AND NOT is_being_delivered
+                """.formatted(table),
+                """
+                CREATE INDEX idx_%1$s_e ON %1$s (queue_name, next_delivery_ts) INCLUDE (id)
+                  WHERE key IS NULL AND NOT is_being_delivered
+                """.formatted(table),
+                """
+                CREATE INDEX idx_%1$s_f ON %1$s (queue_name, key_order, next_delivery_ts) INCLUDE (id)
+                  WHERE key IS NOT NULL AND is_being_delivered = FALSE
+                """.formatted(table));
+    }
+
+    /**
+     * The dead-letter side table. One index, because the only access patterns are "browse a queue's dead
+     * letters" and "fetch one by id" — the latter served by the primary key.
+     */
+    public static List<String> dlqSideTableDdl(String table) {
+        return List.of(
+                "CREATE TABLE " + table + " (" + columnsWithoutDeadLetterFlag() + ", key TEXT DEFAULT NULL, key_order BIGINT DEFAULT -1)",
+                "CREATE INDEX idx_" + table + "_dlq ON " + table + " (queue_name, added_ts)");
+    }
+
+    /**
+     * Moves a message to the dead-letter table, which is what {@code markAsDeadLetterMessage} becomes once the
+     * flag is gone. One statement so it is atomic.
+     */
+    public static String moveToDlqSql(String hotTable, String dlqTable) {
+        return """
+               WITH moved AS (
+                 DELETE FROM %1$s WHERE id = :id RETURNING *
+               )
+               INSERT INTO %2$s SELECT * FROM moved
+               """.formatted(hotTable, dlqTable);
+    }
+
+    /**
+     * v1's shape, partitioned by {@code queue_name}.
+     *
+     * <h2>The consequence that decides whether this is viable</h2>
+     * PostgreSQL requires the partition key to be part of every unique constraint, so the primary key becomes
+     * {@code (id, queue_name)} rather than {@code id}. The whole {@code DurableQueues} API is keyed by
+     * {@link dk.trustworks.essentials.components.foundation.messaging.queue.QueueEntryId} <em>alone</em> —
+     * {@code getQueuedMessage}, {@code acknowledgeMessageAsHandled}, {@code deleteMessage},
+     * {@code markAsDeadLetterMessage}, {@code retryMessage} — so none of them can name a partition, and every
+     * one degrades from a primary-key lookup to a probe of every partition.
+     * <p>
+     * Acknowledgement by id is the hot path that §7 measured at 16.5x, so this is the thing to measure rather
+     * than assume: partitioning may win on purge and index size while losing more on the operation that matters
+     * most.
+     */
+    public static List<String> v1PartitionedByQueueDdl(String table, List<String> queueNames, int fillFactor) {
+        var statements = new ArrayList<String>();
+        // `id TEXT PRIMARY KEY` has to become `id TEXT NOT NULL`, because a partitioned table cannot carry a
+        // primary key that excludes the partition key - PostgreSQL rejects the DDL outright. This is the
+        // constraint made concrete rather than argued: id stops being unique on its own, and every by-id
+        // operation in the DurableQueues API loses its single-partition lookup.
+        var columnsWithoutIdPrimaryKey = COMMON_COLUMNS.replace("id                     TEXT PRIMARY KEY",
+                                                                "id                     TEXT NOT NULL");
+        if (columnsWithoutIdPrimaryKey.equals(COMMON_COLUMNS)) {
+            throw new IllegalStateException("Could not strip the id primary key - the partitioned DDL would declare two");
+        }
+        statements.add("CREATE TABLE " + table + " (" + columnsWithoutIdPrimaryKey
+                               + ", key TEXT DEFAULT NULL, key_order BIGINT DEFAULT -1"
+                               + ", PRIMARY KEY (id, queue_name)) PARTITION BY LIST (queue_name)");
+        for (var i = 0; i < queueNames.size(); i++) {
+            statements.add("CREATE TABLE " + table + "_p" + i + " PARTITION OF " + table
+                                   + " FOR VALUES IN ('" + queueNames.get(i) + "') WITH (fillfactor=" + fillFactor + ")");
+        }
+        statements.add("CREATE INDEX idx_" + table + "_a ON " + table + " (queue_name, key, key_order)");
+        statements.add("CREATE INDEX idx_" + table + "_b ON " + table + " (queue_name, is_dead_letter_message, is_being_delivered, next_delivery_ts)");
+        statements.add("""
+                       CREATE INDEX idx_%1$s_e ON %1$s (queue_name, next_delivery_ts) INCLUDE (id)
+                         WHERE key IS NULL AND NOT is_dead_letter_message AND NOT is_being_delivered
+                       """.formatted(table));
+        return List.copyOf(statements);
+    }
+
+    /**
+     * The primary-key column list for the variant, since partitioning changes it. Used to build the by-id
+     * statements the comparison turns on.
+     */
+    public static String deleteByIdSql(String table) {
+        return "DELETE FROM " + table + " WHERE id = :id";
+    }
+
+    /**
      * Insert used by every variant that has no key columns.
      */
     public static String insertUnorderedSql(String table) {

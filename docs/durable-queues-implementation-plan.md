@@ -153,8 +153,8 @@ second, and they compose:
 | Change | What it removes | Independent of the split? |
 |---|---|---|
 | Ordered/unordered split | 6 secondary indexes → 1 for unordered traffic. Measured 1.38× | — |
-| Dead-letter to its own table | `is_dead_letter_message` from every remaining hot index and predicate; stops long-lived DLQ rows fragmenting hot pages; makes DLQ browse and resurrect cheap | Yes — a third table, orthogonal |
-| Partition by `queue_name` | Per-queue index size; turns `purgeQueue` from `DELETE FROM … WHERE queue_name = :queueName` (`DurableQueuesSql:471`, the purge amplification the statistics doc flags) into an O(1) `TRUNCATE` of a partition | Yes |
+| Dead-letter to its own table | **Measured modest (§12)**: 1.0–1.2× on operations and *no* index-size win — one boolean out of one index and four predicates is not the same lever as five whole indexes. Justify it on contract-preserving cleanliness, cheaper DLQ browse/resurrect and 4% smaller heap, not on throughput | Yes — a third table, orthogonal |
+| ~~Partition by `queue_name`~~ | **Rejected on evidence (§12)** — 30% worse acknowledge-by-id, 40% worse claim. The API is keyed by `QueueEntryId` alone, so no by-id operation can name a partition and each probes every one. Not viable without `(queueName, id)` addressing, which is a breaking change to a stable API | — |
 | Per-table autovacuum settings | Nothing structural — it stops dead tuples accumulating faster than they are reclaimed. `pgmq` ships exactly this | Yes, and applicable today |
 
 None of the last three has been measured. All three are arms in the existing
@@ -197,9 +197,9 @@ but the storage track is where the cheap, certain wins are.
 **S0 — per-table autovacuum settings.** Cheapest item in the plan, no contract change, and it quiets every
 later measurement. Do this first.
 
-**S1 — measure the storage arms.** Dead-letter table and partitioning as arms in
-`QueueSchemaWriteCostScenario`, alongside the split that is already there. Cheap; the harness exists. This is
-what turns three plausible ideas into two or three known quantities.
+**S1 — ~~measure the storage arms~~ done (§12).** Partitioning by `queue_name` is rejected; the dead-letter
+table is a small positive to be justified on grounds other than throughput. The one thing left unmeasured here
+is the autovacuum setting itself, which S0 should quantify while it is being chosen.
 
 **S2 — the statistics trigger.** Independently designed, independently valuable, no interaction with the rest.
 
@@ -207,8 +207,9 @@ what turns three plausible ideas into two or three known quantities.
 unordered traffic and is a precondition for the cursor's ordered table. Sequence the API decision early: it is
 the part that touches `Inbox`/`Outbox`/`DurableLocalCommandBus` and the 12 admin operations.
 
-**S4 — dead-letter table and partitioning**, in whichever order S1 says pays more. Solve
-`getQueueNameFor(QueueEntryId)` and the admin surface once, across all tables, rather than per split.
+**S4 — dead-letter table**, if its non-throughput benefits are wanted. Partitioning is out (§12). Solve
+`getQueueNameFor(QueueEntryId)` and the admin surface once, across the ordered/unordered/dead-letter set,
+rather than per split.
 
 **O0 — decide the two shipped defaults.** Batched acknowledgement (a semantic change: the redelivery window
 widens by one flush interval) and batched fetch (needs a throughput measurement that does not exist).

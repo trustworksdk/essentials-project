@@ -255,6 +255,26 @@ public class EssentialsPerformanceLabProperties {
      */
     private String runLengthRunLengths = "1,4,16,64";
 
+    /**
+     * Messages per case in {@code QueueStorageLayoutScenario}.
+     */
+    private int storageLayoutMessages = 40_000;
+
+    /**
+     * Queues per case. More than one is required: partitioning by {@code queue_name} with a single queue gives
+     * one partition and measures nothing.
+     */
+    private int storageLayoutQueueCount = 8;
+
+    /**
+     * Percentage of messages dead-lettered before the drain. Non-zero on purpose — with no dead letters the
+     * side table stays empty and the arm only measures one fewer index column, missing the claim that long-lived
+     * dead-letter rows occupy pages in the hot table.
+     */
+    private int storageLayoutDeadLetterPercent = 5;
+
+    private int storageLayoutRepetitions = 2;
+
     public Mode getMode() {
         return mode;
     }
@@ -581,6 +601,38 @@ public class EssentialsPerformanceLabProperties {
 
     public void setRunLengthRunLengths(String runLengthRunLengths) {
         this.runLengthRunLengths = runLengthRunLengths;
+    }
+
+    public int getStorageLayoutMessages() {
+        return storageLayoutMessages;
+    }
+
+    public void setStorageLayoutMessages(int storageLayoutMessages) {
+        this.storageLayoutMessages = storageLayoutMessages;
+    }
+
+    public int getStorageLayoutQueueCount() {
+        return storageLayoutQueueCount;
+    }
+
+    public void setStorageLayoutQueueCount(int storageLayoutQueueCount) {
+        this.storageLayoutQueueCount = storageLayoutQueueCount;
+    }
+
+    public int getStorageLayoutDeadLetterPercent() {
+        return storageLayoutDeadLetterPercent;
+    }
+
+    public void setStorageLayoutDeadLetterPercent(int storageLayoutDeadLetterPercent) {
+        this.storageLayoutDeadLetterPercent = storageLayoutDeadLetterPercent;
+    }
+
+    public int getStorageLayoutRepetitions() {
+        return storageLayoutRepetitions;
+    }
+
+    public void setStorageLayoutRepetitions(int storageLayoutRepetitions) {
+        this.storageLayoutRepetitions = storageLayoutRepetitions;
     }
 
     public int getFrameworkOverheadRepetitions() {
