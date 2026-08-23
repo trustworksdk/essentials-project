@@ -236,9 +236,10 @@ is the autovacuum setting itself, which S0 should quantify while it is being cho
 are the better justification. Still worth doing, no longer on a performance claim. If statistics cost matters to
 a deployment, drop an index on the stats table or sample — both beat changing the mechanism.
 
-**S3 — the ordered/unordered split**, with the mode-aware consumer API. Carries the measured 1.38× for
-unordered traffic and is a precondition for the cursor's ordered table. Sequence the API decision early: it is
-the part that touches `Inbox`/`Outbox`/`DurableLocalCommandBus` and the 12 admin operations.
+**S3 — the ordered/unordered split. Increment 1 done (§7d).** `PostgresqlSplitDurableQueues` composes two v1
+storage instances over `<base>_unordered` / `<base>_ordered`, and `foundation-test`'s shared `DurableQueuesIT`
+passes against it unmodified. The mode-aware consumer API was **not** built and is not needed (§7a). Increment 2
+is the admin surface, and remains the review boundary.
 
 **S4 — dead-letter table**, if its non-throughput benefits are wanted. Partitioning is out (§12). Solve
 `getQueueNameFor(QueueEntryId)` and the admin surface once, across the ordered/unordered/dead-letter set,
@@ -348,6 +349,48 @@ per table would double in-flight work and break that contract. The fix is that t
 both tables — the fetcher already computes slots as `maxParallelConsumers - activeWorkers` per queue, so one
 fetcher over the composite gets a shared budget for free. The delegates are storage only, with no consumers of
 their own.
+
+## 7d. S3 increment 1 as built, and the two things it exposed
+
+`PostgresqlSplitDurableQueues` is a `BatchMessageFetchingCapableDurableQueues` composing two
+`PostgresqlDurableQueues` instances — one per table — created with the new `Role.SPLIT_DELEGATE`, which says both
+that the composite owns their DDL and that a by-id miss is expected rather than an error. Configuration is
+`PostgresqlSplitDurableQueuesSettings` (a record, so the parameter ceiling does not apply) plus a builder;
+its defaults are v1's, so moving a deployment onto the split changes the storage layout and nothing else.
+
+**The acceptance gate held: `foundation-test`'s shared `DurableQueuesIT` passes unmodified** —
+`PostgresqlSplitDurableQueuesIT` contains only wiring, no test methods and no relaxed assertions. That suite
+proves the split is indistinguishable through the SPI, which is also why it cannot prove the split is happening;
+`PostgresqlSplitDurableQueuesRoutingIT` does that part, asserting per-table row counts, positional ids across a
+mixed batch, an ordered message acknowledged by id alone, and one consumer draining both tables exactly once.
+
+§7c's "reuse v1's statements unchanged" held, but **not quite as stated: reusing the statements was not enough,
+because v1 had the polling registry welded to the claim.** `fetchNextBatchOfMessages` filtered queues by
+consulting its own `durableQueueConsumers` map and its own polling optimizers, then claimed, in one method. The
+composite owns the registry and the optimizers while the delegates own the tables, so asked through their public
+fetch methods each delegate consulted its own empty registry and skipped every queue. Splitting that into
+`selectQueuesReadyForPolling` / `claimNextBatchOfMessages…` / `reportPollingOutcome` — a consumer concern, a
+storage concern, a consumer concern — is what actually made the composition work, and it made v1's two fetch
+variants symmetric as a side effect. Worth generalising: the "reuse the existing statements" plan understated the
+work because a statement is not the same thing as the method around it.
+
+Two defects the increment surfaced, both in code written earlier in this branch:
+
+1. **`initializeSchema` skipped the JDBI type-mapper registration**, which sat inside the same method as the DDL.
+   Every by-queue-name read on the split failed with `NoSuchMapperException: No mapper registered for type
+   QueueName`. Registration is not schema initialization — it is how the instance can issue any statement at all —
+   and it now runs unconditionally. Caught by the shared suite, on its first run.
+2. **The four "not found" log sites logged at ERROR**, which is right for a standalone instance and wrong for a
+   split delegate: the composite addresses every id at both delegates, so exactly one is expected to miss. Left
+   alone, an ordinary ordered-message retry would have emitted a spurious ERROR line on every delivery. This is
+   why the flag became a `Role` rather than staying a boolean: "does not own its table" and "holds only half the
+   messages" are the same fact, and a boolean named after the first would have kept hiding the second.
+
+Deliberately out of increment 1, in addition to the admin surface: **LISTEN/NOTIFY wake-up.** The trigger is
+created per table by v1's schema initialization, which the delegates do not run, so the split polls at its fixed
+interval with `QueuePollingOptimizer.None()`. Correct, and slower to wake than v1 with a `MultiTableChangeListener`
+configured — it belongs with increment 2, alongside the admin surface, since both need the composite to own
+notification wiring rather than inherit it.
 
 ## 8. Investigation backlog — ideas not yet tried
 

@@ -129,6 +129,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final boolean                   useCentralizedMessageFetcher;
     private final boolean                   useOrderedUnorderedQuery;
     private final OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy;
+    private final Role                            role;
     private final boolean                   useBatchedFetch;
     private final int                       batchedFetchSwitchThreshold;
     private final int                       batchedFetchWarnRowsThreshold;
@@ -513,8 +514,60 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                             int batchedFetchWarnRowsThreshold,
                             BatchedAcknowledgementSettings batchedAcknowledgementSettings,
                             OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy) {
+        this(unitOfWorkFactory, jsonSerializer, sharedQueueTableName, multiTableChangeListener, queuePollingOptimizerFactory,
+             transactionalMode, messageHandlingTimeout, useCentralizedMessageFetcher, centralizedMessageFetcherPollingInterval,
+             centralizedQueuePollingOptimizerFactory, useOrderedUnorderedQuery, useBatchedFetch, batchedFetchSwitchThreshold,
+             batchedFetchWarnRowsThreshold, batchedAcknowledgementSettings, orderedMessageDuplicateStrategy, Role.STANDALONE);
+    }
+
+    /**
+     * Whether this instance is the whole {@link DurableQueues} or one of the two tables behind a
+     * {@link PostgresqlSplitDurableQueues}.
+     * <p>
+     * Two things follow from it, and they are the same fact seen twice: a delegate does not own its table, and a
+     * delegate holds only half the messages.
+     */
+    enum Role {
+        /**
+         * Owns its table and holds every message queued through it.
+         */
+        STANDALONE,
+        /**
+         * One of the two tables behind a {@link PostgresqlSplitDurableQueues}.
+         * <p>
+         * The composite creates both tables itself so it can give each the per-mode index set the evidence
+         * supports rather than the shared table's - see {@code docs/durable-queues-implementation-plan.md} §7c -
+         * so a delegate must not run the DDL. And because a {@link QueueEntryId} carries no delivery mode, the
+         * composite addresses a message by trying both delegates; the one that does not hold it is the expected
+         * case, not an error, so a miss is logged at debug rather than error.
+         */
+        SPLIT_DELEGATE
+    }
+
+    /**
+     * @param role whether this instance is standalone or one of the two tables behind a
+     *             {@link PostgresqlSplitDurableQueues} - see {@link Role}
+     */
+    PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
+                            JSONSerializer jsonSerializer,
+                            String sharedQueueTableName,
+                            MultiTableChangeListener<TableChangeNotification> multiTableChangeListener,
+                            Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory,
+                            TransactionalMode transactionalMode,
+                            Duration messageHandlingTimeout,
+                            boolean useCentralizedMessageFetcher,
+                            Duration centralizedMessageFetcherPollingInterval,
+                            Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
+                            boolean useOrderedUnorderedQuery,
+                            boolean useBatchedFetch,
+                            int batchedFetchSwitchThreshold,
+                            int batchedFetchWarnRowsThreshold,
+                            BatchedAcknowledgementSettings batchedAcknowledgementSettings,
+                            OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy,
+                            Role role) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
         this.orderedMessageDuplicateStrategy = requireNonNull(orderedMessageDuplicateStrategy, "No orderedMessageDuplicateStrategy provided");
+        this.role = requireNonNull(role, "No role provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer");
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
@@ -580,14 +633,50 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         initializeQueueTables();
     }
 
-    private void initializeQueueTables() {
-        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
+    /**
+     * Teaches the shared {@link org.jdbi.v3.core.Jdbi} how to bind and read {@link QueueName} and
+     * {@link QueueEntryId}.
+     * <p>
+     * Deliberately <b>outside</b> the {@link Role} guard below: this is not schema initialization. Without
+     * these no statement this instance issues can bind a queue name or map one back, whether or not this instance
+     * owns the DDL - and {@link PostgresqlSplitDurableQueues} runs its delegates with the DDL turned off. Having
+     * them inside the guard made every by-queue-name read on the split fail with
+     * {@code NoSuchMapperException: No mapper registered for type QueueName}.
+     */
+    private void registerJdbiTypeMappers() {
         unitOfWorkFactory.usingUnitOfWork(handleAwareUnitOfWork -> {
-            PostgresqlUtil.acquireBootstrapLock(handleAwareUnitOfWork.handle());
             handleAwareUnitOfWork.handle().getJdbi().registerArgument(new QueueNameArgumentFactory());
             handleAwareUnitOfWork.handle().getJdbi().registerColumnMapper(new QueueNameColumnMapper());
             handleAwareUnitOfWork.handle().getJdbi().registerArgument(new QueueEntryIdArgumentFactory());
             handleAwareUnitOfWork.handle().getJdbi().registerColumnMapper(new QueueEntryIdColumnMapper());
+        });
+    }
+
+    /**
+     * Reports an operation that addressed a {@link QueueEntryId} this table does not hold.
+     * <p>
+     * An error for a {@link Role#STANDALONE} instance, where it means the message is gone. Only debug for a
+     * {@link Role#SPLIT_DELEGATE}, where the composite addresses every id at both delegates and exactly one of
+     * them is expected to miss - logged as an error, an ordinary ordered-message retry would produce a spurious
+     * ERROR line on every single delivery.
+     */
+    private void logMessageNotFound(String message, QueueEntryId queueEntryId) {
+        if (role == Role.SPLIT_DELEGATE) {
+            log.debug(message + " - this table does not hold it", queueEntryId);
+        } else {
+            log.error(message, queueEntryId);
+        }
+    }
+
+    private void initializeQueueTables() {
+        registerJdbiTypeMappers();
+        if (role == Role.SPLIT_DELEGATE) {
+            log.debug("Skipping schema initialization for '{}' - the composite that owns it creates it", sharedQueueTableName);
+            return;
+        }
+        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
+        unitOfWorkFactory.usingUnitOfWork(handleAwareUnitOfWork -> {
+            PostgresqlUtil.acquireBootstrapLock(handleAwareUnitOfWork.handle());
             handleAwareUnitOfWork.handle().execute(durableQueuesSql.getCreateQueueTableSql()
                                                   );
             log.info("Ensured Durable Queues table '{}' exists", sharedQueueTableName);
@@ -1283,7 +1372,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                        log.debug("Marked Message with id '{}' for Retry at {}. Message entry after update: {}", operation.queueEntryId, nextDeliveryTimestamp, result.get());
                                                        return result;
                                                    } else {
-                                                       log.error("Failed to Mark Message with id '{}' for Retry", operation.queueEntryId);
+                                                       logMessageNotFound("Failed to Mark Message with id '{}' for Retry", operation.queueEntryId);
                                                        return Optional.<QueuedMessage>empty();
                                                    }
                                                }).proceed();
@@ -1307,7 +1396,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                        log.debug("Marked message with id '{}' as Dead Letter Message. Message entry after update: {}", operation.queueEntryId, result.get());
                                                        return result;
                                                    } else {
-                                                       log.error("Failed to Mark as Message message with id '{}' as Dead Letter Message", operation.queueEntryId);
+                                                       logMessageNotFound("Failed to Mark as Message message with id '{}' as Dead Letter Message", operation.queueEntryId);
                                                        return Optional.<QueuedMessage>empty();
                                                    }
                                                }).proceed();
@@ -1330,7 +1419,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                        log.debug("Marked message with id '{}' as Dead Letter Message (direct, no return)", operation.queueEntryId);
                                                        return true;
                                                    } else {
-                                                       log.error("Failed to Mark message with id '{}' as Dead Letter Message (direct)", operation.queueEntryId);
+                                                       logMessageNotFound("Failed to Mark message with id '{}' as Dead Letter Message (direct)", operation.queueEntryId);
                                                        return false;
                                                    }
                                                }).proceed();
@@ -1369,7 +1458,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                  updateResult);
                                                        return result;
                                                    } else {
-                                                       log.error("Failed to resurrect Dead Letter Message with id '{}'", operation.queueEntryId);
+                                                       logMessageNotFound("Failed to resurrect Dead Letter Message with id '{}'", operation.queueEntryId);
                                                        return Optional.<QueuedMessage>empty();
                                                    }
                                                }).proceed();
@@ -1788,31 +1877,96 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                         Map<QueueName, Integer> availableWorkerSlotsPerQueue,
                                                         boolean useOrderedUnorderedQuery) {
         log.trace("Fetching batch of messages for queues: {}", queueNames);
-        if (queueNames.isEmpty()) {
+        var activeQueues = selectQueuesReadyForPolling(queueNames, availableWorkerSlotsPerQueue, durableQueueConsumers);
+        if (activeQueues.isEmpty()) {
             return Collections.emptyList();
         }
 
+        var messages = claimNextBatchOfMessages(activeQueues, excludeKeysPerQueue, availableWorkerSlotsPerQueue, useOrderedUnorderedQuery);
+        reportPollingOutcome(activeQueues, messages, durableQueueConsumers);
+        return messages;
+    }
+
+    /**
+     * The queues a poll should actually visit: those with a worker slot free, a registered consumer, and an
+     * optimizer that is not backing off.
+     * <p>
+     * Separated from the claim below because the two belong to different layers, and {@link PostgresqlSplitDurableQueues}
+     * needs exactly that separation: it owns the consumer registry and the optimizers while its two storage
+     * delegates own the tables, so it must be able to decide <em>which</em> queues to poll once and then claim
+     * from both tables. Left inside the claim, each delegate would consult its own (empty) registry and skip
+     * every queue.
+     */
+    static List<QueueName> selectQueuesReadyForPolling(Collection<QueueName> queueNames,
+                                                       Map<QueueName, Integer> availableWorkerSlotsPerQueue,
+                                                       Map<QueueName, CentralizedMessageFetcherDurableQueueConsumer> consumers) {
+        return queueNames.stream()
+                         .filter(queueName -> {
+                             var slots = availableWorkerSlotsPerQueue.get(queueName);
+                             if (slots == null || slots <= 0) {
+                                 log.trace("[{}] Skipping queue as it has no available worker slots", queueName);
+                                 return false;
+                             }
+                             return true;
+                         })
+                         .filter(queueName -> {
+                             var consumer = consumers.get(queueName);
+                             if (consumer == null) {
+                                 log.trace("[{}] Skipping queue as it has no consumer", queueName);
+                                 return false;
+                             }
+                             var skip = consumer.getQueuePollingOptimizer().shouldSkipPolling();
+                             if (skip) {
+                                 log.trace("[{}] skipping centralized polling due to backoff", queueName);
+                             }
+                             return !skip;
+                         })
+                         .toList();
+    }
+
+    /**
+     * Feeds each polled queue's optimizer with what the poll returned for it, so an empty queue backs off and a
+     * busy one speeds up.
+     */
+    static void reportPollingOutcome(Collection<QueueName> activeQueues,
+                                     List<QueuedMessage> messages,
+                                     Map<QueueName, CentralizedMessageFetcherDurableQueueConsumer> consumers) {
+        var byQueue = messages.stream().collect(Collectors.groupingBy(QueuedMessage::getQueueName));
+        for (var queueName : activeQueues) {
+            var consumer = consumers.get(queueName);
+            if (consumer == null) {
+                continue;
+            }
+            var optimizer        = consumer.getQueuePollingOptimizer();
+            var messagesForQueue = byQueue.getOrDefault(queueName, Collections.emptyList());
+            if (messagesForQueue.isEmpty()) {
+                optimizer.queuePollingReturnedNoMessages();
+            } else {
+                optimizer.queuePollingReturnedMessages(messagesForQueue);
+            }
+        }
+    }
+
+    /**
+     * Claims up to the given number of messages per queue from <b>this</b> table, one statement per queue.
+     * <p>
+     * Pure storage: the caller has already decided which queues to visit and is responsible for feeding the
+     * polling optimizers afterwards (see {@link #selectQueuesReadyForPolling} and {@link #reportPollingOutcome}).
+     */
+    List<QueuedMessage> claimNextBatchOfMessages(List<QueueName> activeQueues,
+                                                 Map<QueueName, Set<String>> excludeKeysPerQueue,
+                                                 Map<QueueName, Integer> availableWorkerSlotsPerQueue,
+                                                 boolean useOrderedUnorderedQuery) {
         try {
             return unitOfWorkFactory.withUnitOfWork(uow -> {
-                resetMessagesStuckBeingDeliveredAcrossMultipleQueues(queueNames);
+                resetMessagesStuckBeingDeliveredAcrossMultipleQueues(activeQueues);
 
                 var now         = Instant.now();
                 var allMessages = new ArrayList<QueuedMessage>();
 
-                for (var queueName : queueNames) {
+                for (var queueName : activeQueues) {
                     var availableWorkerSlotsForThisQueue = availableWorkerSlotsPerQueue.get(queueName);
                     if (availableWorkerSlotsForThisQueue == null || availableWorkerSlotsForThisQueue <= 0) {
-                        log.trace("[{}] Skipping queue as it has no available worker slots", queueName);
-                        continue;
-                    }
-                    var consumer = durableQueueConsumers.get(queueName);
-                    if (consumer == null) {
-                        log.trace("[{}] Skipping queue as it has no consumer", queueName);
-                        continue;
-                    }
-                    var optimizer = consumer.getQueuePollingOptimizer();
-                    if (optimizer.shouldSkipPolling()) {
-                        log.trace("[{}] skipping centralized polling", queueName);
                         continue;
                     }
 
@@ -1856,18 +2010,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
 
                     log.debug("[{}] Batch fetched {} messages with {} slots available",
                               queueName, messagesForQueue.size(), availableWorkerSlotsForThisQueue);
-                    if (messagesForQueue.isEmpty()) {
-                        optimizer.queuePollingReturnedNoMessages();
-                        log.trace("[{}] No messages fetched for this queue", queueName);
-                    } else {
-                        optimizer.queuePollingReturnedMessages(messagesForQueue);
-                        log.trace("[{}] Fetched {} messages for this queue", queueName, messagesForQueue.size());
-                    }
                     allMessages.addAll(messagesForQueue);
                 }
 
                 log.debug("Batch fetched {} messages for {} queues: {}",
-                          allMessages.size(), queueNames.size(), queueNames);
+                          allMessages.size(), activeQueues.size(), activeQueues);
                 return allMessages;
             });
         } catch (Exception e) {
@@ -1901,25 +2048,26 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         log.trace("Fetching batch of messages for queues: {}", queueNames);
 
         // 1) Filter out queues with no slots or that should skip polling
-        List<QueueName> activeQueues = queueNames.stream()
-                                                 .filter(queueName -> availableWorkerSlotsPerQueue.getOrDefault(queueName, 0) > 0)
-                                                 .filter(queueName -> {
-                                                     var durableQueueConsumer = durableQueueConsumers.get(queueName);
-                                                     if (durableQueueConsumer == null) {
-                                                         log.trace("[{}] Skipping queue as it has no consumer", queueName);
-                                                         return false;
-                                                     }
-                                                     var     queuePollingOptimizer = durableQueueConsumer.getQueuePollingOptimizer();
-                                                     boolean skip                  = queuePollingOptimizer.shouldSkipPolling();
-                                                     if (skip) log.trace("[{}] skipping due to backoff", queueName);
-                                                     return !skip;
-                                                 })
-                                                 .toList();
+        var activeQueues = selectQueuesReadyForPolling(queueNames, availableWorkerSlotsPerQueue, durableQueueConsumers);
 
         if (activeQueues.isEmpty()) {
             return Collections.emptyList();
         }
 
+        var messages = claimNextBatchOfMessagesBatched(activeQueues, excludeKeysPerQueue, availableWorkerSlotsPerQueue);
+        reportPollingOutcome(activeQueues, messages, durableQueueConsumers);
+        return messages;
+    }
+
+    /**
+     * Claims messages for all the given queues from <b>this</b> table in a single statement.
+     * <p>
+     * Pure storage, as for {@link #claimNextBatchOfMessages}: the caller has already selected the queues and owns
+     * the optimizer feedback.
+     */
+    List<QueuedMessage> claimNextBatchOfMessagesBatched(List<QueueName> activeQueues,
+                                                        Map<QueueName, Set<String>> excludeKeysPerQueue,
+                                                        Map<QueueName, Integer> availableWorkerSlotsPerQueue) {
         try {
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(activeQueues);
@@ -1975,29 +2123,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     }
                 }
 
-                Map<QueueName, List<QueuedMessage>> byQueue = messages.stream()
-                                                                      .collect(Collectors.groupingBy(QueuedMessage::getQueueName));
-
-                for (var queueName : activeQueues) {
-                    var durableQueueConsumer = durableQueueConsumers.get(queueName);
-                    if (durableQueueConsumer == null) {
-                        log.trace("[{}] Skipping queue as it has no consumer", queueName);
-                        continue;
-                    }
-                    var                 queuePollingOptimizer = durableQueueConsumer.getQueuePollingOptimizer();
-                    List<QueuedMessage> messagesForQueue      = byQueue.getOrDefault(queueName, Collections.emptyList());
-                    if (messagesForQueue.isEmpty()) {
-                        queuePollingOptimizer.queuePollingReturnedNoMessages();
-                    } else {
-                        queuePollingOptimizer.queuePollingReturnedMessages(messagesForQueue);
-                    }
-                }
-
                 log.debug("Batch fetched {} messages across {} queues: {}",
                           messages.size(),
                           activeQueues.size(),
-                          byQueue.entrySet().stream()
-                                 .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().size())));
+                          messages.stream().collect(Collectors.groupingBy(QueuedMessage::getQueueName, Collectors.counting())));
 
                 return messages;
             });
