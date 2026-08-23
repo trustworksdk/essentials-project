@@ -296,6 +296,32 @@ three** — see §16), transparent write routing, both tables read by every quer
 `getQueueNameFor(QueueEntryId)` answering across them. The admin surface is increment 2, and is where the
 review boundary sits.
 
+## 7b. S3 design decision: by-id operations query both tables, and the id stays opaque
+
+Splitting storage creates one genuinely new problem. The `DurableQueues` SPI addresses messages by
+`QueueEntryId` **alone** — `acknowledgeMessageAsHandled`, `deleteMessage`, `getQueuedMessage`, `retryMessage`,
+`markAsDeadLetterMessage`, `resurrectDeadLetterMessage`, `getQueueNameFor` — so with two tables the store no
+longer knows which one an id lives in. This is the same structural issue that sank partitioning by `queue_name`
+(§12), so it deserves an explicit answer rather than an assumption.
+
+**Rejected: encoding the delivery mode into the `QueueEntryId`.** A generated id could be prefixed so every
+by-id operation routes to exactly one table in O(1). It is tempting and it is the wrong trade: it makes an
+opaque public value type structured, so ids become a format with rules, and anything that ever round-trips or
+constructs one inherits those rules. The upside it buys is one statement rather than two.
+
+**Chosen: try both tables, in one transaction.** One extra statement per by-id operation, and none of the
+statements are per-message any more where it counts — batched acknowledgement (shipped) means the hot path is
+`id = ANY(...)` against each table, so the cost is two statements *per batch*, not per message.
+
+The reasoning is the central finding of this whole investigation: **the transaction is what costs, not the
+statement.** §7 measured one transaction per acknowledgement at 16.5× against one per batch, and §14 measured the
+statistics trigger's extra per-row `INSERT` at 2.80× — but two statements inside a single transaction is still one
+transaction. Paying a statement to keep a public type opaque is the right direction, and it is the direction the
+measurements support rather than merely the tidier one.
+
+Consequence for `getQueueNameFor(QueueEntryId)`, which the v2 plan flagged as the hard one: it is simply the same
+dual lookup, and needs no special handling.
+
 ## 8. Investigation backlog — ideas not yet tried
 
 Everything that has measured as significant reduced to two levers: **transactions per message** (§7: 16.5× on

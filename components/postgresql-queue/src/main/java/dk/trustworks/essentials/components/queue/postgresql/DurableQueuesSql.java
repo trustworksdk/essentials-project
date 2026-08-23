@@ -844,6 +844,111 @@ public class DurableQueuesSql {
     }
 
     /**
+     * Table DDL for the split <b>unordered</b> queue table: {@link #getCreateQueueTableSql()} without the
+     * {@code key}, {@code key_order} or {@code delivery_mode} columns, none of which mean anything when every row
+     * in the table is unordered by construction.
+     * <p>
+     * Dropping the columns is not cosmetic. It is what allows a single secondary index here where the shared
+     * table needs several, and index count is the whole of the split's measured 1.38x - see
+     * {@code docs/durable-queues-redesign-measurements.md} §1 and §8.
+     *
+     * @return DDL creating the unordered queue table
+     */
+    public String getCreateUnorderedQueueTableSql() {
+        return bind("""
+                    CREATE TABLE IF NOT EXISTS {:tableName} (
+                    id                     TEXT PRIMARY KEY,
+                    queue_name             TEXT NOT NULL,
+                    message_payload        JSONB NOT NULL,
+                    message_payload_type   TEXT NOT NULL,
+                    added_ts               TIMESTAMPTZ NOT NULL,
+                    next_delivery_ts       TIMESTAMPTZ,
+                    delivery_ts            TIMESTAMPTZ DEFAULT NULL,
+                    total_attempts         INTEGER DEFAULT 0,
+                    redelivery_attempts    INTEGER DEFAULT 0,
+                    last_delivery_error    TEXT DEFAULT NULL,
+                    is_being_delivered     BOOLEAN DEFAULT FALSE,
+                    is_dead_letter_message BOOLEAN NOT NULL DEFAULT FALSE,
+                    meta_data              JSONB DEFAULT NULL
+                    )
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * Table DDL for the split <b>ordered</b> queue table. {@code key} and {@code key_order} become
+     * {@code NOT NULL}, because a row here without them is meaningless - which is a guarantee the shared table
+     * cannot make, since it has to hold both kinds.
+     *
+     * @return DDL creating the ordered queue table
+     */
+    public String getCreateOrderedQueueTableSql() {
+        return bind("""
+                    CREATE TABLE IF NOT EXISTS {:tableName} (
+                    id                     TEXT PRIMARY KEY,
+                    queue_name             TEXT NOT NULL,
+                    message_payload        JSONB NOT NULL,
+                    message_payload_type   TEXT NOT NULL,
+                    added_ts               TIMESTAMPTZ NOT NULL,
+                    next_delivery_ts       TIMESTAMPTZ,
+                    delivery_ts            TIMESTAMPTZ DEFAULT NULL,
+                    total_attempts         INTEGER DEFAULT 0,
+                    redelivery_attempts    INTEGER DEFAULT 0,
+                    last_delivery_error    TEXT DEFAULT NULL,
+                    is_being_delivered     BOOLEAN DEFAULT FALSE,
+                    is_dead_letter_message BOOLEAN NOT NULL DEFAULT FALSE,
+                    meta_data              JSONB DEFAULT NULL,
+                    key                    TEXT   NOT NULL,
+                    key_order              BIGINT NOT NULL
+                    )
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * The unordered table's only ready-scan index. One index, against the shared table's several, because there
+     * is no ordered traffic here to serve.
+     *
+     * @return DDL creating the unordered ready index
+     */
+    public String getCreateSplitUnorderedReadyIndexSql() {
+        return bind("""
+                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_ready ON {:tableName} (queue_name, next_delivery_ts) INCLUDE (id)
+                      WHERE NOT is_dead_letter_message AND NOT is_being_delivered
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * The ordered table's head-scan index.
+     * <p>
+     * Two indexes on this table, not the three v1 carries for ordered traffic: §17 measured
+     * {@code idx_*_ordered_ready} at zero scans at both 8 and 200 ordered keys, and {@code idx_*_ordered_msg}
+     * superseded by the unique index once that exists. Inheriting v1's set on inspection is exactly how the
+     * redundant one came to be there.
+     *
+     * @return DDL creating the ordered head index
+     */
+    public String getCreateSplitOrderedHeadIndexSql() {
+        return bind("""
+                    CREATE INDEX IF NOT EXISTS idx_{:tableName}_head ON {:tableName} (queue_name, key_order, next_delivery_ts) INCLUDE (id)
+                      WHERE NOT is_dead_letter_message AND NOT is_being_delivered
+                    """,
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * The ordered table's per-key index, unique when the duplicate strategy is {@code REJECT}. Non-partial on
+     * key, unlike the shared table's version, because every row here has one.
+     *
+     * @param unique whether to enforce at most one message per {@code (queue_name, key, key_order)}
+     * @return DDL creating the ordered per-key index
+     */
+    public String getCreateSplitOrderedKeyIndexSql(boolean unique) {
+        return bind("CREATE " + (unique ? "UNIQUE " : "") + "INDEX IF NOT EXISTS idx_{:tableName}_key ON {:tableName} (queue_name, key, key_order)",
+                    arg("tableName", sharedQueueTableName));
+    }
+    /**
      * SQL statement for acknowledging several messages as handled in one statement.
      * <p>
      * Same predicate as {@link #getAcknowledgeMessageAsHandledSql()}, widened to a list. The
