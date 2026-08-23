@@ -83,6 +83,15 @@ Acknowledgement gets **46% more expensive** (702 → 1023 ms), because the curso
 as the message deleted. That is a real cost and it is a good trade for eight seconds of claim time — but it
 should not be quietly dropped from the summary.
 
+**Superseded — see measurements §8.** The cursor arm measured here is **not correct**: its claim releases a
+key's successor while the predecessor is in flight, and its acknowledgement can advance past a dead-lettered
+message and lose it permanently. Both are reproduced by test. Corrected, the cursor's end-to-end win against
+the barrier is **1.54×** rather than 2.38×, and its claim **2.18×** rather than 3.75×; gap-safety also puts
+back the non-partial `(queue_name, key, key_order)` index the design claimed to delete. The case for the
+cursor now rests on it unlocking batched ordered acknowledgement (~2.73× when each design is compared at the
+acknowledgement cost it can actually achieve), not on a faster claim. Read the table below as the original
+measurement, not as current guidance.
+
 **This reorders the whole v2 case.** The load-bearing change is the cursor, not the table split:
 
 | Change | Ordered workload |

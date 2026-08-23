@@ -97,7 +97,7 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
         for (var mode : ConsumerMode.values()) {
             for (var repetition = 0; repetition < repetitions; repetition++) {
                 for (var arm : Arm.values()) {
-                    if (arm == Arm.V2_CURSOR && mode == ConsumerMode.UNORDERED) {
+                    if ((arm == Arm.V2_CURSOR || arm == Arm.V2_CURSOR_SAFE) && mode == ConsumerMode.UNORDERED) {
                         // A per-key cursor has nothing to track without keys.
                         continue;
                     }
@@ -149,6 +149,13 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
                 statements.addAll(QueueSchemaPrototype.cursorKeyStateDdl(keyStateTable));
                 yield statements;
             }
+            case V2_CURSOR_SAFE -> {
+                // One index more than the unsafe arm: the per-key in-flight check needs an index over
+                // in-flight rows, which the cursor table's partial index deliberately excludes.
+                var statements = new ArrayList<String>(QueueSchemaPrototype.cursorSafeOrderedTableDdl(table, 100));
+                statements.addAll(QueueSchemaPrototype.cursorKeyStateDdl(keyStateTable));
+                yield statements;
+            }
         };
         // Only the shared table needs to tell the two delivery modes apart.
         var sharedTable = arm == Arm.V1_SHARED || arm == Arm.V1_SHARED_FILLFACTOR_80;
@@ -182,7 +189,7 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
         });
         var insertMillis = millisSince(insertStart);
 
-        if (arm == Arm.V2_CURSOR) {
+        if (arm == Arm.V2_CURSOR || arm == Arm.V2_CURSOR_SAFE) {
             // One cursor row per key. A real implementation would create it on first enqueue for the key;
             // seeding it here keeps that cost out of the insert timing, which is not what this arm is about.
             unitOfWorkFactory.usingUnitOfWork(unitOfWork -> unitOfWork.handle()
@@ -199,15 +206,18 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
         // accumulating timers so their costs stay attributable.
         var claimSql = switch (arm) {
             case V2_CURSOR -> QueueSchemaPrototype.claimOrderedViaCursorSql(table, keyStateTable);
+            case V2_CURSOR_SAFE -> QueueSchemaPrototype.claimOrderedViaSafeCursorSql(table, keyStateTable);
             default -> mode == ConsumerMode.UNORDERED
                     ? QueueSchemaPrototype.claimUnorderedSql(table, sharedTable)
                     : QueueSchemaPrototype.claimOrderedSql(table, sharedTable);
         };
         // The cursor arm's acknowledgement deletes the rows and advances the affected cursors in one
         // statement - the operation the barrier design cannot express at all.
-        var deleteSql = arm == Arm.V2_CURSOR
-                ? QueueSchemaPrototype.ackOrderedViaCursorSql(table, keyStateTable)
-                : QueueSchemaPrototype.deleteBatchSql(table);
+        var deleteSql = switch (arm) {
+            case V2_CURSOR -> QueueSchemaPrototype.ackOrderedViaCursorSql(table, keyStateTable);
+            case V2_CURSOR_SAFE -> QueueSchemaPrototype.ackOrderedViaSafeCursorSql(table, keyStateTable);
+            default -> QueueSchemaPrototype.deleteBatchSql(table);
+        };
         var claimedRows = 0;
         var claimNanos  = 0L;
         var ackNanos    = 0L;
@@ -296,7 +306,8 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
     private List<Map<String, Object>> buildComparisons(List<CaseResult> results) {
         var comparisons = new ArrayList<Map<String, Object>>();
         for (var mode : ConsumerMode.values()) {
-            var cursor = medianOf(results, Arm.V2_CURSOR, mode);
+            for (var cursorArm : List.of(Arm.V2_CURSOR, Arm.V2_CURSOR_SAFE)) {
+            var cursor = medianOf(results, cursorArm, mode);
             if (cursor != null) {
                 for (var arm : List.of(Arm.V1_SHARED, Arm.V2_SPLIT)) {
                     var baseline = medianOf(results, arm, mode);
@@ -304,7 +315,7 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
                     var comparison = new LinkedHashMap<String, Object>();
                     comparison.put("mode", mode.name());
                     comparison.put("baselineArm", arm.name());
-                    comparison.put("candidateArm", Arm.V2_CURSOR.name());
+                    comparison.put("candidateArm", cursorArm.name());
                     comparison.put("baselineClaimMillis", baseline.claim());
                     comparison.put("cursorClaimMillis", cursor.claim());
                     comparison.put("cursorClaimSpeedup", cursor.claim() == 0 ? null : (double) baseline.claim() / cursor.claim());
@@ -315,6 +326,7 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
                     comparison.put("cursorTotalSpeedup", cursor.total() == 0 ? null : (double) baseline.total() / cursor.total());
                     comparisons.add(comparison);
                 }
+            }
             }
             var split = medianOf(results, Arm.V2_SPLIT, mode);
             if (split == null) continue;
@@ -398,8 +410,21 @@ public class QueueSchemaWriteCostScenario implements LabScenario {
         /**
          * Ordered messages only: the split ordered table with its per-key barrier replaced by an explicit
          * progress cursor. Skipped for UNORDERED, where a per-key cursor has nothing to track.
+         * <p>
+         * <b>Retained as measured, and it is not correct.</b> Its claim can hand out a key's next-but-one
+         * while the next is still in flight, and its acknowledgement can advance a cursor past a retried or
+         * dead-lettered message and lose it permanently. Neither shows up here because the harness is
+         * single-connection with claim and acknowledge strictly alternating. It stays in the matrix only
+         * because its numbers have been quoted and {@code V2_CURSOR_SAFE} needs something to be compared
+         * against.
          */
-        V2_CURSOR
+        V2_CURSOR,
+        /**
+         * The cursor with both correctness holes closed: a key with anything in flight yields nothing, and the
+         * cursor advance is clamped so it can never pass a row still present for that key. This is the arm
+         * that says whether the cursor is worth implementing.
+         */
+        V2_CURSOR_SAFE
     }
 
     private record TableStats(int indexCount, long heapBytes, long indexBytes, long updates, long hotUpdates) {

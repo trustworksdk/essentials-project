@@ -26,6 +26,9 @@ the ratios are the result.
 | Acknowledgement granularity alone | **16.5×** [10.3–24.2] — the half production still pays | §7 |
 | Framework overhead over raw SQL | **Not established** — the comparison is confounded, see §7 | §7 |
 | Consequence for the cursor's 2.64× | **Collapses to ≈1.2× unless acknowledgement is batched first** | §7 |
+| The measured cursor prototype | **Not correct** — two faults, both reproduced against the SQL | §8 |
+| Cursor's win once corrected | End-to-end **2.38× → 1.54×**, claim **3.75× → 2.18×** | §8 |
+| Why the cursor is still worth building | It unlocks batched ordered acks, worth **~2.7×** end to end — not its faster claim | §8 |
 
 ## 1. Ordered/unordered query split — confirmed, and already shipped behind a flag
 
@@ -403,3 +406,96 @@ than weakening it (1.26× at 3 reps, 1.21× at 9).
   three arms, 6.56 where only 2.0 is possible) because PostgreSQL flushes backend statistics asynchronously.
 - **Single-threaded, unordered, one node.** No consumer threading, no ordered barrier, no competing consumers.
   The transaction tax is a per-message constant so none of those should change it, but none were run.
+
+## 8. The cursor prototype is not correct, and what correctness costs it
+
+The cursor arm produced the largest number in this investigation — 4.0× on the ordered claim, 2.64× end to
+end — and the v2 design plan makes it the load-bearing change. Before implementing it, its SQL was read
+carefully and then tested. Both faults below are reproduced in
+`examples/essentials-performance-lab/.../QueueCursorCorrectnessIT`, as a passing case for the corrected
+statement and a passing case demonstrating the defect in the measured one, on the same fixture.
+
+### Fault 1 — the claim releases a successor while its predecessor is in flight
+
+`claimOrderedViaCursorSql` filters `is_being_delivered = FALSE` **inside** the per-key `LATERAL` lookup. While
+order 5 is in flight the cursor is still 4 and order 5 is excluded by the filter, so the lookup returns order
+**6**. Two worker threads on one node are enough to reach it; it is not a multi-node concern. The statement's
+own javadoc asserted the opposite ("while that row is in flight the key yields nothing"), which is not what
+the SQL does. The harness never exposed it because it is single-connection with claim and acknowledge strictly
+alternating, so nothing is ever in flight when a claim runs.
+
+### Fault 2 — the acknowledgement can skip a message permanently
+
+`ackOrderedViaCursorSql` sets `completed_through = MAX(key_order)` over the batch. With orders 5 and 7 handled
+and 6 dead-lettered, the cursor jumps to 7, and because the claim only looks *above* the cursor, order 6
+becomes unreachable — resurrecting it does nothing. That is message loss, not reordering, and it is a property
+the `NOT EXISTS` barrier has for free: a dead-lettered predecessor simply keeps blocking. The update was also
+unguarded, so a late acknowledgement could move a cursor backwards.
+
+### What the fixes cost — ORDERED, 50 000 messages, 1 000 keys, medians of 3
+
+| Arm | Insert | Claim | Ack | Total | Index bytes |
+|---|---|---|---|---|---|
+| v1 barrier | 910 ms | 2 084 ms | 156 ms | **3 150 ms** | 25.8 MB |
+| split ordered table | 675 ms | 1 921 ms | 154 ms | **2 750 ms** | 21.0 MB |
+| cursor, as measured (incorrect) | 513 ms | 555 ms | 257 ms | **1 325 ms** | 10.8 MB |
+| cursor, corrected | 609 ms | 955 ms | 475 ms | **2 039 ms** | 14.0 MB |
+
+Correctness costs the claim +72%, the acknowledgement +85%, and 30% more index bytes. Against the barrier the
+cursor goes from **2.38× to 1.54×** end to end, and its claim from **3.75× to 2.18×**.
+
+Three attempts were needed to get there, and each failure was informative rather than incidental:
+
+1. **A per-key `NOT EXISTS` over in-flight rows** for fault 1 — stateless, so nothing leaks if a process dies
+   and the existing stuck-message reset restores eligibility for free. This avoids the lease, expiry and
+   fence-token machinery of the design plan's §8 entirely, and it is cheap **provided** a partial index over
+   in-flight rows exists. The cursor table's only index is partial on `NOT is_being_delivered`, which by
+   construction excludes exactly the rows the check needs; without the extra index the arm ran over fifteen
+   minutes against three seconds.
+2. **Clamping the cursor advance** for fault 2, first written as `id NOT IN (<ids>)` over every row of the key.
+   That is quadratic in batch size — 128s against 250ms. Bounding the scan to the open interval between the
+   cursor and the acknowledged order fixed the shape.
+3. **The interval scan cannot use a partial index at all**, because it must deliberately see rows the claim
+   cannot take. It therefore needs a **non-partial** `(queue_name, key, key_order)` index — the very index the
+   barrier needs and the cursor design claimed to delete. Without it, 116s against 475ms, identically across
+   three repetitions.
+
+So gap-safety puts back one of the indexes the cursor was going to remove. The cursor still holds 14.0 MB
+against the barrier's 25.8 MB, but the "one secondary index instead of three" claim does not survive.
+
+One constraint turned out **not** to be needed. Acknowledging several of a key's messages in one statement
+degrades *conservatively* — the interval scan reads the pre-`DELETE` snapshot, so the rows being acknowledged
+still count as present and pull the clamp down. The cursor under-advances by a step; nothing is skipped, and
+the key resumes normally. An ordered batching implementation is therefore free to group by key or not.
+
+### Why the cursor is still worth building — but not for the stated reason
+
+Storage-only, the corrected cursor is 1.54× against the barrier, which on its own would not justify the
+migration. The case rests on §7 instead: ordered acknowledgement **cannot be batched under the barrier at all**
+(§2b — deferring it stalls the key, measured 0.82×), while the cursor records completion explicitly and can.
+Comparing each design at the acknowledgement cost it can actually achieve, and inflating the per-message
+acknowledgement by §7's measured 16.5×:
+
+| Ordered workload | Insert | Claim | Ack | Total |
+|---|---|---|---|---|
+| barrier, acks necessarily per-message | 910 ms | 2 084 ms | 156 × 16.5 = 2 574 ms | **5 568 ms** |
+| corrected cursor, acks batched | 609 ms | 955 ms | 475 ms | **2 039 ms** |
+
+**≈2.73×.** The cursor's value is that it makes ordered acknowledgement batching possible; its faster claim is
+a secondary benefit worth about 2.2×, not the 4.0× on record. That is a different justification from the one
+in the design plan, and it should be the one carried forward — it also means the cursor and batched
+acknowledgement are a single change with a single payoff, not two independent ones.
+
+### Caveats
+
+- **50 000 messages, not 200 000.** The published cursor figures are at 200k; the full matrix with five
+  ordered arms exceeded a 25-minute budget twice, so this run is internally like-for-like at 50k but its
+  absolute numbers are not comparable to §1–§6. The ratios are the result, and the three repetitions agree
+  closely.
+- **Storage-only, single-connection.** Same harness limitation as the rest of the write-cost work: no
+  consumers, no interceptors, no unit of work per message, and therefore no concurrency. Fault 1 is a
+  concurrency fault, so it is worth restating that this harness cannot detect that class of defect at all —
+  it was found by reading and confirmed by a dedicated test.
+- **The corrected statements are prototype SQL, not an implementation.** Nothing here addresses the key-state
+  table's migration, backfill, or the mixed-version rollout in which some pods claim via the barrier and
+  others via the cursor.

@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.examples.perflab.queuedesign;
 
-import java.util.List;
+import java.util.*;
 
 /**
  * Throwaway schema prototypes for the write-cost comparison driven by {@code QueueSchemaWriteCostScenario}.
@@ -337,6 +337,169 @@ public final class QueueSchemaPrototype {
                  FROM highest
                 WHERE ks.queue_name = highest.queue_name
                   AND ks.key        = highest.key
+               """.formatted(messageTable, keyStateTable);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Cursor variant, corrected. The arm above is kept as measured, because its numbers are quoted; this
+    // one closes two correctness holes in it and exists to price the fix.
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * Ordered table for the corrected cursor: {@link #cursorOrderedTableDdl} plus one partial index on the
+     * in-flight rows.
+     * <p>
+     * The correction's per-key {@code NOT EXISTS} looks for rows with {@code is_being_delivered = TRUE}, and
+     * the cursor table's only index is partial on {@code NOT is_being_delivered} — so it excludes, by
+     * construction, exactly the rows the check needs. Without this index the check falls back to a scan per
+     * key and the arm becomes unmeasurably slow: at 1000 keys it ran for over fifteen minutes on a case every
+     * other arm finishes in under twenty seconds.
+     * <p>
+     * The index is cheap to hold — only in-flight rows are in it, so its size is bounded by the number of
+     * worker slots rather than by the backlog — but it is not free to maintain: a row enters it on claim and
+     * leaves it on acknowledgement, which is index write amplification on the hot path, the very thing the
+     * cursor design was reducing. Two secondary indexes still beats the barrier's three.
+     */
+    public static List<String> cursorSafeOrderedTableDdl(String table, int fillFactor) {
+        var statements = new ArrayList<String>(cursorOrderedTableDdl(table, fillFactor));
+        statements.add("CREATE INDEX idx_" + table + "_b ON " + table + " (queue_name, key) WHERE is_being_delivered");
+        // Non-partial, and that is the point. The clamp's interval scan must see rows the claim cannot take -
+        // dead-lettered, or not yet due - so it carries no predicate on those columns, and a partial index can
+        // therefore never serve it. Without this the MIN falls back to a sequential scan of the whole message
+        // table per key per round: measured at 116s against 250ms, identically across three repetitions.
+        //
+        // Note what this costs the design. The cursor's headline advantage over the barrier was one secondary
+        // index instead of three, and less than half the index bytes. Gap-safety puts back the very index -
+        // (queue_name, key, key_order) over all rows - that the barrier needed and the cursor claimed to delete.
+        statements.add("CREATE INDEX idx_" + table + "_c ON " + table + " (queue_name, key, key_order)");
+        return List.copyOf(statements);
+    }
+
+    /**
+     * Per-key exclusive cursor claim.
+     *
+     * <h2>What was wrong with {@link #claimOrderedViaCursorSql}</h2>
+     * That statement filters {@code is_being_delivered = FALSE} <em>inside</em> the per-key LATERAL lookup, so
+     * while order 5 is in flight — cursor still at 4, row excluded by the filter — the lookup returns order
+     * <b>6</b>. A second claimer for the same key therefore gets 6 while 5 is still being handled, and per-key
+     * ordering is violated under any concurrency at all: two worker threads on one node are enough. Its
+     * javadoc asserts the opposite ("while that row is in flight the key yields nothing"), which is not what
+     * the SQL does. The prototype never surfaced it because it runs single-connection with claim and
+     * acknowledge strictly alternating, so nothing is ever in flight at the moment a claim runs.
+     *
+     * <h2>The fix, and why it is this one</h2>
+     * An explicit {@code NOT EXISTS} over in-flight rows for the key. It is stateless: nothing is written at
+     * claim time, so nothing can leak if a process dies mid-handling, and the existing
+     * {@code resetMessagesStuckBeingDelivered} already restores eligibility by clearing
+     * {@code is_being_delivered}.
+     * <p>
+     * The alternative — an {@code in_flight} marker on the key-state row, locked {@code FOR UPDATE SKIP
+     * LOCKED} — is one indexed row per key rather than a subquery, so probably cheaper. But it is a lease, and
+     * a lease needs expiry, recovery and a fence token to be safe under a partitioned node; that is the whole
+     * of the v2 design plan §8. If the stateless form is fast enough, none of §8 is needed, which is worth
+     * establishing before taking on that machinery.
+     */
+    public static String claimOrderedViaSafeCursorSql(String messageTable, String keyStateTable) {
+        return """
+               WITH candidate AS (
+                 SELECT head.id
+                   FROM %2$s ks
+                   CROSS JOIN LATERAL (
+                     SELECT m.id
+                       FROM %1$s m
+                      WHERE m.queue_name             = ks.queue_name
+                        AND m.key                    = ks.key
+                        AND m.key_order              > ks.completed_through
+                        AND m.is_dead_letter_message = FALSE
+                        AND m.is_being_delivered     = FALSE
+                        AND m.next_delivery_ts      <= :now
+                      ORDER BY m.key_order
+                      LIMIT 1
+                   ) head
+                  WHERE ks.queue_name = :queueName
+                    -- The correction: a key with anything in flight yields nothing at all, rather than
+                    -- yielding its next-but-one.
+                    AND NOT EXISTS (
+                      SELECT 1
+                        FROM %1$s inflight
+                       WHERE inflight.queue_name         = ks.queue_name
+                         AND inflight.key                = ks.key
+                         AND inflight.is_being_delivered = TRUE
+                    )
+                  LIMIT :limit
+               )
+               UPDATE %1$s q
+                  SET total_attempts     = q.total_attempts + 1,
+                      next_delivery_ts   = NULL,
+                      is_being_delivered = TRUE,
+                      delivery_ts        = :now
+                 FROM candidate c
+                WHERE q.id = c.id
+                  AND q.is_being_delivered = FALSE
+               RETURNING q.id
+               """.formatted(messageTable, keyStateTable);
+    }
+
+    /**
+     * Gap-safe cursor advance.
+     *
+     * <h2>What was wrong with {@link #ackOrderedViaCursorSql}</h2>
+     * It sets {@code completed_through = MAX(key_order)} over the acknowledged batch. Suppose orders 5 and 7
+     * for a key are handled while 6 is sitting in the table retried with a future {@code next_delivery_ts}, or
+     * dead-lettered. The cursor jumps to 7, and because the claim only ever looks <em>above</em> the cursor,
+     * order 6 becomes permanently invisible. That is message loss, not merely reordering — and it is a
+     * capability the {@code NOT EXISTS} barrier has for free, since a retried or dead-lettered predecessor
+     * simply keeps blocking its successors. The update was also unguarded, so a late acknowledgement carrying
+     * a lower maximum could move a cursor backwards.
+     *
+     * <h2>The fix</h2>
+     * Advance to the highest acknowledged order, but never past a row that is still present for that key, and
+     * never backwards:
+     * <pre>{@code GREATEST(current, LEAST(max_acknowledged, min_remaining - 1))}</pre>
+     * With per-key exclusivity from the claim above, a batch can hold at most one message per key, so
+     * {@code max_acknowledged} is that single message and the clamp is what keeps a dead-lettered or retried
+     * predecessor blocking. {@code LEFT JOIN} on the remaining-minimum so a key with nothing left still
+     * advances.
+     */
+    public static String ackOrderedViaSafeCursorSql(String messageTable, String keyStateTable) {
+        return """
+               WITH deleted AS (
+                 DELETE FROM %1$s WHERE id IN (<ids>) RETURNING id, queue_name, key, key_order
+               ), highest AS (
+                 SELECT queue_name, key, MAX(key_order) AS max_order FROM deleted GROUP BY queue_name, key
+               ), clamped AS (
+                 SELECT h.queue_name,
+                        h.key,
+                        LEAST(h.max_order, COALESCE(gap.min_order - 1, h.max_order)) AS advance_to
+                   FROM highest h
+                   JOIN %2$s ks
+                     ON ks.queue_name = h.queue_name AND ks.key = h.key
+                   LEFT JOIN LATERAL (
+                     -- Only the OPEN INTERVAL between the cursor and the order just acknowledged. Anything in
+                     -- there is a row the claim could not take - dead-lettered, or not yet due - and it must
+                     -- keep blocking, so the cursor stops below it.
+                     --
+                     -- No anti-join against the acknowledged rows is needed, and adding one was expensive.
+                     -- The exclusive claim admits at most one message per key per batch, so max_order IS that
+                     -- message's order and this interval is strictly below it - the acknowledged row cannot
+                     -- fall inside. Two earlier attempts paid dearly for the redundant guard: "id NOT IN
+                     -- (<ids>)" over every row of the key is quadratic in batch size (>15 min per case), and
+                     -- replacing it with NOT EXISTS over the deleted CTE inside this LATERAL still cost 128s
+                     -- against 284ms unguarded, because the CTE is re-scanned per candidate row. Here the range
+                     -- is normally empty and costs an index probe.
+                     SELECT MIN(m.key_order) AS min_order
+                       FROM %1$s m
+                      WHERE m.queue_name = h.queue_name
+                        AND m.key        = h.key
+                        AND m.key_order  > ks.completed_through
+                        AND m.key_order  < h.max_order
+                   ) gap ON TRUE
+               )
+               UPDATE %2$s ks
+                  SET completed_through = GREATEST(ks.completed_through, clamped.advance_to)
+                 FROM clamped
+                WHERE ks.queue_name = clamped.queue_name
+                  AND ks.key        = clamped.key
                """.formatted(messageTable, keyStateTable);
     }
 }
