@@ -40,11 +40,20 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * {@link DurableQueues} that stores ordered and unordered messages in <b>separate tables</b>, so each carries only
  * the indexes its own access patterns need.
  *
- * <h2>What this buys, and what it is</h2>
- * Measured at <b>1.38× total and 1.62× on insert</b> for unordered traffic, and all of it from index count — six
- * secondary indexes on the shared table down to one here (measurements §1, §8). The ordered table carries two,
- * not the three the shared table has for ordered traffic, because §17 measured one of those at zero scans at both
- * 8 and 200 ordered keys.
+ * <h2>⚠️ Current status: slower than the shared table, and not recommended for throughput</h2>
+ * Measured through this class at 40 000 messages and reproduced (measurements §21): unordered traffic drains in
+ * <b>10 425 ms against the shared table's 1 648 ms</b> — roughly <b>5× slower end to end</b>, on exactly the
+ * traffic the split exists to speed up. Ordered traffic is neutral (0.97×).
+ * <p>
+ * The design's mechanism does work: insert improves 1.36× and index bytes are 1.10× (unordered) to 1.33×
+ * (ordered) smaller. It is simply not where the time goes, and the drain regression swamps it. Because the index
+ * bytes moved the right way while the drain moved the wrong way, the regression localises to how <em>this class
+ * fetches</em> rather than to having two tables — the prime suspect being that every poll claims from the ordered
+ * table first and then the unordered one, two claim transactions and two stuck-message resets per poll where v1
+ * does one, with the ordered half pure overhead for unordered traffic. Not yet confirmed.
+ * <p>
+ * The <b>1.38× total / 1.62× insert</b> figures quoted elsewhere come from raw SQL against prototype schemas and
+ * do not describe this implementation.
  * <p>
  * It is a <b>composition, not a rewrite</b>. {@link DurableQueuesSql} generates its statements for whatever table
  * name it is constructed with, and both split tables keep the shared table's columns, so each is driven by

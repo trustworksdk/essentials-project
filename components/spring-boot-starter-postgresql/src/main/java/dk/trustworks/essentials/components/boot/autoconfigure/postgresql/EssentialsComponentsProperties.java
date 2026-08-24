@@ -310,9 +310,12 @@ public class EssentialsComponentsProperties {
          * Store ordered and unordered messages in <b>separate tables</b> ({@code <sharedQueueTableName>_unordered}
          * and {@code _ordered}), so each carries only the indexes its own access pattern needs (default false).
          * <p>
-         * Measured at <b>1.38× overall and 1.62× on insert for unordered traffic</b>, all of it index maintenance —
-         * six secondary indexes down to one. Ordered traffic gains far less (1.07×): its cost is the per-key
-         * barrier in the claim, which the split does not touch.
+         * ⚠️ <b>Currently slower than the shared table and not recommended for throughput.</b> Measured through the
+         * component at 40 000 messages and reproduced: unordered traffic drains in 10 425 ms against the shared
+         * table's 1 648 ms — roughly <b>5× slower end to end</b> — while insert improves 1.36× and index bytes
+         * 1.10–1.33×. The mechanism works; the drain regression swamps it, and it looks like composite fetch
+         * overhead rather than the schema. See {@code docs/durable-queues-redesign-measurements.md} §21. The
+         * 1.38×/1.62× figures quoted elsewhere are from raw-SQL prototype schemas, not this implementation.
          * <p>
          * ⚠️ <b>Not a drop-in switch for a deployment with a backlog.</b> The split does not read the shared table,
          * so messages already queued there stop being delivered — they are not lost, but nothing picks them up.

@@ -1195,3 +1195,56 @@ concurrent claimers, neither of which had any coverage before.
 from a plausible mechanism and then withdrawn under test, and the first where the withdrawal was of *my own*
 same-session conclusion. Reasoning from "this statement waits where that one skips" to "therefore it deadlocks"
 skips the step where the lock order is examined. Cheap to check, and the check is what decides it.
+
+
+## 21. The shipped split measured through the component — it is slower, not faster
+
+The split's published figures — 1.38× overall, 1.62× on insert for unordered traffic — come from raw SQL against
+prototype schemas (v2 design plan), not from `PostgresqlSplitDurableQueues`. Those figures are quoted in the
+user-facing summary, the class javadoc, the module notes and the Spring property javadoc. This measures the shipped
+component instead: `SplitVsSharedTableBenchmarkIT`, both arms driven through the public API on today's defaults.
+
+### Getting the harness right first — two faults, either of which would have published a wrong number
+
+1. **The drain was polling-bound, not database-bound.** A drain of N messages takes at least
+   `(N / parallelConsumers) × pollingInterval`. At the defaults that is 4 000 / 10 × 20 ms = **8 s**, and the first
+   run measured 8 s in *every* arm — shared and split, batched acknowledgement on and off. The drain column was
+   measuring the poll loop and could not have shown a storage difference of any size.
+2. **At 4 000 messages the measurement was not reproducible.** With the polling bound removed, a single run gave
+   1.47× in the split's favour and medians of five interleaved repetitions gave 0.86× against it. Drains of
+   ~200 ms are dominated by warm-up and tick granularity. Neither number was fit to publish.
+
+### The result, at 40 000 messages, medians of 3 interleaved repetitions
+
+| Traffic | Arm | Enqueue | Drain | Total | Index KB |
+|---|---|---|---|---|---|
+| unordered | shared | 549 ms | **1 648 ms** | 2 197 ms | 6 840 |
+| unordered | split | 404 ms | **10 425 ms** | 10 829 ms | 6 200 |
+| unordered | *ratio* | *1.36×* | ***0.16×*** | ***0.20×*** | *1.10×* |
+| ordered | shared | 668 ms | 57 558 ms | 58 226 ms | 14 104 |
+| ordered | split | 521 ms | 59 659 ms | 60 180 ms | 10 616 |
+| ordered | *ratio* | *1.28×* | *0.96×* | *0.97×* | *1.33×* |
+
+Reproduced on a second independent run: 1 644 ms against 10 282 ms, ratio 0.16 again.
+
+**The split is roughly 5× slower end to end on unordered traffic — the exact traffic it was built to speed up.**
+
+### What survives and what does not
+
+- **The insert win is real**: 1.14–1.36× measured, and index bytes are 1.10× (unordered) to 1.33× (ordered)
+  smaller, so the mechanism the design claims is genuinely happening. It is simply not where the time goes.
+- **The published 1.38× total does not survive.** It was measured on raw insert/claim/ack loops where insert was a
+  large share of the total. Through the component, insert is 549 ms of a 2 197 ms shared-table run, and the drain
+  dominates — the same dilution that turned the cursor's prototype 217× into 1.85×, only this time it goes past
+  neutral into a regression.
+- **The regression is in the composite's drain, not in the schema.** Index bytes moved the right way while drain
+  moved the wrong way by 6×, which localises it to how `PostgresqlSplitDurableQueues` fetches rather than to having
+  two tables. The prime suspect is that every poll claims from the *ordered* table first and then the unordered
+  one — two claim transactions and two stuck-message resets per poll where v1 does one — and for pure-unordered
+  traffic the ordered half is pure overhead. **Not yet confirmed**, and it should be, because if that is the cause
+  it is fixable: skip a store that cannot contribute.
+
+### Consequence
+
+The split flag must not be recommended on the strength of a throughput claim until this is understood. Every place
+quoting 1.38×/1.62× as what a deployment gets has been corrected to state the component measurement instead.
