@@ -17,6 +17,8 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
+import dk.trustworks.essentials.components.queue.postgresql.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
@@ -92,6 +94,23 @@ public class StarterAutoConfigurationIT {
             // in the other direction: any future @TTLJob bean in the starter would break it.
             assertThat(executorJobs).isNotNull();
         });
+    }
+
+    /**
+     * The two-table split is reachable from configuration, and off unless asked for. Both halves matter: the flag
+     * is the only supported way to get the split under Spring, and defaulting it on would silently strand any
+     * backlog sitting in the shared table.
+     */
+    @Test
+    void the_split_queue_tables_flag_selects_the_split_implementation() {
+        contextRunner.run(ctx ->
+            assertThat(ctx.getBean(DurableQueues.class))
+                    .as("off by default")
+                    .isInstanceOf(PostgresqlDurableQueues.class));
+
+        contextRunner.withPropertyValues("essentials.durable-queues.use-split-queue-tables=true")
+                     .run(ctx -> assertThat(ctx.getBean(DurableQueues.class))
+                             .isInstanceOf(PostgresqlSplitDurableQueues.class));
     }
 
     @Test

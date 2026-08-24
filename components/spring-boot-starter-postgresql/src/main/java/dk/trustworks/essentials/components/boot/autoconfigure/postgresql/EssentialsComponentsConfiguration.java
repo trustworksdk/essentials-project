@@ -280,6 +280,28 @@ public class EssentialsComponentsConfiguration {
                                        EssentialsComponentsProperties properties,
                                        List<DurableQueuesInterceptor> durableQueuesInterceptors,
                                        DurableQueuesStatistics durableQueuesStatistics) {
+        if (properties.getDurableQueues().isUseSplitQueueTables()) {
+            // Deliberately not migrating anything here. Moving a backlog out of the shared table is an operational
+            // step with a precondition this bean cannot verify - that no other instance is still consuming it - so
+            // it stays an explicit call on PostgresqlSplitDurableQueues rather than something a rolling deploy does
+            // silently while the previous version is still running.
+            var splitDurableQueues = PostgresqlSplitDurableQueues.builder()
+                                                                 .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                                 .setJsonSerializer(jsonSerializer)
+                                                                 .setBaseQueueTableName(properties.getDurableQueues().getSharedQueueTableName())
+                                                                 .setMultiTableChangeListener(optionalMultiTableChangeListener.orElse(null))
+                                                                 .setTransactionalMode(properties.getDurableQueues().getTransactionalMode())
+                                                                 .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
+                                                                 .setPollingInterval(properties.getDurableQueues().getCentralizedMessageFetcherPollingInterval())
+                                                                 .setUseBatchedFetch(properties.getDurableQueues().isUseBatchedFetch())
+                                                                 .setBatchedFetchSwitchThreshold(properties.getDurableQueues().getBatchedFetchSwitchThreshold())
+                                                                 .setOrderedMessageDuplicateStrategy(properties.getDurableQueues().getOrderedMessageDuplicateStrategy())
+                                                                 .setMessageObserver(messageObserverFor(durableQueuesStatistics))
+                                                                 .build();
+            splitDurableQueues.addInterceptors(durableQueuesInterceptors);
+            return splitDurableQueues;
+        }
+
         var durableQueues = PostgresqlDurableQueues.builder()
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())

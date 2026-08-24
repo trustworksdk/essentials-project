@@ -506,9 +506,37 @@ teeth, and the test says so, because the obvious simplification would delete exa
 
 **Still missing for the split, deliberately:** `DurableQueuesStatistics` is constructed with *a* queue table name
 and the split has two. The admin API already tolerates its absence (`getQueuedStatistics` returns empty), so
-teaching statistics about two tables belongs with **S2**, the statistics rewrite. And the Spring starter still
-builds a `PostgresqlDurableQueues` unconditionally — there is no property to opt a deployment onto the split. That
-is a rollout question, not an admin one.
+teaching statistics about two tables belongs with **S2**, the statistics rewrite — which closed it, since in-memory
+collection keys on `QueueName` rather than a table.
+
+## 7g. S3 rollout: the flag, and the backlog problem it exposed
+
+`essentials.durable-queues.use-split-queue-tables` selects the split under Spring, **defaulting to `false`**, and
+it stays false until there is operational experience — because switching is not free in the way a flag implies.
+
+**The split reads `<base>_unordered` and `<base>_ordered`, never the shared table.** A deployment that flips the
+flag with messages queued does not lose them; it stops delivering them, with nothing reporting an error. That is
+the worst possible failure mode for a queue, and it is not something a release note fixes.
+
+So `PostgresqlSplitDurableQueues.migrateFromSharedTable(sharedQueueTableName)` moves a backlog across: an
+`INSERT ... SELECT` per mode plus a `DELETE`, in one transaction under the bootstrap lock. It is that trivial
+**only** because §7c kept the columns identical — no mapping, no re-serialization, no id rewriting, so ids,
+attempt counts, timestamps, dead-letter state and last errors all survive. That decision was made for a different
+reason (reusing v1's statements) and paid off twice.
+
+The load-bearing part is the **interlock**: it refuses to run while any row in the shared table is marked
+`is_being_delivered`, which is the observable signature of a v1 consumer still running. Migrating rows out from
+under a live pod would hand the same message to two instances. It is not a distributed lock — an idle v1 pod
+passes — so the procedure is still stop, migrate, start; the check turns the most likely mistake into a refusal
+rather than a duplicate delivery.
+
+Two consequences worth being explicit about:
+
+- **There is no rolling upgrade.** A v1 pod and a split pod on the same base name read different tables. §9
+  established that a *mixed-version* rollout is safe for the cursor on one table; this is the opposite situation
+  and that result does not transfer.
+- **The starter does not migrate on startup**, deliberately. The precondition it would have to verify — that no
+  other instance is consuming — is exactly what a rolling deploy violates.
 
 ## 8. Investigation backlog — ideas not yet tried
 

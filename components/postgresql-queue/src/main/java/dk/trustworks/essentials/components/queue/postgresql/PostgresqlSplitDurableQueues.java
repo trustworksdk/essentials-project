@@ -316,6 +316,90 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
                                                     0.1);
     }
 
+    /**
+     * Moves every message from a v1 shared queue table into this instance's two tables, so a deployment with a
+     * backlog can switch to the split without stranding it.
+     * <p>
+     * <b>The split does not read the shared table.</b> Pointing a split instance at a base name whose v1 table
+     * still holds messages leaves those messages invisible - not lost, but never delivered - which is why this
+     * exists rather than a line in the release notes saying "drain first".
+     * <p>
+     * It is a plain {@code INSERT ... SELECT} per mode, and it is that simple only because the split tables keep
+     * v1's columns exactly (see {@code docs/durable-queues-implementation-plan.md} §7c): no column mapping, no
+     * re-serialization, no id rewriting. Delivery counts, timestamps, dead-letter state and last errors all carry
+     * over unchanged, so a half-delivered message keeps its history.
+     *
+     * <h2>Run it with the old consumers stopped</h2>
+     * <b>This refuses to run if any row in the shared table is marked {@code is_being_delivered}</b>, which is the
+     * observable signature of a v1 instance still consuming. That check is the difference between a documented
+     * procedure and an enforced one: migrating rows out from under a live v1 pod would hand the same message to
+     * two instances. It is not a distributed lock - a v1 pod that is idle at this instant passes the check - so
+     * the procedure is still: stop the old consumers, migrate, start the new ones.
+     * <p>
+     * Everything runs in one transaction under the bootstrap lock, so a concurrent start of another split
+     * instance cannot interleave with it, and a failure leaves the shared table untouched. The shared table is
+     * emptied but <b>not dropped</b> - dropping it is the operator's call once they are satisfied, and it is what
+     * makes this reversible up to that point.
+     *
+     * @param sharedQueueTableName the v1 table to migrate from - typically
+     *                             {@link PostgresqlDurableQueues#DEFAULT_DURABLE_QUEUES_TABLE_NAME}. Concatenated
+     *                             into SQL, so it must be a trusted value
+     * @return how many messages moved into each table
+     * @throws IllegalStateException if the shared table still has messages being delivered
+     */
+    public MigrationResult migrateFromSharedTable(String sharedQueueTableName) {
+        requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided");
+        PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
+        requireTrue(!sharedQueueTableName.equalsIgnoreCase(unorderedTableName) && !sharedQueueTableName.equalsIgnoreCase(orderedTableName),
+                    "The shared table to migrate from cannot be one of this instance's own tables");
+
+        return unitOfWorkFactory.withUnitOfWork(unitOfWork -> {
+            PostgresqlUtil.acquireBootstrapLock(unitOfWork.handle());
+
+            var tableExists = unitOfWork.handle()
+                                        .createQuery("SELECT to_regclass(:tableName) IS NOT NULL")
+                                        .bind("tableName", sharedQueueTableName)
+                                        .mapTo(Boolean.class)
+                                        .one();
+            if (!tableExists) {
+                log.info("No shared queue table '{}' to migrate from", sharedQueueTableName);
+                return new MigrationResult(0, 0);
+            }
+
+            var beingDelivered = unitOfWork.handle()
+                                           .createQuery("SELECT count(*) FROM " + sharedQueueTableName + " WHERE is_being_delivered = TRUE")
+                                           .mapTo(Long.class)
+                                           .one();
+            if (beingDelivered > 0) {
+                throw new IllegalStateException(msg("Refusing to migrate from '{}': {} message(s) are marked as being delivered, "
+                                                            + "which means a consumer is still running against it. Stop the consumers on the "
+                                                            + "shared table, let in-flight handling finish or time out, and retry.",
+                                                    sharedQueueTableName, beingDelivered));
+            }
+
+            var unorderedMoved = unitOfWork.handle()
+                                           .execute("INSERT INTO " + unorderedTableName
+                                                            + " SELECT * FROM " + sharedQueueTableName + " WHERE key IS NULL");
+            var orderedMoved = unitOfWork.handle()
+                                         .execute("INSERT INTO " + orderedTableName
+                                                          + " SELECT * FROM " + sharedQueueTableName + " WHERE key IS NOT NULL");
+            unitOfWork.handle().execute("DELETE FROM " + sharedQueueTableName);
+
+            log.info("Migrated {} unordered and {} ordered message(s) out of '{}' - the table is now empty but has "
+                             + "deliberately not been dropped", unorderedMoved, orderedMoved, sharedQueueTableName);
+            return new MigrationResult(unorderedMoved, orderedMoved);
+        });
+    }
+
+    /**
+     * How many messages {@link #migrateFromSharedTable(String)} moved into each table.
+     */
+    public record MigrationResult(int unorderedMessagesMoved, int orderedMessagesMoved) {
+        public int totalMessagesMoved() {
+            return unorderedMessagesMoved + orderedMessagesMoved;
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------
     // Routing helpers
     // ------------------------------------------------------------------------------------------------
