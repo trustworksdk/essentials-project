@@ -925,6 +925,217 @@ public class DurableQueuesSql {
      *
      * @return SQL statement for acknowledging several messages as handled
      */
+    /**
+     * The per-key cursor's key-state table: one row per {@code (queue_name, key)} carrying how far that key has
+     * been completed.
+     *
+     * @return DDL for the key-state table
+     */
+    public String getCreateKeyCursorTableSql() {
+        return bind("""
+                    CREATE TABLE IF NOT EXISTS {:keyCursorTableName} (
+                      queue_name        TEXT   NOT NULL,
+                      key               TEXT   NOT NULL,
+                      completed_through BIGINT NOT NULL,
+                      PRIMARY KEY (queue_name, key)
+                    )
+                    """,
+                    arg("keyCursorTableName", keyCursorTableName()));
+    }
+
+    /**
+     * The <b>non-partial</b> {@code (queue_name, key, key_order)} index the cursor's acknowledgement clamp needs.
+     * <p>
+     * Non-partial deliberately: the clamp's interval scan must see rows the claim <em>cannot</em> take —
+     * dead-lettered, or not yet due — so it carries no predicate on those columns and a partial index can never
+     * serve it. Without this the scan falls back to a sequential scan of the message table per key per round:
+     * measured at 116s against 475ms, identically across three repetitions.
+     * <p>
+     * Note what this costs the design: the cursor's original claim was one secondary index instead of three.
+     * Gap-safety puts back the very index the barrier needed and the cursor claimed to delete.
+     *
+     * @return DDL for the index that makes the cursor's clamp affordable
+     */
+    public String getCreateKeyCursorClampIndexSql() {
+        return bind("CREATE INDEX IF NOT EXISTS idx_{:tableName}_cursor_clamp ON {:tableName} (queue_name, key, key_order)",
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * Creates a key's cursor row at enqueue time, which is where it must happen: the cursor claim drives
+     * <em>from</em> the key-state table, so a key with no row is invisible - never claimed, and no error.
+     * <p>
+     * {@code -1} starts below the lowest possible order, and {@code ON CONFLICT DO NOTHING} makes it safe on every
+     * enqueue - the row must never be reset for a key already making progress, or that whole key is redelivered.
+     *
+     * @return SQL creating the cursor row for a key if it does not already exist
+     */
+    public String getUpsertKeyCursorOnEnqueueSql() {
+        return bind("INSERT INTO {:keyCursorTableName} (queue_name, key, completed_through) "
+                            + "VALUES (:queueName, :key, -1) ON CONFLICT (queue_name, key) DO NOTHING",
+                    arg("keyCursorTableName", keyCursorTableName()));
+    }
+
+    /**
+     * Gives a cursor row to every key that has messages but no row.
+     * <p>
+     * The safety net for a rolling deploy, and not optional: while barrier instances are still enqueuing ordered
+     * messages they create no cursor rows, so those keys are invisible to cursor instances. A one-off backfill
+     * before the deploy cannot close that window because the window <em>is</em> the deploy. Bounded by the number
+     * of distinct keys rather than the backlog, and idempotent, so running it whenever a claim comes back empty
+     * converges without operator involvement.
+     *
+     * @return SQL reconciling missing cursor rows for a queue
+     */
+    public String getReconcileKeyCursorSql() {
+        return bind("INSERT INTO {:keyCursorTableName} (queue_name, key, completed_through) "
+                            + "SELECT DISTINCT m.queue_name, m.key, -1 FROM {:tableName} m "
+                            + "WHERE m.queue_name = :queueName AND m.key IS NOT NULL "
+                            + "ON CONFLICT (queue_name, key) DO NOTHING",
+                    arg("keyCursorTableName", keyCursorTableName()),
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * Per-key exclusive cursor claim - the replacement for the barrier's correlated {@code NOT EXISTS}.
+     * <p>
+     * The barrier evaluates {@code NOT EXISTS (… key_order < mine)} against every candidate row, so its work is
+     * proportional to the backlog and it can only ever yield a key's single head. This drives from the key-state
+     * table instead - one row per key - and walks the {@code (queue_name, key, key_order)} index to that key's
+     * first eligible message. Work becomes proportional to the number of <b>keys</b>.
+     * <p>
+     * <b>The {@code NOT EXISTS} over in-flight rows is the correction that makes it safe.</b> Filtering
+     * {@code is_being_delivered = FALSE} inside the LATERAL instead - which the first prototype did - returns a
+     * key's next-but-one while its head is in flight, violating per-key ordering under any concurrency at all.
+     * Two worker threads on one node are enough. It is stateless, so nothing leaks if a process dies mid-handling
+     * and {@code resetMessagesStuckBeingDelivered} restores eligibility for free - which is what avoids the
+     * leases, expiry and fence tokens a marker-based design would need.
+     *
+     * @return SQL claiming at most one message per eligible key
+     */
+    public String getClaimOrderedViaCursorSql() {
+        return bind("""
+                    WITH candidate AS (
+                      SELECT head.id
+                        FROM {:keyCursorTableName} ks
+                        CROSS JOIN LATERAL (
+                          -- No eligibility predicate here, deliberately: this must return the key's TRUE next
+                          -- message, whatever state it is in. Filtering dead-lettered or not-yet-due rows inside
+                          -- the LATERAL makes the lookup skip over them and hand out the next-but-one, which
+                          -- delivers a key out of order past a dead letter - a case the barrier blocks for free,
+                          -- because a blocked predecessor simply keeps blocking. The eligibility test is applied
+                          -- to the head itself below, so an unclaimable head yields nothing for that key.
+                          SELECT m.id,
+                                 m.is_dead_letter_message,
+                                 m.is_being_delivered,
+                                 m.next_delivery_ts
+                            FROM {:tableName} m
+                           WHERE m.queue_name = ks.queue_name
+                             AND m.key        = ks.key
+                             AND m.key_order  > ks.completed_through
+                           ORDER BY m.key_order
+                           LIMIT 1
+                        ) head
+                       WHERE ks.queue_name = :queueName
+                         AND head.is_dead_letter_message = FALSE
+                         AND head.is_being_delivered     = FALSE
+                         AND head.next_delivery_ts      <= :now
+                         AND NOT EXISTS (
+                           SELECT 1
+                             FROM {:tableName} inflight
+                            WHERE inflight.queue_name         = ks.queue_name
+                              AND inflight.key                = ks.key
+                              AND inflight.is_being_delivered = TRUE
+                         )
+                       LIMIT :limit
+                    )
+                    UPDATE {:tableName} q
+                       SET total_attempts     = q.total_attempts + 1,
+                           next_delivery_ts   = NULL,
+                           is_being_delivered = TRUE,
+                           delivery_ts        = :now
+                      FROM candidate c
+                     WHERE q.id = c.id
+                       AND q.is_being_delivered = FALSE
+                    RETURNING q.*
+                    """,
+                    arg("keyCursorTableName", keyCursorTableName()),
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * Gap-safe acknowledgement: deletes the messages and advances each affected key's cursor, without ever
+     * stepping over a message that is still blocking.
+     * <p>
+     * The naive version sets {@code completed_through = MAX(key_order)} over the batch. With orders 5 and 7
+     * handled and 6 dead-lettered or awaiting retry, the cursor jumps to 7 and - because the claim only looks
+     * <em>above</em> the cursor - order 6 becomes permanently invisible. That is message loss, and it is a
+     * property the barrier has for free, since a blocked predecessor simply keeps blocking. So the advance is
+     * {@code GREATEST(current, LEAST(max_acknowledged, lowest_blocking_below - 1))}: never past a blocker, and
+     * never backwards.
+     * <p>
+     * Unordered messages pass through untouched - they have a NULL key, so the join to the key-state table
+     * matches nothing and no cursor moves. That is what lets this statement serve every acknowledgement rather
+     * than needing the caller to know which mode a {@link QueueEntryId} belongs to.
+     * <p>
+     * The interval scanned is open between the cursor and the <em>lowest</em> order acknowledged, and it needs no
+     * anti-join against the acknowledged rows: the exclusive claim admits at most one message per key per batch.
+     * Two earlier attempts paid dearly for that redundant guard - {@code id NOT IN (<ids>)} is quadratic in batch
+     * size (over 15 minutes per case), and a {@code NOT EXISTS} over the deleted CTE still cost 128s against
+     * 284ms because the CTE is re-scanned per candidate row.
+     *
+     * @return SQL deleting acknowledged messages and advancing their keys' cursors
+     */
+    public String getAcknowledgeMessagesViaCursorSql() {
+        return bind("""
+                    WITH deleted AS (
+                      DELETE FROM {:tableName} WHERE id IN (<ids>) AND is_dead_letter_message = FALSE
+                      RETURNING id, queue_name, key, key_order
+                    ), highest AS (
+                      SELECT queue_name, key, MAX(key_order) AS max_order, MIN(key_order) AS min_order
+                        FROM deleted WHERE key IS NOT NULL GROUP BY queue_name, key
+                    ), clamped AS (
+                      SELECT h.queue_name,
+                             h.key,
+                             LEAST(h.max_order, COALESCE(gap.min_order - 1, h.max_order)) AS advance_to
+                        FROM highest h
+                        JOIN {:keyCursorTableName} ks
+                          ON ks.queue_name = h.queue_name AND ks.key = h.key
+                        LEFT JOIN LATERAL (
+                          SELECT MIN(m.key_order) AS min_order
+                            FROM {:tableName} m
+                           WHERE m.queue_name = h.queue_name
+                             AND m.key        = h.key
+                             AND m.key_order  > ks.completed_through
+                             AND m.key_order  < h.min_order
+                        ) gap ON TRUE
+                    ), advanced AS (
+                      UPDATE {:keyCursorTableName} ks
+                         SET completed_through = GREATEST(ks.completed_through, clamped.advance_to)
+                        FROM clamped
+                       WHERE ks.queue_name = clamped.queue_name
+                         AND ks.key        = clamped.key
+                      RETURNING 1
+                    )
+                    -- Counts the DELETED MESSAGES, not the advanced cursors. The caller's contract is "how many
+                    -- messages were acknowledged", and an unordered message advances no cursor at all - ending on
+                    -- the UPDATE would report 0 for every unordered acknowledgement and the caller would treat a
+                    -- successful ack as a failure. `advanced` is a data-modifying CTE, so PostgreSQL executes it
+                    -- exactly once and to completion whether or not the outer query reads it.
+                    SELECT count(*) FROM deleted
+                    """,
+                    arg("keyCursorTableName", keyCursorTableName()),
+                    arg("tableName", sharedQueueTableName));
+    }
+
+    /**
+     * @return the key-state table's name, derived from the queue table's so it needs no separate configuration
+     * and therefore no separate SQL-injection surface
+     */
+    public String keyCursorTableName() {
+        return sharedQueueTableName + "_key_cursor";
+    }
+
     public String getAcknowledgeMessagesAsHandledSql() {
         return bind("DELETE FROM {:tableName} WHERE id IN (<ids>) AND is_dead_letter_message = FALSE",
                     arg("tableName", sharedQueueTableName));

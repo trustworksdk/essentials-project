@@ -131,6 +131,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy;
     private final Role                            role;
     private final DurableQueueMessageObserver     messageObserver;
+    /**
+     * Opt-in: replace the ordered per-key barrier with a per-key cursor - see
+     * {@link PostgresqlDurableQueuesBuilder#setUseOrderedMessageCursor(boolean)}.
+     */
+    private final boolean                         useOrderedMessageCursor;
     private final boolean                   useBatchedFetch;
     private final int                       batchedFetchSwitchThreshold;
     private final int                       batchedFetchWarnRowsThreshold;
@@ -519,7 +524,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              transactionalMode, messageHandlingTimeout, useCentralizedMessageFetcher, centralizedMessageFetcherPollingInterval,
              centralizedQueuePollingOptimizerFactory, useOrderedUnorderedQuery, useBatchedFetch, batchedFetchSwitchThreshold,
              batchedFetchWarnRowsThreshold, batchedAcknowledgementSettings, orderedMessageDuplicateStrategy, Role.STANDALONE,
-             DurableQueueMessageObserver.none());
+             DurableQueueMessageObserver.none(), false);
     }
 
     /**
@@ -569,11 +574,13 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                             BatchedAcknowledgementSettings batchedAcknowledgementSettings,
                             OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy,
                             Role role,
-                            DurableQueueMessageObserver messageObserver) {
+                            DurableQueueMessageObserver messageObserver,
+                            boolean useOrderedMessageCursor) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
         this.orderedMessageDuplicateStrategy = requireNonNull(orderedMessageDuplicateStrategy, "No orderedMessageDuplicateStrategy provided");
         this.role = requireNonNull(role, "No role provided");
         this.messageObserver = DurableQueueMessageObserver.safe(requireNonNull(messageObserver, "No messageObserver provided"));
+        this.useOrderedMessageCursor = useOrderedMessageCursor;
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer");
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
@@ -675,6 +682,90 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
     }
 
+    /**
+     * Creates a key's cursor row if the ordered-message cursor is enabled, and does nothing at all otherwise.
+     * <p>
+     * A no-op rather than a branch at every call site, because the alternative is remembering the flag at four
+     * enqueue paths - and forgetting one strands every key it creates.
+     */
+    private void createKeyCursorRowIfMissing(HandleAwareUnitOfWork unitOfWork, QueueName queueName, String key) {
+        if (!useOrderedMessageCursor) {
+            return;
+        }
+        unitOfWork.handle().createUpdate(durableQueuesSql.getUpsertKeyCursorOnEnqueueSql())
+                  .bind("queueName", queueName)
+                  .bind("key", key)
+                  .execute();
+    }
+
+    /**
+     * Gives a cursor row to any key that has messages but none - the rolling-deploy safety net.
+     * <p>
+     * Triggered by an empty ordered claim, which is the cheap and self-converging place for it: bounded by the
+     * number of distinct keys rather than the backlog, idempotent, and it runs precisely when the symptom of a
+     * stranded key (nothing to claim) is visible.
+     */
+    private void reconcileKeyCursorRows(HandleAwareUnitOfWork unitOfWork, QueueName queueName) {
+        var reconciled = unitOfWork.handle().createUpdate(durableQueuesSql.getReconcileKeyCursorSql())
+                                   .bind("queueName", queueName)
+                                   .execute();
+        if (reconciled > 0) {
+            log.info("[{}] Reconciled {} ordered key(s) that had messages but no cursor row - these would otherwise "
+                             + "never have been claimed", queueName, reconciled);
+        }
+    }
+
+    /**
+     * The ordered claim as it has always been: the correlated {@code NOT EXISTS} barrier.
+     * {@code excludeKeys} is the fetcher's in-process key set, which the cursor does not need - per-key
+     * exclusivity there comes from the {@code NOT EXISTS} over in-flight rows in the database itself.
+     */
+    private org.jdbi.v3.core.statement.Query buildBarrierOrderedQuery(HandleAwareUnitOfWork uow,
+                                                                      QueueName queueName,
+                                                                      Instant now,
+                                                                      int limit,
+                                                                      Set<String> excluded) {
+        var query = uow.handle().createQuery(durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty()))
+                       .bind("queueName", queueName)
+                       .bind("now", now)
+                       .bind("limit", limit);
+        if (!excluded.isEmpty()) {
+            query.bindList("excludeKeys", excluded);
+        }
+        return query;
+    }
+
+    /**
+     * The acknowledgement statement for a single message.
+     * <p>
+     * Under the cursor this is not just a {@code DELETE}: it also advances the key's cursor, clamped so it can
+     * never step over a message still blocking below. Rewriting the statement rather than adding a second one is
+     * what keeps the two atomic - a delete that committed without its cursor advance would leave the key's
+     * successor permanently unclaimable.
+     * <p>
+     * Safe for unordered messages too: they carry a NULL key, so the join to the key-state table matches nothing
+     * and no cursor moves. That is what lets one statement serve both modes, and it is why the caller does not
+     * have to know which mode a {@link QueueEntryId} belongs to.
+     */
+    private int acknowledgeMessagesAndAdvanceCursors(Collection<QueueEntryId> queueEntryIds) {
+        var handle = unitOfWorkFactory.getRequiredUnitOfWork().handle();
+        if (!useOrderedMessageCursor) {
+            return queueEntryIds.size() == 1
+                   ? handle.createUpdate(durableQueuesSql.getAcknowledgeMessageAsHandledSql())
+                           .bind("id", queueEntryIds.iterator().next())
+                           .execute()
+                   : handle.createUpdate(durableQueuesSql.getAcknowledgeMessagesAsHandledSql())
+                           .bindList("ids", new ArrayList<>(queueEntryIds))
+                           .execute();
+        }
+        // A query rather than an update, because the statement's own row count would be the number of cursors
+        // advanced - zero for unordered messages, which acknowledge no key.
+        return handle.createQuery(durableQueuesSql.getAcknowledgeMessagesViaCursorSql())
+                     .bindList("ids", new ArrayList<>(queueEntryIds))
+                     .mapTo(Integer.class)
+                     .one();
+    }
+
     private void initializeQueueTables() {
         registerJdbiTypeMappers();
         if (role == Role.SPLIT_DELEGATE) {
@@ -726,6 +817,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 // Under ALLOW there is no unique index to serve the barrier, so the per-key index is still needed.
                 createIndex(durableQueuesSql.getCreateOrderedMessageIndexSql(),
                             handleAwareUnitOfWork.handle());
+            }
+
+            if (useOrderedMessageCursor) {
+                handleAwareUnitOfWork.handle().execute(durableQueuesSql.getCreateKeyCursorTableSql());
+                createIndex(durableQueuesSql.getCreateKeyCursorClampIndexSql(), handleAwareUnitOfWork.handle());
+                log.info("Ordered-message cursor enabled - created '{}' and its clamp index", durableQueuesSql.keyCursorTableName());
             }
 
             multiTableChangeListener.ifPresent(listener -> {
@@ -1250,6 +1347,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                 update.bind("deliveryMode", QueuedMessage.DeliveryMode.IN_ORDER)
                       .bind("key", orderedMessage.getKey())
                       .bind("order", orderedMessage.getOrder());
+                // The cursor claim drives FROM the key-state table, so a key with no row is invisible to it -
+                // never claimed and no error. Creating the row here, rather than backfilling, is what closes
+                // that window.
+                createKeyCursorRowIfMissing(unitOfWork, queueName, orderedMessage.getKey());
             } else {
                 update.bind("deliveryMode", QueuedMessage.DeliveryMode.NORMAL)
                       .bindNull("key", Types.VARCHAR)
@@ -1329,6 +1430,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                            batch.bind("deliveryMode", QueuedMessage.DeliveryMode.IN_ORDER)
                                                                 .bindByType("key", orderedMessage.getKey(), String.class)
                                                                 .bind("order", orderedMessage.getOrder());
+                                                           createKeyCursorRowIfMissing(unitOfWorkFactory.getRequiredUnitOfWork(), queueName, orderedMessage.getKey());
                                                        } else {
                                                            // The key MUST be bound with the same declared type as the ordered branch above, and never
                                                            // via bindNull: JDBI's PreparedBatch prepares a single binder from the first row's argument
@@ -1490,9 +1592,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                       () -> {
                                                                                           log.debug("Acknowledging-Message-As-Handled regarding Message with id '{}'", operation.queueEntryId);
                                                                                           var queueEntryId = operation.queueEntryId;
-                                                                                          var rowsUpdated = unitOfWorkFactory.getRequiredUnitOfWork().handle().createUpdate(durableQueuesSql.getAcknowledgeMessageAsHandledSql())
-                                                                                                                             .bind("id", operation.queueEntryId)
-                                                                                                                             .execute();
+                                                                                          var rowsUpdated = acknowledgeMessagesAndAdvanceCursors(List.of(operation.queueEntryId));
                                                                                           if (rowsUpdated == 1) {
                                                                                               log.debug("Acknowledged message as handled and deleted it. Id: '{}'", queueEntryId);
                                                                                               return true;
@@ -1527,9 +1627,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                       (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                                                       () -> {
                                                                                           log.debug("Acknowledging-Messages-As-Handled regarding {} messages", operation.queueEntryIds.size());
-                                                                                          var rowsDeleted = unitOfWorkFactory.getRequiredUnitOfWork().handle().createUpdate(durableQueuesSql.getAcknowledgeMessagesAsHandledSql())
-                                                                                                                             .bindList("ids", operation.queueEntryIds)
-                                                                                                                             .execute();
+                                                                                          var rowsDeleted = acknowledgeMessagesAndAdvanceCursors(operation.queueEntryIds);
                                                                                           if (rowsDeleted != operation.queueEntryIds.size()) {
                                                                                               log.debug("Acknowledged {} of {} messages as handled - the remainder were already deleted or had been marked as Dead-Letter-Messages",
                                                                                                         rowsDeleted,
@@ -2013,16 +2111,24 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     MessageMappingResult mappingResult;
 
                     if (useOrderedUnorderedQuery) {
-                        var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
-                        var orderedQ = uow.handle().createQuery(orderedSql)
-                                          .bind("queueName", queueName)
-                                          .bind("now", now)
-                                          .bind("limit", availableWorkerSlotsForThisQueue);
-                        if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
+                        // The cursor replaces only the ordered half. The unordered claim below is untouched -
+                        // unordered messages have no key and no cursor row, so nothing about them changes.
+                        var orderedQ = useOrderedMessageCursor
+                                       ? uow.handle().createQuery(durableQueuesSql.getClaimOrderedViaCursorSql())
+                                            .bind("queueName", queueName)
+                                            .bind("now", now)
+                                            .bind("limit", availableWorkerSlotsForThisQueue)
+                                       : buildBarrierOrderedQuery(uow, queueName, now, availableWorkerSlotsForThisQueue, excluded);
 
                         mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
                         messagesForQueue = mappingResult.successfulMessages();
                         handleFailedMappings(queueName, mappingResult);
+
+                        if (useOrderedMessageCursor && messagesForQueue.isEmpty()) {
+                            // An empty ordered claim is exactly when a key stranded without a cursor row is
+                            // observable, and the reconcile is bounded by key count rather than backlog.
+                            reconcileKeyCursorRows(uow, queueName);
+                        }
 
                         if (messagesForQueue.isEmpty()) {
                             var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();

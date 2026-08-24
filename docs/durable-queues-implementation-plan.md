@@ -261,7 +261,9 @@ required, and the unconstrained duplicate is now `OrderedMessageDuplicateStrateg
 which needs a consumer-level measurement: run length trades round trips against per-key parallelism, and the
 storage-only harness cannot see the second.
 
-**O3 — the cursor. The gate passed, so this proceeds.** Key-state table plus enqueue upsert and reconciliation (inert but
+**O3 — the cursor. Implemented as an opt-in flag, and the first end-to-end measurement is deflating — see §7h.**
+
+**O3 — the cursor (original entry).** Key-state table plus enqueue upsert and reconciliation (inert but
 exercised) → cursor claim behind a flag → run claiming with the prefix guard and caller-side sort → ordered
 acknowledgement over runs.
 
@@ -537,6 +539,67 @@ Two consequences worth being explicit about:
   and that result does not transfer.
 - **The starter does not migrate on startup**, deliberately. The precondition it would have to verify — that no
   other instance is consuming — is exactly what a rolling deploy violates.
+
+## 7h. The cursor behind a flag, and what measuring it through the component showed
+
+`setUseOrderedMessageCursor(true)` ships the corrected head-only cursor: a `<queueTable>_key_cursor` table, a
+cursor row created on every ordered enqueue, the cursor claim replacing the barrier for the ordered half, a
+gap-safe acknowledgement, and reconcile-on-empty-claim. Off by default. Unordered traffic is untouched.
+
+**Both correctness gates pass**: the shared `DurableQueuesIT` unmodified (`CursorPostgresqlDurableQueuesIT`), and
+per-key ordering under 2 000 messages / 20 parallel consumers
+(`CursorPostgresqlLocalOrderedMessagesDurableQueueIT`) — which is the one that matters, because the fault that sank
+the first prototype is invisible without contention.
+
+**Two implementation faults were found by those gates, not by reading**, and one of them is a design correction the
+prototype shares:
+
+1. **The claim filtered `is_dead_letter_message = FALSE` inside the per-key LATERAL**, exactly as the prototype's
+   `claimOrderedViaSafeCursorSql` does. That makes the lookup *skip* a dead-lettered row and hand out the
+   next-but-one — so a key is delivered out of order past a dead letter, which v1's barrier blocks for free
+   because a blocked predecessor simply keeps blocking. The LATERAL must return the key's **true** next message
+   whatever state it is in, and the eligibility test applies to that head. §8's fault analysis covered the
+   *acknowledgement* skipping a blocked message; this is the same class of fault in the *claim*, and it was not
+   recorded.
+2. A duplicated closing paren in the acknowledgement CTE chain — caught immediately, noted only because it shows
+   the value of running the suite rather than reviewing the SQL.
+
+### The measurement, and it does not support the headline
+
+Through the real component, end to end, drain time (`OrderedCursorVsBarrierBenchmarkIT`, both arms delivering
+every message):
+
+| Keys | Messages/key | Barrier | Cursor | Ratio |
+|---|---|---|---|---|
+| 8 | 100 | 2 027 ms | 1 996 ms | **1.02×** |
+| 8 | 600 | 12 635 ms | 12 019 ms | **1.05×** |
+| 8 | 2 500 | 92 444 ms | 49 993 ms | **1.85×** |
+
+**The effect is real and it scales with backlog depth per key**, which is exactly the mechanism: the barrier's
+correlated `NOT EXISTS` rescans a key's depth per candidate row, so its cost grows with depth while the cursor's
+range scan does not. At 20 000 messages over 8 keys the barrier spends 92 seconds where the cursor spends 50.
+
+**But the 217× does not appear, and §7 already explains why.** That number is a *claim-phase* measurement. End-to-end
+drain also pays one acknowledgement transaction per message — the 16.5× lever — which the cursor does not touch, so
+the claim saving is diluted by a cost that dominates. §8 predicted precisely this ("its *total* is diluted by an
+acknowledgement cost it does not touch"); the component measurement is that prediction arriving.
+
+So the honest position, stated by shape rather than as one number:
+
+- **Shallow keys (≲600 per key): 1.02–1.05×.** Not worth enabling for throughput.
+- **Deep keys (2 500 per key): 1.85×.** Worth having, and it will keep growing with depth — this is the regime
+  where the barrier is pathological.
+- **The remaining headroom is the acknowledgement, not the claim.** Getting near the prototype's claim-phase
+  numbers requires the half that is still missing: **run-claiming plus a batched ordered acknowledgement**, which
+  is the only route §2 permits for ordered traffic to amortise a transaction at all.
+
+Which is what the flag was for: the cursor's value is a function of a deployment's key depth, and now it can be
+measured against real traffic instead of argued from a prototype.
+
+Next, if this is pursued: implement `claimOrderedRunViaSafeCursorSql` (prefix runs with the `bool_and` truncation
+and caller-side sort) and acknowledge each run in one statement. Note the ack is **coupled** to the run claim — it
+scans `(cursor, min_acknowledged)`, sound only for prefix batches — so neither is safe with an arbitrary batch from
+elsewhere.
 
 ## 8. Investigation backlog — ideas not yet tried
 

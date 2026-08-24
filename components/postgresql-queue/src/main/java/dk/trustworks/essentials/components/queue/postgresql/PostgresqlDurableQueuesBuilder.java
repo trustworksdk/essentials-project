@@ -70,6 +70,7 @@ public final class PostgresqlDurableQueuesBuilder {
     private Duration                                   acknowledgementFlushInterval             = BatchedAcknowledgementSettings.DEFAULT_FLUSH_INTERVAL;
     private OrderedMessageDuplicateStrategy            orderedMessageDuplicateStrategy          = OrderedMessageDuplicateStrategy.REJECT;
     private DurableQueueMessageObserver               messageObserver                          = DurableQueueMessageObserver.none();
+    private boolean                                   useOrderedMessageCursor                  = false;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
 
     /**
@@ -365,6 +366,38 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
+    /**
+     * <b>Experimental, opt-in:</b> replace the ordered per-key barrier with a per-key cursor (default false).
+     * <p>
+     * The barrier evaluates a correlated {@code NOT EXISTS (… key_order < mine)} against every candidate row, so
+     * its claim cost scales with the <b>backlog</b> and it can only ever yield a key's single head. The cursor
+     * drives from a key-state table - one row per {@code (queue_name, key)} carrying {@code completed_through} -
+     * so the cost scales with the number of <b>keys</b>. In the barrier's pathological regime (few keys, deep
+     * backlog: 8 keys × 2 500 messages) the claim measured <b>217× faster</b> at an identical number of round
+     * trips; with many shallow keys the advantage is around 2.6×, and there are shapes where it is not worth
+     * having at all.
+     * <p>
+     * It exists to be <b>measured</b> against real traffic, which is why it is a flag rather than a replacement.
+     *
+     * <h2>What switching it on does</h2>
+     * Creates {@code <queueTable>_key_cursor} and a non-partial {@code (queue_name, key, key_order)} index on the
+     * queue table, creates a cursor row on every ordered enqueue, and rewrites the ordered claim and the
+     * acknowledgement. Unordered traffic is untouched.
+     *
+     * <h2>Rolling deploys are safe, and that is measured</h2>
+     * Barrier instances and cursor instances can share one table (27 consecutive runs with a negative control):
+     * both key off the same physical rows, and the only unshared state - {@code completed_through} - can go
+     * stale-low, which the design tolerates. Rollback is equally safe. A barrier instance enqueuing ordered
+     * messages creates no cursor rows, so those keys would be invisible to cursor instances; an empty ordered
+     * claim triggers a bounded, idempotent reconcile that closes exactly that window.
+     *
+     * @param useOrderedMessageCursor whether to use the per-key cursor for ordered messages
+     */
+    public PostgresqlDurableQueuesBuilder setUseOrderedMessageCursor(boolean useOrderedMessageCursor) {
+        this.useOrderedMessageCursor = useOrderedMessageCursor;
+        return this;
+    }
+
     public PostgresqlDurableQueues build() {
         return new PostgresqlDurableQueues(unitOfWorkFactory,
                                            jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
@@ -385,6 +418,7 @@ public final class PostgresqlDurableQueuesBuilder {
                                                                               acknowledgementFlushInterval),
                                            orderedMessageDuplicateStrategy,
                                            PostgresqlDurableQueues.Role.STANDALONE,
-                                           messageObserver);
+                                           messageObserver,
+                                           useOrderedMessageCursor);
     }
 }

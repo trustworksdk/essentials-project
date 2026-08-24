@@ -170,7 +170,13 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
                                            // what the fetcher holds. A delegate never runs a fetcher, so its own
                                            // observer would never be consulted - and if it were, every delivery
                                            // would be reported twice.
-                                           DurableQueueMessageObserver.none());
+                                           DurableQueueMessageObserver.none(),
+                                           // The cursor is not wired into the split yet: it replaces the ordered
+                                           // claim, and the split's ordered delegate would need its own key-state
+                                           // table. Measure it on the shared table first - the two are
+                                           // independent opt-ins and combining them multiplies what a measurement
+                                           // has to control for.
+                                           false);
     }
 
     // ------------------------------------------------------------------------------------------------
