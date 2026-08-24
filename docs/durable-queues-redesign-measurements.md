@@ -1550,3 +1550,34 @@ the component: the framework's 4%, the cursor's 217× → 1.81×, the split's 1.
 batched acknowledgement's 16.5× → 1.0×. The direction is always the same, and the reason is always the same — a
 raw harness isolates one cost and removes everything that normally dominates it. **A prototype measurement should
 be treated as a hypothesis about where time goes, never as a number.**
+
+
+## 28. The split's ordered acknowledgement: three statements per message down to one
+
+§23 recorded, unfixed, that the split issued **80 000 deletes plus 40 000 dead-letter lookups for 40 000 ordered
+messages**. Delegating a by-id acknowledgement meant trying one store and then the other, so an ordered message
+cost three statements on the hot path: a `DELETE` against the unordered table matching nothing, then the
+dead-letter lookup `acknowledgeMessageAsHandled` performs whenever a delete affects no rows, then the delete that
+works.
+
+It also fired the interceptor chain **twice** for an ordered acknowledgement, once per store attempt, so an
+ack-counting interceptor over-counted — a correctness defect hiding behind a performance one.
+
+Both are fixed by the composite owning the operation instead of delegating it: one statement with a data-modifying
+CTE per table, one round trip, and the interceptor chain run once by the composite.
+
+| Ordered, 20 000 messages | Before | After |
+|---|---|---|
+| Statements attributable to acknowledgement | ~60 000 | **20 002** |
+| Versus the shared table's 20 001 | 3× | **parity** |
+| Drain versus shared | 0.97× | 1.00× |
+
+The drain barely moves, which is consistent with everything else measured here — statements are not what the time
+goes on. It is still worth doing: it removes two thirds of the acknowledgement's database work, and the
+double-interception was a genuine defect.
+
+**This is the direction §22's lesson pointed.** The delegation existed so the composite could reuse v1's statements
+unchanged; the acknowledgement is the first place where writing SQL that knows about both tables is plainly better
+than composing two operations that each know about one. The remaining by-id operations — `deleteMessage`,
+`retryMessage`, `markAsDeadLetterMessage`, `resurrectDeadLetterMessage` — still delegate and still pay the double
+cost, but they run per failure rather than per message.

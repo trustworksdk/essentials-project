@@ -539,12 +539,55 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
 
     @Override
     public boolean acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled operation) {
-        return anyTrue(store -> store.acknowledgeMessageAsHandled(operation));
+        requireNonNull(operation, "No operation provided");
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> acknowledgeAcrossBothTables(List.of(operation.queueEntryId)) > 0)
+                .proceed();
     }
 
     @Override
     public int acknowledgeMessagesAsHandled(AcknowledgeMessagesAsHandled operation) {
-        return bothStores().stream().mapToInt(store -> store.acknowledgeMessagesAsHandled(operation)).sum();
+        requireNonNull(operation, "No operation provided");
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> acknowledgeAcrossBothTables(operation.queueEntryIds))
+                .proceed();
+    }
+
+    /**
+     * Acknowledges by id across both tables in <b>one statement and one round trip</b>.
+     *
+     * <h2>Why this does not delegate</h2>
+     * Delegating meant trying one store and then the other, and for an ordered message that cost three statements
+     * per acknowledgement on the hot path: a {@code DELETE} against the unordered table matching nothing, then the
+     * dead-letter lookup {@code acknowledgeMessageAsHandled} performs when a delete affects no rows, then the
+     * delete that works. Measured at <b>80 000 deletes and 40 000 extra lookups for 40 000 ordered messages</b>.
+     * §7b priced the dual lookup at "one extra statement per by-id operation"; delegating made it two.
+     * <p>
+     * It also fired the interceptor chain <b>twice</b> for an ordered acknowledgement — once per store attempt —
+     * so an ack-counting interceptor over-counted. Running the chain here and the SQL once fixes both.
+     * <p>
+     * Data-modifying CTEs are executed exactly once and to completion whether or not the outer query reads them, so
+     * both deletes run and the count is the total actually removed. Table names are validated at construction.
+     */
+    private int acknowledgeAcrossBothTables(Collection<QueueEntryId> queueEntryIds) {
+        if (queueEntryIds.isEmpty()) {
+            return 0;
+        }
+        var sql = "WITH unordered_deleted AS (\n"
+                + "  DELETE FROM " + unorderedTableName + " WHERE id IN (<ids>) AND is_dead_letter_message = FALSE RETURNING 1\n"
+                + "), ordered_deleted AS (\n"
+                + "  DELETE FROM " + orderedTableName + " WHERE id IN (<ids>) AND is_dead_letter_message = FALSE RETURNING 1\n"
+                + ")\n"
+                + "SELECT (SELECT count(*) FROM unordered_deleted) + (SELECT count(*) FROM ordered_deleted)";
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+                                                          .createQuery(sql)
+                                                          .bindList("ids", new ArrayList<>(queueEntryIds))
+                                                          .mapTo(Integer.class)
+                                                          .one());
     }
 
     @Override
