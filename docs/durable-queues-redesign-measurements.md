@@ -1149,10 +1149,11 @@ Nothing about the shipped flag changed.
 - **Run-claiming's benefit is real** (2.25× single-threaded at run length 4) and its cost is a genuinely hard
   concurrency design, not an implementation detail. Prefix integrity and deadlock-freedom pull against each other:
   every lock strategy that prevents one has so far broken the other.
-- **The shipped cursor has a latent deadlock** under concurrent claimers (defect 1). It cannot fire under the
-  centralized fetcher, which is the default and the only configuration the flag has been measured in, but it
-  should be fixed before the cursor is used with the traditional consumer or recommended more widely. The fix is
-  not simply `SKIP LOCKED` — defect 2 shows why.
+- ~~**The shipped cursor has a latent deadlock** under concurrent claimers (defect 1).~~ **Withdrawn — see §20.**
+  The inference was that the head-only claim shares defect 1, since its `UPDATE … FROM candidate` also waits rather
+  than skipping. It does not reproduce, at two levels of aggression, and there is a reason: a cycle needs two
+  claimers to lock the same rows in *different* orders, and this statement takes at most one row per key while both
+  claimers scan the key-state table in the same order. The run claim broke that by taking many rows per key.
 - **A benchmark that counts claims rather than deletions hides all of this.** Twice in this section, and once in
   §18, a harness reported completion with rows still in the table. Counting what the acknowledgement actually
   deleted is what made the stalls visible.
@@ -1163,3 +1164,34 @@ The lock order has to be one order everywhere — cursor row, then message rows 
 *after* locking, which means the claim cannot use `SKIP LOCKED` on the messages at all. A claim that locks exactly
 one key's cursor row per statement would satisfy both, at the cost of one statement per key per poll, which is the
 trade the benchmark should measure next.
+
+
+## 20. The head-only claim's "latent deadlock" — asserted, tested, withdrawn
+
+§19 inferred that the shipped head-only cursor claim carries the deadlock that run-claiming demonstrated, on the
+grounds that `UPDATE … FROM candidate WHERE q.id = c.id` *waits* on rows another claimer holds where v1's barrier
+skips them. The inference was reasonable and it is wrong.
+
+`PostgresqlCursorConcurrentClaimIT` drives concurrent claimers directly — the case both cursor gates structurally
+cannot reach, since `CentralizedMessageFetcher` has a single poll thread and its 20-consumer suite contends on
+*handling* rather than claiming. Against the **unmodified** statement:
+
+| Keys | Claimers | Claim limit | Result |
+|---|---|---|---|
+| 12 | 8 | 4 | passes — no deadlock, ordering holds, queue drains |
+| 40 | 16 | 20 | passes — no deadlock, ordering holds, queue drains |
+
+**Why it cannot deadlock in this shape.** A cycle requires two claimers to lock the same rows in *different* orders.
+This statement takes at most one row per key, and both claimers scan the key-state table in the same order, so
+their lock orders agree. Run-claiming broke exactly that property by taking many rows per key, whose per-key sets
+interleave — which is why the deadlock appeared there and not here.
+
+A `FOR UPDATE SKIP LOCKED` stage was written for the head claim and then **reverted**: a fix for a defect that
+cannot be reproduced is a change with only downside, and the same `SKIP LOCKED` is actively unsafe one step away
+(§19 defect 2). The test is kept, relabelled for what it establishes — per-key ordering and complete drainage under
+concurrent claimers, neither of which had any coverage before.
+
+**The methodological point is the one worth keeping.** This is the fifth claim in this investigation to be asserted
+from a plausible mechanism and then withdrawn under test, and the first where the withdrawal was of *my own*
+same-session conclusion. Reasoning from "this statement waits where that one skips" to "therefore it deadlocks"
+skips the step where the lock order is examined. Cheap to check, and the check is what decides it.
