@@ -166,26 +166,33 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     public void start() {
         if (!started) {
             log.info("[{}] Starting lock manager", lockManagerInstanceId);
-            stopping = false;
-            lockConfirmationExecutor = Executors.newScheduledThreadPool(1,
-                                                                        new ThreadFactoryBuilder()
-                                                                                .nameFormat(lockManagerInstanceId + "-FencedLock-Confirmation-%d")
-                                                                                .daemon(true)
-                                                                                .build());
+            // Symmetric with stop(): the executors and the started flag are published under the lock that
+            // acquireLockAsync reads them under, so a caller racing a restart sees either the whole old state or the
+            // whole new one, never a half-initialized manager
+            reentrantLock.lock();
+            try {
+                stopping = false;
+                lockConfirmationExecutor = Executors.newScheduledThreadPool(1,
+                                                                            new ThreadFactoryBuilder()
+                                                                                    .nameFormat(lockManagerInstanceId + "-FencedLock-Confirmation-%d")
+                                                                                    .daemon(true)
+                                                                                    .build());
 
-            asyncLockAcquiringExecutor = Executors.newScheduledThreadPool(2,
-                                                                          ThreadFactoryBuilder.builder()
-                                                                                              .nameFormat(lockManagerInstanceId + "-Lock-Acquiring-%d")
-                                                                                              .daemon(true)
-                                                                                              .build());
+                asyncLockAcquiringExecutor = Executors.newScheduledThreadPool(2,
+                                                                              ThreadFactoryBuilder.builder()
+                                                                                                  .nameFormat(lockManagerInstanceId + "-Lock-Acquiring-%d")
+                                                                                                  .daemon(true)
+                                                                                                  .build());
 
-            confirmationScheduledFuture = lockConfirmationExecutor.scheduleAtFixedRate(this::confirmAllLocallyAcquiredLocks,
-                                                                                       lockConfirmationInterval.toMillis(),
-                                                                                       lockConfirmationInterval.toMillis(),
-                                                                                       TimeUnit.MILLISECONDS);
+                confirmationScheduledFuture = lockConfirmationExecutor.scheduleAtFixedRate(this::confirmAllLocallyAcquiredLocks,
+                                                                                           lockConfirmationInterval.toMillis(),
+                                                                                           lockConfirmationInterval.toMillis(),
+                                                                                           TimeUnit.MILLISECONDS);
 
-
-            started = true;
+                started = true;
+            } finally {
+                reentrantLock.unlock();
+            }
             log.info("[{}] Started lock manager", lockManagerInstanceId);
             notify(new FencedLockManagerStarted(this));
         } else {
@@ -376,77 +383,87 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
     public void stop() {
         if (started) {
             log.info("[{}] Stopping lock manager", lockManagerInstanceId);
-            stopping = true;
-            if (confirmationScheduledFuture != null) {
-                log.debug("[{}] Stopping confirmationScheduledFuture",
-                          lockManagerInstanceId);
-                confirmationScheduledFuture.cancel(true);
-                confirmationScheduledFuture = null;
-                log.debug("[{}] Stopped confirmationScheduledFuture",
-                          lockManagerInstanceId);
-            }
-
-            locksAcquiredByThisLockManager.values().forEach(lock -> {
-                log.debug("[{}] Releasing acquired Lock '{}' due to Stopping",
-                          lockManagerInstanceId,
-                          lock.getName());
-                try {
-                    lock.release();
-                } catch (Exception e) {
-                    if (IOExceptionUtil.isIOException(e)) {
-                        log.debug(msg("[{}] Failed to release FencedLock with name '{}'",
-                                      lockManagerInstanceId,
-                                      lock.getName()), e);
-                    } else {
-                        log.warn(msg("[{}] Failed to release FencedLock with name '{}'",
-                                     lockManagerInstanceId,
-                                     lock.getName()), e);
-                    }
+            // Held across the whole teardown so that acquireLockAsync - which reads asyncLockAcquiringExecutor under
+            // the same lock - either completes entirely before this and gets its scheduled future cancelled below, or
+            // runs entirely after it and sees started == false. Interleaving the two is what produced a
+            // NullPointerException on the caller's thread, and would otherwise leave a cancelled future stranded in
+            // asyncLockAcquirings, which a later start() would then treat as a live acquiring and never re-schedule.
+            reentrantLock.lock();
+            try {
+                stopping = true;
+                if (confirmationScheduledFuture != null) {
+                    log.debug("[{}] Stopping confirmationScheduledFuture",
+                              lockManagerInstanceId);
+                    confirmationScheduledFuture.cancel(true);
+                    confirmationScheduledFuture = null;
+                    log.debug("[{}] Stopped confirmationScheduledFuture",
+                              lockManagerInstanceId);
                 }
-            });
-            locksAcquiredByThisLockManager.clear();
 
-            asyncLockAcquirings.forEach((lockName, scheduledFuture) -> {
-                log.debug("[{}] Cancelling acquiring of Lock '{}' due to Stopping",
-                          lockManagerInstanceId,
-                          lockName);
-
-                try {
-                    scheduledFuture.cancel(true);
-                } catch (Exception e) {
-                    if (IOExceptionUtil.isIOException(e)) {
-                        log.debug(msg("[{}] Failed to stop acquiring of FencedLock with name '{}'",
-                                      lockManagerInstanceId,
-                                      lockName), e);
-                    } else {
-                        log.warn(msg("[{}] Failed to stop acquiring of FencedLock with name '{}'",
-                                     lockManagerInstanceId,
-                                     lockName), e);
+                locksAcquiredByThisLockManager.values().forEach(lock -> {
+                    log.debug("[{}] Releasing acquired Lock '{}' due to Stopping",
+                              lockManagerInstanceId,
+                              lock.getName());
+                    try {
+                        lock.release();
+                    } catch (Exception e) {
+                        if (IOExceptionUtil.isIOException(e)) {
+                            log.debug(msg("[{}] Failed to release FencedLock with name '{}'",
+                                          lockManagerInstanceId,
+                                          lock.getName()), e);
+                        } else {
+                            log.warn(msg("[{}] Failed to release FencedLock with name '{}'",
+                                         lockManagerInstanceId,
+                                         lock.getName()), e);
+                        }
                     }
+                });
+                locksAcquiredByThisLockManager.clear();
+
+                asyncLockAcquirings.forEach((lockName, scheduledFuture) -> {
+                    log.debug("[{}] Cancelling acquiring of Lock '{}' due to Stopping",
+                              lockManagerInstanceId,
+                              lockName);
+
+                    try {
+                        scheduledFuture.cancel(true);
+                    } catch (Exception e) {
+                        if (IOExceptionUtil.isIOException(e)) {
+                            log.debug(msg("[{}] Failed to stop acquiring of FencedLock with name '{}'",
+                                          lockManagerInstanceId,
+                                          lockName), e);
+                        } else {
+                            log.warn(msg("[{}] Failed to stop acquiring of FencedLock with name '{}'",
+                                         lockManagerInstanceId,
+                                         lockName), e);
+                        }
+                    }
+                });
+                asyncLockAcquirings.clear();
+
+                if (asyncLockAcquiringExecutor != null) {
+                    log.debug("[{}] Shutting down asyncLockAcquiringExecutor",
+                              lockManagerInstanceId);
+                    asyncLockAcquiringExecutor.shutdownNow();
+                    asyncLockAcquiringExecutor = null;
+                    log.debug("[{}] Shutdown asyncLockAcquiringExecutor",
+                              lockManagerInstanceId);
                 }
-            });
-            asyncLockAcquirings.clear();
+                if (lockConfirmationExecutor != null) {
+                    log.debug("[{}] Shutting down lockConfirmationExecutor",
+                              lockManagerInstanceId);
 
-            if (asyncLockAcquiringExecutor != null) {
-                log.debug("[{}] Shutting down asyncLockAcquiringExecutor",
-                          lockManagerInstanceId);
-                asyncLockAcquiringExecutor.shutdownNow();
-                asyncLockAcquiringExecutor = null;
-                log.debug("[{}] Shutdown asyncLockAcquiringExecutor",
-                          lockManagerInstanceId);
+                    lockConfirmationExecutor.shutdownNow();
+                    lockConfirmationExecutor = null;
+                    log.debug("[{}] Shutdown lockConfirmationExecutor",
+                              lockManagerInstanceId);
+                }
+
+                started = false;
+                stopping = false;
+            } finally {
+                reentrantLock.unlock();
             }
-            if (lockConfirmationExecutor != null) {
-                log.debug("[{}] Shutting down lockConfirmationExecutor",
-                          lockManagerInstanceId);
-
-                lockConfirmationExecutor.shutdownNow();
-                lockConfirmationExecutor = null;
-                log.debug("[{}] Shutdown lockConfirmationExecutor",
-                          lockManagerInstanceId);
-            }
-
-            started = false;
-            stopping = false;
             log.info("[{}] Stopped lock manager", lockManagerInstanceId);
             notify(new FencedLockManagerStopped(this));
         } else {
@@ -642,57 +659,82 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
         requireNonNull(lockName, "You must supply a lockName");
         requireNonNull(lockCallback, "You must supply a lockCallback");
 
-        asyncLockAcquirings.computeIfAbsent(lockName, _lockName -> {
-            log.debug("[{}] Starting async Lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
-            return asyncLockAcquiringExecutor.scheduleAtFixedRate(() -> {
-                                                                      try {
-                                                                          reentrantLock.lock();
-                                                                          if (!started) {
-                                                                              return;
-                                                                          }
-                                                                          var existingLock = locksAcquiredByThisLockManager.get(lockName);
-                                                                          if (existingLock == null) {
-                                                                              if (paused) {
-                                                                                  log.info("[{}] Lock Manager is paused, skipping async acquiring for lock '{}'", lockManagerInstanceId, lockName);
-                                                                                  return;
-                                                                              }
+        reentrantLock.lock();
+        try {
+            // Read the executor into a local under the same lock stop() holds while it shuts the executor down and
+            // clears the field. Callers legitimately race a concurrent stop() - an exclusive event store subscription
+            // being reset does stop()/start() around the reset, and a subscription manager shutting down in between
+            // used to make this throw a NullPointerException on the caller's own (often non-pooled) thread.
+            var executor = asyncLockAcquiringExecutor;
+            if (!started || stopping || executor == null) {
+                log.debug("[{}] Lock Manager isn't started - ignoring async lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
+                return;
+            }
 
-                                                                              Optional<FencedLock> lock;
-                                                                              try {
-                                                                                  lock = tryAcquireLock(lockName);
-                                                                              } catch (Exception e) {
-                                                                                  log.error(msg("[{}] Technical error while performing tryAcquireLock for lock '{}'", lockManagerInstanceId, lockName), e);
-                                                                                  return;
-                                                                              }
-                                                                              if (lock.isPresent()) {
-                                                                                  log.debug("[{}] Async Acquired lock '{}'", lockManagerInstanceId, lockName);
-                                                                                  var fencedLock = lock.get();
-                                                                                  fencedLock.registerCallback(lockCallback);
-                                                                                  locksAcquiredByThisLockManager.put(lockName, (LOCK) fencedLock);
-                                                                                  lockCallback.lockAcquired(lock.get());
-                                                                              } else {
-                                                                                  if (log.isTraceEnabled()) {
-                                                                                      log.trace("[{}] Couldn't async Acquire lock '{}' as it is acquired by another Lock Manager instance: {}",
-                                                                                                lockManagerInstanceId, lockName, lookupLock(lockName));
-                                                                                  }
-                                                                              }
-                                                                          } else if (!existingLock.isLockedByThisLockManagerInstance()) {
-                                                                              log.debug("[{}] Noticed that lock '{}' isn't locked by this Lock Manager instance anymore. Releasing the lock",
-                                                                                        lockManagerInstanceId,
-                                                                                        lockName);
-                                                                              locksAcquiredByThisLockManager.remove(lockName);
-                                                                              lockCallback.lockReleased(existingLock);
-                                                                          }
-                                                                      } catch (Exception e) {
-                                                                          log.error(msg("[{}] Technical error while trying to acquire lock '{}'", lockManagerInstanceId, lockName), e);
-                                                                      } finally {
-                                                                          reentrantLock.unlock();
-                                                                      }
-                                                                  },
-                                                                  0,
-                                                                  lockConfirmationInterval.toMillis(),
-                                                                  TimeUnit.MILLISECONDS);
-        });
+            asyncLockAcquirings.computeIfAbsent(lockName, _lockName -> {
+                log.debug("[{}] Starting async Lock acquiring for lock '{}'", lockManagerInstanceId, lockName);
+                return executor.scheduleAtFixedRate(() -> asyncLockAcquiringTick(lockName, lockCallback),
+                                                    0,
+                                                    lockConfirmationInterval.toMillis(),
+                                                    TimeUnit.MILLISECONDS);
+            });
+        } finally {
+            reentrantLock.unlock();
+        }
+    }
+
+    /**
+     * A single tick of the background acquiring scheduled by {@link #acquireLockAsync(LockName, LockCallback)}: acquire
+     * the lock if this instance doesn't hold it, or notice and report that another instance has taken it over.
+     *
+     * @param lockName     the lock being acquired
+     * @param lockCallback the callback notified when the lock is acquired or lost
+     */
+    @SuppressWarnings("unchecked")
+    private void asyncLockAcquiringTick(LockName lockName, LockCallback lockCallback) {
+        try {
+            reentrantLock.lock();
+            if (!started) {
+                return;
+            }
+            var existingLock = locksAcquiredByThisLockManager.get(lockName);
+            if (existingLock == null) {
+                if (paused) {
+                    log.info("[{}] Lock Manager is paused, skipping async acquiring for lock '{}'", lockManagerInstanceId, lockName);
+                    return;
+                }
+
+                Optional<FencedLock> lock;
+                try {
+                    lock = tryAcquireLock(lockName);
+                } catch (Exception e) {
+                    log.error(msg("[{}] Technical error while performing tryAcquireLock for lock '{}'", lockManagerInstanceId, lockName), e);
+                    return;
+                }
+                if (lock.isPresent()) {
+                    log.debug("[{}] Async Acquired lock '{}'", lockManagerInstanceId, lockName);
+                    var fencedLock = lock.get();
+                    fencedLock.registerCallback(lockCallback);
+                    locksAcquiredByThisLockManager.put(lockName, (LOCK) fencedLock);
+                    lockCallback.lockAcquired(lock.get());
+                } else {
+                    if (log.isTraceEnabled()) {
+                        log.trace("[{}] Couldn't async Acquire lock '{}' as it is acquired by another Lock Manager instance: {}",
+                                  lockManagerInstanceId, lockName, lookupLock(lockName));
+                    }
+                }
+            } else if (!existingLock.isLockedByThisLockManagerInstance()) {
+                log.debug("[{}] Noticed that lock '{}' isn't locked by this Lock Manager instance anymore. Releasing the lock",
+                          lockManagerInstanceId,
+                          lockName);
+                locksAcquiredByThisLockManager.remove(lockName);
+                lockCallback.lockReleased(existingLock);
+            }
+        } catch (Exception e) {
+            log.error(msg("[{}] Technical error while trying to acquire lock '{}'", lockManagerInstanceId, lockName), e);
+        } finally {
+            reentrantLock.unlock();
+        }
     }
 
     @Override

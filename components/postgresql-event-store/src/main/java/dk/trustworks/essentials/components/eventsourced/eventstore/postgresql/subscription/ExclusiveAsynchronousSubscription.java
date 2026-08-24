@@ -109,22 +109,33 @@ public class ExclusiveAsynchronousSubscription extends AbstractEventStoreSubscri
 
     @Override
     public void start() {
-        if (!started) {
-            started = true;
-            log.info("[{}-{}] Started subscriber",
-                    subscriberId,
-                    aggregateType);
-
-            fencedLockManager.acquireLockAsync(lockName,
-                    LockCallback.builder()
-                            .onLockAcquired(this::onLockAcquired)
-                            .onLockReleased(this::onLockReleased)
-                            .build());
-        } else {
+        if (started) {
             log.debug("[{}-{}] Subscription was already started",
                     subscriberId,
                     aggregateType);
+            return;
         }
+        if (!fencedLockManager.isStarted()) {
+            // resetFrom() does stop()/start() around the reset, so a concurrent shutdown of the subscription manager
+            // (which stops the lock manager) can land in between. Leaving started == false means a later manager
+            // start() genuinely restarts this subscription instead of finding it "already started" and skipping it,
+            // which would leave the subscription permanently dead
+            log.info("[{}-{}] Not starting subscriber - the FencedLockManager isn't started",
+                    subscriberId,
+                    aggregateType);
+            return;
+        }
+
+        started = true;
+        log.info("[{}-{}] Started subscriber",
+                subscriberId,
+                aggregateType);
+
+        fencedLockManager.acquireLockAsync(lockName,
+                LockCallback.builder()
+                        .onLockAcquired(this::onLockAcquired)
+                        .onLockReleased(this::onLockReleased)
+                        .build());
     }
 
     private void onLockAcquired(FencedLock fencedLock) {
