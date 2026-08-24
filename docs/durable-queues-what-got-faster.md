@@ -16,12 +16,23 @@ It matters because a queue that fills in a burst may never be analysed in time: 
 autovacuums ran** during such a workload, since `autovacuum_naptime` is what binds. If you drain ordered messages
 from a table that was just filled, analyse it first.
 
+## And read this too: every number here is backlog recovery, not steady state
+
+Every measurement behind this page fills a queue with tens of thousands of messages and then drains it with no
+concurrent arrivals. That is a real case — recovering from a backlog — but it is not how a queue normally runs, and
+a steady-state queue differs in table size, planner statistics, dead-tuple churn and insert/claim contention. The
+figures should be read as *backlog-recovery* behaviour. A steady-state harness does not exist yet.
+
 ## Read this first: the numbers do not multiply
 
 Each improvement below attacks a different cost, on a different workload, and several are opt-in. **There is no
 single "the queue is now N× faster".** A deployment that is bottlenecked on acknowledgement transactions gains a
 great deal from one change and nothing from the others; a deployment dominated by ordered-key contention gains
 from a third and is untouched by the first two.
+
+It also explains why figures from early prototypes were consistently optimistic: they measured raw SQL on one
+connection with claim and acknowledge strictly alternating, no framework and no polling — further from a running
+system again, and wrong in the same direction every time.
 
 Two levers account for essentially everything measured:
 

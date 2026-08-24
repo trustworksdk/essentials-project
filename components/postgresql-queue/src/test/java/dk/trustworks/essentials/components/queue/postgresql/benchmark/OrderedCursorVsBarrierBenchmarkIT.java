@@ -136,6 +136,24 @@ class OrderedCursorVsBarrierBenchmarkIT {
                 }
             }
 
+            // ANALYZE before timing, because a freshly-seeded table has no planner statistics and §25 measured that
+            // costing ~11x on the ordered claim - larger than the effect this benchmark exists to measure. Applied
+            // to both arms. Set -Dcursorbench.analyze=false to reproduce the original, un-analysed numbers.
+            if (!"false".equals(System.getProperty("cursorbench.analyze"))) {
+                unitOfWorkFactory.getJdbi().useHandle(handle -> {
+                    try {
+                        handle.getConnection().setAutoCommit(true);
+                    } catch (java.sql.SQLException e) {
+                        throw new IllegalStateException("Could not switch to autoCommit for ANALYZE", e);
+                    }
+                    handle.execute("ANALYZE " + TABLE);
+                    var cursorTable = TABLE + "_key_cursor";
+                    if (Boolean.TRUE.equals(handle.createQuery("SELECT to_regclass(:t) IS NOT NULL").bind("t", cursorTable).mapTo(Boolean.class).one())) {
+                        handle.execute("ANALYZE " + cursorTable);
+                    }
+                });
+            }
+
             var handled = new java.util.concurrent.atomic.AtomicInteger();
             var startedAt = System.nanoTime();
             durableQueues.consumeFromQueue(ConsumeFromQueueBuilderHelper.build(queueName, message -> handled.incrementAndGet()));

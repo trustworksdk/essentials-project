@@ -1449,3 +1449,56 @@ statistics. That includes §21's 46–58 second ordered drains and, quite possib
 regime" in §11 — its 217× was measured on prototype tables seeded immediately before the run. **The barrier may be
 far less pathological than recorded, and the cursor's case correspondingly weaker.** Re-running §11 with `ANALYZE`
 is now the highest-value outstanding measurement, because a headline result rests on it.
+
+
+## 26. §11 re-run with ANALYZE — it survives, and the two ANALYZE results are complementary
+
+§25 cast doubt on every ordered figure taken without `ANALYZE`, including the barrier's pathological regime. Re-run
+through the component at §11's shape, 8 keys × 2 500 messages, with `ANALYZE` applied to both arms:
+
+| | Barrier | Cursor | Ratio |
+|---|---|---|---|
+| Without `ANALYZE` | 92 444 ms | 49 993 ms | 1.85× |
+| **With `ANALYZE`** | **90 503 ms** | **50 014 ms** | **1.81×** |
+
+**Unchanged.** Statistics do not rescue the barrier when keys are few and deep, so §11's conclusion stands and the
+cursor's case is intact.
+
+The two ANALYZE results are not in conflict; they describe different shapes:
+
+| Shape | Effect of `ANALYZE` | Why |
+|---|---|---|
+| Many shallow keys (100 × 200) | **~11×** — §25 | Row estimates drive the per-key plan; with statistics the barrier is fine |
+| Few deep keys (8 × 2 500) | **none** — this section | The barrier rescans a key's depth per candidate regardless of plan; no estimate makes that cheap |
+
+So the advice sharpens rather than changes: **analyse the queue table** (11× when keys are many and shallow, free),
+**and** the cursor is worth having specifically when keys are few and backlogs per key are deep, which is the one
+regime statistics cannot fix.
+
+---
+
+## Standing limitation: every figure here is burst-then-drain, which is not how a queue runs
+
+Worth stating plainly at the end of this document, because it bounds all of it and explains why prototype and
+component numbers keep diverging by more than their differences in *implementation* should account for.
+
+**Every arm in this document seeds N messages and then drains them with no concurrent arrivals.** That is backlog
+recovery, not steady state. A production queue has producers and consumers running together against a small
+backlog, which differs in ways that plausibly matter:
+
+- **Table and index size.** These runs drain a table holding 20 000–40 000 rows down to zero. A steady-state queue
+  holds tens of rows, and index depth, buffer residency and plan choice all differ.
+- **Statistics.** §25's 11× exists precisely because a burst-loaded table has none. A steady-state queue is
+  continuously written and read, and autovacuum has a reason to visit it.
+- **Dead tuples.** Burst-drain produces one large wave of dead rows at the end; steady state produces a continuous
+  trickle, which is what autovacuum is designed for and what §13 found never triggered under a burst.
+- **Contention.** No arm here has inserts competing with claims for the same pages, which is the normal condition.
+
+The prototype numbers were a further step removed again — raw SQL, one connection, claim and acknowledge strictly
+alternating, no framework and no polling — which is why they were wrong in the same direction each time, and by
+more than the component's own unrealism.
+
+**A steady-state harness is the outstanding methodological work**: producers at a fixed rate, consumers running
+continuously, measured as sustained throughput and delivery latency once the backlog stabilises, over long enough
+for autovacuum to behave as it would in production. Until that exists, every ratio in this document should be read
+as *backlog-recovery* behaviour, which is a real and important case — but only one of them.
