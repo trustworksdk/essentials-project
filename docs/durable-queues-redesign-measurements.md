@@ -1047,3 +1047,66 @@ of the other shape.
   (`-Dindexusage.messages`, `-Dindexusage.orderedKeys`) rather than the finding merely written down.
 - This is not the split. It is the index-set groundwork the split needs — an ordered table should carry the head
   index and the unique index, not the three it inherited from v1 — and it happens to ship a win on the way.
+
+
+## 18. B2 and B4, the handler in the claim transaction — both rejected
+
+The last untried ideas on the dominant lever, measured together because B4 requires the lock to span the handler,
+which *is* B2. Harness: `HandlerInClaimTransactionBenchmarkIT`, 1 000 unordered messages, raw JDBI through the
+production `JdbiUnitOfWorkFactory` so only the transaction boundaries differ between arms.
+
+Three arms. **`TWO_TRANSACTIONS`** is today: claim commits, handler runs with no transaction open, acknowledgement
+commits. **`HANDLER_IN_TRANSACTION`** (B2) is claim, savepoint, handler, release, delete, one commit — the savepoint
+around the handler *only*, so a failure rolls back the handler's work without discarding the claim's attempt
+increment, which is the specific defect that makes `FullyTransactional` unusable. **`ADVISORY_LOCK`** (B4+B2) takes
+`pg_try_advisory_xact_lock(hashtext(id))` instead of writing `is_being_delivered`, so the claim performs no write
+at all.
+
+### With workers ≤ connection pool: B2 does nothing, B4 costs 25–30%
+
+10 workers, pool 16, medians of one run per cell:
+
+| Handler | 2 txn | B2 | B4 | B2 gain | B4 gain |
+|---|---|---|---|---|---|
+| 0 ms | 108 ms | 105 ms | 145 ms | 1.03× | 0.74× |
+| 1 ms | 167 ms | 170 ms | 246 ms | 0.98× | 0.68× |
+| 5 ms | 625 ms | 643 ms | 916 ms | 0.97× | 0.68× |
+| 25 ms | 2 846 ms | 2 800 ms | 3 591 ms | 1.02× | 0.79× |
+
+**Halving transactions per message buys nothing**, and that is the finding worth carrying forward. The lever is
+right — transactions per message is what has moved every number in this investigation — but the *gradient is not
+linear*. §7's 16.5× came from 64 messages per transaction against one, a 64× reduction. Going from two to one is a
+2× reduction of a cost that is already cheap and already parallel across workers, and it disappears into noise.
+**Amortising across a batch is the mechanism; shaving one commit is not.**
+
+B4 is worse than B2 at every duration. Replacing a targeted single-row `FOR UPDATE SKIP LOCKED` claim with a
+50-row candidate scan plus a per-row lock attempt costs more than the write it saves — and it loses races, because
+a lock on `hashtext(id)` says nothing about whether the row still exists, so a worker can win a lock for a row
+another worker already deleted and do the handler's work for nothing. That last point also had to be fixed in the
+harness before the arm could even be measured: counting *claims* rather than *deletions* let it report completion
+with rows still in the table.
+
+### With workers > connection pool: the predicted penalty, and it is severe
+
+The first table cannot show B2's risk, because with workers ≤ pool there is always a spare connection and holding
+one across the handler costs nothing. That is a property of the harness, not of the design, so the sweep was
+repeated with 48 workers against a pool of 12:
+
+| Handler | 2 txn | B2 | B4 | B2 gain | B4 gain |
+|---|---|---|---|---|---|
+| 5 ms | 178 ms | 520 ms | 743 ms | **0.34×** | 0.24× |
+| 25 ms | 573 ms | 2 285 ms | 3 000 ms | **0.25×** | 0.19× |
+
+**Three to four times worse.** The baseline releases its connection for the handler's duration and can keep 48
+messages in flight on 12 connections; B2 cannot, so its throughput is capped at `pool ÷ handler duration`. This is
+the risk the backlog required to be measured rather than assumed, and it is real.
+
+### Verdict
+
+**Both rejected.** B2 has no upside and a large downside: flat at 1.0× where connections are plentiful, 0.25× where
+they are not. There is no crossover in the useful direction — the curve is flat, then bad. B4 is worse than B2
+everywhere and is rejected with it.
+
+This closes the last untried idea on transactions per message. What remains on that lever is **run-claiming with a
+batched ordered acknowledgement** — which works by amortising across a batch, the mechanism these two arms confirm
+is the one that matters.

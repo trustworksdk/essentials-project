@@ -17,6 +17,10 @@ Two levers account for essentially everything measured:
 1. **Transactions per message.** Overwhelmingly the dominant cost — not the SQL, the transaction around it.
 2. **Index write amplification.** Every index is maintained on insert, claim and delete.
 
+One refinement on the first, learned the hard way: **the gradient is not linear.** Batched acknowledgement's 16.5×
+comes from putting 64 messages in one transaction. Halving transactions per message — one commit instead of two —
+measures at 1.0× and buys nothing. Amortising across a batch is the mechanism; shaving a commit is not.
+
 Anything that attacks neither turned out not to matter, and several plausible-sounding ideas were measured and
 rejected on exactly that basis.
 
@@ -92,6 +96,9 @@ Worth listing, because each is a plausible idea someone will suggest again:
 | A write-once message row (no in-place claim update) | **Rejected** — 12% worse than the split; the churn moves rather than disappears |
 | A separate dead-letter table | Real but **modest**: 1.0–1.2×, and no index-size win |
 | Batching acknowledgement for *ordered* messages | **0.82× — worse.** Structural: the ordering barrier reads completion from a row's absence, so a buffered ack stalls the key |
+| Running the message handler inside the claim transaction (one commit per message instead of two) | **Rejected.** 1.0× where connections are plentiful, **0.25×** where workers outnumber the connection pool — holding a connection across the handler caps throughput at `pool ÷ handler duration` |
+| Advisory-lock claim instead of marking the row | **Rejected.** 0.68–0.79× even at its best — a candidate scan plus per-row lock attempts costs more than the write it saves |
+| Batched fetch, for throughput | 1.01–1.02×. It reduces round trips (16–64× fewer claim statements), not time — see the opt-in table above |
 
 ## Claims previously made that did not survive measurement
 
