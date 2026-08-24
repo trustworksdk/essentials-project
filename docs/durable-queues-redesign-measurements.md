@@ -1110,3 +1110,56 @@ everywhere and is rejected with it.
 This closes the last untried idea on transactions per message. What remains on that lever is **run-claiming with a
 batched ordered acknowledgement** — which works by amortising across a batch, the mechanism these two arms confirm
 is the one that matters.
+
+
+## 19. Run-claiming — attempted, not achieved, and three concurrency defects found
+
+§18 left run-claiming as the only remaining idea with a case on the dominant lever: one claimer takes a contiguous
+prefix of a key's messages, handles them in order, and commits **once** for the whole run. It defers nothing, so
+unlike batched acknowledgement it does not fall foul of §2 — the key's successor is released by that single commit.
+
+**Single-threaded it works and it pays.** 2 keys × 5 messages, one worker: head-and-ack-per-message 36 ms, run
+length 4 → 16 ms, **2.25×**. The mechanism is real.
+
+**Under concurrency it does not work yet.** Three distinct defects, found in sequence, each one exposed only by
+fixing the previous:
+
+1. **The cursor claim deadlocks with concurrent claimers.** `UPDATE … FROM candidate WHERE q.id = c.id` *waits* on
+   any row another claimer has locked, and two claimers whose candidate sets overlap in different orders produce
+   "deadlock detected". v1's barrier claim has always used `FOR UPDATE SKIP LOCKED`; the cursor claim shipped
+   without it. **It is latent rather than active in the shipped flag**: the centralized message fetcher has a
+   single poll thread and never issues two claims at once. It would surface under the traditional per-consumer
+   fetcher, or with two instances.
+2. **Adding `SKIP LOCKED` to the message update fixes the deadlock and breaks something worse.** It can drop a row
+   from the *middle* of a run — handing a claimer orders 5 and 7 while another holds 6 — which is exactly the
+   skipping fault the `bool_and` prefix window exists to prevent, reintroduced by another route. Caught by the
+   benchmark's per-key ordering assertion, not by inspection.
+3. **Moving exclusivity to a `FOR UPDATE SKIP LOCKED` on the key's cursor row then deadlocks against the
+   acknowledgement**, because the claim locks cursor-row → message-rows while the acknowledgement locks
+   message-rows → cursor-row. Fixing the ordering (lock the affected keys' cursor rows first) removed the deadlock
+   and left a stall: messages claimed and marked in flight that no worker ever acknowledges, so every key blocks
+   permanently and the drain halts around half way.
+
+That third state is where the attempt stopped. **The claim SQL was reverted to the shipped head-only form**, which
+is green again on both cursor gates — the 13-test shared suite and the 2 000-message / 20-consumer ordering suite.
+Nothing about the shipped flag changed.
+
+### What this establishes
+
+- **Run-claiming's benefit is real** (2.25× single-threaded at run length 4) and its cost is a genuinely hard
+  concurrency design, not an implementation detail. Prefix integrity and deadlock-freedom pull against each other:
+  every lock strategy that prevents one has so far broken the other.
+- **The shipped cursor has a latent deadlock** under concurrent claimers (defect 1). It cannot fire under the
+  centralized fetcher, which is the default and the only configuration the flag has been measured in, but it
+  should be fixed before the cursor is used with the traditional consumer or recommended more widely. The fix is
+  not simply `SKIP LOCKED` — defect 2 shows why.
+- **A benchmark that counts claims rather than deletions hides all of this.** Twice in this section, and once in
+  §18, a harness reported completion with rows still in the table. Counting what the acknowledgement actually
+  deleted is what made the stalls visible.
+
+### If this is picked up again
+
+The lock order has to be one order everywhere — cursor row, then message rows — and the run has to stay a prefix
+*after* locking, which means the claim cannot use `SKIP LOCKED` on the messages at all. A claim that locks exactly
+one key's cursor row per statement would satisfy both, at the cost of one statement per key per poll, which is the
+trade the benchmark should measure next.
