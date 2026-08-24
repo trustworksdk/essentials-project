@@ -26,7 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.postgresql.util.PSQLException;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.containers.wait.strategy.*;
 import org.testcontainers.images.builder.ImageFromDockerfile;
 import org.testcontainers.junit.jupiter.*;
 
@@ -86,6 +86,24 @@ public class AbstractLogicalReplicationPostgresIT {
             .withFileFromClasspath("Dockerfile", "docker/postgresql-wal2json/Dockerfile");
 
     /**
+     * The readiness check for {@link #WAL2JSON_IMAGE}, shared with {@link CdcModeAutoRequireIT}.
+     * <p>
+     * The image derives from the official {@code postgres} image, whose entrypoint starts the server <b>twice</b> on a
+     * first boot: a temporary local-only server for {@code initdb}, a shutdown, then the real one. {@code
+     * Wait.forListeningPort()} returns as soon as the postmaster binds 5432 - which happens while the second server is
+     * still starting up and answers every connection with {@code FATAL: the database system is starting up}. Waiting
+     * for the readiness line the second time is what {@link org.testcontainers.containers.PostgreSQLContainer} does,
+     * and the only reason these two suites hand-roll it is that they need {@link GenericContainer} for the custom image.
+     * <p>
+     * A new instance per call on purpose: {@code AbstractWaitStrategy} binds itself to the container it is waiting on,
+     * so a single shared instance cannot serve two containers.
+     */
+    protected static WaitStrategy postgresReadyWaitStrategy() {
+        return Wait.forLogMessage(".*database system is ready to accept connections.*\\s", 2)
+                   .withStartupTimeout(Duration.ofSeconds(60));
+    }
+
+    /**
      * Deliberately an <b>instance</b> field - one container per test method - against the general rule in
      * {@code .claude/rules/testing.md} that {@code @Container} fields are static. These suites assert on absolute
      * {@code GlobalEventOrder} values and own replication slots, so events left behind by an earlier test method make a
@@ -102,7 +120,7 @@ public class AbstractLogicalReplicationPostgresIT {
                          "-c", "max_wal_senders=10"
                         )
             .withExposedPorts(5432)
-            .waitingFor(Wait.forListeningPort().withStartupTimeout(Duration.ofSeconds(60)));
+            .waitingFor(postgresReadyWaitStrategy());
 
     protected Jdbi                               jdbi;
     protected DataSource                         replicationDataSource;
