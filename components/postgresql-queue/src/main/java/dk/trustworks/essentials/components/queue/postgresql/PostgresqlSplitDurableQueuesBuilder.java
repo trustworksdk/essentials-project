@@ -18,9 +18,11 @@ package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 
 import java.time.Duration;
+import java.util.function.Function;
 
 /**
  * Builder for {@link PostgresqlSplitDurableQueues}. Its defaults are
@@ -30,6 +32,8 @@ import java.time.Duration;
 public final class PostgresqlSplitDurableQueuesBuilder {
     private HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory;
     private JSONSerializer                                               jsonSerializer;
+    private MultiTableChangeListener<TableChangeNotification>             multiTableChangeListener;
+    private Function<QueueName, QueuePollingOptimizer>                    centralizedQueuePollingOptimizerFactory;
     private PostgresqlSplitDurableQueuesSettings                         settings = PostgresqlSplitDurableQueuesSettings.defaults();
 
     public PostgresqlSplitDurableQueuesBuilder setUnitOfWorkFactory(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
@@ -39,6 +43,20 @@ public final class PostgresqlSplitDurableQueuesBuilder {
 
     public PostgresqlSplitDurableQueuesBuilder setJsonSerializer(JSONSerializer jsonSerializer) {
         this.jsonSerializer = jsonSerializer;
+        return this;
+    }
+
+    /**
+     * The LISTEN/NOTIFY bridge. Without it the split polls at its fixed interval and every queue gets
+     * {@link QueuePollingOptimizer#None()}, since backoff with no wake-up is only slower.
+     */
+    public PostgresqlSplitDurableQueuesBuilder setMultiTableChangeListener(MultiTableChangeListener<TableChangeNotification> multiTableChangeListener) {
+        this.multiTableChangeListener = multiTableChangeListener;
+        return this;
+    }
+
+    public PostgresqlSplitDurableQueuesBuilder setCentralizedQueuePollingOptimizerFactory(Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory) {
+        this.centralizedQueuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory;
         return this;
     }
 
@@ -145,6 +163,10 @@ public final class PostgresqlSplitDurableQueuesBuilder {
     }
 
     public PostgresqlSplitDurableQueues build() {
-        return new PostgresqlSplitDurableQueues(unitOfWorkFactory, jsonSerializer, settings);
+        return new PostgresqlSplitDurableQueues(unitOfWorkFactory,
+                                               jsonSerializer,
+                                               multiTableChangeListener,
+                                               centralizedQueuePollingOptimizerFactory,
+                                               settings);
     }
 }

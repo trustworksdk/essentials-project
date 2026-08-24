@@ -889,7 +889,16 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         }
     }
 
-    private static DefaultQueuedMessage createDefaultQueuedMessage(QueueTableNotification e, QueueName queueName) {
+    /**
+     * The stub {@link QueuedMessage} a wake-up notification carries.
+     * <p>
+     * A notification says only that <em>something</em> was added to a queue, so this exists to satisfy
+     * {@link QueuePollingOptimizer#messageAdded(QueuedMessage)}'s signature - the payload is
+     * {@link #NO_PAYLOAD} and the attempt counts are {@code -1} precisely because nothing here has been read from
+     * the row. Package-private so {@link PostgresqlSplitDurableQueues} builds it the same way rather than growing
+     * a second version of a stub with a deprecated constructor in it.
+     */
+    static DefaultQueuedMessage createDefaultQueuedMessage(QueueTableNotification e, QueueName queueName) {
         return new DefaultQueuedMessage(QueueEntryId.of(String.valueOf(e.id)),
                                         queueName,
                                         Message.of(NO_PAYLOAD),

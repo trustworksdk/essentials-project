@@ -22,11 +22,13 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
+import dk.trustworks.essentials.reactive.*;
 import org.slf4j.*;
 
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Function;
 import java.util.stream.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -76,6 +78,8 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
     private final PostgresqlDurableQueues                                                  orderedStore;
     private final String                                                                   unorderedTableName;
     private final String                                                                   orderedTableName;
+    private final Optional<MultiTableChangeListener<TableChangeNotification>>               multiTableChangeListener;
+    private final Function<QueueName, QueuePollingOptimizer>                                queuePollingOptimizerFactory;
     private final List<DurableQueuesInterceptor>                                           interceptors           = new CopyOnWriteArrayList<>();
     private final ConcurrentMap<QueueName, CentralizedMessageFetcherDurableQueueConsumer> durableQueueConsumers = new ConcurrentHashMap<>();
     private final CentralizedMessageFetcher                                                centralizedMessageFetcher;
@@ -86,12 +90,29 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
         return new PostgresqlSplitDurableQueuesBuilder();
     }
 
+    /**
+     * @param multiTableChangeListener          the LISTEN/NOTIFY bridge, or {@code null} for polling only. When
+     *                                          present, both tables get a change-notification trigger and an
+     *                                          enqueue on either of them wakes the queue's poll - see
+     *                                          {@link #installNotificationTriggers} and
+     *                                          {@link #subscribeToWakeUpNotifications}
+     * @param centralizedQueuePollingOptimizerFactory per-queue backoff strategy, or {@code null} for the default
+     *                                          (which is {@link QueuePollingOptimizer#None()} when no listener is
+     *                                          configured, since without wake-ups a backed-off queue has nothing
+     *                                          to un-back it off)
+     */
     public PostgresqlSplitDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                                         JSONSerializer jsonSerializer,
+                                        MultiTableChangeListener<TableChangeNotification> multiTableChangeListener,
+                                        Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
                                         PostgresqlSplitDurableQueuesSettings settings) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory provided");
         this.settings = requireNonNull(settings, "No settings provided");
         requireNonNull(jsonSerializer, "No jsonSerializer provided");
+        this.multiTableChangeListener = Optional.ofNullable(multiTableChangeListener);
+        this.queuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory != null
+                                            ? centralizedQueuePollingOptimizerFactory
+                                            : this::createDefaultQueuePollingOptimizerFor;
         this.unorderedTableName = settings.baseQueueTableName() + UNORDERED_TABLE_SUFFIX;
         this.orderedTableName = settings.baseQueueTableName() + ORDERED_TABLE_SUFFIX;
 
@@ -159,6 +180,7 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
         orderedStore.start();
         centralizedMessageFetcher.start();
         durableQueueConsumers.values().forEach(CentralizedMessageFetcherDurableQueueConsumer::start);
+        subscribeToWakeUpNotifications();
         started = true;
         log.info("Started with unordered table '{}' and ordered table '{}'", unorderedTableName, orderedTableName);
     }
@@ -180,6 +202,13 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
         } catch (Exception e) {
             log.error("Error occurred while stopping CentralizedMessageFetcher", e);
         }
+        multiTableChangeListener.ifPresent(listener -> bothTableNames().forEach(tableName -> {
+            try {
+                listener.unlistenToNotificationsFor(tableName);
+            } catch (Exception e) {
+                log.debug("Error occurred while performing unlistenToNotificationsFor '{}'", tableName, e);
+            }
+        }));
         orderedStore.stop();
         unorderedStore.stop();
         started = false;
@@ -207,7 +236,77 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
             unitOfWork.handle().execute(orderedSql.getCreateSplitOrderedHeadIndexSql());
             unitOfWork.handle().execute(orderedSql.getCreateSplitOrderedKeyIndexSql(
                     settings.orderedMessageDuplicateStrategy() == OrderedMessageDuplicateStrategy.REJECT));
+
+            installNotificationTriggers(unitOfWork);
         });
+    }
+
+    /**
+     * Installs the change-notification trigger on <b>both</b> tables, so an enqueue to either wakes the queue's
+     * poll.
+     * <p>
+     * The delegates cannot do this: v1 installs it inside its schema initialization, which a
+     * {@link PostgresqlDurableQueues.Role#SPLIT_DELEGATE} skips. Until this existed the split had no wake-up at
+     * all and polled at its fixed interval - correct, but a silent latency regression for a deployment moving
+     * onto the split with a listener configured.
+     */
+    private void installNotificationTriggers(HandleAwareUnitOfWork unitOfWork) {
+        multiTableChangeListener.ifPresent(listener -> bothTableNames().forEach(tableName ->
+                ListenNotify.addChangeNotificationTriggerToTable(unitOfWork.handle(),
+                                                                 tableName,
+                                                                 List.of(ListenNotify.SqlOperation.INSERT, ListenNotify.SqlOperation.UPDATE),
+                                                                 "id", "queue_name", "added_ts", "next_delivery_ts", "delivery_ts",
+                                                                 "is_dead_letter_message", "is_being_delivered")));
+    }
+
+    /**
+     * Routes a notification from <em>either</em> table to the consumer for its queue, which resets that queue's
+     * backoff so the next tick polls both tables.
+     * <p>
+     * Routing by <b>queue name</b> rather than by table is what makes this correct on a split, and it is not a
+     * change from v1 - v1 already routes on {@code QueueTableNotification.queueName}, and both split tables carry
+     * that column. A table-keyed wake-up would have let an ordered enqueue advance state the queue's single poll
+     * decision never reads. See §7e of {@code docs/durable-queues-implementation-plan.md}.
+     */
+    private void subscribeToWakeUpNotifications() {
+        multiTableChangeListener.ifPresent(listener -> {
+            bothTableNames().forEach(tableName -> listener.listenToNotificationsFor(tableName, QueueTableNotification.class));
+            listener.getEventBus().addAsyncSubscriber(new AnnotatedEventHandler() {
+                @Handler
+                void handle(QueueTableNotification notification) {
+                    try {
+                        var queueName = QueueName.of(notification.queueName);
+                        var consumer  = durableQueueConsumers.get(queueName);
+                        if (consumer != null) {
+                            consumer.messageAdded(PostgresqlDurableQueues.createDefaultQueuedMessage(notification, queueName));
+                        }
+                    } catch (Exception e) {
+                        log.error("Error occurred while handling notification", e);
+                    }
+                }
+            });
+        });
+    }
+
+    private List<String> bothTableNames() {
+        return List.of(unorderedTableName, orderedTableName);
+    }
+
+    /**
+     * Backoff only makes sense when something can end it. With no {@link MultiTableChangeListener} there are no
+     * wake-ups, so a backed-off queue would simply be slower with nothing to recover it - hence
+     * {@link QueuePollingOptimizer#None()}. This mirrors how v1 resolves its own optimizer.
+     */
+    private QueuePollingOptimizer createDefaultQueuePollingOptimizerFor(QueueName queueName) {
+        if (multiTableChangeListener.isEmpty()) {
+            return QueuePollingOptimizer.None();
+        }
+        var pollingIntervalMs = settings.pollingInterval().toMillis();
+        return new CentralizedQueuePollingOptimizer(queueName,
+                                                    Math.max(1L, (long) (pollingIntervalMs * 0.5d)),
+                                                    pollingIntervalMs * 20,
+                                                    1.5,
+                                                    0.1);
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -535,7 +634,7 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
                                                                                                                   this,
                                                                                                                   this::removeQueueConsumer,
                                                                                                                   centralizedMessageFetcher,
-                                                                                                                  QueuePollingOptimizer.None())).proceed();
+                                                                                                                  queuePollingOptimizerFactory.apply(operation.getQueueName()))).proceed();
             if (started) {
                 consumer.start();
             }

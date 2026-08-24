@@ -386,27 +386,35 @@ Two defects the increment surfaced, both in code written earlier in this branch:
    why the flag became a `Role` rather than staying a boolean: "does not own its table" and "holds only half the
    messages" are the same fact, and a boolean named after the first would have kept hiding the second.
 
-Deliberately out of increment 1, in addition to the admin surface: **LISTEN/NOTIFY wake-up.** The trigger is
-installed inside v1's `initializeQueueTables()` under `multiTableChangeListener.ifPresent(...)`, which the
-delegates do not run, so the split polls at its fixed interval with `QueuePollingOptimizer.None()`. Correct, and
-slower to wake than v1 with a `MultiTableChangeListener` configured — it belongs with increment 2, alongside the
-admin surface, since both need the composite to own notification wiring rather than inherit it. See §7e for what
-that wiring can and cannot borrow.
+Out of increment 1 and **since closed by B5(a)**: LISTEN/NOTIFY wake-up. The trigger is installed inside v1's
+`initializeQueueTables()` under `multiTableChangeListener.ifPresent(...)`, which the delegates do not run, so the
+split initially polled at its fixed interval with `QueuePollingOptimizer.None()` — correct, but a silent latency
+regression for anyone moving onto the split with a listener configured. The composite now owns that wiring; see
+§7e for what it did and did not borrow from the event-store prior art. The admin surface remains increment 2.
 
 ## 7e. What B5 can borrow from the CDC/subscription wake-up, and what it cannot
+
+> **Corrected after implementing B5(a).** Two claims below were written from reading the event-store classes and
+> the improvements plan, before reading v1's own notification path, and they were wrong: v1 **already** has a
+> complete queue-name-keyed wake-up, and it is **already** immune to the missed-wakeup race the event-store epoch
+> exists to solve. What B5(a) needed for the split was therefore wiring, not a mechanism. The details are marked
+> inline; the conclusions about `NotifyAwareEventStorePollingOptimizer` not porting, and about the ramp not being
+> the prize, stand.
 
 The improvements plan's **I2** says to replace the fetcher's `scheduleAtFixedRate` with an epoch-driven wait loop
 and to read `postgresql-event-store`'s `subscription/notify/{NotifyEpochSource, NotifyAwareEventStorePollingOptimizer}`
 first, because they solve a missed-wakeup race. Both classes exist on this branch. Having read them, the guidance
 holds for one of the two and not the other, and the difference is structural rather than a matter of taste.
 
-**`NotifyEpochSource` ports, and is the valuable half.** It subscribes to the shared `EventBus`, collapses N
-`TableChangeNotification`s into a per-key monotonic counter created lazily on first sight, and answers "has
-anything changed since epoch X". Nothing in it is event-store-specific. The load-bearing detail is *when* the
-baseline is snapshotted: `eventStorePollingReturnedEvents()` reads the epoch **after** the poll, so a notification
-that arrived *during* the poll counts as already served rather than triggering a redundant immediate re-poll,
-while a genuinely later one still advances past the baseline. That ordering is the missed-wakeup discipline I2
-refers to, and it is the thing to copy.
+**~~`NotifyEpochSource` ports, and is the valuable half.~~ Not needed — the queue already has its equivalent, and
+a structurally stronger one.** The event-store optimizer compares a counter against a snapshot, so *when* the
+snapshot is taken decides whether a notification arriving mid-poll is lost; `eventStorePollingReturnedEvents()`
+reads the epoch after the poll for exactly that reason. The queue never compares: `QueuePollingOptimizer` has a
+`messageAdded(QueuedMessage)` hook, and `CentralizedQueuePollingOptimizer.messageAdded` sets
+`nextAllowedPollEpochMs = now`. Setting a permission cannot miss an update the way comparing a counter can — a
+notification arriving mid-poll simply permits the next poll, whose only cost is one possibly-redundant claim. So
+the missed-wakeup race I2 warns about does not exist on this path, and porting an epoch source would add
+machinery to solve a problem the queue does not have.
 
 **`NotifyAwareEventStorePollingOptimizer` does not port.** The two optimizer SPIs have different output types:
 `EventStorePollingOptimizer.currentDelayMs()` returns a sleep the per-subscription loop honours, whereas
@@ -425,14 +433,25 @@ Two consequences that change the shape of B5 rather than just its size:
    mattering. The win B5 is actually after is the ~95% cut in idle claim statements, and `shouldSkipPolling()`
    plus an epoch source already delivers that without touching the loop. **Replacing `scheduleAtFixedRate` is
    separable from NOTIFY-driven skipping, and only the second is cheap.**
-2. **The epoch must be keyed by queue name, not table name — and the split is why.** The event-store version keys
-   by table because a subscription maps 1:1 to a table. In the split a consumer maps to *two* tables, so a
-   table-keyed epoch would let an ordered enqueue advance only the ordered table's counter while the queue's
-   single poll decision reads the unordered one's. `QueueTableNotification` already carries `queueName`, so the
-   key is available. This is the same mistake as reporting the polling outcome per table instead of once across
-   both (§7d) — a per-queue decision fed from per-table state — and it is now the second time that shape has
-   bitten, which makes it worth stating as a rule: **in the split, anything the consumer decides once must be fed
-   from state merged across both tables.**
+2. **Wake-ups must be keyed by queue name, not table name — and v1 already is.** The event-store version keys by
+   table because a subscription maps 1:1 to a table. In the split a consumer maps to *two* tables, so a
+   table-keyed wake-up would let an ordered enqueue advance state the queue's single poll decision never reads.
+   ~~This is a hazard to avoid~~ — v1's notification handler already routes on `QueueTableNotification.queueName`
+   to the consumer for that queue, and both split tables carry the column, so the split inherits the correct
+   keying for free. The rule the near-miss suggests is still worth stating, because §7d hit the same shape for
+   real: **in the split, anything the consumer decides once must be fed from state merged across both tables.**
+
+**B5(a) as actually built, therefore, is wiring.** `PostgresqlSplitDurableQueues` takes a
+`MultiTableChangeListener`, installs the change-notification trigger on both tables during its own schema
+creation, listens on both table names, and routes `QueueTableNotification`s by queue name into its own consumer
+registry — the same shape as v1's handler over one table. With no listener configured it resolves
+`QueuePollingOptimizer.None()` rather than a backoff, because backoff with nothing to end it is only slower.
+`PostgresqlSplitDurableQueuesNotifyWakeUpIT` pins the trigger install on both tables, the wake-up from *either*
+table reaching the one consumer, a notification for an unconsumed queue being harmless, and — as the control that
+makes the rest believable — that the same traffic with no listener produces no wake-ups at all.
+
+**B5(b) — replacing `scheduleAtFixedRate` — is untouched and still unmeasured.** After B5(a) the idle-statement
+cut is already available through backoff plus wake-ups, which was the point of separating them.
 
 ## 8. Investigation backlog — ideas not yet tried
 
@@ -447,7 +466,7 @@ Anything that attacks neither is in §3 or the "skip" list below.
 | **B2** | **Handler inside the claim transaction, with a savepoint around the handler only.** One transaction per message instead of two | Transactions | The largest remaining win on the dominant lever. This is nominally `FullyTransactional`, which is correctly documented as broken because a rollback loses the attempt increment — but §14 showed a savepoint is cheap when it is per *failure* rather than per row, and failures are rare. **The risk is real and must be measured, not assumed**: it holds a connection and pins the xmin horizon for the handler's duration, which is the mechanism behind §7's 5.7× artefact. The deliverable is a crossover curve against handler duration, not a yes/no | Consumer-level scenario; more work than B1 |
 | **B3** | **Index diet on the current table, no migration.** | Index writes | **Measured and it pays (§16).** Two of the six indexes are never scanned across the entire SPI — `idx_*_ready` and `idx_*_ordered_ready` — holding **43% of the table's index bytes**, maintained on every insert, claim and delete. All six are created unconditionally regardless of `useOrderedUnorderedQuery`, so a default deployment maintains indexes for a query it never runs. **Ready to implement**: make creation conditional on the flag | Done |
 | **B4** | **Advisory-lock claim** (`pg_try_advisory_xact_lock(hashtext(id))`) instead of marking the row | Both | **Promoted by B1's failure (§15).** Same idea, without either cost that sank B1: no write on claim *and* no second table in the acknowledgement path. Requires the lock to span the handler, which ties it to B2 — the two are one experiment, not two. Now the most promising untried idea | Consumer-level, with B2 |
-| **B5** | **NOTIFY-driven wake-up replacing the fixed tick** (I1/I2 in the improvements plan) | Neither — *latency* | Everything measured in this investigation is throughput. This is the only remaining item targeting enqueue-to-delivery latency, estimated 400 ms → <10 ms p99 idle with a ~95% cut in idle claim statements. Fully designed, unimplemented, unmeasured. **Split into two after reading the prior art (§7e): (a) a queue-name-keyed epoch source feeding `shouldSkipPolling()` — cheap, gets the statement cut; (b) replacing `scheduleAtFixedRate` with a wait loop — separable, and a straight port would *worsen* idle latency** | (a) small; (b) already specified but a fetcher-loop rewrite. Then a PROBE scenario |
+| **B5** | **NOTIFY-driven wake-up replacing the fixed tick** (I1/I2 in the improvements plan) | Neither — *latency* | Everything measured in this investigation is throughput. This is the only remaining item targeting enqueue-to-delivery latency, estimated 400 ms → <10 ms p99 idle with a ~95% cut in idle claim statements. Fully designed, unimplemented, unmeasured. **Split in two (§7e). (a) Wake-ups for the split — done: the composite installs the trigger on both tables and routes notifications by queue name, so backoff plus wake-up gives the idle-statement cut with no new mechanism. (b) Replacing `scheduleAtFixedRate` with a wait loop — untouched, and a straight port of the event-store design would *worsen* idle latency** | (a) done; (b) a fetcher-loop rewrite, then a PROBE scenario |
 | **B6** | **Hash-partition by `id`**, if partitioning ever returns | Index writes | Recorded so the idea is not re-proposed on the wrong axis. Partitioning by `queue_name` failed (§12) because by-id operations lost the primary key; hashing by `id` prunes for every by-id operation instead — but then the claim, which filters by `queue_name`, scans every partition. Probably net-negative; the point is that `id` is the only defensible axis | Low priority |
 
 **Skip, on evidence:** `fillfactor` and HOT tuning (§3, measured dead), per-table autovacuum parameters (§13,
