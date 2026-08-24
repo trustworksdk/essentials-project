@@ -5,6 +5,14 @@ A summary for people **using** the queue, not building it. Every figure here is 
 [durable-queues-v2-design-plan.md](durable-queues-v2-design-plan.md); nothing is estimated, and the things that
 did not pay are listed too, because knowing which knobs are pointless is worth as much as knowing which are not.
 
+## The short version
+
+Measured against a queue running normally — producers and consumers together, backlog small — **none of the tuning
+options below change throughput or latency**, and capacity is within 7% across all of them. They help when the
+queue has *fallen behind*, which is a real and important event but not the normal one.
+
+The exception is the first section, which is free and is not a code change.
+
 ## Before any of this: run `ANALYZE` on your queue table
 
 The single largest effect measured in this investigation that costs nothing to fix. A freshly-loaded queue table

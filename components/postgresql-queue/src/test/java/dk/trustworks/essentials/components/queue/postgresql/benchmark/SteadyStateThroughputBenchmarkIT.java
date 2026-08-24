@@ -23,7 +23,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
-import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
+import dk.trustworks.essentials.components.queue.postgresql.*;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -99,6 +99,61 @@ class SteadyStateThroughputBenchmarkIT {
         }
     }
 
+    /**
+     * The split and the cursor in steady state, against the shared table with the barrier.
+     * <p>
+     * Both were measured only in backlog recovery, where the split came out at ~1.1× on unordered and parity on
+     * ordered, and the cursor at 1.81× in the deep-per-key regime. Every claim in this investigation taken from a
+     * less realistic harness has shrunk when re-measured in a more realistic one, so these are re-measured here
+     * rather than assumed to carry over.
+     */
+    @Test
+    void split_and_cursor_in_steady_state() {
+        var ratePerSecond  = Integer.getInteger("steady.ratePerSecond", 600);
+        var warmupSeconds  = Integer.getInteger("steady.warmupSeconds", 8);
+        var measureSeconds = Integer.getInteger("steady.measureSeconds", 15);
+        var ordered        = Boolean.parseBoolean(System.getProperty("steady.ordered", "true"));
+
+        System.out.printf("%nsteady state, %s traffic: %d msg/s offered, %ds warm-up, %ds measured%n",
+                          ordered ? "ordered" : "unordered", ratePerSecond, warmupSeconds, measureSeconds);
+        System.out.printf("%-22s %-12s %-12s %-12s %-14s%n", "implementation", "throughput/s", "p50 ms", "p99 ms", "backlog end");
+        for (var variant : List.of("shared", "split", "cursor")) {
+            if (variant.equals("cursor") && !ordered) {
+                continue;   // the cursor only replaces the ordered claim
+            }
+            var result = runVariant(variant, ordered, ratePerSecond, warmupSeconds, measureSeconds);
+            System.out.printf("%-22s %-12d %-12d %-12d %-14s%n",
+                              variant, result.delivered / measureSeconds, result.p50Ms, result.p99Ms,
+                              result.backlogGrowing ? result.backlogEnd + " GROWING" : String.valueOf(result.backlogEnd));
+        }
+    }
+
+    private Result runVariant(String variant, boolean ordered, int ratePerSecond, int warmupSeconds, int measureSeconds) {
+        unitOfWorkFactory.usingUnitOfWork(uow -> {
+            uow.handle().execute("DROP TABLE IF EXISTS " + TABLE + "_key_cursor");
+            uow.handle().execute("DROP TABLE IF EXISTS " + TABLE + PostgresqlSplitDurableQueues.UNORDERED_TABLE_SUFFIX);
+            uow.handle().execute("DROP TABLE IF EXISTS " + TABLE + PostgresqlSplitDurableQueues.ORDERED_TABLE_SUFFIX);
+            uow.handle().execute("DROP TABLE IF EXISTS " + TABLE);
+        });
+        DurableQueues durableQueues = switch (variant) {
+            case "split" -> PostgresqlSplitDurableQueues.builder()
+                                                        .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                        .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                                        .setBaseQueueTableName(TABLE)
+                                                        .build();
+            case "cursor" -> PostgresqlDurableQueues.builder()
+                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                    .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                                    .setUseOrderedMessageCursor(true)
+                                                    .build();
+            default -> PostgresqlDurableQueues.builder()
+                                              .setUnitOfWorkFactory(unitOfWorkFactory)
+                                              .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                              .build();
+        };
+        return measure(durableQueues, ordered, ratePerSecond, warmupSeconds, measureSeconds);
+    }
+
     @Test
     void batched_acknowledgement_in_steady_state() {
         var ratePerSecond   = Integer.getInteger("steady.ratePerSecond", 2000);
@@ -125,9 +180,14 @@ class SteadyStateThroughputBenchmarkIT {
                                                    .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
                                                    .setUseBatchedAcknowledgement(batchedAck)
                                                    .build();
+        return measure(durableQueues, false, ratePerSecond, warmupSeconds, measureSeconds);
+    }
+
+    private Result measure(DurableQueues durableQueues, boolean ordered, int ratePerSecond, int warmupSeconds, int measureSeconds) {
         durableQueues.start();
 
         var queueName = QueueName.of("SteadyState");
+        var orderKey  = new AtomicLong();
         var latencies = new ConcurrentLinkedQueue<Long>();
         var delivered = new AtomicLong();
         var measuring = new AtomicBoolean();
@@ -158,7 +218,11 @@ class SteadyStateThroughputBenchmarkIT {
                     try {
                         var batch = new ArrayList<Message>();
                         for (var i = 0; i < perTick / 4; i++) {
-                            batch.add(Message.of("m"));
+                            // Ordered messages spread over a fixed set of keys, so per-key ordering is exercised
+                            // without any one key becoming the bottleneck.
+                            batch.add(ordered
+                                      ? OrderedMessage.of("m", "key-" + (orderKey.get() % 64), orderKey.getAndIncrement())
+                                      : Message.of("m"));
                         }
                         if (!batch.isEmpty()) {
                             durableQueues.queueMessages(queueName, batch);
@@ -198,7 +262,7 @@ class SteadyStateThroughputBenchmarkIT {
         }
     }
 
-    private long backlog(QueueName queueName, PostgresqlDurableQueues durableQueues) {
+    private long backlog(QueueName queueName, DurableQueues durableQueues) {
         return durableQueues.getTotalMessagesQueuedFor(queueName);
     }
 

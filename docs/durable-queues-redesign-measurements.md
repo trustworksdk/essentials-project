@@ -1581,3 +1581,52 @@ unchanged; the acknowledgement is the first place where writing SQL that knows a
 than composing two operations that each know about one. The remaining by-id operations — `deleteMessage`,
 `retryMessage`, `markAsDeadLetterMessage`, `resurrectDeadLetterMessage` — still delegate and still pay the double
 cost, but they run per failure rather than per message.
+
+
+## 29. Split and cursor in steady state — neither helps, and capacity is the same
+
+Both had been measured only in backlog recovery. Re-measured with producers and consumers running together,
+ordered traffic over 64 keys.
+
+**At a sustainable rate (600 msg/s offered, ~40% of capacity), all three are equivalent:**
+
+| Implementation | Throughput/s | p50 | p99 | Backlog |
+|---|---|---|---|---|
+| shared + barrier | 400 | 11 ms | 18 ms | 8 |
+| split | 400 | 16 ms | 21 ms | 4 |
+| cursor | 400 | 13 ms | 25 ms | 8 |
+
+Throughput is the offered rate in all three, backlogs are bounded, and the latency differences are small and go the
+wrong way for both optimisations.
+
+**At saturation (3 000 msg/s offered — all three `GROWING`, which is what makes this a capacity measurement):**
+
+| Implementation | Capacity |
+|---|---|
+| shared + barrier | 941 msg/s |
+| split | 1 008 msg/s |
+| cursor | 1 006 msg/s |
+
+**About 7% apart, which is within run-to-run variation.** Neither the split nor the cursor raises the capacity of an
+ordered queue in this shape.
+
+### What this settles
+
+Every optimisation in this investigation is a **backlog-recovery** optimisation:
+
+| | Backlog recovery | Steady state |
+|---|---|---|
+| Batched acknowledgement | 16.5× *(raw harness only; 1.02× through the component)* | 1.00×, worse p99 |
+| Two-table split | ~1.1× unordered, parity ordered | parity, worse p50/p99 |
+| Per-key cursor | 1.81× at 8 keys × 2 500 | parity, worse p99 |
+| `ANALYZE` | **11×** on the ordered claim | *not applicable — a live table has statistics* |
+
+The one intervention that survives contact with a realistic harness is the one that costs nothing and is not a code
+change at all: **make sure the queue table has planner statistics.** Everything else on this list is either an
+artefact of measuring a raw harness, or a genuine improvement to a case — draining a large backlog — that a healthy
+queue is not in.
+
+That is not an argument that the work was wasted. Backlog recovery is a real operational event, and a queue that
+has fallen behind is exactly when throughput matters most. It is an argument that **the defaults are right as they
+are**: every one of these is correctly opt-in, and a deployment should turn one on because it recognises its own
+shape in the table above, not because a headline number looked large.
