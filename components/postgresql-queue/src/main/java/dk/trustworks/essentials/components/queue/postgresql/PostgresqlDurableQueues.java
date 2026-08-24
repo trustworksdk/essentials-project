@@ -622,11 +622,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                            requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout provided - required when batched acknowledgement is enabled"))
                                         : null;
             this.centralizedMessageFetcher = new CentralizedMessageFetcher(this,
-                                                                           requireNonNull(centralizedMessageFetcherPollingInterval, "No centralizedMessageFetcherPollingInterval provided").toMillis(),
                                                                            interceptors,
-                                                                           this.useBatchedFetch,
-                                                                           this.batchedFetchSwitchThreshold,
-                                                                           acknowledgementBuffer);
+                                                                           new CentralizedMessageFetcherSettings(requireNonNull(centralizedMessageFetcherPollingInterval,
+                                                                                                                                "No centralizedMessageFetcherPollingInterval provided").toMillis(),
+                                                                                                                 this.useBatchedFetch,
+                                                                                                                 this.batchedFetchSwitchThreshold,
+                                                                                                                 acknowledgementBuffer));
             this.centralizedQueuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory != null ? centralizedQueuePollingOptimizerFactory : this::createCentralizedQueuePollingOptimizerFor;
         }
 

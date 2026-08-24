@@ -62,7 +62,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
     /**
      * Coalesces acknowledgements so a batch of handled messages costs one transaction instead of one each.
      * {@code null} when batching is not enabled, which is the default — see
-     * {@link #CentralizedMessageFetcher(DurableQueues, long, List, boolean, int, BatchedAcknowledgementBuffer)}.
+     * {@link CentralizedMessageFetcherSettings#acknowledgementBuffer()}.
      */
     private final BatchedAcknowledgementBuffer acknowledgementBuffer;
 
@@ -75,7 +75,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
     public CentralizedMessageFetcher(DurableQueues durableQueues,
                                      long pollingIntervalMs,
                                      List<DurableQueuesInterceptor> interceptors) {
-        this(durableQueues, pollingIntervalMs, interceptors, false, 0);
+        this(durableQueues, interceptors, CentralizedMessageFetcherSettings.perQueueFetch(pollingIntervalMs));
     }
 
     /**
@@ -94,37 +94,30 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                      List<DurableQueuesInterceptor> interceptors,
                                      boolean useBatchedFetch,
                                      int batchedFetchSwitchThreshold) {
-        this(durableQueues, pollingIntervalMs, interceptors, useBatchedFetch, batchedFetchSwitchThreshold, null);
+        this(durableQueues,
+             interceptors,
+             new CentralizedMessageFetcherSettings(pollingIntervalMs, useBatchedFetch, batchedFetchSwitchThreshold, null));
     }
 
     /**
-     * Create a new CentralizedMessageFetcher with optional batched acknowledgement
+     * Create a new CentralizedMessageFetcher.
      *
-     * @param durableQueues               the DurableQueues instance to work with
-     * @param pollingIntervalMs           the polling interval in milliseconds
-     * @param useBatchedFetch             opt in to batched fetching. When {@code false} (the default elsewhere) every poll
-     *                                    uses per-queue fetching regardless of how many queues are active, and
-     *                                    {@code batchedFetchSwitchThreshold} is ignored
-     * @param batchedFetchSwitchThreshold only consulted when {@code useBatchedFetch} is {@code true}: use per-queue fetch
-     *                                    for active queue counts &lt;= threshold, batched fetch above it
-     * @param acknowledgementBuffer       coalesces acknowledgements into batches, or {@code null} to acknowledge each
-     *                                    message in its own transaction as before. {@link QueuedMessage.DeliveryMode#IN_ORDER}
-     *                                    messages are acknowledged immediately either way — see
-     *                                    {@link BatchedAcknowledgementBuffer}
+     * @param durableQueues the DurableQueues instance to work with - also the source of the
+     *                      {@link DurableQueues#getMessageObserver() message observer}
+     * @param interceptors  the interceptor chain applied to message handling
+     * @param settings      polling interval, claim strategy and acknowledgement batching -
+     *                      see {@link CentralizedMessageFetcherSettings}
      */
     public CentralizedMessageFetcher(DurableQueues durableQueues,
-                                     long pollingIntervalMs,
                                      List<DurableQueuesInterceptor> interceptors,
-                                     boolean useBatchedFetch,
-                                     int batchedFetchSwitchThreshold,
-                                     BatchedAcknowledgementBuffer acknowledgementBuffer) {
+                                     CentralizedMessageFetcherSettings settings) {
         this.durableQueues = requireNonNull(durableQueues, "No durableQueues provided");
-        this.acknowledgementBuffer = acknowledgementBuffer;
-        this.pollingIntervalMs = pollingIntervalMs;
         this.interceptors = requireNonNull(interceptors, "interceptors is missing");
-        requireTrue(batchedFetchSwitchThreshold >= 0, "batchedFetchSwitchThreshold must be >= 0");
-        this.useBatchedFetch = useBatchedFetch;
-        this.batchedFetchSwitchThreshold = batchedFetchSwitchThreshold;
+        requireNonNull(settings, "No settings provided");
+        this.acknowledgementBuffer = settings.acknowledgementBuffer();
+        this.pollingIntervalMs = settings.pollingIntervalMs();
+        this.useBatchedFetch = settings.useBatchedFetch();
+        this.batchedFetchSwitchThreshold = settings.batchedFetchSwitchThreshold();
         this.consumerRegistrations = new ConcurrentHashMap<>();
         this.inProcessOrderedKeys = new ConcurrentHashMap<>();
         this.scheduler = Executors.newScheduledThreadPool(1, r -> {

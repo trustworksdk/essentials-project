@@ -141,11 +141,11 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
                                                                        settings.messageHandlingTimeout())
                                     : null;
         this.centralizedMessageFetcher = new CentralizedMessageFetcher(this,
-                                                                       settings.pollingInterval().toMillis(),
                                                                        interceptors,
-                                                                       settings.useBatchedFetch(),
-                                                                       settings.batchedFetchSwitchThreshold(),
-                                                                       acknowledgementBuffer);
+                                                                       new CentralizedMessageFetcherSettings(settings.pollingInterval().toMillis(),
+                                                                                                             settings.useBatchedFetch(),
+                                                                                                             settings.batchedFetchSwitchThreshold(),
+                                                                                                             acknowledgementBuffer));
     }
 
     private PostgresqlDurableQueues storageDelegateFor(String tableName, JSONSerializer jsonSerializer) {
