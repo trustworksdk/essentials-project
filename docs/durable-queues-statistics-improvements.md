@@ -7,6 +7,51 @@ plan, not a changelog.
 
 ---
 
+## Status — Q1 is implemented, and the phasing collapsed
+
+The design below is what shipped, with one change to its shape. It assumed backward
+compatibility had to be preserved: a `DURABLE_TRIGGER` mode reproducing today's behaviour,
+`enable-queue-statistics=true` mapped onto a durable mode so no deployment changed on
+upgrade, a `@Deprecated(forRemoval)` dance, and three phases to get there.
+
+**That constraint was lifted** — the feature was off by default and has no users, so
+changing it outright was explicitly sanctioned. So there is no mode enum, no legacy trigger
+path to select, and no migration mapping. What landed:
+
+- `DurableQueueMessageObserver` in `foundation`, with `none()`, `composite(List)` and
+  `safe(...)`. Reached through a **new default method on `DurableQueues`**,
+  `getMessageObserver()` — not injected into the two call sites, because both already hold
+  the `DurableQueues`, so no constructor anywhere had to grow a parameter and an
+  implementation that does not care inherits the no-op.
+- Notification at the two places that decide the outcome, exactly as argued below:
+  `CentralizedMessageFetcher.processMessage` and `DefaultDurableQueueConsumer.handleMessage`.
+  `messageHandled` fires **after** the acknowledgement.
+- `DurableQueuesStatisticsRegistry` (`LongAdder` counters, capped tracked queues, bounded LRU
+  of recent terminal records) and `InMemoryDurableQueuesStatistics` reading from it.
+- The Spring starter's `durableQueuesStatistics` bean now yields
+  `InMemoryDurableQueuesStatistics`, and `durableQueues` takes it as a dependency so the queue
+  is handed the observer. **The direction reversed**, and that is the whole point: statistics
+  no longer receive the queue and then install DDL on its table.
+- `PostgresqlDurableQueuesStatistics` is `@Deprecated(forRemoval = true)` with the seven
+  reasons in its javadoc, and is wired by nothing.
+
+Two things worth recording that the design did not anticipate:
+
+1. **`getQueueStatisticsMessage` was kept, not dropped.** Open decision 1 below listed
+   removal as an option. It is served from the bounded LRU instead, which means it *works for
+   the first time* — the durable version stored `delivery_latency` as an `INTERVAL` and read it
+   with `getInt`, so it threw for every id. Best-effort and per instance, and its javadoc says
+   so.
+2. **A `NoOpDurableQueuesStatistics` yields `none()`, not a no-op observer.** Otherwise every
+   delivery pays a fan-out to record into nothing, which is the same class of mistake as the
+   trigger: work on the hot path that no reader needs.
+
+Still open, and deliberately not built: the **Tier 2 durable sink** (Phase 2 below). Nothing
+persists statistics now, so a restart resets them. That is stated in the property javadoc
+rather than left for a reader to discover.
+
+---
+
 ## Q1 — Replace the `AFTER DELETE` trigger with a Java-side observer
 
 ### Current mechanism

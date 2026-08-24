@@ -278,7 +278,8 @@ public class EssentialsComponentsConfiguration {
                                        JSONSerializer jsonSerializer,
                                        Optional<MultiTableChangeListener<TableChangeNotification>> optionalMultiTableChangeListener,
                                        EssentialsComponentsProperties properties,
-                                       List<DurableQueuesInterceptor> durableQueuesInterceptors) {
+                                       List<DurableQueuesInterceptor> durableQueuesInterceptors,
+                                       DurableQueuesStatistics durableQueuesStatistics) {
         var durableQueues = PostgresqlDurableQueues.builder()
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
@@ -310,23 +311,38 @@ public class EssentialsComponentsConfiguration {
                                                     .setAcknowledgementMaxBatchSize(properties.getDurableQueues().getAcknowledgementMaxBatchSize())
                                                     .setAcknowledgementFlushInterval(properties.getDurableQueues().getAcknowledgementFlushInterval())
                                                     .setOrderedMessageDuplicateStrategy(properties.getDurableQueues().getOrderedMessageDuplicateStrategy())
+                                                    .setMessageObserver(messageObserverFor(durableQueuesStatistics))
                                                     .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;
     }
 
+    /**
+     * The observer that feeds the statistics bean, or {@link DurableQueueMessageObserver#none()} when statistics
+     * are off.
+     * <p>
+     * A {@code NoOpDurableQueuesStatistics} deliberately yields {@code none()} rather than an observer that records
+     * into nothing: the call sites then skip the work entirely instead of paying for a fan-out per delivery.
+     */
+    private static DurableQueueMessageObserver messageObserverFor(DurableQueuesStatistics durableQueuesStatistics) {
+        return durableQueuesStatistics instanceof InMemoryDurableQueuesStatistics inMemory
+               ? inMemory.observer()
+               : DurableQueueMessageObserver.none();
+    }
+
+    /**
+     * Delivery statistics, collected in this JVM through a {@code DurableQueueMessageObserver}.
+     * <p>
+     * Declared <b>before</b> {@code durableQueues} in dependency order, and that direction is the point: the queue
+     * is handed the statistics object's observer, rather than the statistics object being handed the queue and then
+     * installing an {@code AFTER DELETE} trigger on the queue's own table. Enabling statistics is therefore a
+     * configuration change with no DDL and no cost on the acknowledgement transaction.
+     */
     @Bean
     @ConditionalOnMissingBean
-    public DurableQueuesStatistics durableQueuesStatistics(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                           JSONSerializer jsonSerializer,
-                                                           EssentialsComponentsProperties properties) {
+    public DurableQueuesStatistics durableQueuesStatistics(EssentialsComponentsProperties properties) {
         if (properties.getDurableQueues().isEnableQueueStatistics()) {
-            return new PostgresqlDurableQueuesStatistics(
-                    unitOfWorkFactory,
-                    jsonSerializer,
-                    properties.getDurableQueues().getSharedQueueTableName(),
-                    properties.getDurableQueues().getSharedQueueStatisticsTableName()
-            );
+            return new InMemoryDurableQueuesStatistics();
         }
         return new NoOpDurableQueuesStatistics();
     }

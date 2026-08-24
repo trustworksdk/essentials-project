@@ -82,7 +82,8 @@ public final class PostgresqlSplitDurableQueuesBuilder {
                                                                    settings.pollingInterval(),
                                                                    settings.useBatchedFetch(),
                                                                    settings.batchedFetchSwitchThreshold(),
-                                                                   settings.batchedAcknowledgementSettings()));
+                                                                   settings.batchedAcknowledgementSettings(),
+                                                                   settings.messageObserver()));
     }
 
     public PostgresqlSplitDurableQueuesBuilder setTransactionalMode(TransactionalMode transactionalMode) {
@@ -93,7 +94,8 @@ public final class PostgresqlSplitDurableQueuesBuilder {
                                                                    settings.pollingInterval(),
                                                                    settings.useBatchedFetch(),
                                                                    settings.batchedFetchSwitchThreshold(),
-                                                                   settings.batchedAcknowledgementSettings()));
+                                                                   settings.batchedAcknowledgementSettings(),
+                                                                   settings.messageObserver()));
     }
 
     public PostgresqlSplitDurableQueuesBuilder setMessageHandlingTimeout(Duration messageHandlingTimeout) {
@@ -104,7 +106,8 @@ public final class PostgresqlSplitDurableQueuesBuilder {
                                                                    settings.pollingInterval(),
                                                                    settings.useBatchedFetch(),
                                                                    settings.batchedFetchSwitchThreshold(),
-                                                                   settings.batchedAcknowledgementSettings()));
+                                                                   settings.batchedAcknowledgementSettings(),
+                                                                   settings.messageObserver()));
     }
 
     public PostgresqlSplitDurableQueuesBuilder setOrderedMessageDuplicateStrategy(OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy) {
@@ -115,7 +118,8 @@ public final class PostgresqlSplitDurableQueuesBuilder {
                                                                    settings.pollingInterval(),
                                                                    settings.useBatchedFetch(),
                                                                    settings.batchedFetchSwitchThreshold(),
-                                                                   settings.batchedAcknowledgementSettings()));
+                                                                   settings.batchedAcknowledgementSettings(),
+                                                                   settings.messageObserver()));
     }
 
     public PostgresqlSplitDurableQueuesBuilder setPollingInterval(Duration pollingInterval) {
@@ -126,7 +130,8 @@ public final class PostgresqlSplitDurableQueuesBuilder {
                                                                    pollingInterval,
                                                                    settings.useBatchedFetch(),
                                                                    settings.batchedFetchSwitchThreshold(),
-                                                                   settings.batchedAcknowledgementSettings()));
+                                                                   settings.batchedAcknowledgementSettings(),
+                                                                   settings.messageObserver()));
     }
 
     public PostgresqlSplitDurableQueuesBuilder setUseBatchedFetch(boolean useBatchedFetch) {
@@ -137,7 +142,8 @@ public final class PostgresqlSplitDurableQueuesBuilder {
                                                                    settings.pollingInterval(),
                                                                    useBatchedFetch,
                                                                    settings.batchedFetchSwitchThreshold(),
-                                                                   settings.batchedAcknowledgementSettings()));
+                                                                   settings.batchedAcknowledgementSettings(),
+                                                                   settings.messageObserver()));
     }
 
     public PostgresqlSplitDurableQueuesBuilder setBatchedFetchSwitchThreshold(int batchedFetchSwitchThreshold) {
@@ -148,7 +154,8 @@ public final class PostgresqlSplitDurableQueuesBuilder {
                                                                    settings.pollingInterval(),
                                                                    settings.useBatchedFetch(),
                                                                    batchedFetchSwitchThreshold,
-                                                                   settings.batchedAcknowledgementSettings()));
+                                                                   settings.batchedAcknowledgementSettings(),
+                                                                   settings.messageObserver()));
     }
 
     public PostgresqlSplitDurableQueuesBuilder setBatchedAcknowledgementSettings(BatchedAcknowledgementSettings batchedAcknowledgementSettings) {
@@ -159,7 +166,25 @@ public final class PostgresqlSplitDurableQueuesBuilder {
                                                                    settings.pollingInterval(),
                                                                    settings.useBatchedFetch(),
                                                                    settings.batchedFetchSwitchThreshold(),
-                                                                   batchedAcknowledgementSettings));
+                                                                   batchedAcknowledgementSettings,
+                                                                   settings.messageObserver()));
+    }
+
+    /**
+     * Observes how each delivery ended, for delivery statistics - see
+     * {@link PostgresqlDurableQueuesBuilder#setMessageObserver}. Reported once per delivery by the composite, not
+     * once per table.
+     */
+    public PostgresqlSplitDurableQueuesBuilder setMessageObserver(DurableQueueMessageObserver messageObserver) {
+        return setSettings(new PostgresqlSplitDurableQueuesSettings(settings.baseQueueTableName(),
+                                                                   settings.transactionalMode(),
+                                                                   settings.messageHandlingTimeout(),
+                                                                   settings.orderedMessageDuplicateStrategy(),
+                                                                   settings.pollingInterval(),
+                                                                   settings.useBatchedFetch(),
+                                                                   settings.batchedFetchSwitchThreshold(),
+                                                                   settings.batchedAcknowledgementSettings(),
+                                                                   messageObserver != null ? messageObserver : DurableQueueMessageObserver.none()));
     }
 
     public PostgresqlSplitDurableQueues build() {

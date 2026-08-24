@@ -266,6 +266,24 @@ public interface DurableQueues extends Lifecycle {
     TransactionalMode getTransactionalMode();
 
     /**
+     * The observer notified of how each message delivery ended — used by delivery statistics and observability.
+     * <p>
+     * Reached through the {@link DurableQueues} rather than injected into {@link CentralizedMessageFetcher} and
+     * {@link DefaultDurableQueueConsumer}: both already hold a reference to this instance, so no constructor
+     * anywhere has to grow a parameter, and an implementation that does not care about observation inherits the
+     * no-op. It also means a composing implementation (such as a queue that stores ordered and unordered messages
+     * in separate tables) reports through one observer for the whole composite rather than one per delegate.
+     * <p>
+     * Implementations should return an observer already wrapped in
+     * {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}.
+     *
+     * @return the observer to notify; never {@code null}, {@link DurableQueueMessageObserver#none()} by default
+     */
+    default DurableQueueMessageObserver getMessageObserver() {
+        return DurableQueueMessageObserver.none();
+    }
+
+    /**
      * @return If {@link #getTransactionalMode()} is {@link TransactionalMode#FullyTransactional} then
      * it will return the {@link UnitOfWorkFactory} wrapped in an {@link Optional}, otherwise it will return
      * an {@link Optional#empty()}

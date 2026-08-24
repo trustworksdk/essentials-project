@@ -21,6 +21,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -371,6 +372,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
         registration.workerPool.submit(() -> {
             try {
                 var operation = new HandleQueuedMessage(message, registration.messageHandler);
+                var handlerStartedAt = System.nanoTime();
                 newInterceptorChainForOperation(operation,
                                                 interceptors,
                                                 (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -379,6 +381,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                                     return (Void) null;
                                                 })
                         .proceed();
+                var handlerDuration = Duration.ofNanos(System.nanoTime() - handlerStartedAt);
 
                 if (message.isManuallyMarkedForRedelivery()) {
                     log.debug("[{}:{}] Message handler manually requested redelivery",
@@ -396,6 +399,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                  message.getId(),
                                  ex.getMessage());
                     }
+                    durableQueues.getMessageObserver().messageRedeliveryRequested(message);
                 } else {
                     log.debug("[{}:{}] Message handled successfully, acknowledging",
                               queueName,
@@ -432,6 +436,11 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                  message.getId(),
                                  ex.getMessage());
                     }
+                    // After the acknowledgement, so "handled" means delivered and removed from the queue rather
+                    // than "the handler returned". Outside the try/catch above deliberately: an acknowledgement
+                    // that could not be issued is still a completed handling, and the message will be re-delivered
+                    // by the stuck-message reset - which is exactly the double delivery the statistics should show.
+                    durableQueues.getMessageObserver().messageHandled(message, handlerDuration);
                 }
             } catch (Throwable e) {
                 rethrowIfCriticalError(e);
@@ -446,6 +455,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   e);
 
                         durableQueues.markAsDeadLetterMessage(message.getId(), e);
+                        durableQueues.getMessageObserver().messageDeadLettered(message, e);
                     } else {
                         // Redelivery
                         var redeliveryDelay = registration.consumer.getRedeliveryPolicy()
@@ -458,6 +468,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   e.getMessage());
 
                         durableQueues.retryMessage(message.getId(), e, redeliveryDelay);
+                        durableQueues.getMessageObserver().messageRetried(message, e, redeliveryDelay);
                     }
                 } catch (Exception retryEx) {
                     log.error("[{}:{}] Error handling message failure: {}",

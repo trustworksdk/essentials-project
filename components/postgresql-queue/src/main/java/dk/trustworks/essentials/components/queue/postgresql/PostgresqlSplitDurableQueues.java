@@ -83,6 +83,7 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
     private final List<DurableQueuesInterceptor>                                           interceptors           = new CopyOnWriteArrayList<>();
     private final ConcurrentMap<QueueName, CentralizedMessageFetcherDurableQueueConsumer> durableQueueConsumers = new ConcurrentHashMap<>();
     private final CentralizedMessageFetcher                                                centralizedMessageFetcher;
+    private final DurableQueueMessageObserver                                              messageObserver;
 
     private volatile boolean started;
 
@@ -110,6 +111,7 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
         this.settings = requireNonNull(settings, "No settings provided");
         requireNonNull(jsonSerializer, "No jsonSerializer provided");
         this.multiTableChangeListener = Optional.ofNullable(multiTableChangeListener);
+        this.messageObserver = DurableQueueMessageObserver.safe(requireNonNull(settings.messageObserver(), "No messageObserver provided"));
         this.queuePollingOptimizerFactory = centralizedQueuePollingOptimizerFactory != null
                                             ? centralizedQueuePollingOptimizerFactory
                                             : this::createDefaultQueuePollingOptimizerFor;
@@ -163,7 +165,12 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
                                            5000,
                                            BatchedAcknowledgementSettings.disabled(),
                                            settings.orderedMessageDuplicateStrategy(),
-                                           PostgresqlDurableQueues.Role.SPLIT_DELEGATE);
+                                           PostgresqlDurableQueues.Role.SPLIT_DELEGATE,
+                                           // none(): the composite owns the observer, because the composite is
+                                           // what the fetcher holds. A delegate never runs a fetcher, so its own
+                                           // observer would never be consulted - and if it were, every delivery
+                                           // would be reported twice.
+                                           DurableQueueMessageObserver.none());
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -735,6 +742,16 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
     @Override
     public TransactionalMode getTransactionalMode() {
         return settings.transactionalMode();
+    }
+
+    /**
+     * The composite's own observer, not either delegate's - so a delivery is reported once for the queue rather
+     * than once per table. This is also what makes delivery statistics work over the split with no per-table
+     * configuration: collection is keyed by {@link QueueName}, which both tables share.
+     */
+    @Override
+    public DurableQueueMessageObserver getMessageObserver() {
+        return messageObserver;
     }
 
     @Override

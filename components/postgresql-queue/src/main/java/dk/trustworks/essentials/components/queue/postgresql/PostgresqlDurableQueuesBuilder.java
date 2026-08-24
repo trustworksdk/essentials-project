@@ -69,6 +69,7 @@ public final class PostgresqlDurableQueuesBuilder {
     private int                                        acknowledgementMaxBatchSize              = BatchedAcknowledgementSettings.DEFAULT_MAX_BATCH_SIZE;
     private Duration                                   acknowledgementFlushInterval             = BatchedAcknowledgementSettings.DEFAULT_FLUSH_INTERVAL;
     private OrderedMessageDuplicateStrategy            orderedMessageDuplicateStrategy          = OrderedMessageDuplicateStrategy.REJECT;
+    private DurableQueueMessageObserver               messageObserver                          = DurableQueueMessageObserver.none();
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
 
     /**
@@ -348,6 +349,22 @@ public final class PostgresqlDurableQueuesBuilder {
 
     @SuppressWarnings("removal")
 
+    /**
+     * Observes how each delivery ended - handled, retried, dead-lettered - for delivery statistics and
+     * observability. Off by default ({@link DurableQueueMessageObserver#none()}).
+     * <p>
+     * This is how {@code InMemoryDurableQueuesStatistics} is wired: pass its {@code observer()}. Note the
+     * direction - the statistics object is created first and handed here, rather than the queue being handed to
+     * the statistics, which is what the trigger-based implementation needed and why enabling statistics used to
+     * mean running DDL against the queue table.
+     *
+     * @param messageObserver the observer, wrapped in {@link DurableQueueMessageObserver#safe} by the constructor
+     */
+    public PostgresqlDurableQueuesBuilder setMessageObserver(DurableQueueMessageObserver messageObserver) {
+        this.messageObserver = messageObserver != null ? messageObserver : DurableQueueMessageObserver.none();
+        return this;
+    }
+
     public PostgresqlDurableQueues build() {
         return new PostgresqlDurableQueues(unitOfWorkFactory,
                                            jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
@@ -366,6 +383,8 @@ public final class PostgresqlDurableQueuesBuilder {
                                            new BatchedAcknowledgementSettings(useBatchedAcknowledgement,
                                                                               acknowledgementMaxBatchSize,
                                                                               acknowledgementFlushInterval),
-                                           orderedMessageDuplicateStrategy);
+                                           orderedMessageDuplicateStrategy,
+                                           PostgresqlDurableQueues.Role.STANDALONE,
+                                           messageObserver);
     }
 }

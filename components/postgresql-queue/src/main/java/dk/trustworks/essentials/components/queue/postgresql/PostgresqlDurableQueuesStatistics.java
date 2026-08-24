@@ -72,7 +72,37 @@ import static dk.trustworks.essentials.shared.MessageFormatter.*;
  * <br>
  * It is highly recommended that the {@code statsQueueTableName} and {@code durableQueueTableName} value is only derived from a controlled and trusted source.<br>
  * To mitigate the risk of SQL injection attacks, external or untrusted inputs should never directly provide the {@code durableQueueTableName} and {@code statsQueueTableName} value.<br>
+ *
+ * @deprecated Superseded by {@link InMemoryDurableQueuesStatistics}, which the Spring starter now wires when
+ * {@code essentials.durable-queues.enable-queue-statistics=true}. Collecting in the database was the wrong
+ * mechanism on several counts, and none of them are fixable while the {@code AFTER DELETE} trigger remains the
+ * collection point:
+ * <ul>
+ *     <li><b>Cost on the acknowledgement hot path.</b> Every acknowledgement paid a plpgsql invocation, an
+ *     {@code INSERT} and maintenance on two indexes, inside the queue's own transaction — measured at <b>2.80×</b>
+ *     on acknowledgement throughput ({@code docs/durable-queues-redesign-measurements.md} §14). None of it is
+ *     needed for the queue to be correct.</li>
+ *     <li><b>Purge amplification, and wrong numbers.</b> A {@code purgeQueue} of 100 000 rows fired the trigger
+ *     100 000 times, counting every purged message as delivered with a latency measured to the moment of the
+ *     purge.</li>
+ *     <li><b>DDL against a table it does not own.</b> {@code CREATE TRIGGER} on the queue table made "enable
+ *     statistics" a schema migration rather than a configuration change.</li>
+ *     <li><b>A shared, unqualified function.</b> {@code log_message_delivery_stats()} takes no arguments and bakes
+ *     its target table into its body, so two instances in one schema silently fight over it: the second
+ *     {@code CREATE OR REPLACE} rewrites the function and both triggers then write to one table.</li>
+ *     <li><b>A read path that could not work.</b> {@code delivery_latency} is stored as an {@code INTERVAL} and
+ *     read back with {@code getInt}, which pgjdbc rejects, so {@code getQueueStatisticsMessage} threw for every
+ *     id. Undetected because the method had no caller and the single statistics test asserted only
+ *     {@code isPresent()} on the queue-level aggregate.</li>
+ *     <li><b>It does not port.</b> A plpgsql trigger body cannot be shared with the planned
+ *     {@code MsSqlDurableQueuesStatistics}; collecting in Java is dialect-neutral by construction, and works
+ *     unchanged over a queue that stores its messages in more than one table.</li>
+ * </ul>
+ * Kept for one release rather than deleted outright, but it is not wired by anything and gains no fixes. A durable
+ * sink, if one is wanted, should be a batched asynchronous writer fed by the same
+ * {@code DurableQueueMessageObserver} — never a trigger. See {@code docs/durable-queues-statistics-improvements.md}.
  */
+@Deprecated(forRemoval = true, since = "0.40.x")
 @TTLJob(name = "durable_queues_statistics_ttl",
         enabledProperty = "essentials.durable-queues.enable-queue-statistics-ttl",
         tableName = "durable_queues_statistics",

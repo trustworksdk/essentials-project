@@ -130,6 +130,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final boolean                   useOrderedUnorderedQuery;
     private final OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy;
     private final Role                            role;
+    private final DurableQueueMessageObserver     messageObserver;
     private final boolean                   useBatchedFetch;
     private final int                       batchedFetchSwitchThreshold;
     private final int                       batchedFetchWarnRowsThreshold;
@@ -517,7 +518,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         this(unitOfWorkFactory, jsonSerializer, sharedQueueTableName, multiTableChangeListener, queuePollingOptimizerFactory,
              transactionalMode, messageHandlingTimeout, useCentralizedMessageFetcher, centralizedMessageFetcherPollingInterval,
              centralizedQueuePollingOptimizerFactory, useOrderedUnorderedQuery, useBatchedFetch, batchedFetchSwitchThreshold,
-             batchedFetchWarnRowsThreshold, batchedAcknowledgementSettings, orderedMessageDuplicateStrategy, Role.STANDALONE);
+             batchedFetchWarnRowsThreshold, batchedAcknowledgementSettings, orderedMessageDuplicateStrategy, Role.STANDALONE,
+             DurableQueueMessageObserver.none());
     }
 
     /**
@@ -545,8 +547,10 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     /**
-     * @param role whether this instance is standalone or one of the two tables behind a
-     *             {@link PostgresqlSplitDurableQueues} - see {@link Role}
+     * @param role            whether this instance is standalone or one of the two tables behind a
+     *                        {@link PostgresqlSplitDurableQueues} - see {@link Role}
+     * @param messageObserver notified of how each delivery ended - see {@link DurableQueues#getMessageObserver()}.
+     *                        {@link DurableQueueMessageObserver#none()} to observe nothing
      */
     PostgresqlDurableQueues(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                             JSONSerializer jsonSerializer,
@@ -564,10 +568,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                             int batchedFetchWarnRowsThreshold,
                             BatchedAcknowledgementSettings batchedAcknowledgementSettings,
                             OrderedMessageDuplicateStrategy orderedMessageDuplicateStrategy,
-                            Role role) {
+                            Role role,
+                            DurableQueueMessageObserver messageObserver) {
         this.unitOfWorkFactory = requireNonNull(unitOfWorkFactory, "No unitOfWorkFactory instance provided");
         this.orderedMessageDuplicateStrategy = requireNonNull(orderedMessageDuplicateStrategy, "No orderedMessageDuplicateStrategy provided");
         this.role = requireNonNull(role, "No role provided");
+        this.messageObserver = DurableQueueMessageObserver.safe(requireNonNull(messageObserver, "No messageObserver provided"));
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer");
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
@@ -1836,6 +1842,11 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                                                               .bind("pageSize", pageSize)
                                                                                               .map(queuedMessageMapper)
                                                                                               .list());
+    }
+
+    @Override
+    public DurableQueueMessageObserver getMessageObserver() {
+        return messageObserver;
     }
 
     @Override

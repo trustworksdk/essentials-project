@@ -53,6 +53,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *                                        {@code useBatchedFetch} is on
  * @param batchedAcknowledgementSettings  whether acknowledgements are coalesced into one {@code DELETE} per batch.
  *                                        {@link OrderedMessage}s are never buffered regardless
+ * @param messageObserver                 notified of how each delivery ended, for delivery statistics. Reported by
+ *                                        the composite rather than per table, so it is keyed by {@link QueueName}
+ *                                        and needs no knowledge of the split
  */
 public record PostgresqlSplitDurableQueuesSettings(String baseQueueTableName,
                                                    TransactionalMode transactionalMode,
@@ -61,7 +64,8 @@ public record PostgresqlSplitDurableQueuesSettings(String baseQueueTableName,
                                                    Duration pollingInterval,
                                                    boolean useBatchedFetch,
                                                    int batchedFetchSwitchThreshold,
-                                                   BatchedAcknowledgementSettings batchedAcknowledgementSettings) {
+                                                   BatchedAcknowledgementSettings batchedAcknowledgementSettings,
+                                                   DurableQueueMessageObserver messageObserver) {
 
     /**
      * The base name the two split tables are derived from when none is given.
@@ -80,6 +84,7 @@ public record PostgresqlSplitDurableQueuesSettings(String baseQueueTableName,
         requireNonNull(orderedMessageDuplicateStrategy, "No orderedMessageDuplicateStrategy provided");
         requireNonNull(pollingInterval, "No pollingInterval provided");
         requireNonNull(batchedAcknowledgementSettings, "No batchedAcknowledgementSettings provided");
+        requireNonNull(messageObserver, "No messageObserver provided");
         if (transactionalMode == TransactionalMode.SingleOperationTransaction) {
             requireNonNull(messageHandlingTimeout, "No messageHandlingTimeout provided - it is required by TransactionalMode.SingleOperationTransaction");
         }
@@ -106,6 +111,7 @@ public record PostgresqlSplitDurableQueuesSettings(String baseQueueTableName,
                                                         DEFAULT_POLLING_INTERVAL,
                                                         false,
                                                         DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
-                                                        BatchedAcknowledgementSettings.disabled());
+                                                        BatchedAcknowledgementSettings.disabled(),
+                                                        DurableQueueMessageObserver.none());
     }
 }

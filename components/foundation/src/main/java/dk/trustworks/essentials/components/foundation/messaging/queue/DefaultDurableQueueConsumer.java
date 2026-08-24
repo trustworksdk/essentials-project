@@ -454,6 +454,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
         }
         try {
             var operation = new HandleQueuedMessage(queuedMessage, consumeFromQueue.queueMessageHandler);
+            var handlerStartedAt = System.nanoTime();
             newInterceptorChainForOperation(operation,
                                             interceptors,
                                             (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
@@ -462,6 +463,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                                                 return (Void) null;
                                             })
                     .proceed();
+            var handlerDuration = Duration.ofNanos(System.nanoTime() - handlerStartedAt);
 
             if (queuedMessage.isManuallyMarkedForRedelivery()) {
                 LOG.debug("[{}:{}] {} - Message handler manually requested redelivery of the message",
@@ -477,6 +479,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           queuedMessage.getTotalDeliveryAttempts(),
                           queuedMessage.getRedeliveryAttempts());
                 durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId());
+                // After the acknowledgement, so "handled" means delivered and removed from the queue rather than
+                // "the handler returned".
+                durableQueues.getMessageObserver().messageHandled(queuedMessage, handlerDuration);
                 orderedMessageDeliveryThreads.remove(Thread.currentThread());
                 return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
             }
@@ -505,6 +510,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
 
                 try {
                     durableQueues.markAsDeadLetterMessage(queuedMessage.getId(), e);
+                    durableQueues.getMessageObserver().messageDeadLettered(queuedMessage, e);
                     orderedMessageDeliveryThreads.remove(Thread.currentThread());
                     return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
                 } catch (Throwable ex) {
@@ -556,6 +562,13 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             durableQueues.retryMessage(queuedMessage.getId(),
                                        e,
                                        redeliveryDelay);
+            // A null cause is how this method is called for a handler that asked for redelivery itself, rather
+            // than for one that threw - the two are different outcomes and must not be conflated in statistics.
+            if (e != null) {
+                durableQueues.getMessageObserver().messageRetried(queuedMessage, e, redeliveryDelay);
+            } else {
+                durableQueues.getMessageObserver().messageRedeliveryRequested(queuedMessage);
+            }
             orderedMessageDeliveryThreads.remove(Thread.currentThread());
             return NO_POSTPROCESSING_AFTER_PROCESS_NEXT_MESSAGE;
         } catch (Throwable ex) {

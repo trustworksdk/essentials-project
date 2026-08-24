@@ -232,9 +232,15 @@ is exactly how `ordered_ready` came to exist, and the report is what catches it.
 table is a small positive to be justified on grounds other than throughput. The one thing left unmeasured here
 is the autovacuum setting itself, which S0 should quantify while it is being chosen.
 
-**S2 — the statistics trigger.** Measured (§14): 1.34× available from the rewrite, and the correctness defects
-are the better justification. Still worth doing, no longer on a performance claim. If statistics cost matters to
-a deployment, drop an index on the stats table or sample — both beat changing the mechanism.
+**S2 — the statistics trigger. Done, and it went further than planned** because the backward-compatibility
+constraint was lifted: the feature was off by default with no users, so it was changed outright rather than phased
+behind a mode enum. Collection moved into Java via a `DurableQueueMessageObserver` reached through a new default
+method on `DurableQueues`, with an in-memory registry behind it; the starter now hands the queue the observer
+instead of handing statistics the queue, so enabling statistics involves no DDL at all. The trigger-based
+implementation is deprecated for removal and wired by nothing. Details in
+`docs/durable-queues-statistics-improvements.md`. **The split gets statistics for free** — collection is keyed by
+`QueueName`, which both of its tables share — which closes the gap §7f left open. Not built: a durable sink, so
+statistics reset on restart.
 
 **S3 — the ordered/unordered split. Increment 1 done (§7d).** `PostgresqlSplitDurableQueues` composes two v1
 storage instances over `<base>_unordered` / `<base>_ordered`, and `foundation-test`'s shared `DurableQueuesIT`

@@ -85,7 +85,12 @@ public class StarterAutoConfigurationIT {
             assertThat(ctx).hasSingleBean(SchedulerApi.class);
             SchedulerApi schedulerApi = ctx.getBean(SchedulerApi.class);
             List<ApiExecutorJob> executorJobs = schedulerApi.getExecutorJobs("principal", 0, 10);
-            assertThat(executorJobs).isNotEmpty();
+            // isNotNull, not isNotEmpty: this used to be non-empty only incidentally. The single job in this
+            // context was the durable-statistics TTL job, registered from the @TTLJob annotation on
+            // PostgresqlDurableQueuesStatistics - and delivery statistics are now collected in memory, so there is
+            // no statistics table to prune and no TTL job to register. Asserting isEmpty() instead would over-fit
+            // in the other direction: any future @TTLJob bean in the starter would break it.
+            assertThat(executorJobs).isNotNull();
         });
     }
 
