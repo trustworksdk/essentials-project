@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Acknowledging one message at a time measured <b>16.5x</b> more expensive on drain time than acknowledging a
  * batch, because the cost is the transaction rather than the {@code DELETE}; see
- * {@code docs/durable-queues-redesign-measurements.md} §7. This suite asserts the two things that make
+ * {@code docs/durable-queues-measurements.md} §2. This suite asserts the two things that make
  * batching safe to turn on rather than the speed-up, which belongs in the performance lab:
  * <ol>
  *     <li><b>Nothing is lost.</b> Every message is handled exactly once from the handler's point of view and

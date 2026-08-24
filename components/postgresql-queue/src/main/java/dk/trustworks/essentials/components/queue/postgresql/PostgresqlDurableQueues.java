@@ -98,7 +98,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * against the same table — to every candidate row, including unordered ones where {@code key IS NULL}
      * makes it vacuously true, and sorts by {@code key_order} which is a constant {@code -1} for those rows.
      * On a backlog mixing both kinds that measured 5.4x slower than the split queries; see
-     * {@code docs/durable-queues-redesign-measurements.md}. Pure-ordered traffic is indifferent, since it
+     * {@code docs/durable-queues-measurements.md}. Pure-ordered traffic is indifferent, since it
      * needs the barrier either way.
      */
     static final         boolean DEFAULT_USE_ORDERED_UNORDERED_QUERY       = true;
@@ -543,7 +543,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
          * One of the two tables behind a {@link PostgresqlSplitDurableQueues}.
          * <p>
          * The composite creates both tables itself so it can give each the per-mode index set the evidence
-         * supports rather than the shared table's - see {@code docs/durable-queues-implementation-plan.md} §7c -
+         * supports rather than the shared table's - see {@code docs/durable-queues-measurements.md} §3 -
          * so a delegate must not run the DDL. And because a {@link QueueEntryId} carries no delivery mode, the
          * composite addresses a message by trying both delegates; the one that does not hold it is the expected
          * case, not an error, so a miss is logged at debug rather than error.
@@ -1611,7 +1611,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     /**
      * Acknowledges a whole batch in one statement inside one {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork},
      * which is the point of the operation: the transaction is the dominant per-message cost, not the
-     * {@code DELETE}. See {@code docs/durable-queues-redesign-measurements.md} §7.
+     * {@code DELETE}. Note the throughput claim attached to this historically (16.5x) does not reproduce through
+     * the component - see {@code docs/durable-queues-measurements.md} §2.
      * <p>
      * Unlike the single-message path this does not fall back to checking whether each missing id became a
      * dead letter. That check costs a query per id and would reintroduce exactly the per-message round trip

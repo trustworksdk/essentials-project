@@ -32,8 +32,14 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * <p>
  * This exists because the per-message acknowledgement is the dominant per-message cost in the queue, and the
  * cost is the transaction rather than the statement. Acknowledging one message at a time measured
- * <strong>16.5x</strong> more expensive on drain time than acknowledging a batch
- * [10.3-24.2x across 9 repetitions] — see {@code docs/durable-queues-redesign-measurements.md} §7. A
+ * <strong>16.5x</strong> more expensive on drain time than acknowledging a batch <em>in a raw-SQL harness</em>.
+ * Measured at <strong>16.5x</strong> on drain time in a raw-SQL harness — but that does <b>not</b>
+ * reproduce through the component, where it measures <strong>1.02x</strong> on a backlog drain and
+ * <strong>1.00x</strong> in steady state with a worse p99. The acknowledgement transaction is simply not the
+ * bottleneck once a connection pool and a real consumer are in the picture. See
+ * {@code docs/durable-queues-measurements.md} §2, "Claims withdrawn under measurement".
+ * <p>
+ * A
  * batching implementation therefore needs a way to
  * acknowledge a group of {@link QueueEntryId}s inside <em>one</em> {@link UnitOfWork}, which is what this
  * operation provides.

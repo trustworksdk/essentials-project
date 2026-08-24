@@ -166,7 +166,7 @@ Per-consumer polling threads.
 The acknowledgement is the dominant per-message cost, and the cost is the **transaction**, not the `DELETE`.
 Measured: one transaction per ack is **16.5× more expensive** on drain time than one per batch
 [10.3–24.2× across 9 repetitions]; two transactions per message rather than per batch costs 134×
-(`docs/durable-queues-redesign-measurements.md` §7).
+(`docs/durable-queues-measurements.md` §7).
 
 ```java
 PostgresqlDurableQueues.builder()

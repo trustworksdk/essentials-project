@@ -189,7 +189,7 @@ public interface DurableQueues {
 `acknowledgeMessagesAsHandled(Collection)` acknowledges a group in **one** transaction. This matters because
 the transaction, not the `DELETE`, is the dominant per-message cost: one transaction per acknowledgement
 measured **16.5× more expensive** on drain time than one per batch [10.3–24.2× across 9 repetitions] — see
-`docs/durable-queues-redesign-measurements.md` §7.
+`docs/durable-queues-measurements.md` §7.
 
 The default implementation loops over the single-message operation, so an existing `DurableQueues` backend
 keeps working; a backend that can do better overrides it (PostgreSQL issues one

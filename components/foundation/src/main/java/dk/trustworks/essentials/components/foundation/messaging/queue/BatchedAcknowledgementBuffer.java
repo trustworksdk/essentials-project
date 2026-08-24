@@ -34,9 +34,13 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *
  * <h2>Why</h2>
  * The acknowledgement is the queue's dominant per-message cost, and the cost is the transaction rather than
- * the statement. Measured: one transaction per acknowledgement is <strong>16.5x</strong> more expensive on
- * drain time than one per batch [10.3-24.2x across 9 repetitions]; two transactions per message rather than
- * per batch costs 134x. See {@code docs/durable-queues-redesign-measurements.md} §7. An earlier
+ * the statement — <em>in a raw-SQL harness</em>. Measured at <strong>16.5x</strong> on drain time in a raw-SQL harness — but that does <b>not</b>
+ * reproduce through the component, where it measures <strong>1.02x</strong> on a backlog drain and
+ * <strong>1.00x</strong> in steady state with a worse p99. The acknowledgement transaction is simply not the
+ * bottleneck once a connection pool and a real consumer are in the picture. See
+ * {@code docs/durable-queues-measurements.md} §2, "Claims withdrawn under measurement".
+ * <p>
+ * An earlier
  * interceptor-level prototype measured only 1.13x because it could remove the {@code DELETE} but not the
  * surrounding {@code UnitOfWork}; this buffer removes both.
  *

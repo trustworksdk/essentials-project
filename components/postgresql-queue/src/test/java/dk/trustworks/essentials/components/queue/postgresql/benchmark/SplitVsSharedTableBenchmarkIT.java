@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <h2>Why this needs to exist</h2>
  * The split's published figures — <b>1.38× overall and 1.62× on insert</b> for unordered traffic, 1.07× for ordered
- * — come from raw SQL against prototype schemas (see {@code docs/durable-queues-v2-design-plan.md}), not from
+ * — come from raw SQL against prototype schemas (see {@code docs/durable-queues.md}), not from
  * {@link PostgresqlSplitDurableQueues}. Those numbers appear in the user-facing summary, the class javadoc, the
  * module notes and the Spring property javadoc, so they are load-bearing advice resting on a prototype.
  * <p>

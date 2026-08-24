@@ -80,7 +80,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.*;
  * <ul>
  *     <li><b>Cost on the acknowledgement hot path.</b> Every acknowledgement paid a plpgsql invocation, an
  *     {@code INSERT} and maintenance on two indexes, inside the queue's own transaction — measured at <b>2.80×</b>
- *     on acknowledgement throughput ({@code docs/durable-queues-redesign-measurements.md} §14). None of it is
+ *     on acknowledgement throughput ({@code docs/durable-queues-measurements.md} §1). None of it is
  *     needed for the queue to be correct.</li>
  *     <li><b>Purge amplification, and wrong numbers.</b> A {@code purgeQueue} of 100 000 rows fired the trigger
  *     100 000 times, counting every purged message as delivered with a latency measured to the moment of the
@@ -100,7 +100,7 @@ import static dk.trustworks.essentials.shared.MessageFormatter.*;
  * </ul>
  * Kept for one release rather than deleted outright, but it is not wired by anything and gains no fixes. A durable
  * sink, if one is wanted, should be a batched asynchronous writer fed by the same
- * {@code DurableQueueMessageObserver} — never a trigger. See {@code docs/durable-queues-statistics-improvements.md}.
+ * {@code DurableQueueMessageObserver} — never a trigger. See {@code docs/durable-queues.md}.
  */
 @Deprecated(forRemoval = true, since = "0.40.x")
 @TTLJob(name = "durable_queues_statistics_ttl",

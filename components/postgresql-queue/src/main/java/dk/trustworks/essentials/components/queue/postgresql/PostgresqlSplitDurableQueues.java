@@ -57,7 +57,7 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * It is a <b>composition, not a rewrite</b>. {@link DurableQueuesSql} generates its statements for whatever table
  * name it is constructed with, and both split tables keep the shared table's columns, so each is driven by
  * {@link PostgresqlDurableQueues}' existing, tested statements unchanged — see
- * {@code docs/durable-queues-implementation-plan.md} §7c. This class owns the schema of both tables and routes
+ * {@code docs/durable-queues-measurements.md} §3. This class owns the schema of both tables and routes
  * operations between two storage delegates; it introduces no new SQL.
  *
  * <h2>Routing</h2>
@@ -287,7 +287,7 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
      * Routing by <b>queue name</b> rather than by table is what makes this correct on a split, and it is not a
      * change from v1 - v1 already routes on {@code QueueTableNotification.queueName}, and both split tables carry
      * that column. A table-keyed wake-up would have let an ordered enqueue advance state the queue's single poll
-     * decision never reads. See §7e of {@code docs/durable-queues-implementation-plan.md}.
+     * decision never reads. See §7e of {@code docs/durable-queues.md}.
      */
     private void subscribeToWakeUpNotifications() {
         multiTableChangeListener.ifPresent(listener -> {
@@ -339,7 +339,7 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
      * exists rather than a line in the release notes saying "drain first".
      * <p>
      * It is a plain {@code INSERT ... SELECT} per mode, and it is that simple only because the split tables keep
-     * v1's columns exactly (see {@code docs/durable-queues-implementation-plan.md} §7c): no column mapping, no
+     * v1's columns exactly (see {@code docs/durable-queues-measurements.md} §3): no column mapping, no
      * re-serialization, no id rewriting. Delivery counts, timestamps, dead-letter state and last errors all carry
      * over unchanged, so a half-delivered message keeps its history.
      *

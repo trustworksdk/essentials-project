@@ -739,10 +739,11 @@ public interface DurableQueues extends Lifecycle {
      * Note this method MUST be called within an existing {@link UnitOfWork} IF
      * using {@link TransactionalMode#FullyTransactional}
      * <p>
-     * Acknowledging in batches exists because the transaction, not the statement, is the dominant per-message
-     * cost: one transaction per acknowledgement measured 16.5x more expensive on drain time than one per
-     * batch [10.3-24.2x across 9 repetitions]. See
-     * {@code docs/durable-queues-redesign-measurements.md} §7.
+     * Acknowledging in batches exists because the transaction, not the statement, was expected to be the dominant
+     * per-message cost. That holds in a raw-SQL harness (16.5x) and <b>not</b> through the component, where it
+     * measures 1.02x on a backlog drain and 1.00x in steady state with a worse p99 - see
+     * {@code docs/durable-queues-measurements.md} §2. The operation is still worth having; the throughput claim is
+     * not.
      * <p>
      * <b>Ordered messages must not be acknowledged through this method with a deferred batch.</b> The
      * per-key barrier infers completion from the <em>absence</em> of a lower-{@code key_order} row, so an

@@ -55,7 +55,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * how v1 already routes them — so an ordered enqueue wakes the poll that also covers the unordered table. Keyed
  * by table instead, an ordered enqueue would advance state the queue's single poll decision never reads; that is
  * the same failure shape as reporting the polling outcome per table rather than once across both. See §7d/§7e of
- * {@code docs/durable-queues-implementation-plan.md}.
+ * {@code docs/durable-queues.md}.
  */
 @Testcontainers
 class PostgresqlSplitDurableQueuesNotifyWakeUpIT {

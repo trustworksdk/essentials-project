@@ -249,7 +249,8 @@ public final class PostgresqlDurableQueuesBuilder {
      * This is the largest per-message win available in the queue: the acknowledgement transaction, not its
      * {@code DELETE}, is the dominant cost, measured at <b>16.5x</b> against a batched acknowledgement
      * [10.3-24.2x across 9 repetitions]. See
-     * {@code docs/durable-queues-redesign-measurements.md} §7.
+     * {@code docs/durable-queues-measurements.md} §2 - and note the 16.5x quoted historically is a raw-harness
+     * figure that measures ~1.0x through the component.
      * <p>
      * Off by default, because it is a semantic change and not only a faster one: an acknowledgement can sit
      * buffered for up to {@link #setAcknowledgementFlushInterval(Duration)}, so a crash in that window
@@ -338,7 +339,7 @@ public final class PostgresqlDurableQueuesBuilder {
      * Leave this on unless you have a measured reason not to. The unified query applies the ordered per-key
      * barrier to every candidate row, including unordered ones that cannot need it, which measured 5.4x
      * slower on a backlog containing both kinds. Pure-ordered traffic is indifferent, since it needs the
-     * barrier either way. See {@code docs/durable-queues-redesign-measurements.md}.
+     * barrier either way. See {@code docs/durable-queues-measurements.md}.
      *
      * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
      * @return this builder instance

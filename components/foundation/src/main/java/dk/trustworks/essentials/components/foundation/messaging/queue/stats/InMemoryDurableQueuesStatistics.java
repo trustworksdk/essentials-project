@@ -30,7 +30,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The previous implementation collected statistics in the database: an {@code AFTER DELETE ... FOR EACH ROW}
  * trigger on the queue table inserted one statistics row per acknowledged message, inside the queue's own
  * transaction. Measured at <b>2.80×</b> on acknowledgement throughput (see
- * {@code docs/durable-queues-redesign-measurements.md} §14), and paid by every deployment that turned statistics
+ * {@code docs/durable-queues-measurements.md} §1), and paid by every deployment that turned statistics
  * on, so that one admin endpoint could report an average. It also had defects the cost alone would not justify
  * fixing around: a {@code purgeQueue} of 100 000 rows counted 100 000 delivered messages each with a latency
  * measured to the moment of the purge; the statistics component ran {@code CREATE TRIGGER} against a table it does

@@ -119,7 +119,7 @@ That query applies the ordered per-key barrier — a correlated `NOT EXISTS` aga
 candidate row, including unordered ones where `key IS NULL` makes it vacuously true, and orders by
 `key_order`, a constant `-1` for those rows. On a backlog mixing both kinds it measured **5.4× slower**;
 pure-ordered traffic is indifferent, since it needs the barrier either way. See
-`docs/durable-queues-redesign-measurements.md`.
+`docs/durable-queues-measurements.md`.
 
 **No action needed for Spring applications** — they were already on `true`. **If you build
 `PostgresqlDurableQueues` directly and deliberately want the unified query**, say so explicitly:
@@ -228,7 +228,7 @@ nothing.
   will be removed in the next major. There is no statistics table to name or prune.
 
 If you need durable, cluster-wide statistics, the intended shape is a batched asynchronous writer fed by the same
-observer — see `docs/durable-queues-statistics-improvements.md`. It is not built.
+observer — see `docs/durable-queues.md`. It is not built.
 
 ### `QueuedMessage.getDeliveryMode()` is derived and no longer always reports `NORMAL`
 

@@ -313,7 +313,7 @@ public class EssentialsComponentsProperties {
          * Measured through the component at 40 000 messages: unordered traffic is <b>1.07× overall</b> — insert
          * 1.34–1.60×, drain at parity, 8–9% fewer index bytes. Not the 1.38×/1.62× quoted historically, which came
          * from raw-SQL prototype schemas. <b>Ordered traffic is unmeasured</b>: repeat runs of the same
-         * configuration differ by 4.75×. See {@code docs/durable-queues-redesign-measurements.md} §21–§23.
+         * configuration differ by 4.75×. See {@code docs/durable-queues-measurements.md} §3–§4.
          * <p>
          * ⚠️ <b>Not a drop-in switch for a deployment with a backlog.</b> The split does not read the shared table,
          * so messages already queued there stop being delivered — they are not lost, but nothing picks them up.
