@@ -653,6 +653,35 @@ tolerate a redelivery window one flush interval wider — which is most of them,
 already implies handling redelivery. That is a documentation change rather than a code change, and it is the
 honest split: the number justifies the feature, the semantics justify the opt-in.
 
+## 7j. B5(b) status: not done, and the case for it has moved
+
+`CentralizedMessageFetcher` still drives every consumer from
+`scheduler.scheduleAtFixedRate(…, 0, pollingIntervalMs, MILLISECONDS)` — 50 ticks a second at the 20 ms default.
+B5(b) was to replace that with a wait loop. It has not been built, and reading what a tick now costs argues
+against building it *for the reason originally given*.
+
+**An idle tick is already almost free.** `fetchAndDistributeMessages` returns early when no consumer is
+registered or no worker slot is free, and beyond that `selectQueuesReadyForPolling` drops every queue whose
+optimizer is backing off — **before any SQL**. So a fully idle tick on a backed-off system is a few map lookups
+and allocations, with no database round trip and no transaction. The ~95% idle-statement cut B5 was aiming at is
+therefore already delivered, by backoff plus B5(a)'s wake-ups, without touching the loop.
+
+**And the latency target has largely been met too.** B5 estimated 400 ms → <10 ms p99 on an idle system. But a
+wake-up sets `nextAllowedPollEpochMs = now`, so the *next tick* polls — and the next tick is at most one polling
+interval away. Idle enqueue-to-delivery is therefore already bounded by the tick, ~20 ms, not by the optimizer's
+backoff ceiling of 2 s. The remaining gap between "≤20 ms" and "<10 ms" is exactly one tick.
+
+**So what B5(b) actually buys is sub-tick wake-up**, and that requires the wait to be *interruptible*: a
+notification arriving 1 ms after a tick currently waits out the remaining 19 ms, whereas an interruptible wait
+could dispatch it immediately, taking p99 idle latency down toward the notification's own latency. That is a real
+capability, and it is a **latency** feature, not the cost feature B5 was written as.
+
+**Recommendation: do not build it without a stated sub-20 ms requirement.** It rewrites the loop that drives all
+consumption — the highest-blast-radius change left on this list — to save timer fires that measure as nothing, and
+the one thing it would genuinely improve is a latency figure nobody has asked to be below 20 ms. If such a
+requirement appears, the shape is an interruptible wait woken by the same `messageAdded` signal that already
+resets the backoff, not the event-store's `currentDelayMs` ramp, which §7e established does not port.
+
 ## 8. Investigation backlog — ideas not yet tried
 
 Everything that has measured as significant reduced to two levers: **transactions per message** (§7: 16.5× on
@@ -666,7 +695,7 @@ Anything that attacks neither is in §3 or the "skip" list below.
 | **B2** | **Handler inside the claim transaction, with a savepoint around the handler only.** One transaction per message instead of two | Transactions | The largest remaining win on the dominant lever. This is nominally `FullyTransactional`, which is correctly documented as broken because a rollback loses the attempt increment — but §14 showed a savepoint is cheap when it is per *failure* rather than per row, and failures are rare. **The risk is real and must be measured, not assumed**: it holds a connection and pins the xmin horizon for the handler's duration, which is the mechanism behind §7's 5.7× artefact. The deliverable is a crossover curve against handler duration, not a yes/no | Consumer-level scenario; more work than B1 |
 | **B3** | **Index diet on the current table, no migration.** | Index writes | **Measured and it pays (§16).** Two of the six indexes are never scanned across the entire SPI — `idx_*_ready` and `idx_*_ordered_ready` — holding **43% of the table's index bytes**, maintained on every insert, claim and delete. All six are created unconditionally regardless of `useOrderedUnorderedQuery`, so a default deployment maintains indexes for a query it never runs. **Ready to implement**: make creation conditional on the flag | Done |
 | **B4** | **Advisory-lock claim** (`pg_try_advisory_xact_lock(hashtext(id))`) instead of marking the row | Both | **Promoted by B1's failure (§15).** Same idea, without either cost that sank B1: no write on claim *and* no second table in the acknowledgement path. Requires the lock to span the handler, which ties it to B2 — the two are one experiment, not two. Now the most promising untried idea | Consumer-level, with B2 |
-| **B5** | **NOTIFY-driven wake-up replacing the fixed tick** (I1/I2 in the improvements plan) | Neither — *latency* | Everything measured in this investigation is throughput. This is the only remaining item targeting enqueue-to-delivery latency, estimated 400 ms → <10 ms p99 idle with a ~95% cut in idle claim statements. Fully designed, unimplemented, unmeasured. **Split in two (§7e). (a) Wake-ups for the split — done: the composite installs the trigger on both tables and routes notifications by queue name, so backoff plus wake-up gives the idle-statement cut with no new mechanism. (b) Replacing `scheduleAtFixedRate` with a wait loop — untouched, and a straight port of the event-store design would *worsen* idle latency** | (a) done; (b) a fetcher-loop rewrite, then a PROBE scenario |
+| **B5** | **NOTIFY-driven wake-up replacing the fixed tick** (I1/I2 in the improvements plan) | Neither — *latency* | Everything measured in this investigation is throughput. This is the only remaining item targeting enqueue-to-delivery latency, estimated 400 ms → <10 ms p99 idle with a ~95% cut in idle claim statements. Fully designed, unimplemented, unmeasured. **Split in two (§7e). (a) Done. (b) Untouched, and now recommended against for its original reason — see §7j: it is not a cost optimisation, it is the prerequisite for sub-tick wake-up latency, and B5(a) already delivered most of the latency B5 was aiming at** | (a) done; (b) a fetcher-loop rewrite, only worth it against a stated sub-20 ms requirement |
 | **B6** | **Hash-partition by `id`**, if partitioning ever returns | Index writes | Recorded so the idea is not re-proposed on the wrong axis. Partitioning by `queue_name` failed (§12) because by-id operations lost the primary key; hashing by `id` prunes for every by-id operation instead — but then the claim, which filters by `queue_name`, scans every partition. Probably net-negative; the point is that `id` is the only defensible axis | Low priority |
 
 **Skip, on evidence:** `fillfactor` and HOT tuning (§3, measured dead), per-table autovacuum parameters (§13,
