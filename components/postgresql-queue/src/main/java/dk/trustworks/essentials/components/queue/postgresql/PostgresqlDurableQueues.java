@@ -2089,10 +2089,35 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * Pure storage: the caller has already decided which queues to visit and is responsible for feeding the
      * polling optimizers afterwards (see {@link #selectQueuesReadyForPolling} and {@link #reportPollingOutcome}).
      */
+    /**
+     * Which halves of the queue a claim should look at.
+     * <p>
+     * Exists because {@link PostgresqlSplitDurableQueues} gives each of its tables an index set matched to the one
+     * kind of message it holds. Asking a table for the other kind is then not a cheap no-result query but a scan,
+     * since the index that would serve it is exactly the one the split removed.
+     */
+    enum ClaimScope {
+        /** Both, as a shared table needs. */
+        ORDERED_AND_UNORDERED,
+        /** Only ordered messages - for a table that holds nothing else. */
+        ORDERED_ONLY,
+        /** Only unordered messages - for a table that holds nothing else. */
+        UNORDERED_ONLY
+    }
+
     List<QueuedMessage> claimNextBatchOfMessages(List<QueueName> activeQueues,
                                                  Map<QueueName, Set<String>> excludeKeysPerQueue,
                                                  Map<QueueName, Integer> availableWorkerSlotsPerQueue,
                                                  boolean useOrderedUnorderedQuery) {
+        return claimNextBatchOfMessages(activeQueues, excludeKeysPerQueue, availableWorkerSlotsPerQueue,
+                                        useOrderedUnorderedQuery, ClaimScope.ORDERED_AND_UNORDERED);
+    }
+
+    List<QueuedMessage> claimNextBatchOfMessages(List<QueueName> activeQueues,
+                                                 Map<QueueName, Set<String>> excludeKeysPerQueue,
+                                                 Map<QueueName, Integer> availableWorkerSlotsPerQueue,
+                                                 boolean useOrderedUnorderedQuery,
+                                                 ClaimScope claimScope) {
         try {
             return unitOfWorkFactory.withUnitOfWork(uow -> {
                 resetMessagesStuckBeingDeliveredAcrossMultipleQueues(activeQueues);
@@ -2110,7 +2135,33 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     List<QueuedMessage>  messagesForQueue;
                     MessageMappingResult mappingResult;
 
-                    if (useOrderedUnorderedQuery) {
+                    if (claimScope == ClaimScope.UNORDERED_ONLY) {
+                        // This table cannot contain ordered messages, so the ordered query is not merely
+                        // redundant - it is a scan. Its `key IS NOT NULL` predicate has no index to use on a split
+                        // unordered table, which by design carries one index on (queue_name, next_delivery_ts).
+                        // Running it anyway cost a full scan per poll and grew with the backlog: measured 0.75x at
+                        // 10 000 messages and 0.16x at 40 000 (§21).
+                        var unorderedQ = uow.handle().createQuery(durableQueuesSql.buildUnorderedSqlStatement())
+                                            .bind("queueName", queueName)
+                                            .bind("now", now)
+                                            .bind("limit", availableWorkerSlotsForThisQueue);
+                        mappingResult = mapQueryResultsWithExceptionHandling(unorderedQ);
+                        messagesForQueue = mappingResult.successfulMessages();
+                        handleFailedMappings(queueName, mappingResult);
+                    } else if (claimScope == ClaimScope.ORDERED_ONLY) {
+                        var orderedQ = useOrderedMessageCursor
+                                       ? uow.handle().createQuery(durableQueuesSql.getClaimOrderedViaCursorSql())
+                                            .bind("queueName", queueName)
+                                            .bind("now", now)
+                                            .bind("limit", availableWorkerSlotsForThisQueue)
+                                       : buildBarrierOrderedQuery(uow, queueName, now, availableWorkerSlotsForThisQueue, excluded);
+                        mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
+                        messagesForQueue = mappingResult.successfulMessages();
+                        handleFailedMappings(queueName, mappingResult);
+                        if (useOrderedMessageCursor && messagesForQueue.isEmpty()) {
+                            reconcileKeyCursorRows(uow, queueName);
+                        }
+                    } else if (useOrderedUnorderedQuery) {
                         // The cursor replaces only the ordered half. The unordered claim below is untouched -
                         // unordered messages have no key and no cursor row, so nothing about them changes.
                         var orderedQ = useOrderedMessageCursor

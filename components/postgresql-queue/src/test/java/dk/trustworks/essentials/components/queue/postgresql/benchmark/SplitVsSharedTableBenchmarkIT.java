@@ -25,6 +25,7 @@ import dk.trustworks.essentials.components.foundation.test.EssentialsTestContain
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
 import dk.trustworks.essentials.components.queue.postgresql.*;
 import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -216,8 +217,32 @@ class SplitVsSharedTableBenchmarkIT {
             // Index bytes read while the table is full, which is when maintenance cost is being paid.
             var indexKb = indexBytes() / 1024;
 
+            // Counting the statements the drain actually issues, by shape. Theorising about where a 6x regression
+            // comes from has already been wrong once (the two-transactions hypothesis, which the fix disproved), so
+            // this counts rather than reasons.
+            var statementsByShape = new java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong>();
+            var counting          = new java.util.concurrent.atomic.AtomicBoolean();
+            unitOfWorkFactory.getJdbi().setSqlLogger(new SqlLogger() {
+                @Override
+                public void logAfterExecution(StatementContext context) {
+                    if (!counting.get()) {
+                        return;
+                    }
+                    var sql = context.getRenderedSql();
+                    if (sql == null) {
+                        return;
+                    }
+                    var shape = sql.contains("SKIP LOCKED") ? "claim"
+                                : sql.startsWith("DELETE") ? "delete"
+                                : sql.contains("is_being_delivered = FALSE, ") || sql.contains("reset") ? "reset"
+                                : "other";
+                    statementsByShape.computeIfAbsent(shape, ignored -> new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();
+                }
+            });
+
             var handled       = new AtomicInteger();
             var drainStartedAt = System.nanoTime();
+            counting.set(true);
             durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
                                                            .setQueueName(queueName)
                                                            .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff()
@@ -237,6 +262,10 @@ class SplitVsSharedTableBenchmarkIT {
                 }
             }
             var drainMs = Duration.ofNanos(System.nanoTime() - drainStartedAt).toMillis();
+            counting.set(false);
+            System.out.printf("      [%s/%s statements: %s]%n",
+                              useSplit ? "split" : "shared", ordered ? "ordered" : "unordered",
+                              new java.util.TreeMap<>(statementsByShape).toString());
 
             assertThat(handled.get())
                     .as("%s arm must deliver every %s message", useSplit ? "split" : "shared", ordered ? "ordered" : "unordered")

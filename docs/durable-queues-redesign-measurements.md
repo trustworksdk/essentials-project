@@ -1248,3 +1248,60 @@ Reproduced on a second independent run: 1 644 ms against 10 282 ms, ratio 0.16 a
 
 The split flag must not be recommended on the strength of a throughput claim until this is understood. Every place
 quoting 1.38×/1.62× as what a deployment gets has been corrected to state the component measurement instead.
+
+
+## 22. The split's regression was the reused claim path, not the two tables
+
+§21 localised the 6× unordered drain regression to how the composite fetches. Two hypotheses were tested in order,
+and the first — the obvious one — was wrong.
+
+**Wrong: two transactions per poll.** Each delegate opens its own `UnitOfWork`, so a poll committed twice where v1
+commits once. A `UnitOfWorkFactory` *joins* an ambient unit of work and only the outermost commits, so wrapping the
+composite's fetch and its by-id lookups in one outer unit of work collapses them into a single transaction. The fix
+is correct and was kept — §7b's "two statements, one transaction" argument depends on it — but it moved the number
+not at all: still 0.16×.
+
+**Right: the composite asked each table for messages it cannot hold.** Reusing v1's claim path meant the unordered
+delegate ran v1's *ordered* query against the unordered table on every poll. That query filters `key IS NOT NULL`,
+and a split unordered table carries exactly one index — `(queue_name, next_delivery_ts)` partial on not-dead-letter
+and not-being-delivered — which cannot serve it. So every poll scanned the whole unordered table hunting for
+ordered messages that by construction never exist, and the cost grew with the backlog: 0.75× at 10 000 messages,
+0.16× at 40 000. The statement counter is what showed it, at 1 643 claim statements against the shared table's 684.
+
+The fix is a `ClaimScope` — `ORDERED_ONLY`, `UNORDERED_ONLY`, `ORDERED_AND_UNORDERED` — so each table is asked only
+for what it can hold. Shared-table behaviour is untouched, since it keeps the third.
+
+### After the fix, 40 000 messages, medians of 3
+
+| Traffic | Arm | Enqueue | Drain | Total | Index KB |
+|---|---|---|---|---|---|
+| unordered | shared | 542 ms | 1 630 ms | 2 172 ms | 6 776 |
+| unordered | split | 394 ms | 6 635 ms | 7 029 ms | 6 192 |
+| unordered | *ratio* | *1.38×* | *0.25×* | *0.31×* | *1.09×* |
+| ordered | shared | 683 ms | 46 308 ms | 46 991 ms | 14 160 |
+| ordered | split | 521 ms | **12 388 ms** | 12 909 ms | 10 568 |
+| ordered | *ratio* | *1.31×* | ***3.74×*** | ***3.64×*** | *1.34×* |
+
+**Ordered traffic goes from 0.97× to 3.64×** — the split is now decisively worth having for ordered workloads,
+which is the opposite of what the prototype predicted (it said 1.07×, "buys almost nothing"). The prototype
+measured a schema; what actually pays is not asking a table for what it cannot hold.
+
+**Unordered improves from 0.16× to 0.31× and is still a 3× regression.** Not solved. The claim counter still shows
+the split issuing roughly twice the shared table's claim statements, which does not by itself explain a 4× drain,
+so the remaining cause is unidentified and must not be guessed at again.
+
+### A second defect the counter exposed, unfixed
+
+For **ordered** traffic the split issues **80 000 deletes for 40 000 messages** and 40 000 extra statements. The
+by-id dual lookup tries the unordered store first, so every ordered acknowledgement runs a `DELETE` that matches
+nothing before running the one that works. §7b accepted "one extra statement per by-id operation" as the price of
+keeping the id opaque — this is that price, now measured, and it is being paid on the hot path once per message.
+Routing by a cheap probe, or trying the ordered store first when the queue is known to be ordered, would remove it.
+The split still wins ordered by 3.64× while paying it.
+
+### The lesson
+
+The composition was chosen so both tables could be driven by v1's existing statements unchanged (§7c), which made
+increment 1 cheap. That reuse is exactly what caused the regression: v1's statements assume v1's index set, and the
+split's whole purpose is to *not* have v1's index set. Reuse across a boundary where the invariants differ buys
+delivery speed and charges for it later.

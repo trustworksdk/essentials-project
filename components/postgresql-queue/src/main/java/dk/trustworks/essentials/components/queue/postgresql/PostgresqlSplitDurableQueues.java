@@ -435,22 +435,29 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
      * the id a structured format.
      */
     private <T> Optional<T> firstPresent(java.util.function.Function<PostgresqlDurableQueues, Optional<T>> operation) {
-        for (var store : bothStores()) {
-            var result = operation.apply(store);
-            if (result.isPresent()) {
-                return result;
+        // Wrapped so a miss on the first table and the retry on the second share one transaction. Each delegate
+        // opens its own otherwise, which turns every by-id operation on an ordered message into two commits - and
+        // §7b's argument for trying both tables rests explicitly on it being "two statements, one transaction".
+        return unitOfWorkFactory.withUnitOfWork(uow -> {
+            for (var store : bothStores()) {
+                var result = operation.apply(store);
+                if (result.isPresent()) {
+                    return result;
+                }
             }
-        }
-        return Optional.empty();
+            return Optional.<T>empty();
+        });
     }
 
     private boolean anyTrue(java.util.function.Predicate<PostgresqlDurableQueues> operation) {
-        for (var store : bothStores()) {
-            if (operation.test(store)) {
-                return true;
+        return unitOfWorkFactory.withUnitOfWork(uow -> {
+            for (var store : bothStores()) {
+                if (operation.test(store)) {
+                    return true;
+                }
             }
-        }
-        return false;
+            return false;
+        });
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -693,7 +700,15 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
                                                         Map<QueueName, Integer> availableWorkerSlotsPerQueue) {
         return fetchAcrossBothTables(queueNames,
                                      availableWorkerSlotsPerQueue,
-                                     (store, activeQueues, slots) -> store.claimNextBatchOfMessages(activeQueues, excludeKeysPerQueue, slots, true));
+                                     (store, activeQueues, slots) ->
+                                             store.claimNextBatchOfMessages(activeQueues, excludeKeysPerQueue, slots, true,
+                                                                            // Each table is asked only for what it can hold. Asking the
+                                                                            // unordered table for ordered messages is a scan, not an empty
+                                                                            // result - its single index cannot serve `key IS NOT NULL`,
+                                                                            // because that index is precisely what the split removed.
+                                                                            store == orderedStore
+                                                                            ? PostgresqlDurableQueues.ClaimScope.ORDERED_ONLY
+                                                                            : PostgresqlDurableQueues.ClaimScope.UNORDERED_ONLY));
     }
 
     @Override
@@ -725,6 +740,19 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
             return List.of();
         }
 
+        // ONE transaction across both tables, not one per table.
+        //
+        // Each delegate's claim opens its own UnitOfWork, and a UnitOfWorkFactory joins an ambient one rather than
+        // nesting - only the outermost commits. Without this wrapper a poll therefore committed twice where v1
+        // commits once, which measured as a 6x regression on the unordered drain (§21). The transaction is what
+        // costs, not the statement, and that is the finding this whole investigation rests on; the composite was
+        // paying it twice per poll.
+        return unitOfWorkFactory.withUnitOfWork(uow -> claimAcrossBothTables(activeQueues, availableWorkerSlotsPerQueue, claim));
+    }
+
+    private List<QueuedMessage> claimAcrossBothTables(List<QueueName> activeQueues,
+                                                      Map<QueueName, Integer> availableWorkerSlotsPerQueue,
+                                                      ClaimFromTable claim) {
         var fromOrdered = claim.claim(orderedStore, activeQueues, availableWorkerSlotsPerQueue);
 
         // The remaining slot budget after the ordered table has taken its share. Without this the two tables
