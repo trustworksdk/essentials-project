@@ -5,6 +5,17 @@ A summary for people **using** the queue, not building it. Every figure here is 
 [durable-queues-v2-design-plan.md](durable-queues-v2-design-plan.md); nothing is estimated, and the things that
 did not pay are listed too, because knowing which knobs are pointless is worth as much as knowing which are not.
 
+## Before any of this: run `ANALYZE` on your queue table
+
+The single largest effect measured in this investigation that costs nothing to fix. A freshly-loaded queue table
+with no planner statistics runs the **ordered** claim about **11× slower** — 13 517 ms against 1 184 ms for 20 000
+messages. `ANALYZE` recovers it; `VACUUM` alone does not, so this is the planner's row estimates rather than the
+visibility map.
+
+It matters because a queue that fills in a burst may never be analysed in time: on a default cluster, **zero
+autovacuums ran** during such a workload, since `autovacuum_naptime` is what binds. If you drain ordered messages
+from a table that was just filled, analyse it first.
+
 ## Read this first: the numbers do not multiply
 
 Each improvement below attacks a different cost, on a different workload, and several are opt-in. **There is no
@@ -43,7 +54,7 @@ the slow path.
 | Change | Effect | Conditions and cost |
 |---|---|---|
 | **Batched acknowledgement** (`setUseBatchedAcknowledgement(true)`) — **recommended** | **16.5× on drain time** [10.3–24.2 across 9 repetitions] | The largest win available, and off by default only because it is a *semantic* change: the redelivery window widens by one flush interval, and delivery behaviour does not change outside a major version. Most at-least-once consumers already tolerate that. Unordered messages only — ordered ones are never batched, and measured **0.82×, actively worse**. Requires `SingleOperationTransaction` |
-| **Two-table split** (`essentials.durable-queues.use-split-queue-tables=true`) | **1.07–1.36× total** for unordered traffic — and it is an *insert* feature: 1.34–1.66× on enqueue, drain at parity, ~9% fewer index bytes | Measured through the shipped component at 40 000 messages (§21–§23), not the raw-SQL prototype the often-quoted **1.38×/1.62×** came from. It reached this only after two defects were found and fixed by measurement: the composite asked each table for messages it cannot hold, and the unordered index omitted `key IS NULL` so every claim took heap fetches. **And the headline rationale — "six indexes down to one" — does not apply to unordered traffic at all**: the ordered indexes are partial on `key IS NOT NULL`, so with no ordered messages they hold 8 KB and cost nothing. The split removes two *small* indexes, 9% of the bytes (§24). **Ordered traffic is unmeasured** — repeat runs differ by 4.75×, so no figure is quoted, and it is now the only remaining reason to consider the split. ⚠️ **Requires a migration if you have a backlog** — see below |
+| **Two-table split** (`essentials.durable-queues.use-split-queue-tables=true`) | **1.07–1.36× total** for unordered traffic — and it is an *insert* feature: 1.34–1.66× on enqueue, drain at parity, ~9% fewer index bytes | Measured through the shipped component at 40 000 messages (§21–§23), not the raw-SQL prototype the often-quoted **1.38×/1.62×** came from. It reached this only after two defects were found and fixed by measurement: the composite asked each table for messages it cannot hold, and the unordered index omitted `key IS NULL` so every claim took heap fetches. **And the headline rationale — "six indexes down to one" — does not apply to unordered traffic at all**: the ordered indexes are partial on `key IS NOT NULL`, so with no ordered messages they hold 8 KB and cost nothing. The split removes two *small* indexes, 9% of the bytes (§24). **Ordered traffic is parity** (0.97×) once the table has been analysed — the 4.75× spread that previously prevented a figure was stale planner statistics, not the split. So the split is an insert-and-storage optimisation, never a drain one. ⚠️ **Requires a migration if you have a backlog** — see below |
 | **Batched fetch** (`setUseBatchedFetch(true)`) | **16–64× fewer claim statements**, and **no throughput change** (1.01–1.02×) | It reduces database round trips, not time. Measured against a database on localhost, where a round trip is nearly free — so if yours is remote or database CPU is your constraint, this is worth measuring in *your* environment, and `BatchedFetchThroughputBenchmarkIT` is the harness. Set `batchedFetchSwitchThreshold` to 0 or a small deployment silently stays on per-queue fetch |
 | **Ordered-message cursor** (`setUseOrderedMessageCursor(true)`) | **1.85×** at 8 keys × 2 500 messages; **1.02–1.05×** at 100–600 per key | Ordered traffic only, and the benefit is a function of how deep your per-key backlogs get — the barrier it replaces rescans a key's depth per candidate row. Experimental, and the remaining headroom is the acknowledgement rather than the claim |
 

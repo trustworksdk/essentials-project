@@ -122,6 +122,13 @@ class SplitVsSharedTableBenchmarkIT {
                 sharedRuns.add(run(false, ordered, messages, orderedKeys));
                 splitRuns.add(run(true, ordered, messages, orderedKeys));
             }
+            // Per-repetition drains printed, not just the median. Ordered runs of an identical configuration have
+            // differed by 4.75x, and a median hides whether that is drift, bimodality or one outlier - which is
+            // exactly what has to be known before any ordered ratio can be quoted.
+            System.out.printf("      [%s drains  shared=%s  split=%s]%n",
+                              label,
+                              sharedRuns.stream().map(r -> r.drainMs() + "ms").toList(),
+                              splitRuns.stream().map(r -> r.drainMs() + "ms").toList());
             var shared = median(sharedRuns);
             var split  = median(splitRuns);
             System.out.printf("%-12s %-10s %-12d %-12d %-12d %-12d %-12s%n",
@@ -213,6 +220,15 @@ class SplitVsSharedTableBenchmarkIT {
                 durableQueues.queueMessages(queueName, batch);
             }
             var enqueueMs = Duration.ofNanos(System.nanoTime() - enqueueStartedAt).toMillis();
+
+            // VACUUM ANALYZE both arms after seeding, before timing the drain.
+            //
+            // Not cosmetic. An index-only scan requires the visibility map to be set, which happens after a vacuum,
+            // and the split's ordered drain was bimodal because of it: four repetitions at 13.8-17.2 s and one at
+            // 4.6 s, while the shared arm stayed inside 11.5-14.3 s. That is a plan flipping between an index-only
+            // scan and a heap-fetching one depending on whether autovacuum happened to have run, not a property of
+            // either design. Normalising it makes the comparison about the schemas rather than about vacuum timing.
+            vacuumAnalyze();
 
             // Index bytes read while the table is full, which is when maintenance cost is being paid.
             var indexKb = indexBytes() / 1024;
@@ -326,6 +342,28 @@ class SplitVsSharedTableBenchmarkIT {
                                                           .mapTo(String.class)
                                                           .list()
                                                           .toString());
+    }
+
+    private void vacuumAnalyze() {
+        // VACUUM cannot run inside a transaction block, so it goes through a bare handle rather than a UnitOfWork.
+        unitOfWorkFactory.getJdbi().useHandle(handle -> {
+            // VACUUM cannot run inside a transaction block; Hikari hands out connections with autoCommit off.
+            try {
+                handle.getConnection().setAutoCommit(true);
+            } catch (java.sql.SQLException e) {
+                throw new IllegalStateException("Could not switch the connection to autoCommit for VACUUM", e);
+            }
+            for (var table : List.of(BASE, BASE + PostgresqlSplitDurableQueues.UNORDERED_TABLE_SUFFIX,
+                                     BASE + PostgresqlSplitDurableQueues.ORDERED_TABLE_SUFFIX)) {
+                var exists = handle.createQuery("SELECT to_regclass(:t) IS NOT NULL").bind("t", table).mapTo(Boolean.class).one();
+                if (exists) {
+                    // ANALYZE alone, VACUUM alone, or both - the two do different things and the operational
+                    // advice differs: ANALYZE refreshes planner statistics and is cheap, VACUUM also sets the
+                    // visibility map which is what an index-only scan needs.
+                    handle.execute(System.getProperty("splitbench.maintenance", "VACUUM ANALYZE") + " " + table);
+                }
+            }
+        });
     }
 
     private void dropTables() {

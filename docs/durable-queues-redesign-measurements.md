@@ -1407,3 +1407,45 @@ is no hidden index cost for batching to reveal.
   that is still unmeasured (§23), and it is now the only reason left to pursue the split.
 - **A separate poll per table would not change this.** The ceiling is index maintenance the split cannot remove,
   not contention between the two claims. If polling is split, it should be for ordered traffic and measured there.
+
+
+## 25. Ordered traffic measured at last — and the answer is ANALYZE, not the split
+
+§23 withdrew every ordered figure because repeat runs of one configuration differed by 4.75×. Printing the
+per-repetition drains rather than the median showed why: the shared arm was tight (11.5–14.3 s) while the split
+arm was bimodal — 13.8, 16.7, 16.9, 17.2 s and one run at **4.6 s**. A median cannot represent that, and averaging
+it would have been worse.
+
+Bimodality on one arm only suggests a query plan flipping, so the tables were given maintenance before the timed
+drain, in both arms. It is not a subtle effect. 20 000 ordered messages, 100 keys, medians of 3–5:
+
+| Maintenance before drain | Shared drain | Split drain | Split vs shared |
+|---|---|---|---|
+| none | 13 517 ms | 16 681 ms | 0.81× |
+| `VACUUM` only | 12 684 ms | 16 508 ms | 0.78× |
+| **`ANALYZE` only** | **1 184 ms** | **1 252 ms** | **0.97×** |
+| `VACUUM ANALYZE` | 1 067 ms | 1 166 ms | 0.98× |
+
+**Stale planner statistics cost roughly 11× on the ordered claim**, and it is `ANALYZE` that recovers it, not
+`VACUUM` — so this is about the planner's row estimates, not about the visibility map or index-only scans. Both
+arms become tight once statistics are current: shared 1003–1357 ms, split 1137–1340 ms.
+
+### Two conclusions, and the second is bigger than the first
+
+**The split does nothing for ordered traffic.** With current statistics it is **0.97×** on drain and 1.05–1.35× on
+enqueue, with 29% fewer index bytes. Parity. Combined with §24's finding that unordered is bounded at ~9% of index
+bytes, the split is an **insert-and-storage** optimisation across the board and never a drain one.
+
+**A freshly-loaded queue table without `ANALYZE` plans the ordered claim about 11× worse**, and that is larger than
+anything else in this investigation except batched acknowledgement. §13 already measured that on a default cluster
+**zero autovacuums ran** during a burst workload — autovacuum's `naptime` is what binds — so a queue that fills
+quickly and is drained by ordered consumers can sit in exactly this state for the whole drain. This is free to fix
+and needs no code.
+
+### What it means for earlier measurements in this document
+
+Any ordered figure taken on a freshly-seeded table without `ANALYZE` is suspect, because the planner had no
+statistics. That includes §21's 46–58 second ordered drains and, quite possibly, the barrier's "pathological
+regime" in §11 — its 217× was measured on prototype tables seeded immediately before the run. **The barrier may be
+far less pathological than recorded, and the cursor's case correspondingly weaker.** Re-running §11 with `ANALYZE`
+is now the highest-value outstanding measurement, because a headline result rests on it.
