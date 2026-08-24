@@ -38,19 +38,22 @@ the slow path.
 
 | Change | Effect | Conditions and cost |
 |---|---|---|
-| **Batched acknowledgement** (`setUseBatchedAcknowledgement(true)`) | **16.5× on drain time** [10.3–24.2 across 9 repetitions] | Unordered messages only — ordered ones are never batched, and were measured **0.82×, actively worse**. Widens the redelivery window by one flush interval, which is a semantics change, which is why it is off by default. Requires `SingleOperationTransaction` |
+| **Batched acknowledgement** (`setUseBatchedAcknowledgement(true)`) — **recommended** | **16.5× on drain time** [10.3–24.2 across 9 repetitions] | The largest win available, and off by default only because it is a *semantic* change: the redelivery window widens by one flush interval, and delivery behaviour does not change outside a major version. Most at-least-once consumers already tolerate that. Unordered messages only — ordered ones are never batched, and measured **0.82×, actively worse**. Requires `SingleOperationTransaction` |
 | **Two-table split** (`essentials.durable-queues.use-split-queue-tables=true`) | **1.38× overall, 1.62× on insert** | **Unordered traffic only** — ordered traffic gets 1.07×, because its cost is the per-key barrier in the claim and the split does not touch that. Measured against raw SQL on prototype schemas, so it isolates index maintenance rather than end-to-end throughput. ⚠️ **Requires a migration if you have a backlog** — see below |
-| **Batched fetch** (`setUseBatchedFetch(true)`) | Correctness under competing consumers is evidenced; **throughput is not measured** | Off by default precisely because no number justifies it yet. Do not enable it expecting a speed-up nobody has demonstrated |
+| **Batched fetch** (`setUseBatchedFetch(true)`) | **16–64× fewer claim statements**, and **no throughput change** (1.01–1.02×) | It reduces database round trips, not time. Measured against a database on localhost, where a round trip is nearly free — so if yours is remote or database CPU is your constraint, this is worth measuring in *your* environment, and `BatchedFetchThroughputBenchmarkIT` is the harness. Set `batchedFetchSwitchThreshold` to 0 or a small deployment silently stays on per-queue fetch |
+| **Ordered-message cursor** (`setUseOrderedMessageCursor(true)`) | **1.85×** at 8 keys × 2 500 messages; **1.02–1.05×** at 100–600 per key | Ordered traffic only, and the benefit is a function of how deep your per-key backlogs get — the barrier it replaces rescans a key's depth per candidate row. Experimental, and the remaining headroom is the acknowledgement rather than the claim |
 
-## Where the big remaining win is, and why it is not built
+## Where the remaining win is
 
-For **ordered** traffic with many messages per key, claiming per-key *runs* instead of one message at a time
-measured **217× in the deep-per-key regime**. That is by far the largest unrealised number in this investigation.
-It needs a per-key cursor design that has been prototyped, found incorrect twice, and corrected — see §8–§11 of
-the measurements. It is not shipped.
+For **ordered** traffic, the per-key cursor above is half of a design. The other half — claiming per-key *runs*
+and acknowledging a whole run in one transaction — is what would let ordered traffic amortise a transaction at
+all, which is the only lever that has ever mattered. It is not built.
 
-If your ordered throughput matters, that is the change to ask for. Nothing you can currently switch on addresses
-it.
+That is also why the cursor measures at 1.85× rather than the 217× quoted from the prototype: **217× was a
+claim-phase number**, and an end-to-end drain still pays one acknowledgement transaction per message. The claim is
+no longer the bottleneck once you have fixed the claim.
+
+If your ordered throughput matters, run-claiming is the change to ask for.
 
 ---
 

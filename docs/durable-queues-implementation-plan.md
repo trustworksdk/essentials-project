@@ -251,8 +251,7 @@ is the admin surface, and remains the review boundary.
 `getQueueNameFor(QueueEntryId)` and the admin surface once, across the ordered/unordered/dead-letter set,
 rather than per split.
 
-**O0 — decide the two shipped defaults.** Batched acknowledgement (a semantic change: the redelivery window
-widens by one flush interval) and batched fetch (needs a throughput measurement that does not exist).
+**O0 — the two shipped defaults. Decided, and both stay off — see §7i.**
 
 **O1 — the cheap defects. Done**, apart from the doc-drift sweep. The accessor and the cast landed together as
 required, and the unconstrained duplicate is now `OrderedMessageDuplicateStrategy` with `REJECT` as the default.
@@ -600,6 +599,59 @@ Next, if this is pursued: implement `claimOrderedRunViaSafeCursorSql` (prefix ru
 and caller-side sort) and acknowledge each run in one statement. Note the ack is **coupled** to the run claim — it
 scans `(cursor, min_acknowledged)`, sound only for prefix batches — so neither is safe with an arbitrary batch from
 elsewhere.
+
+## 7i. O0 decided: both shipped defaults stay off, for different reasons
+
+### Batched fetch is not a throughput feature — it is a round-trip feature
+
+`BatchedFetchThroughputBenchmarkIT` measures it, sweeping the active-queue count because that is the whole
+mechanism, and counting the **actual claim statements** via a JDBI `SqlLogger` rather than messages handled. That
+distinction was load-bearing: the first version counted messages, which are equal by construction, so "no
+measurable difference" and "the feature never engaged" looked identical. `batchedFetchSwitchThreshold` is set to 0
+in the batched arm, or the smaller shapes silently stay on per-queue fetch in both arms and report a dead heat.
+
+With one acknowledgement transaction per message (the shipped default):
+
+| Queues | Per-queue | Batched | Ratio | Per-queue claims | Batched claims |
+|---|---|---|---|---|---|
+| 2 | 10 016 ms | 10 003 ms | 1.00× | 2 000 | 500 |
+| 8 | 2 497 ms | 2 508 ms | 1.00× | 2 000 | 125 |
+
+The obvious objection is that the acknowledgement is hiding it, so the same sweep with **batched acknowledgement
+enabled in both arms** — which removes the 16.5× lever from both sides equally rather than biasing either:
+
+| Queues | Per-queue | Batched | Ratio | Per-queue claims | Batched claims |
+|---|---|---|---|---|---|
+| 8 | 5 053 ms | 4 991 ms | 1.01× | 4 018 | 250 |
+| 32 | 1 275 ms | 1 255 ms | 1.02× | 4 032 | 63 |
+
+**Batching does exactly what it claims — 16× to 64× fewer claim statements — and it moves throughput by 1–2%,
+which is noise.** The mechanism is real and the benefit is not throughput.
+
+**The caveat that decides how to read this.** The benchmark runs against a container on localhost, where a round
+trip costs almost nothing. What batched fetch saves *is* round trips, so the deployment shape where it pays is
+precisely the one this benchmark cannot see: a remote or high-latency database. At 1 ms of round-trip latency,
+4 032 statements against 63 is four seconds of pure network per drain versus none. So:
+
+- **Default stays off.** No measured throughput gain, and a default should not be changed on a mechanism that
+  measures at 1.01×.
+- **But it is not pointless**, and the docs should stop implying it is a speed-up that nobody has demonstrated and
+  start saying what it actually reduces. A deployment with a remote database, or one where database CPU rather
+  than the application is the constraint, has a real reason to enable it — and now has the flag and the statement
+  counter to measure its own case.
+
+### Batched acknowledgement stays off because it is a semantic change, not because it is slow
+
+It is the largest measured win in the whole investigation (16.5× on drain, [10.3–24.2] over 9 repetitions) and
+nothing here argues against its value. It stays off because enabling it **widens the redelivery window by one
+flush interval**, which is observable delivery behaviour, and the project's rule is that central APIs change
+behaviour only in a new major. It also requires `SingleOperationTransaction` and never applies to ordered
+messages.
+
+**Recommendation: flip it at the next major, and recommend it in the meantime** for any deployment that can
+tolerate a redelivery window one flush interval wider — which is most of them, since at-least-once delivery
+already implies handling redelivery. That is a documentation change rather than a code change, and it is the
+honest split: the number justifies the feature, the semantics justify the opt-in.
 
 ## 8. Investigation backlog — ideas not yet tried
 
