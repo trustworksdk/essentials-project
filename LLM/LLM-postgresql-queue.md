@@ -27,6 +27,8 @@
 - [Database Schema](#database-schema)
 - [Monitoring](#monitoring)
 - [Performance Tuning](#performance-tuning)
+- [Ordered Message Duplicates](#ordered-message-duplicates)
+- [Two-Table Split](#two-table-split-opt-in)
 - ⚠️ [Security](#security)
 - [Gotchas](#gotchas)
 
@@ -42,7 +44,8 @@ Base package: `dk.trustworks.essentials.components.queue.postgresql`
 |-------|---------|
 | `PostgresqlDurableQueues` | Main implementation |
 | `PostgresqlDurableQueuesBuilder` | Builder via `PostgresqlDurableQueues.builder()` |
-| `PostgresqlDurableQueuesStatistics` | Extended statistics API |
+| `PostgresqlSplitDurableQueues` | Ordered and unordered messages in separate tables, so each carries only the indexes it needs. Opt-in; configured via `PostgresqlSplitDurableQueuesSettings` / `.builder()` |
+| `PostgresqlDurableQueuesStatistics` | **Deprecated, for removal, wired by nothing** - collected via an `AFTER DELETE` trigger on the queue table (2.80x on acknowledgement throughput). Use `InMemoryDurableQueuesStatistics` (foundation) |
 | `PostgresqlDurableQueueConsumer` | Traditional per-consumer polling |
 
 Foundation classes (package: `dk.trustworks.essentials.components.foundation.messaging.queue`):
@@ -103,7 +106,9 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `transactionMode` | `TransactionMode` | `SingleOperationTransaction` | See [Transaction Modes](#transaction-modes) |
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
-| `useOrderedUnorderedQuery` | `boolean` | `false` | Query optimization |
+| `useOrderedUnorderedQuery` | `boolean` | `true` | Separate ordered/unordered claim queries. `false` uses one unified query, measured **5.4x slower** on a backlog mixing both kinds |
+| `orderedMessageDuplicateStrategy` | `OrderedMessageDuplicateStrategy` | `REJECT` | `REJECT` adds a unique index on `(queue_name, key, key_order) WHERE key IS NOT NULL`. **Startup fails on a table that already contains duplicates** - see [Ordered message duplicates](#ordered-message-duplicates) |
+| `messageObserver` | `DurableQueueMessageObserver` | `none()` | Notified of how each delivery ended. Pass `InMemoryDurableQueuesStatistics.observer()` to collect delivery statistics |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
 | `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
 | `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
@@ -305,10 +310,6 @@ CREATE TABLE durable_queues (
 Auto-created. `*` = table name.
 
 ```sql
--- Ordered message lookup
-CREATE INDEX idx_*_ordered_msg
-  ON durable_queues (queue_name, key, key_order);
-
 -- Next message to deliver
 CREATE INDEX idx_*_next_msg
   ON durable_queues (queue_name, is_dead_letter_message, is_being_delivered, next_delivery_ts);
@@ -318,24 +319,34 @@ CREATE INDEX idx_*_ready
   ON durable_queues (queue_name, next_delivery_ts, key, key_order)
   WHERE is_dead_letter_message = FALSE AND is_being_delivered = FALSE;
 
--- Ordered messages ready (when useOrderedUnorderedQuery=true)
-CREATE INDEX idx_*_ordered_ready
-  ON durable_queues (key, queue_name, key_order, next_delivery_ts)
-  INCLUDE (id)
-  WHERE key IS NOT NULL AND NOT is_dead_letter_message AND NOT is_being_delivered;
-
--- Unordered messages ready (when useOrderedUnorderedQuery=true)
+-- Unordered messages ready
 CREATE INDEX idx_*_unordered_ready
   ON durable_queues (queue_name, next_delivery_ts)
   INCLUDE (id)
   WHERE key IS NULL AND NOT is_dead_letter_message AND NOT is_being_delivered;
 
--- Ordered message head (for ordered processing)
+-- Ordered message head
 CREATE INDEX idx_*_ordered_head
   ON durable_queues (queue_name, key_order, next_delivery_ts)
   INCLUDE (id)
   WHERE key IS NOT NULL AND is_dead_letter_message = FALSE AND is_being_delivered = FALSE;
+
+-- Ordered per-key, unique under orderedMessageDuplicateStrategy = REJECT (the default)
+CREATE UNIQUE INDEX idx_*_ordered_unique
+  ON durable_queues (queue_name, key, key_order)
+  WHERE key IS NOT NULL;
+
+-- Under ALLOW, a non-unique equivalent is created instead, since no unique index exists to serve the barrier
+CREATE INDEX idx_*_ordered_msg
+  ON durable_queues (queue_name, key, key_order);
 ```
+
+**Two indexes were removed** on measured evidence (`PostgresqlIndexUsageIT`, net −28% index bytes):
+`idx_*_ordered_ready` took zero scans at both 8 and 200 ordered keys, and `idx_*_ordered_msg` is superseded by the
+unique index under `REJECT`. Existing deployments have them dropped on startup.
+
+⚠️ **The schema auto-migrates on startup** — indexes are dropped and recreated to match the current set, which is
+not zero-downtime safe across versions when index names change.
 
 **Query pattern**: `FOR UPDATE SKIP LOCKED` for lock-free concurrent access.
 
@@ -381,27 +392,43 @@ var durableQueues = PostgresqlDurableQueues.builder()
 | `DurableQueuesMicrometerTracingInterceptor` | Distributed tracing via Micrometer Observation |
 | `RecordExecutionTimeDurableQueueInterceptor` | Operation execution time |
 
-### PostgreSQL-Specific Statistics
+### Delivery Statistics
 
 Package: `dk.trustworks.essentials.components.foundation.messaging.queue.stats`
 
+Collected in memory from a `DurableQueueMessageObserver`, so nothing is written on the acknowledgement path and
+enabling them creates no table. **The queue does not own the statistics object** — you create it and hand the queue
+its observer, which is what makes this a configuration change rather than a schema migration:
+
 ```java
-import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
 import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
 
-PostgresqlDurableQueues queues = (PostgresqlDurableQueues) durableQueues;
-DurableQueuesStatistics stats = queues.getStatistics();
+var statistics = new InMemoryDurableQueuesStatistics();
+var durableQueues = PostgresqlDurableQueues.builder()
+                                           .setUnitOfWorkFactory(unitOfWorkFactory)
+                                           .setJsonSerializer(jsonSerializer)
+                                           .setMessageObserver(statistics.observer())   // <- the wiring
+                                           .build();
 
-// Queue statistics
-Optional<QueueStatistics> queueStats = stats.getQueueStatistics(queueName);
-queueStats.ifPresent(s -> {
-    log.info("Total: {}, DLQ: {}, Earliest: {}",
-        s.getTotalMessages(), s.getDeadLetterMessages(), s.getEarliestMessageTimestamp());
-});
+// Queue-level aggregate
+statistics.getQueueStatistics(queueName).ifPresent(s ->
+    log.info("Delivered: {}, avg latency: {} ms, last delivery: {}",
+             s.totalMessagesDelivered(), s.avgDeliveryLatencyMs(), s.lastDelivery()));
 
-// Individual message statistics
-Optional<QueuedStatisticsMessage> msgStats = stats.getQueueStatisticsMessage(queueEntryId);
+// One message, best-effort: answers for a message this instance recently finished with
+Optional<QueuedStatisticsMessage> messageStatistics = statistics.getQueueStatisticsMessage(queueEntryId);
 ```
+
+Under Spring, set `essentials.durable-queues.enable-queue-statistics=true` and the starter does the wiring.
+
+⚠️ **Per instance, and since startup.** Each instance counts only the deliveries it performed, and a restart
+resets them — so a low number is not a slow queue and a zero is not a stall. Nothing is persisted. For
+cluster-wide or historical answers, aggregate the Micrometer meters. `purgeQueue` and `deleteMessage` produce no
+statistics: they are administrative operations, not deliveries.
+
+Custom observers are the extension point — implement `DurableQueueMessageObserver` and combine with
+`DurableQueueMessageObserver.composite(List.of(...))`. Exceptions thrown by an observer never reach the delivery
+path.
 
 ### Logging
 
@@ -515,11 +542,59 @@ See [README Security](../components/postgresql-queue/README.md#security) for ful
 
 **Bottom line:** Validation is a defense layer, not a security guarantee. Always use hardcoded names or thoroughly validated configuration.
 
+## Ordered Message Duplicates
+
+Two `OrderedMessage`s sharing a key **and** a `key_order` never block each other — the per-key barrier blocks only
+on a *strictly* lower order — so that key's ordering guarantee silently does not hold. `orderedMessageDuplicateStrategy`
+defaults to `REJECT`, which adds a unique index that makes the second enqueue fail instead.
+
+```java
+// REJECT (default) - a duplicate key+order is refused, which doubles as an idempotent enqueue
+durableQueues.queueMessage(queueName, OrderedMessage.of("first",  "key-a", 0L));   // ok
+durableQueues.queueMessage(queueName, OrderedMessage.of("second", "key-a", 0L));   // throws
+durableQueues.queueMessage(queueName, OrderedMessage.of("third",  "key-a", 1L));   // ok - different order
+```
+
+Safe as a default because every ordered message the framework produces keys on the aggregate id and orders by
+`EventOrder`, unique within its stream. The exposure is application code deriving the order from something that is
+not unique.
+
+⚠️ **Startup fails on a table that already contains duplicates**, naming the offending key — `CREATE UNIQUE INDEX`
+cannot succeed against them, and carrying on would leave the deployment believing ordering is protected when it is
+not. Either resolve them, or opt out with `.setOrderedMessageDuplicateStrategy(OrderedMessageDuplicateStrategy.ALLOW)`.
+Unordered messages are unaffected: the index is partial on `key IS NOT NULL`.
+
+## Two-Table Split (opt-in)
+
+`PostgresqlSplitDurableQueues` stores ordered and unordered messages in separate tables (`<base>_unordered` /
+`<base>_ordered`), so each carries only the indexes its own access pattern needs — measured **1.38× total, 1.62× on
+insert** for unordered traffic, all of it index count.
+
+```java
+var durableQueues = PostgresqlSplitDurableQueues.builder()
+                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                .setJsonSerializer(jsonSerializer)
+                                                .setBaseQueueTableName("durable_queues")
+                                                .setMultiTableChangeListener(listener)     // optional, for wake-ups
+                                                .build();
+```
+
+Transparent through the `DurableQueues` API — routing is by message type, and the shared cross-implementation test
+suite passes against it unmodified. Notes:
+
+- **No Spring property enables it yet**; the starter always builds `PostgresqlDurableQueues`. Hand-wire it.
+- **Deep paging costs more**: a page cannot push its offset into either table, so page *n* reads *n* × `pageSize`
+  rows from each. Fine for admin browsing.
+- **Migration is not automatic** — it is a different physical layout, so moving to it means draining the existing
+  table first.
+
 ## Gotchas
 
 | Issue | Wrong | Right |
 |-------|-------|-------|
 | FullyTransactional breaks retries | `.setTransactionMode(TransactionMode.FullyTransactional)` | `.setTransactionMode(TransactionMode.SingleOperationTransaction)` |
+| Ack-counting interceptor goes blind when batching acks | implementing only `intercept(AcknowledgeMessageAsHandled…)` | implement `intercept(AcknowledgeMessagesAsHandled…)` too |
+| Statistics assumed cluster-wide | reading `totalMessagesDelivered` as the queue's throughput | it is this instance's, since its startup — aggregate Micrometer for a cluster figure |
 | SQL injection via table name | `.setSharedQueueTableName(request.getParameter("table"))` | `.setSharedQueueTableName("message_queue")` |
 | Optimizer without listener | `.setQueuePollingOptimizerFactory(...)` alone | `.setMultiTableChangeListener(...).setQueuePollingOptimizerFactory(...)` |
 | Aggressive polling without optimization | `.setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(1))` | Add optimizer + reasonable interval |

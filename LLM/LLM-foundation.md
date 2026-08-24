@@ -204,6 +204,42 @@ design and the redelivery window widens by one flush interval — see
 Interceptors: batched acks arrive as `AcknowledgeMessagesAsHandled`, not `AcknowledgeMessageAsHandled`.
 Implement both `intercept` overloads or an ack-counting interceptor goes blind once batching is on.
 
+### Observing Delivery Outcomes
+
+**Interface**: `dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueMessageObserver`
+
+Notified of how each delivery **ended** — handled, redelivery-requested, retried, dead-lettered. This is where
+delivery statistics come from, and it is not a `DurableQueuesInterceptor`: an interceptor sees the operation, not
+the outcome. `chain.proceed()` covers only the handler invocation, and the acknowledge / retry / dead-letter
+operations carry just a `QueueEntryId`, so an interceptor would have to keep a map of in-flight messages plus a
+size cap and a sweep for the acks that never arrive.
+
+```java
+var observer = new DurableQueueMessageObserver() {
+    @Override
+    public void messageHandled(QueuedMessage message, Duration handlerDuration) { /* … */ }
+
+    @Override
+    public void messageDeadLettered(QueuedMessage message, Throwable cause) { /* … */ }
+};
+
+var durableQueues = PostgresqlDurableQueues.builder()
+                                           .setMessageObserver(observer)
+                                           .build();
+```
+
+- `messageHandled` fires **after** the acknowledgement, so its count means "delivered and removed from the queue"
+  rather than "the handler returned".
+- Administrative `deleteMessage` and `purgeQueue` do **not** notify — they are not deliveries.
+- Combine several with `DurableQueueMessageObserver.composite(List.of(...))`. Exceptions never reach the delivery
+  path: the framework wraps observers in `safe(...)`, which swallows and logs once. Observers run on the delivery
+  threads, so they must not block.
+- Reached by the framework through `DurableQueues.getMessageObserver()`, a `default` method — so implementations
+  that do not care inherit the no-op.
+
+`InMemoryDurableQueuesStatistics` (package `…messaging.queue.stats`) is the built-in consumer; see
+[LLM-postgresql-queue.md](./LLM-postgresql-queue.md#delivery-statistics).
+
 ### Pattern Matching Handler
 
 **Class**: `dk.trustworks.essentials.components.foundation.messaging.queue.PatternMatchingQueuedMessageHandler` implementing `dk.trustworks.essentials.components.foundation.messaging.MessageHandler`:

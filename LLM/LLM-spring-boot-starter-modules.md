@@ -55,7 +55,7 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 **Components:**
 - `PostgresqlFencedLockManager` - Distributed locks
 - `PostgresqlDurableQueues` - Durable message queuing
-- `PostgresqlDurableQueuesStatistics` - Queue statistics (when enabled)
+- `InMemoryDurableQueuesStatistics` - Delivery statistics (when enabled). Collected in memory from a `DurableQueueMessageObserver`; **per instance and since startup**, nothing persisted
 - `Inboxes`, `Outboxes` - Store-and-forward patterns
 - `DurableLocalCommandBus` - Command bus with durable delivery
 - `MultiTableChangeListener` - PostgreSQL NOTIFY/LISTEN optimization
@@ -197,10 +197,11 @@ Prefix: `essentials.durable-queues`
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `enable-queue-statistics` | `false` | Collect statistics |
-| `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - see [Security](#security) |
-| `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
-| `queue-statistics-ttl-duration` | `90` | Days |
+| `enable-queue-statistics` | `false` | Collect delivery statistics in memory. Creates no table and installs no trigger; figures are **per instance and reset on restart** |
+| `ordered-message-duplicate-strategy` | `REJECT` | `REJECT` refuses a duplicate `OrderedMessage` key+order. ⚠️ **Startup fails if the table already contains duplicates** |
+| `shared-queue-statistics-table-name` | `durable_queues_statistics` | ⚠️ **Inert** - no statistics table exists any more. Removed next major |
+| `enable-queue-statistics-ttl` | `false` | ⚠️ **Inert** - nothing to prune. Removed next major |
+| `queue-statistics-ttl-duration` | `90` | ⚠️ **Inert** - nothing to prune. Removed next major |
 
 **Transactional Modes:**
 - `single-operation-transaction`: Queue ops outside transaction, timeout-based ack (RECOMMENDED)

@@ -150,6 +150,95 @@ new PostgresqlDurableQueues(unitOfWorkFactory, jsonSerializer, tableName, listen
                             TransactionalMode.FullyTransactional, null);
 ```
 
+### `OrderedMessage` duplicates are now rejected, and startup fails on a table that already contains some
+
+**This is the one behaviour change in this release that can stop an existing deployment from starting**, so it is
+worth reading even if nothing else here applies.
+
+`PostgresqlDurableQueues` now defaults `orderedMessageDuplicateStrategy` to `REJECT`, which adds a unique index on
+`(queue_name, key, key_order) WHERE key IS NOT NULL`. The defect it closes is silent: the per-key ordering barrier
+blocks only on a **strictly** lower `key_order`, so two `OrderedMessage`s sharing a key *and* an order never block
+each other and that key's ordering guarantee simply does not hold. Nothing in the schema prevented it before.
+
+`REJECT` is safe as a default because every ordered message the framework itself produces is duplicate-free by
+construction — the event processors and the subscription manager key on the aggregate id and order by `EventOrder`,
+which is unique within its stream. The exposure is application code deriving `key_order` from something that is not
+unique. Rejection doubles as an idempotent enqueue for an at-least-once upstream.
+
+**A `CREATE UNIQUE INDEX` cannot succeed against a table that already contains duplicates**, so startup fails,
+naming the offending key, rather than continuing without the index. That is deliberate: logging a warning and
+carrying on would leave the deployment believing ordering is protected when it is not. Two ways forward:
+
+```java
+// 1. Keep the old behaviour - duplicates accepted, ordering not guaranteed for those keys
+PostgresqlDurableQueues.builder()
+                       .setOrderedMessageDuplicateStrategy(OrderedMessageDuplicateStrategy.ALLOW)
+                       .build();
+```
+
+```sql
+-- 2. Or find and resolve them first, then upgrade into REJECT
+SELECT queue_name, key, key_order, count(*), array_agg(id)
+  FROM durable_queues
+ WHERE key IS NOT NULL
+ GROUP BY queue_name, key, key_order
+HAVING count(*) > 1;
+```
+
+Spring applications set this through `essentials.durable-queues.ordered-message-duplicate-strategy`.
+
+### Paging queued and dead-letter messages is now ordered, and `queueingSortOrder` is finally honoured
+
+`getQueuedMessages` / `getDeadLetterMessages` took a `QueueingSortOrder` that **both** implementations ignored:
+PostgreSQL paged with `LIMIT/OFFSET` and no `ORDER BY`, MongoDB with `skip()/limit()` and no sort. Without a total
+order, paging is not a partition of the queue — the database is free to return rows in a different order per query,
+so a message could appear on two pages and another on none.
+
+Both now order by the added timestamp, with the entry id as the tie-break that makes the order total. **Not by id
+alone**, even though the javadoc used to say "the sorting order for `QueuedMessage#getId()`": a `QueueEntryId` is a
+UUID and does not sort chronologically as a string, so id-ordering would have turned the admin browse surface from
+"oldest first" into a stable shuffle. The javadoc was describing an order nobody wanted and has been corrected.
+
+**No action needed.** The observable change is that pages are now stable and `DESC` actually reverses them. If you
+depended on the previous order, you were depending on heap order, which was never guaranteed.
+
+### Delivery statistics are collected in memory, not by a database trigger
+
+`essentials.durable-queues.enable-queue-statistics=true` used to create a statistics table and an `AFTER DELETE`
+trigger on the queue table, writing one row per acknowledged message inside the queue's own transaction — measured
+at **2.80×** on acknowledgement throughput. It now wires `InMemoryDurableQueuesStatistics`, fed by a
+`DurableQueueMessageObserver`. `PostgresqlDurableQueuesStatistics` is `@Deprecated(forRemoval = true)` and wired by
+nothing.
+
+**What changes for you:**
+
+- **Enabling statistics is no longer a schema migration.** No table is created, and no trigger is installed on the
+  queue table. An existing `durable_queues_statistics` table is left alone; drop it when you are ready.
+- **The numbers are now per instance and since startup.** Each instance counts the deliveries it performed, and a
+  restart resets them. A low number is not a slow queue and a zero is not a stall. The admin UI states this on the
+  queue view. For cluster-wide or historical answers, aggregate the Micrometer meters.
+- **`purgeQueue` and `deleteMessage` no longer produce statistics.** The trigger counted a purge of N rows as N
+  delivered messages, each with a latency measured to the moment of the purge, so the previous numbers were wrong
+  in a way that is worth knowing if you have been reading them.
+- **`getQueueStatisticsMessage(QueueEntryId)` works for the first time**, best-effort: it answers for a message
+  this instance recently finished with. The durable version stored `delivery_latency` as an `INTERVAL` and read it
+  back with `getInt`, which pgjdbc rejects, so it threw for every id.
+- **Three properties are now inert**: `shared-queue-statistics-table-name`, `enable-queue-statistics-ttl` and
+  `queue-statistics-ttl-duration`. Nothing reads them; they are kept so existing configuration still binds, and
+  will be removed in the next major. There is no statistics table to name or prune.
+
+If you need durable, cluster-wide statistics, the intended shape is a batched asynchronous writer fed by the same
+observer — see `docs/durable-queues-statistics-improvements.md`. It is not built.
+
+### `QueuedMessage.getDeliveryMode()` is derived and no longer always reports `NORMAL`
+
+`DefaultQueuedMessage.getDeliveryMode()` returned `NORMAL` unconditionally, contradicting both the persisted
+`delivery_mode` column and Mongo's own implementation. It now returns `IN_ORDER` if and only if the wrapped
+`Message` is an `OrderedMessage`, so it cannot disagree with what was stored.
+
+**Action needed only if you branched on it** and were relying on the constant `NORMAL` — such code now takes the
+ordered path for ordered messages, which is what it was presumably written to do.
+
 Everything else in this release is source- and binary-compatible.
 
 ## Per-module reference
@@ -235,6 +324,16 @@ All of the following gain a `builder()`; their `Optional`-taking and wide constr
 | `PostgresqlDurableQueueConsumer(…)` / `MongoDurableQueueConsumer(…)` — 7 args | `(ConsumeFromQueue, DurableQueueConsumerDependencies)` |
 | `PostgresqlFencedLockManager` / `MongoFencedLockManager` — `Optional`-taking constructors | their existing `builder()` |
 | `LocalEventBus(…)` — wide constructor | `LocalEventBus.builder()` |
+| `PostgresqlDurableQueuesStatistics` — collects via an `AFTER DELETE` trigger | `InMemoryDurableQueuesStatistics` + `DurableQueueMessageObserver` — **see the behaviour changes above** |
+
+New in this release, additive:
+
+| Addition | What it is for |
+|---|---|
+| `DurableQueues.getMessageObserver()` — a `default` method | How `DurableQueueMessageObserver` reaches the two classes that decide a delivery's outcome. Defaults to `none()`, so no implementation has to change |
+| `DurableQueues.acknowledgeMessagesAsHandled(Collection)` | Batched acknowledgement — one `DELETE` per batch instead of one transaction per message. **An ack-counting `DurableQueuesInterceptor` must implement both this and the single-message overload, or it goes blind when batching is on** |
+| `OrderedMessageDuplicateStrategy` | `REJECT` (default) / `ALLOW` — see the behaviour changes above |
+| `PostgresqlSplitDurableQueues` + `…Settings` / `…Builder` | Stores ordered and unordered messages in separate tables so each carries only the indexes it needs. Opt-in, hand-wired; the Spring starter still builds `PostgresqlDurableQueues` |
 
 ### Starters and admin API
 

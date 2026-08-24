@@ -279,7 +279,13 @@ public class EssentialsComponentsProperties {
 
     public static class DurableQueuesProperties {
         private String sharedQueueTableName           = PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
-        private String sharedQueueStatisticsTableName = PostgresqlDurableQueuesStatistics.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
+        /**
+         * @deprecated Inert. Delivery statistics are collected in memory, so there is no statistics table to name -
+         * see {@code InMemoryDurableQueuesStatistics}. Kept so existing configuration still binds; removed in the
+         * next major.
+         */
+        @Deprecated(forRemoval = true, since = "0.40.x")
+        private String sharedQueueStatisticsTableName = "durable_queues_statistics";
 
         private Double            pollingDelayIntervalIncrementFactor      = 0.5d;
         private Duration          maxPollingInterval                       = Duration.ofMillis(2000);
@@ -377,7 +383,12 @@ public class EssentialsComponentsProperties {
          * Default: false
          *
          * @return true if queue statistics TTL is enabled, false otherwise.
+         *
+         * @deprecated Inert. Delivery statistics are collected in memory rather than in a table, so there is
+         * nothing to prune or to name - see {@code InMemoryDurableQueuesStatistics}. Setting this has no effect.
+         * Kept so existing configuration still binds; removed in the next major.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public boolean isEnableQueueStatisticsTtl() {
             return enableQueueStatisticsTtl;
         }
@@ -387,7 +398,12 @@ public class EssentialsComponentsProperties {
          *
          * @param enableQueueStatisticsTtl a boolean value where {@code true} enables TTL for the queue statistics,
          *                                 and {@code false} disables it.
+         *
+         * @deprecated Inert. Delivery statistics are collected in memory rather than in a table, so there is
+         * nothing to prune or to name - see {@code InMemoryDurableQueuesStatistics}. Setting this has no effect.
+         * Kept so existing configuration still binds; removed in the next major.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public void setEnableQueueStatisticsTtl(boolean enableQueueStatisticsTtl) {
             this.enableQueueStatisticsTtl = enableQueueStatisticsTtl;
         }
@@ -397,7 +413,12 @@ public class EssentialsComponentsProperties {
          * Default: 90 days
          *
          * @return the TTL duration for queue statistics in days
+         *
+         * @deprecated Inert. Delivery statistics are collected in memory rather than in a table, so there is
+         * nothing to prune or to name - see {@code InMemoryDurableQueuesStatistics}. Setting this has no effect.
+         * Kept so existing configuration still binds; removed in the next major.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public int getQueueStatisticsTtlDuration() {
             return queueStatisticsTtlDuration;
         }
@@ -406,7 +427,12 @@ public class EssentialsComponentsProperties {
          * Sets the time-to-live (TTL) duration for the queue statistics.
          *
          * @param queueStatisticsTtlDuration the duration in days for which the queue statistics will be retained
+         *
+         * @deprecated Inert. Delivery statistics are collected in memory rather than in a table, so there is
+         * nothing to prune or to name - see {@code InMemoryDurableQueuesStatistics}. Setting this has no effect.
+         * Kept so existing configuration still binds; removed in the next major.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public void setQueueStatisticsTtlDuration(int queueStatisticsTtlDuration) {
             this.queueStatisticsTtlDuration = queueStatisticsTtlDuration;
         }
@@ -537,7 +563,12 @@ public class EssentialsComponentsProperties {
          * vulnerabilities, compromising the security and integrity of the database.</b>
          *
          * @return the name of the table that will contain all messages (across all {@link QueueName}'s)
+         *
+         * @deprecated Inert. Delivery statistics are collected in memory rather than in a table, so there is
+         * nothing to prune or to name - see {@code InMemoryDurableQueuesStatistics}. Setting this has no effect.
+         * Kept so existing configuration still binds; removed in the next major.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public String getSharedQueueStatisticsTableName() {
             return sharedQueueStatisticsTableName;
         }
@@ -566,7 +597,12 @@ public class EssentialsComponentsProperties {
          * vulnerabilities, compromising the security and integrity of the database.</b>
          *
          * @param sharedQueueStatisticsTableName the name of the table that will contain all messages (across all {@link QueueName}'s)
+         *
+         * @deprecated Inert. Delivery statistics are collected in memory rather than in a table, so there is
+         * nothing to prune or to name - see {@code InMemoryDurableQueuesStatistics}. Setting this has no effect.
+         * Kept so existing configuration still binds; removed in the next major.
          */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public void setSharedQueueStatisticsTableName(String sharedQueueStatisticsTableName) {
             this.sharedQueueStatisticsTableName = sharedQueueStatisticsTableName;
         }
