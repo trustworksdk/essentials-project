@@ -1305,3 +1305,53 @@ The composition was chosen so both tables could be driven by v1's existing state
 increment 1 cheap. That reuse is exactly what caused the regression: v1's statements assume v1's index set, and the
 split's whole purpose is to *not* have v1's index set. Reuse across a boundary where the invariants differ buys
 delivery speed and charges for it later.
+
+
+## 23. The unordered regression was one missing index predicate
+
+§22 fixed the wrong claim query per table and left unordered at 0.31× — improved, still a 3× regression, cause
+unidentified. It was one line.
+
+**The split's unordered index omitted `key IS NULL` from its predicate.** The unordered claim filters
+`key IS NULL`; v1's `idx_*_unordered_ready` has always been partial on exactly that, so the claim is an index-only
+scan. The split's `idx_*_ready` was partial only on `NOT is_dead_letter_message AND NOT is_being_delivered`, which
+does not imply it — so PostgreSQL had to fetch every candidate row from the heap to re-check a condition that is
+true for every row in that table by construction. The cost grows with the backlog, which is why it read 0.75× at
+10 000 messages and 0.16× at 40 000.
+
+Adding the predicate — redundant-looking, since the table holds nothing else — closes it completely:
+
+| Unordered, 40 000 messages | Before | After |
+|---|---|---|
+| Drain | 0.16× | **1.00×** |
+| Total | 0.20× | **1.07×** |
+| Enqueue | 1.36× | 1.34–1.60× |
+| Claim statements (split vs shared) | 3 209 vs 1 624 | **1 628 vs 1 660** |
+
+The claim counter is what confirms the mechanism rather than just the outcome: the split's "extra" claim statements
+were never extra claims, they were the same claims taking heap fetches. With the predicate present the counts match
+and so does the time.
+
+**So the split is now neutral-to-slightly-positive for unordered traffic** — 1.07× total, driven entirely by the
+1.34–1.60× on insert, with the drain at parity and 8–9% fewer index bytes. That is a long way from the 1.38× the
+prototype promised, but it is no longer a regression.
+
+### Ordered traffic is unstable and no ratio should be quoted
+
+Two runs of the identical configuration (40 000 messages, 200 keys, medians of 3) gave a split drain of
+**12 388 ms** and **58 899 ms** — 4.75× apart, against a shared-table arm that varied only 12% (46 308 / 52 341).
+So §22's "ordered goes to 3.64×" is **withdrawn**: it is within the spread of a bimodal measurement, not a result.
+
+The instability is plausibly the barrier's known sensitivity to how many keys are blocked at any instant (§11
+measured its claim varying by two orders of magnitude with key depth), but that is a hypothesis and this document
+has already been wrong twice this session by reasoning from mechanism instead of measuring. **Ordered traffic on
+the split is unmeasured**, and finding a stable harness for it is the next piece of work.
+
+### Still open: the double delete
+
+The split issues **80 000 deletes for 40 000 ordered messages**, plus 40 000 extra dead-letter lookups: the by-id
+dual lookup tries the unordered store first, its `DELETE` matches nothing, `acknowledgeMessageAsHandled` then
+checks whether the id is a dead letter, and only then does the ordered store's delete succeed. Three statements per
+acknowledgement where one would do. §7b priced the dual lookup at "one extra statement per by-id operation"; on the
+hot path it is two. The fix is a single statement deleting from both tables in one round trip — new SQL in the
+composite rather than reuse of v1's, which is the direction §22's lesson already points.

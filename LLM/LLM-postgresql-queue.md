@@ -569,11 +569,10 @@ Unordered messages are unaffected: the index is partial on `key IS NOT NULL`.
 `PostgresqlSplitDurableQueues` stores ordered and unordered messages in separate tables (`<base>_unordered` /
 `<base>_ordered`), so each carries only the indexes its own access pattern needs.
 
-⚠️ **Not currently recommended for throughput.** Measured through the component at 40 000 messages and reproduced,
-unordered traffic drains **~5× slower** than the shared table (10 425 ms against 1 648 ms). Insert improves 1.36×
-and index bytes 1.10–1.33×, so the mechanism works, but the drain regression swamps it — apparently composite fetch
-overhead rather than the schema. The **1.38×/1.62×** figures quoted historically come from raw-SQL prototype
-schemas and do not describe this implementation.
+Measured through the component at 40 000 messages: unordered traffic is **1.07× overall** — insert 1.34–1.60×,
+drain at parity, 8–9% fewer index bytes. The **1.38×/1.62×** quoted historically came from raw-SQL prototype
+schemas and never described this implementation. **Ordered traffic is unmeasured** — repeat runs of the same
+configuration differ by 4.75×, so no figure is quoted.
 
 ```java
 var durableQueues = PostgresqlSplitDurableQueues.builder()

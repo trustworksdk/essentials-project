@@ -40,20 +40,19 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * {@link DurableQueues} that stores ordered and unordered messages in <b>separate tables</b>, so each carries only
  * the indexes its own access patterns need.
  *
- * <h2>⚠️ Current status: slower than the shared table, and not recommended for throughput</h2>
- * Measured through this class at 40 000 messages and reproduced (measurements §21): unordered traffic drains in
- * <b>10 425 ms against the shared table's 1 648 ms</b> — roughly <b>5× slower end to end</b>, on exactly the
- * traffic the split exists to speed up. Ordered traffic is neutral (0.97×).
+ * <h2>What this measures at, through this class</h2>
+ * Unordered traffic: <b>1.07× total</b> at 40 000 messages — insert 1.34–1.60×, drain at parity, 8–9% fewer index
+ * bytes (measurements §21–§23). Not the <b>1.38×/1.62×</b> quoted historically, which came from raw SQL against
+ * prototype schemas and never described this implementation.
  * <p>
- * The design's mechanism does work: insert improves 1.36× and index bytes are 1.10× (unordered) to 1.33×
- * (ordered) smaller. It is simply not where the time goes, and the drain regression swamps it. Because the index
- * bytes moved the right way while the drain moved the wrong way, the regression localises to how <em>this class
- * fetches</em> rather than to having two tables — the prime suspect being that every poll claims from the ordered
- * table first and then the unordered one, two claim transactions and two stuck-message resets per poll where v1
- * does one, with the ordered half pure overhead for unordered traffic. Not yet confirmed.
+ * <b>Ordered traffic is unmeasured.</b> Repeat runs of an identical configuration differ by 4.75×, so no ratio is
+ * quoted until there is a stable harness.
  * <p>
- * The <b>1.38× total / 1.62× insert</b> figures quoted elsewhere come from raw SQL against prototype schemas and
- * do not describe this implementation.
+ * It reached parity only after measurement found two defects that reasoning had not. Both are worth knowing before
+ * changing anything here, because both came from reusing v1's statements against a schema that deliberately is not
+ * v1's: the composite asked each table for messages it cannot hold (fixed by {@code ClaimScope}), and the unordered
+ * index omitted {@code key IS NULL} so every claim fell back to heap fetches (§23). Together they made the split
+ * <b>5× slower</b> than the table it replaces.
  * <p>
  * It is a <b>composition, not a rewrite</b>. {@link DurableQueuesSql} generates its statements for whatever table
  * name it is constructed with, and both split tables keep the shared table's columns, so each is driven by

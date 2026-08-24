@@ -294,7 +294,32 @@ class SplitVsSharedTableBenchmarkIT {
                                                           .one());
     }
 
+    /**
+     * Retried, because this is teardown racing the previous arm's shutdown rather than anything about the product.
+     * {@code stop()} returns before every worker connection is certainly gone, and a {@code DROP TABLE} that
+     * collides with one deadlocks. It began failing only once the unordered arm got fast enough for the next arm's
+     * drop to arrive while the last one was still unwinding.
+     */
     private void dropTables() {
+        for (var attempt = 1; ; attempt++) {
+            try {
+                dropTablesOnce();
+                return;
+            } catch (RuntimeException e) {
+                if (attempt >= 5) {
+                    throw e;
+                }
+                try {
+                    Thread.sleep(200L * attempt);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private void dropTablesOnce() {
         unitOfWorkFactory.usingUnitOfWork(uow -> {
             uow.handle().execute("DROP TABLE IF EXISTS " + BASE + PostgresqlSplitDurableQueues.UNORDERED_TABLE_SUFFIX);
             uow.handle().execute("DROP TABLE IF EXISTS " + BASE + PostgresqlSplitDurableQueues.ORDERED_TABLE_SUFFIX);

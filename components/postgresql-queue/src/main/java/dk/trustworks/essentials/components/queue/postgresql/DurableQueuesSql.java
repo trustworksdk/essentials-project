@@ -872,10 +872,20 @@ public class DurableQueuesSql {
      *
      * @return DDL creating the unordered ready index
      */
+    /**
+     * The unordered table's single index.
+     * <p>
+     * <b>{@code key IS NULL} is in the predicate even though every row in this table satisfies it</b>, and that is
+     * not redundancy - it is what lets the claim be an index-only scan. The unordered claim filters
+     * {@code key IS NULL}, and an index whose predicate does not imply it forces PostgreSQL to fetch each candidate
+     * row from the heap to re-check, at a cost that grows with the backlog. v1's own
+     * {@code idx_*_unordered_ready} has always carried the predicate for this reason; the split's copy omitted it
+     * and measured 0.75× at 10 000 messages and 0.16× at 40 000 against the shared table (§21, §22).
+     */
     public String getCreateSplitUnorderedReadyIndexSql() {
         return bind("""
                     CREATE INDEX IF NOT EXISTS idx_{:tableName}_ready ON {:tableName} (queue_name, next_delivery_ts) INCLUDE (id)
-                      WHERE NOT is_dead_letter_message AND NOT is_being_delivered
+                      WHERE key IS NULL AND NOT is_dead_letter_message AND NOT is_being_delivered
                     """,
                     arg("tableName", sharedQueueTableName));
     }
