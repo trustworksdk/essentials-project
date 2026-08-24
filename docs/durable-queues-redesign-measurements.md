@@ -1355,3 +1355,55 @@ checks whether the id is a dead letter, and only then does the ordered store's d
 acknowledgement where one would do. §7b priced the dual lookup at "one extra statement per by-id operation"; on the
 hot path it is two. The fix is a single statement deleting from both tables in one round trip — new SQL in the
 composite rather than reuse of v1's, which is the direction §22's lesson already points.
+
+
+## 24. Why the split cannot help unordered traffic much — the premise counts indexes, not rows
+
+The split's rationale, repeated everywhere including this document, is "six secondary indexes on the shared table
+down to one". Unordered traffic barely improved after both defects were fixed, so the per-index sizes were measured
+rather than the count. 40 000 unordered messages:
+
+| Index | Shared table | Split |
+|---|---|---|
+| `idx_*_unordered_ready` | 3 240 KB | 3 240 KB |
+| primary key | 2 856 KB | 2 904 KB |
+| `idx_*_next_msg` | 288 KB | *removed* |
+| `idx_*_ready` | 288 KB | *removed* |
+| `idx_*_ordered_head` | **8 KB** | 8 KB |
+| `idx_*_ordered_unique` | **8 KB** | 8 KB |
+| **total** | **6 688 KB** | **6 168 KB** |
+
+**The ordered indexes are partial on `key IS NOT NULL`. With no ordered messages they hold 8 KB — they are empty,
+and an empty partial index costs essentially nothing to maintain.** So the split does not remove "five indexes'
+worth of maintenance" from unordered traffic. It removes two *small* ones, 576 KB of 6 688 — **8.6%** — while the
+two structures that actually hold the data, `unordered_ready` at 3 240 KB and the primary key at 2 856 KB, exist
+identically on both sides and are maintained identically.
+
+**That is the ceiling, and the measurements sit exactly on it.** Total 1.07–1.36× across runs, all of it on insert
+(1.34–1.66×), drain at parity. There was never a large win available here.
+
+### Why the prototype said 1.38× and the component says ~1.1×
+
+The v2 plan's prototype schemas listed six secondary indexes for the shared arm against one for the split arm, and
+counted all six as maintained. Under single-mode traffic they are not: PostgreSQL only touches a partial index when
+a row matches its predicate. The prototype measured the difference between six *declared* indexes and one; the
+component measures the difference between four *populated* indexes and two. Both numbers are right about what they
+measured, and only one of them describes a running system.
+
+### Batched acknowledgement does not unlock more of it
+
+Tested, because the obvious objection is that the per-message acknowledgement transaction is hiding the index
+effect. With batched acknowledgement enabled in both arms the deletes drop from 40 000 to 1 268 — batching plainly
+engages — and the split's ratio does not move: 1.11× total, drain 1.00×. Consistent with the ceiling above: there
+is no hidden index cost for batching to reveal.
+
+### What this means for the split
+
+- **For unordered traffic the split's case is insert throughput** (1.34–1.66×) **and about 9% fewer index bytes.**
+  Not the drain, and not a large multiple. Anyone enabling it for read/drain throughput on unordered traffic will
+  be disappointed, and the documentation now says so.
+- **The remaining case is ordered traffic**, where the shared table genuinely does maintain fully-populated ordered
+  indexes alongside everything else, and where the barrier's cost is the dominant term. That is precisely the arm
+  that is still unmeasured (§23), and it is now the only reason left to pursue the split.
+- **A separate poll per table would not change this.** The ceiling is index maintenance the split cannot remove,
+  not contention between the two claims. If polling is split, it should be for ordered traffic and measured there.

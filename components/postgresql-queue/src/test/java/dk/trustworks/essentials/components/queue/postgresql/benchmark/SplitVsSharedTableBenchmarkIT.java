@@ -216,6 +216,11 @@ class SplitVsSharedTableBenchmarkIT {
 
             // Index bytes read while the table is full, which is when maintenance cost is being paid.
             var indexKb = indexBytes() / 1024;
+            // Per index, not just the total. The split's whole premise is "six indexes down to one", and a total
+            // that barely moves means either the premise is wrong or something else is being counted - which the
+            // breakdown settles and speculation does not.
+            System.out.printf("      [%s/%s indexes: %s]%n",
+                              useSplit ? "split" : "shared", ordered ? "ordered" : "unordered", indexSizes());
 
             // Counting the statements the drain actually issues, by shape. Theorising about where a 6x regression
             // comes from has already been wrong once (the two-transactions hypothesis, which the fix disproved), so
@@ -300,6 +305,29 @@ class SplitVsSharedTableBenchmarkIT {
      * collides with one deadlocks. It began failing only once the unordered arm got fast enough for the next arm's
      * drop to arrive while the last one was still unwinding.
      */
+    /**
+     * Every index on whichever tables the arm created, with its size - so "which indexes actually hold rows" is
+     * answered rather than assumed. A partial index whose predicate matches nothing costs almost nothing to
+     * maintain, and that is the difference between the split removing real work and removing empty structures.
+     */
+    private String indexSizes() {
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
+                                                          .createQuery("""
+                                                                       SELECT i.relname || '=' || (pg_relation_size(i.oid) / 1024) || 'KB'
+                                                                         FROM pg_index x
+                                                                         JOIN pg_class c ON c.oid = x.indrelid
+                                                                         JOIN pg_class i ON i.oid = x.indexrelid
+                                                                        WHERE c.relname IN (:base, :unordered, :ordered)
+                                                                        ORDER BY pg_relation_size(i.oid) DESC
+                                                                       """)
+                                                          .bind("base", BASE)
+                                                          .bind("unordered", BASE + PostgresqlSplitDurableQueues.UNORDERED_TABLE_SUFFIX)
+                                                          .bind("ordered", BASE + PostgresqlSplitDurableQueues.ORDERED_TABLE_SUFFIX)
+                                                          .mapTo(String.class)
+                                                          .list()
+                                                          .toString());
+    }
+
     private void dropTables() {
         for (var attempt = 1; ; attempt++) {
             try {
