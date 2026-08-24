@@ -595,10 +595,19 @@ So the honest position, stated by shape rather than as one number:
 Which is what the flag was for: the cursor's value is a function of a deployment's key depth, and now it can be
 measured against real traffic instead of argued from a prototype.
 
-Next, if this is pursued: implement `claimOrderedRunViaSafeCursorSql` (prefix runs with the `bool_and` truncation
-and caller-side sort) and acknowledge each run in one statement. Note the ack is **coupled** to the run claim — it
-scans `(cursor, min_acknowledged)`, sound only for prefix batches — so neither is safe with an arbitrary batch from
-elsewhere.
+**Run-claiming was then attempted and did not land — see measurements §19.** It pays single-threaded (2.25× at run
+length 4) but three concurrency defects appeared in sequence, each exposed by fixing the previous: the cursor claim
+deadlocks with concurrent claimers; adding `SKIP LOCKED` fixes that and punctures runs, reintroducing the skipping
+fault; and moving exclusivity onto the key's cursor row deadlocks against the acknowledgement's opposite lock
+order. The claim SQL was reverted to the shipped head-only form and both cursor gates are green.
+
+**One consequence for the shipped flag: it carries a latent deadlock** under *concurrent* claimers. It cannot fire
+under the centralized fetcher — single poll thread, never two claims at once — which is the default and the only
+configuration the flag has been measured in, but it must be fixed before the cursor is used with the traditional
+per-consumer fetcher or recommended more widely. The fix is not simply `SKIP LOCKED`; §19 explains why.
+
+The acknowledgement remains **coupled** to whatever claim shape is chosen — it scans `(cursor, min_acknowledged)`,
+sound only for prefix batches — so neither is safe with an arbitrary batch from elsewhere.
 
 ## 7i. O0 decided: both shipped defaults stay off, for different reasons
 
