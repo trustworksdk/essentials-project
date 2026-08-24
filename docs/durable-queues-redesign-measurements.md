@@ -1502,3 +1502,51 @@ more than the component's own unrealism.
 continuously, measured as sustained throughput and delivery latency once the backlog stabilises, over long enough
 for autovacuum to behave as it would in production. Until that exists, every ratio in this document should be read
 as *backlog-recovery* behaviour, which is a real and important case — but only one of them.
+
+
+## 27. Steady state, and the 16.5× does not reproduce through the component
+
+The first steady-state harness: producers at a fixed rate and consumers running continuously, with the backlog
+sampled throughout so a run that never reaches steady state is reported as such instead of averaged.
+
+**The check earned its place immediately.** At 2 000 msg/s offered, both arms reported `GROWING` — capacity is
+around 1 000/s, so the run had degenerated into backlog recovery, the very thing the harness exists to avoid.
+Without the check it would have produced a confident latency table describing a queue falling behind.
+
+At 600 msg/s, genuinely steady (backlog bounded at 4 and 16 rather than growing):
+
+| Batched ack | Throughput/s | p50 | p99 | Backlog |
+|---|---|---|---|---|
+| off | 400 | 12 ms | **18 ms** | 4 |
+| on | 400 | 12 ms | **25 ms** | 16 |
+
+Throughput is an input at a sustainable arrival rate, so both deliver what is produced. What differs is the tail:
+batching is **worse**, by one flush interval, which is exactly what the mechanism predicts when there is no backlog
+to amortise across.
+
+And at saturation it does not help either: 1 004 msg/s delivered with batching off against **913 with it on**.
+
+### The correction this forces
+
+§7 measured batched acknowledgement at **16.5×** on drain time, and that number has been the headline of this
+investigation and the basis for recommending the feature. **It does not reproduce through the component.** The
+shared-table drain of 40 000 messages measures **1 668 ms with batching off and 1 627 ms with it on** — 2.5%,
+noise — while the delete count drops from 40 000 to 1 268, so batching plainly engages and simply does not matter.
+
+Three independent component measurements now agree: backlog-recovery drain 1.02×, steady-state throughput 1.00×
+with a worse tail, saturation 0.91×. §7's harness compared one transaction per acknowledgement against one per
+batch in raw SQL, where the per-message transaction was the dominant cost. Through the component it is not the
+dominant cost, and removing it changes nothing.
+
+**So the recommendation is withdrawn.** Batched acknowledgement should not be enabled for throughput, and the
+plan's "flip it at the next major" is unsupported. What remains true is the narrow original claim — it reduces
+acknowledgement transactions by roughly the batch size — and that this buys nothing measurable in the component,
+while widening the redelivery window and the latency tail.
+
+### The pattern, stated once
+
+Every claim in this investigation that came from a raw-SQL harness has shrunk or reversed when measured through
+the component: the framework's 4%, the cursor's 217× → 1.81×, the split's 1.38× → ~1.1× and briefly 0.20×, and now
+batched acknowledgement's 16.5× → 1.0×. The direction is always the same, and the reason is always the same — a
+raw harness isolates one cost and removes everything that normally dominates it. **A prototype measurement should
+be treated as a hypothesis about where time goes, never as a number.**

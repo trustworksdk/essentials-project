@@ -657,7 +657,10 @@ flush interval**, which is observable delivery behaviour, and the project's rule
 behaviour only in a new major. It also requires `SingleOperationTransaction` and never applies to ordered
 messages.
 
-**Recommendation: flip it at the next major, and recommend it in the meantime** for any deployment that can
+**~~Recommendation: flip it at the next major, and recommend it in the meantime~~ — WITHDRAWN (§27).** Measured
+through the component, batched acknowledgement is ~1.0×: backlog drain 1.02×, steady-state throughput 1.00× with a
+worse p99, saturation 0.91×. The 16.5× came from a raw-SQL harness where the per-message transaction dominated;
+through the component it does not. The original recommendation below is left visible because it was acted on. for any deployment that can
 tolerate a redelivery window one flush interval wider — which is most of them, since at-least-once delivery
 already implies handling redelivery. That is a documentation change rather than a code change, and it is the
 honest split: the number justifies the feature, the semantics justify the opt-in.
