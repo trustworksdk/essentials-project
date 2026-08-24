@@ -25,6 +25,11 @@
         <ignoreVersion type="regex">.*beta(?:-?\d+)?</ignoreVersion>
         <ignoreVersion type="regex">.*RC(?:-?\d+)?</ignoreVersion>
         <ignoreVersion type="regex">.*rc(?:-?\d+)?</ignoreVersion>
+        <!-- Not a pre-release, but the same trap: byte-buddy publishes a parallel legacy Java 5 line
+             (1.18.12-jdk5) that sorts *above* the plain release, so Central reports it as <latest> and
+             an unattended versions:update-properties would take it. The plain artifact is the one every
+             consumer wants; see the byte-buddy note in the root pom. -->
+        <ignoreVersion type="regex">.*-jdk5</ignoreVersion>
     </ignoreVersions>
     <rules/>
 </ruleset>

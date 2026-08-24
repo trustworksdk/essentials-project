@@ -51,7 +51,7 @@
              and safe only while OpenApiContractCompatibilityTest passes, since that test is what actually
              drives openapi-diff. Treat a failure there as "revert the bump", not "fix the test". -->
         <swagger-core.version>2.2.52</swagger-core.version>
-        <swagger-parser.version>2.1.46</swagger-parser.version>
+        <swagger-parser.version>2.1.47</swagger-parser.version>
         <openapi-diff.version>2.1.7</openapi-diff.version>
         <build-helper-maven-plugin.version>3.6.1</build-helper-maven-plugin.version>
     </properties>

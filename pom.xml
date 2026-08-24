@@ -91,7 +91,7 @@
         <revision>DEV-SNAPSHOT</revision>
         <skipDependencyCheck>false</skipDependencyCheck>
 
-        <spring-boot.version>4.0.7</spring-boot.version>
+        <spring-boot.version>4.0.8</spring-boot.version>
         <!-- The default Jackson flavour. Jackson 3 is the default because that is what Spring Boot 4 ships with; build
              or depend with -Pjackson2 to stay on Jackson 2. Both flavours publish the same class names, so exactly one
              is ever on the classpath, and both write byte-identical JSON — see EssentialsObjectMappers. -->
@@ -121,11 +121,19 @@
         <!-- Newest release; the floor is assertj-core's own 1.18.3, which is what Spring Boot's management
              was pulling back down. Take the plain version, never the `-jdk5` line Central reports as
              <latest> — that is the legacy Java 5 build, not a newer release. -->
-        <byte-buddy.version>1.18.11</byte-buddy.version>
+        <byte-buddy.version>1.18.12</byte-buddy.version>
         <snakeyaml.version>2.6</snakeyaml.version>
+        <!-- Deliberately held one patch back. 1.12.2 adds org.apache.avro.util.ClassSecurityValidator, which
+             refuses to reflect any class not named in org.apache.avro.SERIALIZABLE_CLASSES /
+             SERIALIZABLE_PACKAGES - a behaviour change, not a patch, and one that lands on consumers of
+             types-avro rather than on us (CustomConversionsTest is simply the first thing to hit it).
+             Taking it means deciding what the module's default trust list should be and saying so in the
+             release notes; do that as its own change, not inside a patch batch. -->
         <avro.version>1.12.1</avro.version>
         <commons-compress.version>1.28.0</commons-compress.version>
         <commons-lang3.version>3.20.0</commons-lang3.version>
+        <commons-configuration2.version>2.15.1</commons-configuration2.version>
+        <kafka-clients.version>4.3.1</kafka-clients.version>
         <xmlunit-core.version>2.13.0</xmlunit-core.version>
         <archunit-junit5.version>1.5.0</archunit-junit5.version>
         <java-uuid-generator.version>5.1.1</java-uuid-generator.version>
@@ -134,7 +142,7 @@
         <!-- Held ahead of the versions the Spring Boot BOM manages, purely to clear CVEs Spring Boot has not
              yet picked up; drop the override once its BOM catches up. Both are patch-level moves within the
              line Spring Boot already targets, so no API change is implied. -->
-        <tomcat.version>11.0.24</tomcat.version>
+        <tomcat.version>11.0.25</tomcat.version>
         <netty-bom.version>4.2.17.Final</netty-bom.version>
 
         <dokka.version>2.2.0</dokka.version>
@@ -393,6 +401,32 @@
                 <artifactId>commons-lang3</artifactId>
                 <version>${commons-lang3.version}</version>
                 <scope>provided</scope>
+            </dependency>
+            <!-- Due to CVE-2026-45205 (uncontrolled recursion on cyclic YAML, "from 2.2 before 2.15.0"), which
+                 openapi-diff-core ${openapi-diff.version} drags into admin-api-spec at 2.13.0. Nothing here feeds
+                 it an untrusted document - openapi-diff only ever reads our own committed contract - so this is a
+                 clean upgrade rather than an exposure being closed. Test scope only, and openapi-diff has no say
+                 in the version, so nothing but the scanner notices. Drop the override once openapi-diff ships a
+                 release built against 2.15.0 or later. -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-configuration2</artifactId>
+                <version>${commons-configuration2.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <!-- Held ahead of the version the Spring Boot BOM manages (4.1.2 at spring-boot 4.0.8), because
+                 CVE-2026-41115 covers "4.0.0 through 4.3.0" inclusive - the version below is the first release
+                 outside that range, so no smaller bump clears the scanner. The CVE itself is a broker-side ACL
+                 discrepancy on CONSUMER_GROUP_DESCRIBE, and its own text concludes the implementation is correct
+                 and the *docs* are what gets fixed; kafka-clients enforces no ACLs, so this is a scanner-driven
+                 bump, not a patched exposure. Used only by the postgresql-cqrs example, not part of the release.
+                 spring-kafka 4.0.7 is compiled against the 4.1 line - Kafka keeps its client API compatible
+                 within a major, and the ITs run against `apache/kafka-native:latest`, so the broker is never
+                 the older half. Drop the override once the Spring Boot BOM reaches 4.3.1. -->
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>kafka-clients</artifactId>
+                <version>${kafka-clients.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -653,6 +687,17 @@
                     <artifactId>versions-maven-plugin</artifactId>
                     <version>${versions-maven-plugin.version}</version>
                 </plugin>
+                <!-- The version lives here rather than on the <plugins> declaration below because six modules
+                     (shared, types, immutable, reactive, foundation-types, foundation) re-declare the plugin to
+                     add their own executions. A child re-declaration inherits the parent's version fine, but
+                     versions:display-plugin-updates reads each module's own POM and reported all six under
+                     "plugins do not have their version specified". Managing it here makes that true statement
+                     about the effective build visible in the child POMs as well. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-enforcer-plugin</artifactId>
+                    <version>${maven-enforcer-plugin.version}</version>
+                </plugin>
             </plugins>
         </pluginManagement>
         <plugins>
@@ -675,7 +720,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
-                <version>${maven-enforcer-plugin.version}</version>
+                <!-- Version comes from <pluginManagement> above - see the note there. -->
                 <executions>
                     <execution>
                         <id>enforce-maven</id>
