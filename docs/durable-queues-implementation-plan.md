@@ -453,6 +453,57 @@ makes the rest believable — that the same traffic with no listener produces no
 **B5(b) — replacing `scheduleAtFixedRate` — is untouched and still unmeasured.** After B5(a) the idle-statement
 cut is already available through backoff plus wake-ups, which was the point of separating them.
 
+## 7f. S3 increment 2: the admin surface was mostly already there, and paging was broken everywhere
+
+Increment 2 was budgeted as the expensive half — 12 admin operations, each in three synced places (the `*Api`
+SPI, `EssentialsAdminApiSpec`'s mapping table, a controller in `spring-boot-starter-admin-api`). **That did not
+apply.** `DefaultDurableQueuesApi` is written against the `DurableQueues` *interface*, so the split satisfies it
+by being a `DurableQueues`: no new SPI method, no spec entry, no controller. The work was to establish that rather
+than assert it (`PostgresqlSplitDurableQueuesAdminApiIT` drives the reads, the by-id mutations against a message
+in the *ordered* table specifically, purge across both tables, and paging), and to fix the one operation whose
+semantics the split genuinely changed.
+
+**That operation was paging, and looking at it turned up a larger defect underneath.** The split's version was
+wrong in the way already recorded: handing each delegate the caller's `startIndex` makes each skip that many of
+*its own* rows, returning the wrong rows and up to `2 × pageSize` of them. But the reason it could not simply be
+fixed is that **neither implementation had a deterministic order to merge on**. PostgreSQL paged with
+`LIMIT/OFFSET` and no `ORDER BY`; MongoDB with `skip()/limit()` and no sort. `queueingSortOrder` was accepted and
+ignored by both. So paging was not a partition of the queue on *any* implementation — the database was free to
+return rows in a different order per query, and a message could appear on two pages while another appeared on
+none. Not introduced by the split; the split only made it impossible to ignore.
+
+Fixed in all three: both implementations now order by `added_ts`/`addedTimestamp` with the id as tie-break, and
+the composite reads `startIndex + pageSize` rows from each table at offset 0, merges in that same order, and takes
+the caller's window from the merge.
+
+Three decisions inside that worth keeping:
+
+1. **Order by added-timestamp, not by id** — even though the SPI's javadoc said "the sorting order for
+   `QueuedMessage#getId()`". A `QueueEntryId` is a UUID and neither generator flavour sorts chronologically as a
+   string, so id-ordering would be deterministic but arbitrary: the admin browse surface would go from "oldest
+   first" to a stable shuffle, and the shared suite already asserts insertion order. The javadoc was describing an
+   order nobody wanted, so **the javadoc was corrected** (11 occurrences) rather than the behaviour built to match
+   it. The id remains as the tie-break, which is what makes the order total.
+2. **`COLLATE "C"` on the id tie-break.** The composite merges the two tables' pages in Java, so the SQL order and
+   the Java comparator must agree; `COLLATE "C"` is byte order, which for ASCII UUIDs is `String.compareTo`. Under
+   a linguistic collation the hyphens can sort differently and page boundaries would corrupt — quietly, and only
+   on the split.
+3. **The offset cannot be pushed down, so deep pages cost.** Page *n* reads `n × pageSize` rows from each table.
+   Acceptable for an admin browse surface that pages shallowly, and the price of exactness; a cheaper deep-page
+   story needs a keyset cursor, which changes the SPI rather than the storage.
+
+The paging test went into the **shared** suite, because the defect was cross-implementation — it now runs against
+Postgres v1, the split, and Mongo. It was then falsified to check it could fail: with the `ORDER BY` reverted, the
+"no duplicates" and "every message" assertions still **passed** (freshly inserted rows come back in heap order,
+stable within one run) and only the "DESC is ASC reversed" assertion failed. So that assertion is the one with
+teeth, and the test says so, because the obvious simplification would delete exactly the half that works.
+
+**Still missing for the split, deliberately:** `DurableQueuesStatistics` is constructed with *a* queue table name
+and the split has two. The admin API already tolerates its absence (`getQueuedStatistics` returns empty), so
+teaching statistics about two tables belongs with **S2**, the statistics rewrite. And the Spring starter still
+builds a `PostgresqlDurableQueues` unconditionally — there is no property to opt a deployment onto the split. That
+is a rollout question, not an admin one.
+
 ## 8. Investigation backlog — ideas not yet tried
 
 Everything that has measured as significant reduced to two levers: **transactions per message** (§7: 16.5× on

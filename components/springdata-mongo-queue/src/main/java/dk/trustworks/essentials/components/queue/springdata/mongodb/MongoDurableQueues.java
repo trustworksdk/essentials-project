@@ -1479,7 +1479,17 @@ public final class MongoDurableQueues implements DurableQueues {
                 throw new IllegalArgumentException("Unsupported IncludeMessages value: " + includeMessages);
         }
 
+        // Sorting is what makes skip()/limit() mean anything: without it MongoDB gives no ordering guarantee
+        // between two queries, so paging could repeat a message on one page and never show another, and
+        // queueingSortOrder was accepted and ignored. PostgresqlDurableQueues had the same defect (LIMIT/OFFSET
+        // with no ORDER BY) and now sorts the same way: addedTimestamp first, id only as the tie-break that makes
+        // the total order deterministic. Sorting by id alone would be deterministic but arbitrary - a UUID does
+        // not sort chronologically as a string - which would turn the admin browse surface into a stable shuffle.
         return mongoTemplate.find(query(criteria.get())
+                                          .with(Sort.by(queueingSortOrder == QueueingSortOrder.DESC
+                                                        ? Sort.Direction.DESC
+                                                        : Sort.Direction.ASC,
+                                                        "addedTimestamp", "id"))
                                           .limit((int) pageSize)
                                           .skip(startIndex),
                                   DurableQueuedMessage.class,

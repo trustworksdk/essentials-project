@@ -39,7 +39,7 @@ public final class GetDeadLetterMessagesBuilder {
 
     /**
      *
-     * @param queueingSortOrder the sort order for the {@link QueuedMessage#getId()}
+     * @param queueingSortOrder the order the page is drawn in: by {@link QueuedMessage#getAddedTimestamp()}, with {@link QueuedMessage#getId()} as the tie-break that makes it a total order
      * @return this builder instance
      */
     public GetDeadLetterMessagesBuilder setQueueingSortOrder(DurableQueues.QueueingSortOrder queueingSortOrder) {

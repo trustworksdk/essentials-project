@@ -105,6 +105,68 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         }
     }
 
+    /**
+     * Paging has to be a partition of the queue: every message exactly once, no repeats, no omissions. That is
+     * only true if the underlying query imposes a <b>total</b> order, and for a long time neither implementation
+     * did — PostgreSQL used {@code LIMIT/OFFSET} with no {@code ORDER BY} and MongoDB used {@code skip()/limit()}
+     * with no sort, so {@code queueingSortOrder} was accepted and ignored and the database was free to return
+     * rows in a different order per query.
+     * <p>
+     * It lives in the shared suite because the defect was in both implementations, and because
+     * {@code PostgresqlSplitDurableQueues} is the case most likely to break it: it serves one page from two
+     * physically separate tables, so its merge order has to agree exactly with the order each table was truncated
+     * by.
+     * <p>
+     * The page size is deliberately not a divisor of the message count, so the last page is partial — an
+     * off-by-one in the window arithmetic survives an exact division.
+     * <p>
+     * <b>The DESC assertion is the one with teeth</b>, and it is not decoration. Reverting the {@code ORDER BY}
+     * and re-running this was how that was established: the "no duplicates" and "every message" assertions
+     * <em>passed</em> unordered, because freshly inserted rows come back in heap order and that happens to be
+     * stable within one run. Only asking for the same total order in the other direction exposed it. So do not
+     * simplify this test down to the ASC half — that half cannot fail.
+     */
+    @Test
+    void paging_through_queued_messages_visits_every_message_exactly_once() {
+        var queueName     = QueueName.of("PagingQueue");
+        var totalMessages = 25;
+        var pageSize      = 7;
+
+        var expectedIds = new ArrayList<QueueEntryId>();
+        usingDurableQueue(() -> {
+            for (var i = 0; i < totalMessages; i++) {
+                // Both delivery modes, so the split has content in both of its tables - a single-mode fixture
+                // would page through one table and prove nothing about the merge.
+                var message = i % 2 == 0
+                              ? Message.of(new OrderEvent.OrderAccepted(OrderId.random()))
+                              : OrderedMessage.of(new OrderEvent.OrderAccepted(OrderId.random()), "key-" + (i % 3), i);
+                expectedIds.add(durableQueues.queueMessage(queueName, message));
+            }
+        });
+
+        var pagedIds = new ArrayList<QueueEntryId>();
+        for (var startIndex = 0; startIndex < totalMessages; startIndex += pageSize) {
+            var page = durableQueues.getQueuedMessages(queueName, DurableQueues.QueueingSortOrder.ASC, startIndex, pageSize);
+            assertThat(page.size())
+                    .as("page at startIndex %d must not exceed pageSize", startIndex)
+                    .isLessThanOrEqualTo(pageSize);
+            page.forEach(queuedMessage -> pagedIds.add(queuedMessage.getId()));
+        }
+
+        assertThat(pagedIds).as("paging must not repeat a message").doesNotHaveDuplicates();
+        assertThat(pagedIds).as("paging must visit every queued message").containsExactlyInAnyOrderElementsOf(expectedIds);
+
+        // DESC must be the same total order reversed - not merely "some other order".
+        var descending = new ArrayList<QueueEntryId>();
+        for (var startIndex = 0; startIndex < totalMessages; startIndex += pageSize) {
+            durableQueues.getQueuedMessages(queueName, DurableQueues.QueueingSortOrder.DESC, startIndex, pageSize)
+                         .forEach(queuedMessage -> descending.add(queuedMessage.getId()));
+        }
+        var reversedAscending = new ArrayList<>(pagedIds);
+        Collections.reverse(reversedAscending);
+        assertThat(descending).as("DESC must be ASC reversed").isEqualTo(reversedAscending);
+    }
+
     @Test
     void test_simple_enqueueing_and_afterwards_querying_queued_messages() {
         // Given

@@ -1807,12 +1807,29 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             }
         };
 
+        // ORDER BY is what makes LIMIT/OFFSET mean anything: without it PostgreSQL gives no ordering guarantee
+        // between two queries, so paging could repeat a message on one page and never show another, and
+        // queueingSortOrder was accepted and ignored. Both implementations had this; MongoDurableQueues used
+        // skip()/limit() with no sort at all.
+        //
+        // added_ts first, id only as a tie-break - not id alone. Ordering by id would be deterministic but
+        // arbitrary: QueueEntryId is a UUID, and neither flavour the RandomIdGenerator produces sorts
+        // chronologically as a string. That would turn the admin browse surface from "oldest first" into a stable
+        // shuffle, and it is the order the shared DurableQueuesIT already asserts. The id is what makes the total
+        // order deterministic, since added_ts alone is not unique.
+        //
+        // COLLATE "C" on that tie-break rather than the database's default collation, deliberately: it sorts by
+        // byte value, which for ASCII UUIDs is the same order as Java's String.compareTo. A linguistic collation
+        // can order the hyphens differently, and PostgresqlSplitDurableQueues merges the two tables' pages in
+        // Java - so a mismatch there would corrupt page boundaries rather than merely look odd.
         return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(bind("SELECT * FROM {:tableName} \n" +
                                                                                                                                  " WHERE queue_name = :queueName\n" +
                                                                                                                                  "{:includeMessages}" +
+                                                                                                                                 " ORDER BY added_ts {:sortOrder}, id COLLATE \"C\" {:sortOrder} \n" +
                                                                                                                                  " LIMIT :pageSize \n" +
                                                                                                                                  " OFFSET :offset",
                                                                                                                          arg("tableName", sharedQueueTableName),
+                                                                                                                         arg("sortOrder", queueingSortOrder == QueueingSortOrder.DESC ? "DESC" : "ASC"),
                                                                                                                          arg("includeMessages", resolveIncludeMessagesSql.get())))
                                                                                               .bind("queueName", requireNonNull(queueName, "No QueueName provided"))
                                                                                               .bind("offset", startIndex)

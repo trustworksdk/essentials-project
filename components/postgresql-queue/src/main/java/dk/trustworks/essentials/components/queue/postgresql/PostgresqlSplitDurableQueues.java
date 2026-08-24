@@ -499,32 +499,69 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
                                        counts.stream().mapToLong(QueuedMessageCounts::numberOfQueuedDeadLetterMessages).sum());
     }
 
-    /**
-     * Merged across both tables and re-sorted, then paged.
-     * <p>
-     * <b>Paging is approximate across the two tables.</b> Each delegate applies the offset to its own table, so a
-     * page beyond the first can omit or repeat rows relative to a single-table query. Recorded rather than
-     * hidden: the operation is used by the admin browse surface, where an exact global ordering across two
-     * physically separate tables would need a keyset cursor. That belongs with the admin work (increment 2).
-     */
     @Override
     public List<QueuedMessage> getQueuedMessages(GetQueuedMessages operation) {
-        return mergeSorted(bothStores().stream().map(store -> store.getQueuedMessages(operation)).toList(),
-                           operation.getQueueingSortOrder());
+        return pagedAcrossBothTables(operation.getQueueingSortOrder(),
+                                     operation.getStartIndex(),
+                                     operation.getPageSize(),
+                                     (store, pageSize) -> store.getQueuedMessages(GetQueuedMessages.builder()
+                                                                                                   .setQueueName(operation.queueName)
+                                                                                                   .setQueueingSortOrder(operation.getQueueingSortOrder())
+                                                                                                   .setStartIndex(0)
+                                                                                                   .setPageSize(pageSize)
+                                                                                                   .build()));
     }
 
     @Override
     public List<QueuedMessage> getDeadLetterMessages(GetDeadLetterMessages operation) {
-        return mergeSorted(bothStores().stream().map(store -> store.getDeadLetterMessages(operation)).toList(),
-                           operation.getQueueingSortOrder());
+        return pagedAcrossBothTables(operation.getQueueingSortOrder(),
+                                     operation.getStartIndex(),
+                                     operation.getPageSize(),
+                                     (store, pageSize) -> store.getDeadLetterMessages(GetDeadLetterMessages.builder()
+                                                                                                           .setQueueName(operation.queueName)
+                                                                                                           .setQueueingSortOrder(operation.getQueueingSortOrder())
+                                                                                                           .setStartIndex(0)
+                                                                                                           .setPageSize(pageSize)
+                                                                                                           .build()));
     }
 
-    private static List<QueuedMessage> mergeSorted(List<List<QueuedMessage>> pages, DurableQueues.QueueingSortOrder sortOrder) {
-        var comparator = Comparator.comparing(QueuedMessage::getAddedTimestamp);
-        return pages.stream()
-                    .flatMap(List::stream)
-                    .sorted(sortOrder == DurableQueues.QueueingSortOrder.DESC ? comparator.reversed() : comparator)
-                    .toList();
+    /**
+     * Exact global paging across the two tables.
+     * <p>
+     * <b>The offset cannot be pushed down.</b> Handing each delegate the caller's {@code startIndex} makes each
+     * skip that many of <em>its own</em> rows, which returns the wrong rows and up to {@code 2 × pageSize} of
+     * them. So each table is read from offset 0 up to {@code startIndex + pageSize} rows, the two are merged, and
+     * the caller's window is taken from the merge.
+     * <p>
+     * <b>The merge order must be exactly the delegates' order</b>, or the window is taken from a differently
+     * sorted list than the one each table was truncated by, and page boundaries go wrong. The delegates order by
+     * {@code added_ts, id COLLATE "C"}; this compares the added timestamp as an {@link Instant} and then the id as
+     * a string, which is the same total order — {@code COLLATE "C"} is byte order, and for the ASCII UUIDs
+     * {@code QueueEntryId} carries that matches {@code String.compareTo}.
+     * <p>
+     * The cost is read amplification proportional to the page's depth: page <i>n</i> reads
+     * {@code n × pageSize} rows from each table. Fine for the admin browse surface this serves, which pages
+     * shallowly, and the price of exactness — a cheaper deep-page story needs a keyset cursor, which would change
+     * the SPI rather than the storage.
+     */
+    private List<QueuedMessage> pagedAcrossBothTables(DurableQueues.QueueingSortOrder sortOrder,
+                                                      long startIndex,
+                                                      long pageSize,
+                                                      java.util.function.BiFunction<PostgresqlDurableQueues, Long, List<QueuedMessage>> readFrom) {
+        if (pageSize <= 0) {
+            return List.of();
+        }
+        var rowsNeededPerTable = startIndex + pageSize;
+        var comparator = Comparator.comparing((QueuedMessage message) -> message.getAddedTimestamp().toInstant())
+                                   .thenComparing(message -> message.getId().toString());
+
+        return bothStores().stream()
+                           .map(store -> readFrom.apply(store, rowsNeededPerTable))
+                           .flatMap(List::stream)
+                           .sorted(sortOrder == DurableQueues.QueueingSortOrder.DESC ? comparator.reversed() : comparator)
+                           .skip(startIndex)
+                           .limit(pageSize)
+                           .toList();
     }
 
     @Override

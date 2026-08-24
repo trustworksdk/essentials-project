@@ -146,7 +146,13 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 public interface DurableQueues extends Lifecycle {
     /**
-     * The sorting order for the {@link QueuedMessage#getId()}
+     * The order a page of messages is drawn in: by {@link QueuedMessage#getAddedTimestamp()}, with
+     * {@link QueuedMessage#getId()} as the tie-break that makes it a total order.
+     * <p>
+     * It must be a <b>total</b> order, or paging is not a partition of the queue: a message can appear on two
+     * pages and another on none. Both implementations once ignored this parameter entirely — PostgreSQL used
+     * {@code LIMIT/OFFSET} with no {@code ORDER BY}, MongoDB {@code skip()/limit()} with no sort — which is
+     * exactly the defect that caused. Pinned by {@code DurableQueuesIT}'s paging test.
      */
     enum QueueingSortOrder {
         /**
@@ -899,7 +905,7 @@ public interface DurableQueues extends Lifecycle {
      * Query Queued Messages (i.e. not including any Dead Letter Messages) for the given Queue
      *
      * @param queueName         the name of the Queue where we will query for queued messages
-     * @param queueingSortOrder the sort order for the {@link QueuedMessage#getId()}
+     * @param queueingSortOrder the order the page is drawn in: by {@link QueuedMessage#getAddedTimestamp()}, with {@link QueuedMessage#getId()} as the tie-break that makes it a total order
      * @param startIndex        the index of the first message to include in the result (used for pagination)
      * @param pageSize          how many messages to include in the result (used for pagination)
      * @return the messages matching the criteria
@@ -928,7 +934,7 @@ public interface DurableQueues extends Lifecycle {
      * Query Dead Letter Messages (i.e. not normal Queued Messages) for the given Queue
      *
      * @param queueName         the name of the Queue where we will query for Dead letter messages
-     * @param queueingSortOrder the sort order for the {@link QueuedMessage#getId()}
+     * @param queueingSortOrder the order the page is drawn in: by {@link QueuedMessage#getAddedTimestamp()}, with {@link QueuedMessage#getId()} as the tie-break that makes it a total order
      * @param startIndex        the index of the first message to include in the result (used for pagination)
      * @param pageSize          how many messages to include in the result (used for pagination)
      * @return the dead letter messages matching the criteria

@@ -175,6 +175,40 @@ class PostgresqlSplitDurableQueuesRoutingIT {
         assertThat(rowCountOf(durableQueues.getOrderedTableName())).isZero();
     }
 
+    /**
+     * Paging across the two tables, with the split's specific hazard forced: the naive implementation hands each
+     * delegate the caller's {@code startIndex}, so each skips that many of <em>its own</em> rows. That returns the
+     * wrong rows and up to {@code 2 × pageSize} of them.
+     * <p>
+     * The fixture is deliberately <b>lopsided</b> — many more ordered messages than unordered ones — so a page in
+     * the middle of the sequence has to be drawn entirely from one table. An even split lets a per-table offset
+     * look almost right, which is how this class of bug survives review.
+     */
+    @Test
+    void a_page_in_the_middle_is_drawn_correctly_even_when_one_table_holds_most_of_the_queue() {
+        var queueName = QueueName.of("LopsidedPaging");
+        var expected  = new ArrayList<QueueEntryId>();
+        for (var i = 0; i < 30; i++) {
+            expected.add(durableQueues.queueMessage(queueName, OrderedMessage.of("o" + i, "key-" + (i % 3), i)));
+        }
+        for (var i = 0; i < 3; i++) {
+            expected.add(durableQueues.queueMessage(queueName, Message.of("u" + i)));
+        }
+
+        var pageSize = 5;
+        var paged    = new ArrayList<QueueEntryId>();
+        for (var startIndex = 0; startIndex < expected.size(); startIndex += pageSize) {
+            var page = durableQueues.getQueuedMessages(queueName, DurableQueues.QueueingSortOrder.ASC, startIndex, pageSize);
+            assertThat(page.size())
+                    .as("a page must never exceed pageSize - handing the offset to both tables returns up to twice it")
+                    .isLessThanOrEqualTo(pageSize);
+            page.forEach(queuedMessage -> paged.add(queuedMessage.getId()));
+        }
+
+        assertThat(paged).doesNotHaveDuplicates();
+        assertThat(paged).containsExactlyInAnyOrderElementsOf(expected);
+    }
+
     private long rowCountOf(String tableName) {
         return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle()
                                                           .createQuery("SELECT count(*) FROM " + tableName)

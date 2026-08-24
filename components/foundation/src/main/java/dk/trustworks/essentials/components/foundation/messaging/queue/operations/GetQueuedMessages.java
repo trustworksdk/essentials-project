@@ -44,7 +44,7 @@ public final class GetQueuedMessages {
      * Query Queued Messages (i.e. not including any Dead Letter Messages) for the given Queue
      *
      * @param queueName         the name of the Queue where we will query for queued messages
-     * @param queueingSortOrder the sort order for the {@link QueuedMessage#getId()}
+     * @param queueingSortOrder the order the page is drawn in: by {@link QueuedMessage#getAddedTimestamp()}, with {@link QueuedMessage#getId()} as the tie-break that makes it a total order
      * @param startIndex        the index of the first message to include in the result (used for pagination)
      * @param pageSize          how many messages to include in the result (used for pagination)
      */
@@ -65,7 +65,7 @@ public final class GetQueuedMessages {
 
     /**
      *
-     * @return the sort order for the {@link QueuedMessage#getId()}
+     * @return the order the page is drawn in: by {@link QueuedMessage#getAddedTimestamp()}, with {@link QueuedMessage#getId()} as the tie-break that makes it a total order
      */
     public DurableQueues.QueueingSortOrder getQueueingSortOrder() {
         return queueingSortOrder;
@@ -73,7 +73,7 @@ public final class GetQueuedMessages {
 
     /**
      *
-     * @param queueingSortOrder the sort order for the {@link QueuedMessage#getId()}
+     * @param queueingSortOrder the order the page is drawn in: by {@link QueuedMessage#getAddedTimestamp()}, with {@link QueuedMessage#getId()} as the tie-break that makes it a total order
      */
     public void setQueueingSortOrder(DurableQueues.QueueingSortOrder queueingSortOrder) {
         this.queueingSortOrder = requireNonNull(queueingSortOrder, "No queueingSortOrder provided");;
