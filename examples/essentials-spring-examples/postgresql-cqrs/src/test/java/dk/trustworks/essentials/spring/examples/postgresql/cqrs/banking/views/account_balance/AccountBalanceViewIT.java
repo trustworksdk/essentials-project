@@ -112,11 +112,16 @@ public class AccountBalanceViewIT {
             account.depositToday(Amount.of("40"), TransactionId.random());
         });
 
+        // Wait for the balance, not just for the row: AccountOpened creates the row with a zero balance and the
+        // deposit is projected as a separate event, so waiting only for non-null can observe a balance of 0
         Awaitility.waitAtMost(Duration.ofSeconds(15))
-                  .untilAsserted(() -> assertThat(findView(accountId)).isNotNull());
+                  .untilAsserted(() -> {
+                      var view = findView(accountId);
+                      assertThat(view).isNotNull();
+                      assertThat(view.getBalance()).isEqualTo(Amount.of("40"));
+                  });
 
         var afterFirstDelivery = findView(accountId);
-        assertThat(afterFirstDelivery.getBalance()).isEqualTo(Amount.of("40"));
 
         // The version stored on the row is the projected event's EventOrder, and every handler compares
         // against it before writing. Re-projecting the same stream must therefore be a no-op rather than
