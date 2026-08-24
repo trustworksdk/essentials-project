@@ -387,10 +387,52 @@ Two defects the increment surfaced, both in code written earlier in this branch:
    messages" are the same fact, and a boolean named after the first would have kept hiding the second.
 
 Deliberately out of increment 1, in addition to the admin surface: **LISTEN/NOTIFY wake-up.** The trigger is
-created per table by v1's schema initialization, which the delegates do not run, so the split polls at its fixed
-interval with `QueuePollingOptimizer.None()`. Correct, and slower to wake than v1 with a `MultiTableChangeListener`
-configured — it belongs with increment 2, alongside the admin surface, since both need the composite to own
-notification wiring rather than inherit it.
+installed inside v1's `initializeQueueTables()` under `multiTableChangeListener.ifPresent(...)`, which the
+delegates do not run, so the split polls at its fixed interval with `QueuePollingOptimizer.None()`. Correct, and
+slower to wake than v1 with a `MultiTableChangeListener` configured — it belongs with increment 2, alongside the
+admin surface, since both need the composite to own notification wiring rather than inherit it. See §7e for what
+that wiring can and cannot borrow.
+
+## 7e. What B5 can borrow from the CDC/subscription wake-up, and what it cannot
+
+The improvements plan's **I2** says to replace the fetcher's `scheduleAtFixedRate` with an epoch-driven wait loop
+and to read `postgresql-event-store`'s `subscription/notify/{NotifyEpochSource, NotifyAwareEventStorePollingOptimizer}`
+first, because they solve a missed-wakeup race. Both classes exist on this branch. Having read them, the guidance
+holds for one of the two and not the other, and the difference is structural rather than a matter of taste.
+
+**`NotifyEpochSource` ports, and is the valuable half.** It subscribes to the shared `EventBus`, collapses N
+`TableChangeNotification`s into a per-key monotonic counter created lazily on first sight, and answers "has
+anything changed since epoch X". Nothing in it is event-store-specific. The load-bearing detail is *when* the
+baseline is snapshotted: `eventStorePollingReturnedEvents()` reads the epoch **after** the poll, so a notification
+that arrived *during* the poll counts as already served rather than triggering a redundant immediate re-poll,
+while a genuinely later one still advances past the baseline. That ordering is the missed-wakeup discipline I2
+refers to, and it is the thing to copy.
+
+**`NotifyAwareEventStorePollingOptimizer` does not port.** The two optimizer SPIs have different output types:
+`EventStorePollingOptimizer.currentDelayMs()` returns a sleep the per-subscription loop honours, whereas
+`QueuePollingOptimizer.shouldSkipPolling()` returns a boolean the *shared* fetcher consults on every fixed 20 ms
+tick. The whole content of the notify-aware optimizer is a ramped delay, and the queue SPI has no channel to
+return one — so it is not an adaptation, it is a rewrite of the fetcher's loop, which is exactly what I2 asks for
+and what makes I2 the larger job.
+
+Two consequences that change the shape of B5 rather than just its size:
+
+1. **The queue is already better on latency and worse on idle wake-ups, so the ramp is not the prize.** The
+   event-store optimizer's documented Phase-1 limitation is that a NOTIFY arriving mid-sleep cannot interrupt the
+   sleep, so worst-case live latency on a quiet system equals `maxDelay`. The queue has no such sleep: its floor
+   is the 20 ms tick, always, and backoff suppresses *SQL* rather than wake-ups. So a straight port would make
+   idle latency worse in exchange for fewer timer fires — a trade nothing in this investigation measured as
+   mattering. The win B5 is actually after is the ~95% cut in idle claim statements, and `shouldSkipPolling()`
+   plus an epoch source already delivers that without touching the loop. **Replacing `scheduleAtFixedRate` is
+   separable from NOTIFY-driven skipping, and only the second is cheap.**
+2. **The epoch must be keyed by queue name, not table name — and the split is why.** The event-store version keys
+   by table because a subscription maps 1:1 to a table. In the split a consumer maps to *two* tables, so a
+   table-keyed epoch would let an ordered enqueue advance only the ordered table's counter while the queue's
+   single poll decision reads the unordered one's. `QueueTableNotification` already carries `queueName`, so the
+   key is available. This is the same mistake as reporting the polling outcome per table instead of once across
+   both (§7d) — a per-queue decision fed from per-table state — and it is now the second time that shape has
+   bitten, which makes it worth stating as a rule: **in the split, anything the consumer decides once must be fed
+   from state merged across both tables.**
 
 ## 8. Investigation backlog — ideas not yet tried
 
@@ -405,7 +447,7 @@ Anything that attacks neither is in §3 or the "skip" list below.
 | **B2** | **Handler inside the claim transaction, with a savepoint around the handler only.** One transaction per message instead of two | Transactions | The largest remaining win on the dominant lever. This is nominally `FullyTransactional`, which is correctly documented as broken because a rollback loses the attempt increment — but §14 showed a savepoint is cheap when it is per *failure* rather than per row, and failures are rare. **The risk is real and must be measured, not assumed**: it holds a connection and pins the xmin horizon for the handler's duration, which is the mechanism behind §7's 5.7× artefact. The deliverable is a crossover curve against handler duration, not a yes/no | Consumer-level scenario; more work than B1 |
 | **B3** | **Index diet on the current table, no migration.** | Index writes | **Measured and it pays (§16).** Two of the six indexes are never scanned across the entire SPI — `idx_*_ready` and `idx_*_ordered_ready` — holding **43% of the table's index bytes**, maintained on every insert, claim and delete. All six are created unconditionally regardless of `useOrderedUnorderedQuery`, so a default deployment maintains indexes for a query it never runs. **Ready to implement**: make creation conditional on the flag | Done |
 | **B4** | **Advisory-lock claim** (`pg_try_advisory_xact_lock(hashtext(id))`) instead of marking the row | Both | **Promoted by B1's failure (§15).** Same idea, without either cost that sank B1: no write on claim *and* no second table in the acknowledgement path. Requires the lock to span the handler, which ties it to B2 — the two are one experiment, not two. Now the most promising untried idea | Consumer-level, with B2 |
-| **B5** | **NOTIFY-driven wake-up replacing the fixed tick** (I1/I2 in the improvements plan) | Neither — *latency* | Everything measured in this investigation is throughput. This is the only remaining item targeting enqueue-to-delivery latency, estimated 400 ms → <10 ms p99 idle with a ~95% cut in idle claim statements. Fully designed, unimplemented, unmeasured | Already specified; implementation, then a PROBE scenario |
+| **B5** | **NOTIFY-driven wake-up replacing the fixed tick** (I1/I2 in the improvements plan) | Neither — *latency* | Everything measured in this investigation is throughput. This is the only remaining item targeting enqueue-to-delivery latency, estimated 400 ms → <10 ms p99 idle with a ~95% cut in idle claim statements. Fully designed, unimplemented, unmeasured. **Split into two after reading the prior art (§7e): (a) a queue-name-keyed epoch source feeding `shouldSkipPolling()` — cheap, gets the statement cut; (b) replacing `scheduleAtFixedRate` with a wait loop — separable, and a straight port would *worsen* idle latency** | (a) small; (b) already specified but a fetcher-loop rewrite. Then a PROBE scenario |
 | **B6** | **Hash-partition by `id`**, if partitioning ever returns | Index writes | Recorded so the idea is not re-proposed on the wrong axis. Partitioning by `queue_name` failed (§12) because by-id operations lost the primary key; hashing by `id` prunes for every by-id operation instead — but then the claim, which filters by `queue_name`, scans every partition. Probably net-negative; the point is that `id` is the only defensible axis | Low priority |
 
 **Skip, on evidence:** `fillfactor` and HOT tuning (§3, measured dead), per-table autovacuum parameters (§13,
