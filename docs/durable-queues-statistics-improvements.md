@@ -46,9 +46,35 @@ Two things worth recording that the design did not anticipate:
    delivery pays a fan-out to record into nothing, which is the same class of mistake as the
    trigger: work on the hot path that no reader needs.
 
-Still open, and deliberately not built: the **Tier 2 durable sink** (Phase 2 below). Nothing
-persists statistics now, so a restart resets them. That is stated in the property javadoc
-rather than left for a reader to discover.
+### TODO — the Tier 2 durable async writer (not built)
+
+Nothing persists statistics now, so a restart resets them and each instance reports only its
+own deliveries. Stated in the property javadoc and in the admin UI's queue view rather than
+left for a reader to discover. The durable sink is deliberately deferred, not abandoned — what
+it needs, when someone wants it:
+
+- **A batched asynchronous writer fed by the same `DurableQueueMessageObserver`** — bounded
+  `ArrayBlockingQueue`, single daemon drainer (or an `EssentialsScheduler` job), multi-row
+  `INSERT` in its own unit of work, flush interval around one second, **drop-on-overflow with a
+  dropped-record counter**. Never blocking the delivery thread: the whole point of moving off
+  the trigger was to get statistics off the acknowledgement transaction, and a bounded queue
+  that blocks when full puts it straight back on.
+- **It belongs in `jdbc-queue-base`**, not in `postgresql-queue`, so `mssql-queue` inherits it
+  as the thin subclass those modules' `CLAUDE.md` files already promise. A multi-row `INSERT`
+  ports; a plpgsql trigger body does not, which was reason 4 for this whole change.
+- **Fix the schema while there**: `delivery_latency INTERVAL` becomes `delivery_latency_ms
+  INTEGER`, which is the defect that made the per-message read throw for every id.
+- **Do not resurrect the trigger** for it. `PostgresqlDurableQueuesStatistics` stays
+  `@Deprecated(forRemoval = true)`; its table, TTL job and two read queries are the reusable
+  parts, its collection mechanism is not.
+- **State the trade in the javadoc**: statistics buffered at crash time are lost. Right for
+  delivery statistics, wrong for anything audit-grade — such callers should write their own
+  observer.
+
+Before building it, check whether Micrometer already answers the question. Emitting a per-queue
+latency `Timer` plus handled/dead-lettered counters from the observer lets Prometheus aggregate
+across instances, which is what the durable table was really being used to approximate. That is
+cheaper than a durable sink and gives a better answer.
 
 ---
 

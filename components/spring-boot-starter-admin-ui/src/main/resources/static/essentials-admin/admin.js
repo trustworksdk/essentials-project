@@ -273,11 +273,18 @@ views.queues = async () => {
       <button class="btn btn-sm btn-danger" data-act="purge" data-name="${esc(q)}" ${CAN.writeQueues ? '' : 'disabled'}>Purge queue</button>
     </div>
 
+    ${stats ? `<div class="banner banner-info">
+      <span aria-hidden="true">○</span>
+      <div><strong>Delivery statistics cover this instance only.</strong> Queued and dead-letter counts come from
+      the database and so cover every instance, but delivered, latency and last-delivery are counted in memory by
+      the instance that handled the message, and reset when it restarts. On a multi-instance deployment each
+      instance reports its own share, so a low number is not a slow queue and a zero is not a stall.</div>
+    </div>` : ''}
     <div class="kpi-row">
-      ${tile('Queued', queuedCount ? num(queuedCount.total) : nil())}
-      ${tile('Dead letters', deadCount ? num(deadCount.total) : nil(), null, deadCount ? deadCount.total > 0 : false)}
-      ${tile('Delivered', stats ? num(stats.totalMessagesDelivered) : nil())}
-      ${tile('Avg delivery latency', stats ? `${stats.avgDeliveryLatencyMs} <span class="tile-sub" style="font-size:13px">ms</span>` : nil())}
+      ${tile('Queued', queuedCount ? num(queuedCount.total) : nil(), 'across all instances')}
+      ${tile('Dead letters', deadCount ? num(deadCount.total) : nil(), 'across all instances', deadCount ? deadCount.total > 0 : false)}
+      ${tile('Delivered', stats ? num(stats.totalMessagesDelivered) : nil(), 'in this instance')}
+      ${tile('Avg delivery latency', stats ? `${stats.avgDeliveryLatencyMs} <span class="tile-sub" style="font-size:13px">ms</span>` : nil(), 'in this instance')}
       ${tile('Last delivery', stats ? esc(String(stats.lastDelivery).slice(11, 19)) : nil(),
              stats ? esc(String(stats.lastDelivery).slice(0, 10)) : null)}
     </div>
