@@ -23,6 +23,8 @@ import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.reactive.*;
+import dk.trustworks.essentials.shared.Exceptions;
+import org.jdbi.v3.core.statement.Query;
 import org.slf4j.*;
 
 import java.time.Instant;
@@ -55,16 +57,19 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * under single-mode traffic the ordered indexes are partial on {@code key IS NOT NULL}, hold 8 KB and cost nothing
  * — so the real removal is two small indexes, ~9% of the bytes. See {@code docs/durable-queues-measurements.md} §4.
  *
- * <h2>Two defects it shipped with, both from reuse</h2>
- * Worth knowing before changing anything here, because both came from reusing v1's statements against a schema
- * that deliberately is not v1's — v1's statements assume v1's index set:
+ * <h2>Three defects it shipped with, all from reuse</h2>
+ * Worth knowing before changing anything here, because all came from reusing v1's behaviour against a composite
+ * that deliberately is not v1 — v1's statements assume v1's index set, and v1 is not two stores:
  * <ol>
  *     <li>the composite asked each table for messages it cannot hold (fixed by {@link PostgresqlDurableQueues.ClaimScope});</li>
  *     <li>the unordered index omitted {@code key IS NULL}, which the claim filters on, so every claim fell back to
- *     heap fetches instead of an index-only scan.</li>
+ *     heap fetches instead of an index-only scan — together with (1), <b>5× slower</b> than the table it replaces,
+ *     growing with backlog size;</li>
+ *     <li>every operation addressed by {@link QueueEntryId} tried one delegate and then the other, which ran the
+ *     <b>interceptor chain twice</b> for anything in the second table, because interceptors register on this class
+ *     <em>and</em> on both delegates — see {@link #byIdAcrossBothTables(Function, Function)}.</li>
  * </ol>
- * Together they made the split <b>5× slower</b> than the table it replaces, growing with backlog size. Both are
- * fixed; neither was visible by inspection.
+ * All are fixed; none was visible by inspection, and none could fail a test that only checked results.
  * <p>
  * It is a <b>composition, not a rewrite</b>. {@link DurableQueuesSql} generates its statements for whatever table
  * name it is constructed with, and both split tables keep the shared table's columns, so each is driven by
@@ -76,9 +81,11 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * <ul>
  *     <li><b>Writes</b> route on the message: an {@link OrderedMessage} goes to the ordered table, anything else
  *     to the unordered one. Nothing has to be declared, which is why there is no new consumer API — §7a.</li>
- *     <li><b>Reads and writes by {@link QueueEntryId}</b> try both tables, because the SPI addresses messages by
- *     id alone and an id carries no mode. Two statements, one transaction — and the transaction is what costs,
- *     not the statement (§7, §7b).</li>
+ *     <li><b>Everything addressed by {@link QueueEntryId}</b> — acknowledge, delete, retry, dead-letter,
+ *     resurrect, and the by-id reads — hits both tables in <b>one statement</b>, because the SPI addresses
+ *     messages by id alone and an id carries no mode. Each used to try one delegate and then the other, which
+ *     cost two statements and two runs of the interceptor chain for whichever table came second; see
+ *     {@link #byIdAcrossBothTables(Function, Function)}.</li>
  *     <li><b>Queries and counts</b> merge across both.</li>
  *     <li><b>Consumption</b> is served by <em>one</em> {@link CentralizedMessageFetcher} owned here, over this
  *     composite. That is what keeps a single {@code parallelConsumers} budget: registering a consumer per
@@ -439,27 +446,14 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
     }
 
     /**
-     * Runs an operation against whichever table holds the id, trying the unordered one first.
+     * Runs a boolean operation against whichever table answers first.
      * <p>
-     * The SPI addresses messages by {@link QueueEntryId} alone, so the mode cannot be derived from the id. Two
-     * statements in one transaction is the cost, and §7b explains why that is the right trade rather than making
-     * the id a structured format.
+     * The last survivor of the "try one delegate, then the other" approach, and the only one where it is
+     * <b>correct</b> rather than merely adequate: {@link #hasMessagesQueuedFor(QueueName)} short-circuits on the
+     * first table that has anything, so the second statement runs only when the first found nothing - the case
+     * where a single combined statement would have had to scan both anyway. Everything addressed by
+     * {@link QueueEntryId} goes through {@link #byIdAcrossBothTables(Function, Function)} instead.
      */
-    private <T> Optional<T> firstPresent(java.util.function.Function<PostgresqlDurableQueues, Optional<T>> operation) {
-        // Wrapped so a miss on the first table and the retry on the second share one transaction. Each delegate
-        // opens its own otherwise, which turns every by-id operation on an ordered message into two commits - and
-        // §7b's argument for trying both tables rests explicitly on it being "two statements, one transaction".
-        return unitOfWorkFactory.withUnitOfWork(uow -> {
-            for (var store : bothStores()) {
-                var result = operation.apply(store);
-                if (result.isPresent()) {
-                    return result;
-                }
-            }
-            return Optional.<T>empty();
-        });
-    }
-
     private boolean anyTrue(java.util.function.Predicate<PostgresqlDurableQueues> operation) {
         return unitOfWorkFactory.withUnitOfWork(uow -> {
             for (var store : bothStores()) {
@@ -536,17 +530,48 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
 
     @Override
     public Optional<QueuedMessage> getQueuedMessage(GetQueuedMessage operation) {
-        return firstPresent(store -> store.getQueuedMessage(operation));
+        requireNonNull(operation, "You must provide a GetQueuedMessage instance");
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> readByIdAcrossBothTables(operation.queueEntryId, false))
+                .proceed();
     }
 
     @Override
     public Optional<QueuedMessage> getDeadLetterMessage(GetDeadLetterMessage operation) {
-        return firstPresent(store -> store.getDeadLetterMessage(operation));
+        requireNonNull(operation, "You must provide a GetDeadLetterMessage instance");
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> readByIdAcrossBothTables(operation.queueEntryId, true))
+                .proceed();
     }
 
     @Override
     public Optional<QueueName> getQueueNameFor(QueueEntryId queueEntryId) {
-        return firstPresent(store -> store.getQueueNameFor(queueEntryId));
+        requireNonNull(queueEntryId, "No queueEntryId provided");
+        var sql = unionAcrossBothTables(DurableQueuesSql::getQueueNameForQueueEntryIdSql);
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql)
+                                                          .bind("queueEntryId", queueEntryId)
+                                                          .mapTo(QueueName.class)
+                                                          .findOne());
+    }
+
+    /**
+     * A by-id read over both tables in one statement.
+     * <p>
+     * Reads carry the same double-firing as the writes did - {@link #getQueuedMessage(GetQueuedMessage)} and
+     * {@link #getDeadLetterMessage(GetDeadLetterMessage)} are both interceptable operations, so trying one
+     * delegate and then the other ran a metrics or tracing interceptor twice for anything in the second table.
+     */
+    private Optional<QueuedMessage> readByIdAcrossBothTables(QueueEntryId queueEntryId, boolean isDeadLetterMessage) {
+        var sql = unionAcrossBothTables(DurableQueuesSql::getQueuedMessageByIdSql);
+        return unitOfWorkFactory.withUnitOfWork(uow -> uow.handle().createQuery(sql)
+                                                          .bind("id", queueEntryId)
+                                                          .bind("isDeadLetterMessage", isDeadLetterMessage)
+                                                          .map(unorderedStore.getQueuedMessageMapper())
+                                                          .findOne());
     }
 
     @Override
@@ -604,27 +629,172 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
 
     @Override
     public boolean deleteMessage(DeleteMessage operation) {
-        return anyTrue(store -> store.deleteMessage(operation));
+        requireNonNull(operation, "You must provide a DeleteMessage instance");
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> affectedRowsAcrossBothTables(DurableQueuesSql::getDeleteMessageSql,
+                                                                                  query -> query.bind("id", operation.queueEntryId)) > 0)
+                .proceed();
     }
 
     @Override
     public Optional<QueuedMessage> retryMessage(RetryMessage operation) {
-        return firstPresent(store -> store.retryMessage(operation));
+        requireNonNull(operation, "You must provide a RetryMessage instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
+                                                   var result = byIdAcrossBothTables(DurableQueuesSql::getRetryMessageSql,
+                                                                                     query -> query.bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
+                                                                                                   .bind("lastDeliveryError",
+                                                                                                         operation.getCauseForRetry() != null
+                                                                                                         ? Exceptions.getStackTrace(operation.getCauseForRetry())
+                                                                                                         : RetryMessage.MANUALLY_REQUESTED_REDELIVERY)
+                                                                                                   .bind("id", operation.queueEntryId));
+                                                   if (result.isPresent()) {
+                                                       log.debug("Marked Message with id '{}' for Retry at {}. Message entry after update: {}", operation.queueEntryId, nextDeliveryTimestamp, result.get());
+                                                   } else {
+                                                       log.error("Failed to Mark Message with id '{}' for Retry", operation.queueEntryId);
+                                                   }
+                                                   return result;
+                                               })
+                .proceed();
     }
 
     @Override
     public Optional<QueuedMessage> markAsDeadLetterMessage(MarkAsDeadLetterMessage operation) {
-        return firstPresent(store -> store.markAsDeadLetterMessage(operation));
+        requireNonNull(operation, "You must provide a MarkAsDeadLetterMessage instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var result = byIdAcrossBothTables(DurableQueuesSql::getMarkAsDeadLetterMessageSql,
+                                                                                     query -> query.bind("lastDeliveryError", operation.getCauseForBeingMarkedAsDeadLetter())
+                                                                                                   .bind("id", operation.queueEntryId));
+                                                   if (result.isPresent()) {
+                                                       log.debug("Marked message with id '{}' as Dead Letter Message. Message entry after update: {}", operation.queueEntryId, result.get());
+                                                   } else {
+                                                       log.error("Failed to Mark as Message message with id '{}' as Dead Letter Message", operation.queueEntryId);
+                                                   }
+                                                   return result;
+                                               })
+                .proceed();
     }
 
     @Override
     public boolean markAsDeadLetterMessageDirect(MarkAsDeadLetterMessageDirect operation) {
-        return anyTrue(store -> store.markAsDeadLetterMessageDirect(operation));
+        requireNonNull(operation, "You must provide a MarkAsDeadLetterMessageDirect instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> affectedRowsAcrossBothTables(DurableQueuesSql::getMarkAsDeadLetterMessageDirectSql,
+                                                                                  query -> query.bind("lastDeliveryError", operation.getCauseForBeingMarkedAsDeadLetter())
+                                                                                                .bind("id", operation.queueEntryId)) > 0)
+                .proceed();
     }
 
     @Override
     public Optional<QueuedMessage> resurrectDeadLetterMessage(ResurrectDeadLetterMessage operation) {
-        return firstPresent(store -> store.resurrectDeadLetterMessage(operation));
+        requireNonNull(operation, "You must provide a ResurrectDeadLetterMessage instance");
+        operation.validate();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var nextDeliveryTimestamp = Instant.now().plus(operation.getDeliveryDelay());
+                                                   var result = byIdAcrossBothTables(DurableQueuesSql::getResurrectDeadLetterMessageSql,
+                                                                                     query -> query.bind("nextDeliveryTimestamp", nextDeliveryTimestamp)
+                                                                                                   .bind("id", operation.queueEntryId));
+                                                   if (result.isPresent()) {
+                                                       log.debug("Resurrected Dead Letter Message with id '{}' with nextDeliveryTimestamp: {}. Message entry after update: {}",
+                                                                 operation.queueEntryId, nextDeliveryTimestamp, result.get());
+                                                   } else {
+                                                       log.error("Failed to resurrect Dead Letter Message with id '{}'", operation.queueEntryId);
+                                                   }
+                                                   return result;
+                                               })
+                .proceed();
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // By-id operations across both tables - one statement, one round trip
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * Runs a by-id statement against <b>both</b> tables in one statement and one round trip, returning the row it
+     * matched.
+     *
+     * <h2>Why this does not delegate</h2>
+     * Delegating tried one store and then the other, which cost <b>two statements per call</b> for every message
+     * that happens to live in the second table, and fired the <b>interceptor chain twice</b> because interceptors
+     * are registered on the composite <em>and</em> on both delegates - the same pair of defects
+     * {@link #acknowledgeAcrossBothTables(Collection)} was written to fix.
+     * <p>
+     * That cost was originally dismissed as "per failure, not per message". <b>It is not.</b>
+     * {@link #retryMessage(RetryMessage)} is on the delivery path: {@code CentralizedMessageFetcher} calls it when a
+     * handler throws, when a consumer is no longer registered, <b>and for every
+     * {@code MessageDeliveryErrorHandler}-driven {@code markForRedeliveryIn(...)}</b> - which is ordinary control
+     * flow for a handler that defers work, not an error path. A workload built on deferred redelivery calls this as
+     * often as it acknowledges. {@link #markAsDeadLetterMessage(MarkAsDeadLetterMessage)} is likewise reached from
+     * the fetcher and {@code DefaultDurableQueueConsumer}, not only from the admin API.
+     *
+     * <h2>How the SQL stays shared</h2>
+     * Each delegate's statement is wrapped verbatim as a data-modifying CTE, so v1's statements remain the single
+     * definition of what retry/dead-letter/resurrect <em>mean</em> - this class composes them, it does not restate
+     * them. All three already end in {@code RETURNING *}, and both tables are created from the same DDL with
+     * identical columns (the same invariant {@link #migrateFromSharedTable(String)}'s {@code INSERT ... SELECT}
+     * rests on), so the {@code UNION ALL} lines up and one delegate's {@link QueuedMessageRowMapper} reads either
+     * branch.
+     * <p>
+     * A data-modifying CTE runs exactly once and to completion whether or not the outer query reads it. Ids are
+     * unique across both tables, so {@code findOne()} is also an assertion that they are.
+     */
+    private Optional<QueuedMessage> byIdAcrossBothTables(Function<DurableQueuesSql, String> statement,
+                                                         Function<Query, Query> bindings) {
+        var sql = "WITH unordered_result AS (\n"
+                + statement.apply(unorderedStore.getDurableQueuesSql()) + "\n"
+                + "), ordered_result AS (\n"
+                + statement.apply(orderedStore.getDurableQueuesSql()) + "\n"
+                + ")\n"
+                + "SELECT * FROM unordered_result\n"
+                + "UNION ALL\n"
+                + "SELECT * FROM ordered_result";
+        return unitOfWorkFactory.withUnitOfWork(uow -> bindings.apply(uow.handle().createQuery(sql))
+                                                               .map(unorderedStore.getQueuedMessageMapper())
+                                                               .findOne());
+    }
+
+    /**
+     * Both tables' version of a plain read, which needs no CTE - {@code UNION ALL} of the two statements is
+     * enough. Shares {@link #byIdAcrossBothTables}'s requirement that both tables have identical columns.
+     */
+    private String unionAcrossBothTables(Function<DurableQueuesSql, String> statement) {
+        return "(" + statement.apply(unorderedStore.getDurableQueuesSql()) + ")\n"
+                + "UNION ALL\n"
+                + "(" + statement.apply(orderedStore.getDurableQueuesSql()) + ")";
+    }
+
+    /**
+     * As {@link #byIdAcrossBothTables}, for the two statements that report success by rows affected rather than by
+     * returning the row. Neither declares {@code RETURNING}, so one is appended to make them usable as
+     * data-modifying CTEs; the count is the total actually affected across both tables.
+     */
+    private int affectedRowsAcrossBothTables(Function<DurableQueuesSql, String> statement,
+                                             Function<Query, Query> bindings) {
+        var sql = "WITH unordered_result AS (\n"
+                + statement.apply(unorderedStore.getDurableQueuesSql()) + " RETURNING 1\n"
+                + "), ordered_result AS (\n"
+                + statement.apply(orderedStore.getDurableQueuesSql()) + " RETURNING 1\n"
+                + ")\n"
+                + "SELECT (SELECT count(*) FROM unordered_result) + (SELECT count(*) FROM ordered_result)";
+        return unitOfWorkFactory.withUnitOfWork(uow -> bindings.apply(uow.handle().createQuery(sql))
+                                                               .mapTo(Integer.class)
+                                                               .one());
     }
 
     // ------------------------------------------------------------------------------------------------

@@ -99,6 +99,11 @@ Each is plausible and each will be proposed again.
 - **Reuse across a boundary where the invariants differ will cost you.** The split reused v1's statements, which
   assume v1's index set, while the split's entire purpose is not to have v1's index set. That produced two separate
   regressions.
+- **On the split, an interceptor registered once runs on the composite *and* on both delegates.** Any composite
+  operation implemented by "try one delegate, then the other" therefore fires the chain twice for a message in the
+  second table, and no correctness test can see it. Every by-id operation is now a single statement over both
+  tables for exactly this reason; `PostgresqlSplitDurableQueuesByIdOperationsIT` counts statements and chain
+  invocations rather than trusting the result.
 
 ## 7. Still open
 
@@ -107,9 +112,6 @@ Each is plausible and each will be proposed again.
   documents is backlog-recovery behaviour.
 - **Run-claiming** — claim a contiguous prefix of one key and acknowledge it in one transaction. Pays 2.25×
   single-threaded; three concurrency defects blocked it, all recorded in the measurements.
-- **The split's remaining by-id operations** (`deleteMessage`, `retryMessage`, `markAsDeadLetterMessage`,
-  `resurrectDeadLetterMessage`) still try one table then the other. Acknowledgement was fixed; these run per
-  failure rather than per message.
 - **The split's admin statistics** — `DurableQueuesStatistics` is per-instance and in-memory, so it works across
   the split unchanged. A durable sink, if wanted, is a batched asynchronous writer fed by the same observer —
   never a trigger.

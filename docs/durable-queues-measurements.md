@@ -19,7 +19,7 @@ unless marked otherwise.
 | Index set reduced six → five | **−28% index bytes**; two indexes took zero scans across the whole SPI | High — scan counts at two key cardinalities |
 | **Per-key cursor**, few keys and deep backlog (8 × 2 500) | **1.81×** on drain, unchanged by `ANALYZE` | High — reproduced with and without statistics |
 | Per-key cursor, shallow keys | 1.02–1.05× | High |
-| **Two-table split**, unordered | 1.07–1.36× total, all of it insert (1.34–1.66×); drain parity | High — after two defects fixed |
+| **Two-table split**, unordered | 1.07–1.36× total, all of it insert (1.34–1.66×); drain parity | High — after the two throughput defects in §3 fixed |
 | Two-table split, ordered | Parity (0.97–1.00×) | Medium — needs `ANALYZE` to be stable at all |
 | **Steady state, everything** | Shared / split / cursor all deliver the offered rate; capacity 941 / 1 008 / 1 006 msg/s | High — backlog bounded, saturation measured separately |
 | Batched fetch | 1.01–1.02× time; **16–64× fewer claim statements** | High — statement counter, both with and without batched ack |
@@ -46,10 +46,11 @@ A raw harness isolates one cost and removes everything that normally dominates i
 pool, no polling, one connection, claim and acknowledge strictly alternating. **A prototype measurement is a
 hypothesis about where time goes, not a number.**
 
-## 3. Two defects the split shipped with, and how they were found
+## 3. Three defects the split shipped with, and how they were found
 
-Both came from the same decision: compose two v1 stores so both tables could be driven by v1's statements
+All came from the same decision: compose two v1 stores so both tables could be driven by v1's statements
 unchanged. v1's statements assume v1's index set, and the split's entire purpose is not to have v1's index set.
+The first two cost throughput; the third cost correctness of anything observing the queue.
 
 1. **The composite asked each table for messages it cannot hold.** The unordered delegate ran v1's *ordered* query
    — which filters `key IS NOT NULL` — against the unordered table on every poll. Fixed with a `ClaimScope`.
@@ -60,6 +61,14 @@ unchanged. v1's statements assume v1's index set, and the split's entire purpose
 Together they made the split **5× slower** than the table it replaces: 0.16× on unordered drain, worsening with
 backlog size (0.75× at 10 000 messages, 0.16× at 40 000). Neither was visible by inspection. The statement counter
 found the first; the second only became findable once the first was fixed.
+
+A third instance of the same decision, found later and by the same instrument: every operation addressed by
+`QueueEntryId` tried one delegate and then the other. That is two statements *and* two runs of the interceptor
+chain — interceptors register on the composite and on both delegates — so any counting, metrics or tracing
+interceptor double-counted every operation on an ordered message, with no assertion anywhere able to see it. All of
+them are now one statement composed from the delegates' own SQL. It had been filed as low priority on the grounds
+that these run "per failure"; `retryMessage` is in fact called for every `markForRedeliveryIn(...)`, which is
+ordinary control flow.
 
 ## 4. Why the split cannot help unordered traffic much
 

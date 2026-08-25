@@ -1971,10 +1971,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     @Override
     public Optional<QueueName> getQueueNameFor(QueueEntryId queueEntryId) {
         return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle()
-                                                                                              .createQuery(bind("SELECT queue_name FROM {:tableName} WHERE \n" +
-                                                                                                                        " id = :id",
-                                                                                                                arg("tableName", sharedQueueTableName)))
-                                                                                              .bind("id", requireNonNull(queueEntryId, "No queueEntryId provided"))
+                                                                                              .createQuery(durableQueuesSql.getQueueNameForQueueEntryIdSql())
+                                                                                              .bind("queueEntryId", requireNonNull(queueEntryId, "No queueEntryId provided"))
                                                                                               .mapTo(QueueName.class)
                                                                                               .findOne());
     }
@@ -2464,10 +2462,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     }
 
     private Optional<QueuedMessage> getQueuedMessage(QueueEntryId queueEntryId, boolean isDeadLetterMessage) {
-        return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(bind("SELECT * FROM {:tableName} WHERE \n" +
-                                                                                                                                 " id = :id AND\n" +
-                                                                                                                                 " is_dead_letter_message = :isDeadLetterMessage",
-                                                                                                                         arg("tableName", sharedQueueTableName)))
+        return unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(durableQueuesSql.getQueuedMessageByIdSql())
                                                                                               .bind("id", requireNonNull(queueEntryId, "No queueEntryId provided"))
                                                                                               .bind("isDeadLetterMessage", isDeadLetterMessage)
                                                                                               .map(queuedMessageMapper)
