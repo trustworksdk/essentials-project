@@ -339,7 +339,7 @@ Drain completion is measured as "no rows left for the queue", not "last handler 
 before the framework acknowledges, so a handler-latch wait stops the clock before the per-message `DELETE`
 that the scenario exists to measure.
 
-Results and the resulting recommendations: `docs/durable-queues-redesign-measurements.md`.
+Results and the resulting recommendations: `docs/durable-queues-measurements.md`.
 
 ## Benchmark matrix scripts
 
@@ -1030,4 +1030,4 @@ mvn verify -pl examples/essentials-performance-lab \
 
 Takes roughly five minutes at the defaults. Run it on an otherwise idle machine: the per-message arms have a
 run-to-run spread near ±40%, dominated by autovacuum timing against the dead tuples the drain itself creates.
-Results and interpretation are in `docs/durable-queues-redesign-measurements.md` §7.
+Results and interpretation are in `docs/durable-queues-measurements.md` §2 — the framework-overhead figure this produced was withdrawn as confounded (the two arms used different claim queries).

@@ -35,17 +35,23 @@ import java.util.*;
  * worth building.
  *
  * <h2>The claim under test</h2>
- * {@code docs/durable-queues-statistics-improvements.md} argues the trigger is the wrong mechanism on seven
- * counts, of which two are measurable here. Every acknowledged message pays a plpgsql invocation, an
- * {@code INSERT} and maintenance on two indexes — and, the sharpest claim, the
- * {@code EXCEPTION WHEN OTHERS} guard around that insert is implemented in plpgsql as an <b>implicit savepoint,
- * so it costs a subtransaction per row</b>. The document's contention is that at sustained throughput this burns
- * subtransaction ids and pushes the subtransaction SLRU toward overflow, degrading unrelated queries on the same
- * database — making the safety net more dangerous than the thing it guards.
+ * Every acknowledged message pays a plpgsql invocation, an {@code INSERT} and maintenance on two indexes — and,
+ * the sharpest claim, the {@code EXCEPTION WHEN OTHERS} guard around that insert is implemented in plpgsql as an
+ * <b>implicit savepoint, so it costs a subtransaction per row</b>. The contention was that at sustained throughput
+ * this burns subtransaction ids and pushes the subtransaction SLRU toward overflow, degrading unrelated queries on
+ * the same database — making the safety net more dangerous than the thing it guards.
  * <p>
  * That is a specific, falsifiable claim, and PostgreSQL exposes the evidence directly: {@code pg_stat_slru} has a
  * row for the subtransaction cache, so the reads, writes and hits it attributes can be differenced across the
  * drain.
+ *
+ * <h2>What it came back as</h2>
+ * <b>The sharpest claim was wrong, and the boring one was right.</b> The subtransaction mechanism is real, but the
+ * exception block is worth <b>1.03×</b> of wall clock — noise. The trigger's cost is the {@code INSERT} and its
+ * indexes, and that is worth <b>2.80×</b> on the acknowledgement path, which is why statistics are now collected in
+ * memory from a {@code DurableQueueMessageObserver} instead. See {@code docs/durable-queues-measurements.md} §1 for
+ * the figure and §2 for the withdrawal. This scenario is kept because it is the thing that settled it, and because
+ * the arms below are what make the two costs separable at all.
  *
  * <h2>Arms</h2>
  * <ul>
