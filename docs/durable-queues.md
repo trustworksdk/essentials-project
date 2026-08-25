@@ -107,6 +107,49 @@ Each is plausible and each will be proposed again.
 
 ## 7. Still open
 
+### Parked pending review: how the split should be composed
+
+**Status: parked 2026-08-25, awaiting review by a second pair of eyes. Do not extend the current structure
+further until that review has happened** — the open items below are all consequences of the structure, and fixing
+them one at a time entrenches it.
+
+Every defect the split has shipped came from the same place, and it is not "reuse" as such. Two of the three came
+from *reusing* v1's behaviour where the composite is not v1 (the claim scope, the interceptor double-firing); the
+third came from *not* reusing it — the split re-derived its index DDL and dropped the `key IS NULL` predicate v1
+had always carried. The boundary between what was reused and what was re-derived was never drawn deliberately, and
+every defect to date sits exactly on that boundary.
+
+The gate that justified composing two `PostgresqlDurableQueues` was that `PostgresqlSplitDurableQueuesIT` extends
+the shared `DurableQueuesIT` unmodified. That suite passed through all three defects. It proves *semantics*, and
+all three were invisible to semantics — so the strongest argument for composition bought less than it appeared to.
+
+Two candidate ways forward:
+
+1. **An explicit storage SPI.** A `QueueMessageStore` that is *not* a `DurableQueues` — statements and row mapping
+   only, no interceptors, no consumer registry, no lifecycle, no observer, no fetcher. Whole classes of defect stop
+   being representable rather than being fixed: `PostgresqlDurableQueues.Role` disappears (it exists only to make a
+   v1 store act as a non-owning half), `ClaimScope` disappears (an unordered store has no ordered query to run by
+   accident), the interceptor chain has exactly one owner, and the outstanding merge-operation item below falls out
+   for free instead of costing eleven hand-written wrappers. The cost is the acceptance gate: the composite would
+   implement the SPI itself and needs its own proof of semantics.
+2. **A clean-room second attempt.** Design the two-table queue from the requirements without reading the current
+   implementation, then compare. The current shape was reached by incremental composition, so it is worth knowing
+   what someone would build who was not anchored to it.
+
+Timing favours deciding sooner: `essentials.durable-queues.use-split-queue-tables` defaults to `false` and has no
+operational experience behind it, so nothing is committed yet. After a first deployment the table layout and
+`migrateFromSharedTable` become a compatibility contract.
+
+### Open items
+
+- **Six merge operations still fire the interceptor chain twice** — `getQueuedMessages`, `getDeadLetterMessages`,
+  `getQueuedMessageCountsFor`, `getTotalMessagesQueuedFor`, `getTotalDeadLetterMessagesQueuedFor`, `purgeQueue`.
+  The composite runs no chain and both delegates run theirs, so unlike the by-id operations this happens on
+  *every* call, not only for messages in the second table. Wrapping them in a chain on the composite would make it
+  fire three times; the only coherent fix is for the composite to own the chain for all 22 operations and stop
+  propagating user interceptors to the delegates (delegates keep their own internal
+  `SingleOperationTransactionDurableQueuesInterceptor`, so transactions are unaffected). That is roughly eleven
+  more methods to wrap — or nothing at all, under option 1 above. **Blocked on the parked decision.**
 - **A steady-state harness exists** ([`SteadyStateThroughputBenchmarkIT`](../components/postgresql-queue/src/test/java/dk/trustworks/essentials/components/queue/postgresql/benchmark/SteadyStateThroughputBenchmarkIT.java))
   but has only been pointed at batched acknowledgement, the split and the cursor. Anything else quoted in these
   documents is backlog-recovery behaviour.
@@ -115,3 +158,8 @@ Each is plausible and each will be proposed again.
 - **The split's admin statistics** — `DurableQueuesStatistics` is per-instance and in-memory, so it works across
   the split unchanged. A durable sink, if wanted, is a batched asynchronous writer fed by the same observer —
   never a trigger.
+- **The cursor is not wired into the split.** It replaces the ordered claim, and the split's ordered delegate would
+  need its own key-state table. They are independent opt-ins; combining them multiplies what a measurement has to
+  control for.
+- **The ArchUnit construction-ergonomics freeze store is uncommitted**, so that guard currently cannot fail. It
+  belongs on `main`, not on this branch.
