@@ -2141,7 +2141,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                         // redundant - it is a scan. Its `key IS NOT NULL` predicate has no index to use on a split
                         // unordered table, which by design carries one index on (queue_name, next_delivery_ts).
                         // Running it anyway cost a full scan per poll and grew with the backlog: measured 0.75x at
-                        // 10 000 messages and 0.16x at 40 000 (§21).
+                        // 10 000 messages and 0.16x at 40 000 - see docs/durable-queues-measurements.md §3.
                         var unorderedQ = uow.handle().createQuery(durableQueuesSql.buildUnorderedSqlStatement())
                                             .bind("queueName", queueName)
                                             .bind("now", now)

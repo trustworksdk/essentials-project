@@ -41,18 +41,30 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
  * the indexes its own access patterns need.
  *
  * <h2>What this measures at, through this class</h2>
- * Unordered traffic: <b>1.07× total</b> at 40 000 messages — insert 1.34–1.60×, drain at parity, 8–9% fewer index
- * bytes (measurements §21–§23). Not the <b>1.38×/1.62×</b> quoted historically, which came from raw SQL against
- * prototype schemas and never described this implementation.
- * <p>
- * <b>Ordered traffic is unmeasured.</b> Repeat runs of an identical configuration differ by 4.75×, so no ratio is
- * quoted until there is a stable harness.
- * <p>
- * It reached parity only after measurement found two defects that reasoning had not. Both are worth knowing before
- * changing anything here, because both came from reusing v1's statements against a schema that deliberately is not
- * v1's: the composite asked each table for messages it cannot hold (fixed by {@code ClaimScope}), and the unordered
- * index omitted {@code key IS NULL} so every claim fell back to heap fetches (§23). Together they made the split
- * <b>5× slower</b> than the table it replaces.
+ * <b>It is an insert-and-storage optimisation, not a throughput one.</b>
+ * <ul>
+ *     <li><b>Unordered:</b> 1.07–1.36× total at 40 000 messages, all of it enqueue (1.34–1.66×); drain at parity;
+ *     ~9% fewer index bytes.</li>
+ *     <li><b>Ordered:</b> parity (0.97–1.00×) once the table has been analysed, with ~29% fewer index bytes. The
+ *     4.75× spread that once prevented a figure here was missing planner statistics, not the split.</li>
+ *     <li><b>Steady state</b>, producers and consumers together: indistinguishable from the shared table, and
+ *     capacity within 7%.</li>
+ * </ul>
+ * The <b>1.38×/1.62×</b> quoted historically came from raw SQL against prototype schemas and never described this
+ * implementation. Its premise does not hold either: "six indexes down to one" counts <em>declarations</em>, and
+ * under single-mode traffic the ordered indexes are partial on {@code key IS NOT NULL}, hold 8 KB and cost nothing
+ * — so the real removal is two small indexes, ~9% of the bytes. See {@code docs/durable-queues-measurements.md} §4.
+ *
+ * <h2>Two defects it shipped with, both from reuse</h2>
+ * Worth knowing before changing anything here, because both came from reusing v1's statements against a schema
+ * that deliberately is not v1's — v1's statements assume v1's index set:
+ * <ol>
+ *     <li>the composite asked each table for messages it cannot hold (fixed by {@link PostgresqlDurableQueues.ClaimScope});</li>
+ *     <li>the unordered index omitted {@code key IS NULL}, which the claim filters on, so every claim fell back to
+ *     heap fetches instead of an index-only scan.</li>
+ * </ol>
+ * Together they made the split <b>5× slower</b> than the table it replaces, growing with backlog size. Both are
+ * fixed; neither was visible by inspection.
  * <p>
  * It is a <b>composition, not a rewrite</b>. {@link DurableQueuesSql} generates its statements for whatever table
  * name it is constructed with, and both split tables keep the shared table's columns, so each is driven by
@@ -786,7 +798,7 @@ public final class PostgresqlSplitDurableQueues implements BatchMessageFetchingC
         //
         // Each delegate's claim opens its own UnitOfWork, and a UnitOfWorkFactory joins an ambient one rather than
         // nesting - only the outermost commits. Without this wrapper a poll therefore committed twice where v1
-        // commits once, which measured as a 6x regression on the unordered drain (§21). The transaction is what
+        // commits once, which measured as a 6x regression on the unordered drain (measurements §3). The transaction is what
         // costs, not the statement, and that is the finding this whole investigation rests on; the composite was
         // paying it twice per poll.
         return unitOfWorkFactory.withUnitOfWork(uow -> claimAcrossBothTables(activeQueues, availableWorkerSlotsPerQueue, claim));

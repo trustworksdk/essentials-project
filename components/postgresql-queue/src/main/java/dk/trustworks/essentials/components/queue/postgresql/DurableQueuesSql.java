@@ -854,7 +854,7 @@ public class DurableQueuesSql {
      * {@code delivery_mode} — so trimming them would mean rewriting and re-testing the whole SQL surface to buy
      * about nine bytes a row.
      * <p>
-     * And it buys nothing that was measured. The split's 1.38x total and 1.62x insert are attributed to
+     * And it buys nothing that was measured. The split's prototype figures (1.38x total, 1.62x insert) were attributed to
      * <b>index count</b>, six secondary indexes down to one (measurements §1, §8). Column width was never shown
      * to matter on its own. So the split varies the index set per mode and leaves the columns alone, which lets
      * each table be driven by v1's existing, tested statements unchanged.
@@ -880,7 +880,7 @@ public class DurableQueuesSql {
      * {@code key IS NULL}, and an index whose predicate does not imply it forces PostgreSQL to fetch each candidate
      * row from the heap to re-check, at a cost that grows with the backlog. v1's own
      * {@code idx_*_unordered_ready} has always carried the predicate for this reason; the split's copy omitted it
-     * and measured 0.75× at 10 000 messages and 0.16× at 40 000 against the shared table (§21, §22).
+     * and measured 0.75× at 10 000 messages and 0.16× at 40 000 against the shared table - see docs/durable-queues-measurements.md §3.
      */
     public String getCreateSplitUnorderedReadyIndexSql() {
         return bind("""

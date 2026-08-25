@@ -40,7 +40,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Which of the six indexes on {@code durable_queues} does anything actually use?
  *
  * <h2>Why this exists</h2>
- * The split's measured win (1.38× total, 1.62× insert for unordered traffic) came entirely from index count —
+ * The split's <em>prototype</em> win (1.38× total, 1.62× insert for unordered traffic - through the component it
+ * is ~1.1-1.36×, all of it insert) was attributed to index count —
  * six secondary indexes down to one. Part of that is available with no new tables and no API change, because
  * {@code PostgresqlDurableQueues.initializeQueueTables()} creates all six **unconditionally**, regardless of
  * {@code useOrderedUnorderedQuery}. With the flag on — which it now is by default everywhere — the three indexes

@@ -32,7 +32,8 @@ import static org.assertj.core.api.Assertions.*;
  * evidence supports rather than the one v1 carries.
  *
  * <h2>What is worth pinning here and why</h2>
- * The split's entire measured benefit — 1.38× total, 1.62× on insert for unordered traffic — is index count, six
+ * The split's <em>prototype</em> benefit — 1.38× total, 1.62× on insert for unordered traffic, and ~1.1-1.36×
+ * through the component — was attributed to index count, six
  * secondary indexes down to one. So the schemas are the load-bearing part, and two properties of them are easy to
  * get wrong on inspection:
  * <ul>

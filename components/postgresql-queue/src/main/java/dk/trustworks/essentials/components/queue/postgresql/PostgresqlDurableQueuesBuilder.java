@@ -246,11 +246,11 @@ public final class PostgresqlDurableQueuesBuilder {
      * Coalesce acknowledgements so a batch of handled messages costs one transaction instead of one each.
      * Only applies when the {@link CentralizedMessageFetcher} is in use.
      * <p>
-     * This is the largest per-message win available in the queue: the acknowledgement transaction, not its
-     * {@code DELETE}, is the dominant cost, measured at <b>16.5x</b> against a batched acknowledgement
-     * [10.3-24.2x across 9 repetitions]. See
-     * {@code docs/durable-queues-measurements.md} §2 - and note the 16.5x quoted historically is a raw-harness
-     * figure that measures ~1.0x through the component.
+     * <b>Not a throughput feature, despite the number attached to it historically.</b> One transaction per
+     * acknowledgement measured 16.5x against one per batch <em>in a raw-SQL harness</em>, and that does not
+     * reproduce here: through the component it is <b>1.02x</b> on a backlog drain and <b>1.00x</b> in steady state
+     * with a worse p99. Once a connection pool and a real consumer are in the picture the acknowledgement
+     * transaction is not the bottleneck. See {@code docs/durable-queues-measurements.md} §2.
      * <p>
      * Off by default, because it is a semantic change and not only a faster one: an acknowledgement can sit
      * buffered for up to {@link #setAcknowledgementFlushInterval(Duration)}, so a crash in that window
@@ -374,9 +374,10 @@ public final class PostgresqlDurableQueuesBuilder {
      * its claim cost scales with the <b>backlog</b> and it can only ever yield a key's single head. The cursor
      * drives from a key-state table - one row per {@code (queue_name, key)} carrying {@code completed_through} -
      * so the cost scales with the number of <b>keys</b>. In the barrier's pathological regime (few keys, deep
-     * backlog: 8 keys × 2 500 messages) the claim measured <b>217× faster</b> at an identical number of round
-     * trips; with many shallow keys the advantage is around 2.6×, and there are shapes where it is not worth
-     * having at all.
+     * backlog: 8 keys × 2 500 messages) it measures <b>1.81×</b> on drain through the component, and that figure
+     * is unchanged by {@code ANALYZE}, so it is a property of the barrier rather than of missing statistics. With
+     * shallow keys it is 1.02-1.05x - not worth having - and in steady state, where the queue keeps up, it is
+     * parity. A prototype measured the <em>claim phase alone</em> at 217×; that is not what a deployment sees.
      * <p>
      * It exists to be <b>measured</b> against real traffic, which is why it is a flag rather than a replacement.
      *

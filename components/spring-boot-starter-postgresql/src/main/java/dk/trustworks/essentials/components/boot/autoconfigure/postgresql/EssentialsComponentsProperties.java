@@ -310,10 +310,11 @@ public class EssentialsComponentsProperties {
          * Store ordered and unordered messages in <b>separate tables</b> ({@code <sharedQueueTableName>_unordered}
          * and {@code _ordered}), so each carries only the indexes its own access pattern needs (default false).
          * <p>
-         * Measured through the component at 40 000 messages: unordered traffic is <b>1.07× overall</b> — insert
-         * 1.34–1.60×, drain at parity, 8–9% fewer index bytes. Not the 1.38×/1.62× quoted historically, which came
-         * from raw-SQL prototype schemas. <b>Ordered traffic is unmeasured</b>: repeat runs of the same
-         * configuration differ by 4.75×. See {@code docs/durable-queues-measurements.md} §3–§4.
+         * <b>An insert-and-storage optimisation, not a throughput one.</b> Measured through the component:
+         * unordered 1.07–1.36× overall, all of it enqueue (1.34–1.66×) with the drain at parity and ~9% fewer index
+         * bytes; ordered at parity with ~29% fewer index bytes; and in steady state indistinguishable from the
+         * shared table, with capacity within 7%. The 1.38×/1.62× quoted historically came from raw-SQL prototype
+         * schemas. See {@code docs/durable-queues-measurements.md} §1 and §4.
          * <p>
          * ⚠️ <b>Not a drop-in switch for a deployment with a backlog.</b> The split does not read the shared table,
          * so messages already queued there stop being delivered — they are not lost, but nothing picks them up.
@@ -339,8 +340,9 @@ public class EssentialsComponentsProperties {
          * Coalesce message acknowledgements so a batch of handled messages costs one transaction instead of
          * one each. Off by default.
          * <p>
-         * The acknowledgement transaction, not its {@code DELETE}, is the queue's dominant per-message cost —
-         * measured 16.5x on drain time against a batched acknowledgement. It is nonetheless opt-in because it
+         * ⚠️ <b>Not measured to help.</b> The 16.5x quoted historically is a raw-SQL harness figure; through the
+         * component this measures <b>1.02x</b> on a backlog drain and <b>1.00x</b> in steady state with a worse
+         * p99 (25 ms against 18 ms). See {@code docs/durable-queues-measurements.md} §2. It is opt-in because it
          * widens the redelivery window by up to {@link #acknowledgementFlushInterval}: a crash in that window
          * redelivers messages that were in fact handled. At-least-once already permits that and handlers must
          * be idempotent regardless, but it is a semantic change and should be chosen rather than inherited
