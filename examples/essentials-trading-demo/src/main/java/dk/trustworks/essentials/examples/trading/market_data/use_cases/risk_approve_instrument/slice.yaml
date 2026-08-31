@@ -1,0 +1,31 @@
+schemaVersion: "1.1"
+slice: market_data.risk_approve_instrument
+kind: automation
+bc: market_data
+owner: market-data-team
+status: live
+summary: Send every newly registered instrument through an external risk assessment and record the answer, calling the risk service outside any transaction.
+generator: essentials
+language: java
+
+handles: [InstrumentRegistered]
+publishes: [InstrumentRiskApproved, InstrumentRiskRejected]
+writes: [Instrument]
+reads: []
+endpoints: []
+invariants:
+  - id: INV-RAI-1
+    text: "An instrument carries at most one risk decision — the first one recorded stands, so a redelivered InstrumentRegistered adds nothing"
+    enforcedBy: Instrument
+  - id: INV-RAI-2
+    text: "The risk service is called with no UnitOfWork active, so no database connection is held for the duration of the call"
+    enforcedBy: InstrumentRiskApprovalProcessor
+  - id: INV-RAI-3
+    text: "The risk call must complete well inside the DurableQueues message-handling timeout, or the message is redelivered while the first attempt is still blocked"
+    enforcedBy: RiskApprovalProperties
+forbidden:
+  - cross-slice-internal:market_data
+tests:
+  unit: { present: false }
+  integration: { present: true, path: "src/test/java/dk/trustworks/essentials/examples/trading/market_data/InstrumentRiskApprovalTest.java" }
+  contract: { present: false }

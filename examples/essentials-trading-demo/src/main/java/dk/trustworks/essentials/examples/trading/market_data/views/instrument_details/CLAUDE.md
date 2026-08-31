@@ -24,4 +24,14 @@ nothing needs an instrument's display name strongly consistently, so it projects
 table it owns and is eventually consistent like every other view in the demo.
 
 `InstrumentRegistered` upserts rather than inserts, so redelivery re-applies the same row instead of failing
-on the primary key.
+on the primary key. Its `ON CONFLICT` clause updates only symbol and display name: `risk_status` is set on
+insert and never reset, because by the time a registration is redelivered the risk automation may already
+have recorded a decision.
+
+## `risk_status` is where the risk automation becomes visible
+
+`market_data.risk_approve_instrument` calls an external risk service outside any transaction and records the
+answer on the instrument. This read model projects both outcomes into `risk_status` / `risk_detail`, and
+`PENDING` is the state it invents for the window in between — an instrument exists as soon as it is
+registered, while the blocking call is still in flight. That window is the only place the demo shows a handler
+doing blocking I/O, so the column is worth having even though nothing branches on it.

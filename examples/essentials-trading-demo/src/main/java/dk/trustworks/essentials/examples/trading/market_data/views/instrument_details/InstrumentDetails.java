@@ -22,18 +22,26 @@ import dk.trustworks.essentials.examples.trading.market_data.types.Symbol;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * The read shape this slice serves — one instrument's reference data and its suspension state.
+ * The read shape this slice serves — one instrument's reference data, its suspension state, and where it stands with
+ * the risk assessment.
  * <p>
  * Returned straight from the API; there is no DTO between this and the wire (§R2).
+ * <p>
+ * {@code riskDetail} carries the awarded rating for an {@code APPROVED} instrument and the refusal reason for a
+ * {@code REJECTED} one, and is null while the assessment is {@code PENDING}. One column because a caller displays it
+ * next to the status either way, and nothing reads it apart.
  */
 public record InstrumentDetails(InstrumentId instrumentId,
                                 Symbol symbol,
                                 String displayName,
                                 boolean suspended,
-                                String suspensionReason) {
+                                String suspensionReason,
+                                InstrumentRiskStatus riskStatus,
+                                String riskDetail) {
     public InstrumentDetails {
         requireNonNull(instrumentId, "No instrumentId provided");
         requireNonNull(symbol, "No symbol provided");
         requireNonNull(displayName, "No displayName provided");
+        requireNonNull(riskStatus, "No riskStatus provided");
     }
 }

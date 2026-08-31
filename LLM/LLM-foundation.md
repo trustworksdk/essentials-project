@@ -516,6 +516,47 @@ public void handle(OrderEvent event) {
 }
 ```
 
+### Blocking I/O in a Message Handler: `UnitOfWorkMode`
+
+**Enum**: `dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode`
+**Attribute**: `MessageHandler.unitOfWork()`, default `REQUIRED`
+
+**Problem**: A `@MessageHandler` method runs inside a `UnitOfWork` by default, and a `UnitOfWork` holds a pooled database connection with an open transaction. A handler that calls an external system therefore parks a connection in `idle in transaction` for the duration of that call — one per parallel consumer — while writing nothing.
+
+**Solution**: Declare the handler `UnitOfWorkMode.NONE`. It is then invoked with **no** `UnitOfWork` active, and wraps its own transactional tail after the blocking call returns.
+
+```java
+new PatternMatchingMessageHandler() {
+    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+    void handle(AssessRiskCommand cmd) {
+        var assessment = riskServiceHttpClient.assess(cmd.instrumentId());   // no connection held
+
+        unitOfWorkFactory.usingUnitOfWork(() -> repository.save(assessment)); // transactional tail
+    }
+
+    @MessageHandler                                                          // REQUIRED (default), unchanged
+    void handle(ProcessOrderCommand cmd) { }
+}
+```
+
+There is no ambient `UnitOfWork` between the two statements, so touching a transactional resource outside the wrapper fails fast instead of silently opening a transaction.
+
+| Mode | Handler invoked | Commit/rollback |
+|------|-----------------|-----------------|
+| `REQUIRED` (default) | Inside a `UnitOfWork`; joins an active one if present | On normal return / on throw. Historic behaviour |
+| `NONE` | With no `UnitOfWork`, no connection, no open transaction | Handler's own `usingUnitOfWork(...)` / `withUnitOfWork(...)` blocks |
+
+**Who honours it**: only dispatchers that own the `UnitOfWork` boundary — see `UnitOfWorkBoundaryOwningMessageConsumer` and `PatternMatchingMessageHandler.setUnitOfWorkFactory(...)`. A `PatternMatchingMessageHandler` without a `UnitOfWorkFactory`, or a plain `Consumer<Message>`, keeps the historic behaviour where the dispatcher's `UnitOfWork` wraps every handler.
+
+**Two responsibilities the mode shifts onto the handler**:
+
+1. **Idempotency is mandatory.** Delivery is at-least-once and the blocking call is no longer part of the transaction that acknowledges the message. A failure after the call returned but before the tail committed redelivers the message and repeats the call.
+2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (30s by default in the Spring Boot starters). Past that timeout the in-flight message is reset as stuck and can be delivered again *concurrently with the still-running first attempt* — which also degrades `OrderedMessage` per-key ordering for as long as that overlap lasts. Size the client's timeout, not just the happy path.
+
+**Guard**: an `Inbox` rejects a consumer with `NONE` handlers under `TransactionalMode.FullyTransactional` (`IllegalStateException` at start-up), because fetching, handling and acknowledgement share one `UnitOfWork` there that cannot be suspended. Use `TransactionalMode.SingleOperationTransaction`, which is the starters' default.
+
+For `EventProcessor` handlers — including the `usingUnitOfWork` / `withUnitOfWork` helpers used above and which processor types support the mode — see [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md#blocking-io-in-a-handler-unitofworkmodenone).
+
 ### Outbox Pattern
 
 **Problem**: Dual write when updating database + publishing to Kafka.
