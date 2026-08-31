@@ -48,6 +48,16 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
     private final Set<Class<?>>                              nextGenerationFactoryAggregateTypes;
 
     /**
+     * Create a {@link DefaultAggregateLifecycleConfigurationValidatorBuilder} that names every argument and accepts
+     * both plain values and {@link Optional}s.
+     *
+     * @return the builder
+     */
+    public static DefaultAggregateLifecycleConfigurationValidatorBuilder builder() {
+        return new DefaultAggregateLifecycleConfigurationValidatorBuilder();
+    }
+
+    /**
      * Constructs a {@code DefaultAggregateLifecycleConfigurationValidator} with the necessary dependencies.
      * This validator ensures that various configurations comply with the intended lifecycle policies
      * for aggregates in an event-sourced system.
@@ -66,7 +76,9 @@ public class DefaultAggregateLifecycleConfigurationValidator implements Aggregat
      * @param nextGenerationFactories a list of typed factories responsible for creating the next-generation
      *                                implementations of aggregates; must not be null
      * @throws IllegalArgumentException if any of the provided parameters is null
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultAggregateLifecycleConfigurationValidator(AggregateSnapshotPolicyRegistry snapshotPolicyRegistry,
                                                            AggregateClosingBooksPolicyRegistry closingBooksPolicyRegistry,
                                                            AggregateSnapshotConfigurationResolver snapshotConfigurationResolver,

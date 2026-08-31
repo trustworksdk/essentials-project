@@ -722,9 +722,14 @@ public class ImmutableOrder extends ImmutableValueObject {
 
 ## Version Compatibility
 
-| Essentials Version | Java | Spring Boot | Jackson | Kotlin | Notes |
-|--------------------|------|-------------|---------|--------|-------|
-| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 21+ | 4.0.x | 3 (default) / 2 | 2.2+ | Under active development |
+> **Upgrading from 0.40.x?** Read [docs/RELEASE-NOTES-0.50.0.md](docs/RELEASE-NOTES-0.50.0.md) first — it lists
+> what you must change (Java 21, Spring Boot 4, Jackson 3, the removed Vaadin UI) and the three behaviour
+> changes that are silent at compile time.
+
+| Essentials Version                                                       | Java | Spring Boot | Jackson                | Kotlin                    | Notes                    |
+|--------------------------------------------------------------------------|------|-------------|------------------------|---------------------------|--------------------------|
+| [0.50.0+](https://github.com/trustworksdk/essentials-project/tree/main)  | 21+ | 4.0.x | 3 (default) / 2        | 2.2+                      | Under active development |
+| [0.40.24+](https://github.com/trustworksdk/essentials-project/tree/main) | 17+ | 3.3.x | 2 | 2.1+ | No longer maintained     |
 
 **Java 21 is a hard floor, not a recommendation.** Artifacts are compiled with `--release 21`, so the class files
 carry major version 65 and a Java 17 runtime rejects them with `UnsupportedClassVersionError`. Building the project

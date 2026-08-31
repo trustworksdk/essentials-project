@@ -45,6 +45,34 @@ public final class PgReplicationSlots {
         public final Boolean failover;
         public final Boolean synced;
 
+        /**
+         * Create a {@link SlotInfoBuilder} that names every argument.
+         *
+         * @return the builder
+         */
+        public static SlotInfoBuilder builder() {
+            return new SlotInfoBuilder();
+        }
+
+        /**
+         * @param slotName           the slot name
+         * @param slotType           {@code logical} or {@code physical}
+         * @param plugin             the output plugin backing a logical slot
+         * @param database           the database the slot belongs to
+         * @param activePid          the pid holding the slot, or {@code null} when inactive
+         * @param temporary          whether the slot is temporary
+         * @param restartLsn         the slot's restart LSN
+         * @param confirmedFlushLsn  the slot's confirmed flush LSN
+         * @param walStatus          {@code reserved}, {@code extended}, {@code unreserved} or {@code lost}
+         * @param safeWalSize        bytes of WAL that can still be written before the slot risks invalidation
+         * @param inactiveSince      when the slot went inactive, or {@code null}
+         * @param conflicting        whether the slot conflicts with recovery
+         * @param invalidationReason why the slot was invalidated, or {@code null}
+         * @param failover           whether the slot is enabled for failover
+         * @param synced             whether the slot was synced from a primary
+         * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+         */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public SlotInfo(String slotName,
                         String slotType,
                         String plugin,

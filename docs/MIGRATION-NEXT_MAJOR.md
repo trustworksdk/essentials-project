@@ -150,6 +150,35 @@ new PostgresqlDurableQueues(unitOfWorkFactory, jsonSerializer, tableName, listen
                             TransactionalMode.FullyTransactional, null);
 ```
 
+### `MongoDurableQueues.builder()` now defaults to `SingleOperationTransaction`, not `FullyTransactional`
+
+The same convergence, one layer out: the two builders now agree. `MongoDurableQueues.builder()` previously produced
+`FullyTransactional` — it delegated to the constructor taking a `SpringMongoTransactionAwareUnitOfWorkFactory` — while
+`PostgresqlDurableQueues.builder()` produced `SingleOperationTransaction`. An application that moved between the two
+database modules therefore got different delivery semantics from identical code, with nothing in either API saying so.
+
+`messageHandlingTimeout` now defaults to `MongoDurableQueues.DEFAULT_MESSAGE_HANDLING_TIMEOUT` (30 seconds), matching
+`PostgresqlDurableQueues.DEFAULT_MESSAGE_HANDLING_TIMEOUT`, so the default mode is usable with nothing but a
+`MongoTemplate`. **If you use `MongoDurableQueues.builder()` and rely on `FullyTransactional`, say so explicitly:**
+
+```java
+MongoDurableQueues.builder()
+                  .setMongoTemplate(mongoTemplate)
+                  .setJsonSerializer(jsonSerializer)
+                  .setSharedQueueCollectionName("durable_queues")
+                  .setTransactionalMode(TransactionalMode.FullyTransactional)
+                  .setUnitOfWorkFactory(unitOfWorkFactory)   // required in this mode
+                  .build();
+```
+
+The **constructors are unaffected** — each still produces the mode its javadoc names, so only builder callers see this.
+In `SingleOperationTransaction` the consumer MUST acknowledge messages explicitly in a new `UnitOfWork`; see
+`DurableQueues#acknowledgeMessageAsHandled`.
+
+Both defaults are now pinned by `PostgresqlDurableQueuesBuilderDefaultsTest` and
+`MongoDurableQueuesBuilderDefaultsTest`, because the integration suites branch on `getTransactionalMode()` rather than
+asserting it and so pass whichever way it drifts.
+
 Everything else in this release is source- and binary-compatible.
 
 ## Per-module reference
@@ -208,6 +237,17 @@ fires when `FencedLockManagerSettings` is created, which is strictly earlier tha
 | `AggregateEventStreamConfiguration(…)` — 10 args | `AggregateEventStreamConfiguration.builder()` |
 | `SeparateTablePerAggregateEventStreamConfiguration(…)` — 12 args | `SeparateTablePerAggregateEventStreamConfiguration.builder()` |
 | `SeparateTablePerAggregateTypeEventStreamConfigurationFactory(…)` — 10 args | `…Factory.builder()` |
+| `PostgresqlEventStore(EventStoreUnitOfWorkFactory, STRATEGY, Optional<EventStoreEventBus>, Function, EventStoreSubscriptionObserver)` | `PostgresqlEventStore.builder()` |
+| `CdcEventStore(…)` — 6- and 7-arg forms | `CdcEventStore.builder()` |
+| `CdcInboxRepository(…, Optional<MeterRegistry>[, String])` — both forms | `CdcInboxRepository.builder()`; the two non-`Optional` constructors are unchanged |
+| `CdcEffectivenessMonitor(…)` — 6 args | `CdcEffectivenessMonitor.builder()` |
+| `EventStoreEventBus(EventStoreUnitOfWorkFactory, int, int, OnErrorHandler, int, double)` | `EventStoreEventBus.builder()`; the shorter constructors are unchanged |
+| `PersistedEventSubscriber(…)` — 6 args | `PersistedEventSubscriber.builder()` |
+| `BatchedPersistedEventSubscriber(…)` — 7- and 8-arg forms | `BatchedPersistedEventSubscriber.builder()` |
+| `DefaultEventStoreSubscriptionManager(…)` — 7- and 8-arg forms | `EventStoreSubscriptionManager.builder()` (also reachable as `DefaultEventStoreSubscriptionManager.builder()`) |
+| `SeparateTablePerAggregateTypePersistenceStrategy(…)` — the two 6-arg forms | `SeparateTablePerAggregateTypePersistenceStrategy.builder()`; the 5-arg forms are unchanged |
+| `EventStreamTableColumnNames(…)` — 12 args | `EventStreamTableColumnNames.builder()` |
+| `PgReplicationSlots.SlotInfo(…)` — 15 args | `PgReplicationSlots.SlotInfo.builder()` |
 
 `EventStoreSubscription.onlyIncludeEventsForTenant()` still returns `Optional<Tenant>` — only the field behind it
 became nullable. Same for `AppendToStream.getAppendEventsAfterEventOrder()`, `FetchStream.getTenant()` and
@@ -231,7 +271,8 @@ All of the following gain a `builder()`; their `Optional`-taking and wide constr
 | Deprecated | Replacement |
 |---|---|
 | `PostgresqlDurableQueues` — wide constructors | `PostgresqlDurableQueues.builder()` — **and see the behaviour change above** |
-| `MongoDurableQueues` — 9 of 10 constructors | `MongoDurableQueues.builder()` |
+| `MongoDurableQueues` — all 10 constructors, including the `protected` one taking `TransactionalMode` | `MongoDurableQueues.builder()`, which gained `setTransactionalMode(…)` and `setMessageHandlingTimeout(…)` so the mode is reachable without it — **and see the behaviour change above**: the builder's default moved from `FullyTransactional` to `SingleOperationTransaction`, matching `PostgresqlDurableQueuesBuilder` |
+| `MongoDurableQueues.DurableQueuedMessage(…)` — 16 args | `MongoDurableQueues.DurableQueuedMessage.builder()`; the no-arg constructor Spring Data uses is unchanged |
 | `PostgresqlDurableQueueConsumer(…)` / `MongoDurableQueueConsumer(…)` — 7 args | `(ConsumeFromQueue, DurableQueueConsumerDependencies)` |
 | `PostgresqlFencedLockManager` / `MongoFencedLockManager` — `Optional`-taking constructors | their existing `builder()` |
 | `LocalEventBus(…)` — wide constructor | `LocalEventBus.builder()` |
@@ -242,6 +283,8 @@ All of the following gain a `builder()`; their `Optional`-taking and wide constr
 |---|---|
 | `DefaultAggregateSnapshotRepositoryFactory(…)` — 9 args | `DefaultAggregateSnapshotRepositoryFactory.builder()` |
 | `DefaultEventStoreApi(…)` / `DefaultCdcApi(…)` | their `builder()` |
+| `DefaultAggregateLifecycleConfigurationValidator(…)` — 7 args | `DefaultAggregateLifecycleConfigurationValidator.builder()` |
+| `CdcHealthIndicator(CdcAvailability, Optional<WalReplicationTailer>, Optional<CdcDispatcher>, EssentialsEventStoreProperties)` | `CdcHealthIndicator.builder()` |
 
 ## Records are exempt
 
@@ -255,3 +298,8 @@ component's type *is* its accessor's return type — and `Optional` return types
 `PersistedEvent.DefaultPersistedEvent` and `PersistableEvent.DefaultPersistableEvent` still have wide constructors.
 Under Jackson 3 a constructor parameter *name* is part of the JSON contract, so reshaping the creator of a persisted
 type risks the wire format. They are left alone deliberately; see the Risks section of the design document.
+
+They are also the only two classes in the sweep that are not even marked `@Deprecated(forRemoval = true)`. That
+annotation is a promise to remove the constructor at the next major, and here it is a promise the persisted format does
+not let us keep — so making it would be worse than the wide constructor. Every other constructor the ArchUnit guard
+flagged, across all four of its vantage points, is now deprecated with a `builder()` alongside it.

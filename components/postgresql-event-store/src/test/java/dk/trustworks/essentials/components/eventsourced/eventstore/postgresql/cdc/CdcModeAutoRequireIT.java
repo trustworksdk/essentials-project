@@ -30,7 +30,6 @@ import org.jdbi.v3.postgres.PostgresPlugin;
 import org.junit.jupiter.api.*;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.*;
 
 import javax.sql.DataSource;
@@ -65,7 +64,7 @@ public class CdcModeAutoRequireIT {
                          "-c", "max_wal_senders=10"
                         )
             .withExposedPorts(5432)
-            .waitingFor(Wait.forListeningPort().withStartupTimeout(Duration.ofSeconds(60)));
+            .waitingFor(AbstractLogicalReplicationPostgresIT.postgresReadyWaitStrategy());
 
     private Jdbi                               adminJdbi;
     private Jdbi                               limitedJdbi;
@@ -106,6 +105,11 @@ public class CdcModeAutoRequireIT {
 
     @AfterEach
     void cleanup() {
+        if (unitOfWorkFactory == null) {
+            // setup() failed before it got this far - dereferencing the field here would add a suppressed NPE that
+            // buries the actual cause in the report
+            return;
+        }
         unitOfWorkFactory.getCurrentUnitOfWork().ifPresent(uow -> uow.rollback(new RuntimeException("test-cleanup")));
         assertThat(unitOfWorkFactory.getCurrentUnitOfWork()).isEmpty();
     }

@@ -10,6 +10,7 @@ All classes live in `src/main/java` — shipped as a test-support library consum
 - `...foundation.test.messaging.queue` — abstract ITs for `DurableQueues` implementations; includes `test_data/` domain fixtures
 - `...foundation.test.messaging.queue.test_data` — shared domain value objects (`OrderId`, `CustomerId`, `ProductId`, `AccountId`) and events (`OrderEvent`, `ProductEvent`)
 - `...foundation.test.reactive.command` — abstract IT for `DurableLocalCommandBus`
+- `...foundation.test.architecture` — shared ArchUnit rule definitions + the abstract test that runs them
 
 ## Key Classes
 
@@ -28,6 +29,8 @@ All classes live in `src/main/java` — shipped as a test-support library consum
 | `ProxyJSONSerializer` | Wraps real `JSONSerializer`; can inject truncated-JSON corruption per payload type (one-shot or persistent) to simulate missing-class deserialization failures |
 | `RecordingQueuedMessageHandler` (inner) | `ConcurrentLinkedQueue`-backed message recorder; optional `Consumer<Message>` for side-effects/throw |
 | `TestLockCallback` (inner) | Captures `lockAcquired`/`lockReleased` events for assertions |
+| `EssentialsConstructionRules` | The three construction-ergonomics `ArchRule`s: no `Optional` constructor parameter, 5-parameter ceiling, `@Deprecated(forRemoval=true)` must name a replacement |
+| `AbstractEssentialsConstructionErgonomicsTest` | Harness running those rules over `importPackages("dk.trustworks.essentials")`; first two wrapped in `FreezingArchRule`. Subclass is empty — the module's POM decides the scope |
 
 ## Test Structure
 
@@ -65,3 +68,7 @@ Implement these abstract methods in the consuming module's concrete IT:
 - In `DBFencedLockManagerIT`, a lock acquired via `acquireLockAsync` must be handed to the other node by calling `pause()` on the owning manager **before** `release()`. Release alone does not stop the background acquirer (that's `cancelAsyncLockAcquiring`), so the owner wins its own lock back on the next tick and every downstream fence-token assertion shifts by one (`expected: 2L but was: 3L`). Window is sub-ms, so it only shows up on a loaded machine — reproduce by sleeping between the two calls.
 - `DistributedCompetingConsumersDurableQueuesIT` spins up two independent `DurableQueues` instances against the same storage — subclass must support that (shared connection pool / same schema).
 - `DurableQueuesIT` calls `durableQueues.addInterceptor(...)` in-test to test two-stage redelivery; interceptors added mid-test affect all subsequent operations in that test only.
+- **A `FreezingArchRule` store is rule INPUT, not build output — commit it.** With `allowStoreCreation=true` and no store in git, a clean checkout (every CI job) writes a fresh baseline from whatever it finds and passes, so the guard enforces nothing. Extending `AbstractEssentialsConstructionErgonomicsTest` means also adding `src/test/resources/archunit.properties` and committing `archunit_store/`.
+- **`archunit-junit5` is `<optional>` here on purpose** — foundation-test ships to consumers; ArchUnit must not ride along. Every module extending the arch test declares `archunit-junit5` test-scoped itself.
+- **Coverage is decided by classpath, not by code.** Four modules extend the arch test, because no single classpath sees everything: `eventsourced-aggregates` (core chain + PostgreSQL event store), `spring-boot-starter-postgresql` (PostgreSQL queue + fenced lock), `spring-boot-starter-mongodb` (MongoDB queue + fenced lock), `spring-boot-starter-postgresql-event-store` (`spring-postgresql-event-store` + own auto-config). Where they overlap a violation lands in more than one store — harmless, `allowStoreUpdate` clears all of them when it is fixed. The event-store starter's store is a strict superset of `eventsourced-aggregates`'.
+- **All four stores are down to the same 3 entries**, both classes deliberate: `PersistedEvent$DefaultPersistedEvent` and `PersistableEvent$DefaultPersistableEvent`. They are Jackson creators whose parameter *names* are the persisted wire contract, so they cannot even be `@Deprecated(forRemoval = true)` — that annotation promises a removal the wire format will not allow. See `docs/constructor-ergonomics-and-optional-policy.md` § Risks.

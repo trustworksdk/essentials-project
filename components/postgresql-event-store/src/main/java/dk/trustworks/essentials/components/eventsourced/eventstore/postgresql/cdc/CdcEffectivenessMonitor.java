@@ -95,6 +95,25 @@ public final class CdcEffectivenessMonitor implements Lifecycle {
      */
     private long     consecutiveFireCount;
 
+    /**
+     * Create a {@link CdcEffectivenessMonitorBuilder} that names every argument.
+     *
+     * @return the builder
+     */
+    public static CdcEffectivenessMonitorBuilder builder() {
+        return new CdcEffectivenessMonitorBuilder();
+    }
+
+    /**
+     * @param tailer       the {@link WalReplicationTailer} being monitored
+     * @param dispatcher   the {@link CdcDispatcher} being monitored
+     * @param availability the shared {@link CdcAvailability} tracker this monitor flips on a stuck slot
+     * @param deliveryMode the CDC delivery mode — only {@link CdcDeliveryMode#INBOX} is monitored
+     * @param config       the health-check thresholds
+     * @param slotName     the replication slot name
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public CdcEffectivenessMonitor(WalReplicationTailer tailer,
                                    CdcDispatcher dispatcher,
                                    CdcAvailability availability,
