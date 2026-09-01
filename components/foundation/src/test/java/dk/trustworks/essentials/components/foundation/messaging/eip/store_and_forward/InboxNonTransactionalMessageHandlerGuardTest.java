@@ -19,9 +19,11 @@ package dk.trustworks.essentials.components.foundation.messaging.eip.store_and_f
 import dk.trustworks.essentials.components.foundation.fencedlock.FencedLockManager;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -70,9 +72,53 @@ class InboxNonTransactionalMessageHandlerGuardTest {
         }));
     }
 
+    @Test
+    void a_consumer_carrying_its_own_NONE_handlers_is_detected_without_reporting_it_by_hand() {
+        var inboxes = inboxes(TransactionalMode.FullyTransactional);
+        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
+
+        assertThatThrownBy(() -> inbox.setMessageConsumer(new SelfHostingBoundaryOwningConsumer()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("UnitOfWorkMode.NONE");
+    }
+
+    /**
+     * The {@link Inbox} wraps every delivery in a {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork}
+     * unless the consumer owns the boundary, so {@link UnitOfWorkMode#NONE} could never take effect - reject rather
+     * than silently run the blocking call inside that transaction
+     */
+    @Test
+    void a_consumer_that_does_not_own_the_boundary_is_rejected_when_the_Inbox_would_open_a_UnitOfWork() {
+        var inboxes = inboxes(TransactionalMode.SingleOperationTransaction, true);
+        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
+
+        assertThatThrownBy(() -> inbox.setMessageConsumer(new PatternMatchingMessageHandler(new NonTransactionalHandlers())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("UnitOfWorkMode.NONE")
+                .hasMessageContaining(UnitOfWorkBoundaryOwningMessageConsumer.class.getSimpleName());
+    }
+
+    @Test
+    void a_consumer_that_does_not_own_the_boundary_is_accepted_when_there_is_no_UnitOfWorkFactory() {
+        // Without a UnitOfWorkFactory the Inbox doesn't open a UnitOfWork around the delivery either, so the handler
+        // does get the UnitOfWork-free window it asked for
+        var inboxes = inboxes(TransactionalMode.SingleOperationTransaction, false);
+        var inbox   = inboxes.getOrCreateInbox(inboxConfig());
+
+        assertThatNoException().isThrownBy(() -> inbox.setMessageConsumer(new PatternMatchingMessageHandler(new NonTransactionalHandlers())));
+    }
+
     private static Inboxes inboxes(TransactionalMode transactionalMode) {
+        return inboxes(transactionalMode, false);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Inboxes inboxes(TransactionalMode transactionalMode, boolean withUnitOfWorkFactory) {
         var durableQueues = mock(DurableQueues.class);
         when(durableQueues.getTransactionalMode()).thenReturn(transactionalMode);
+        if (withUnitOfWorkFactory) {
+            when(durableQueues.getUnitOfWorkFactory()).thenReturn(Optional.of(mock(UnitOfWorkFactory.class)));
+        }
         return Inboxes.durableQueueBasedInboxes(durableQueues,
                                                 mock(FencedLockManager.class));
     }
@@ -87,11 +133,35 @@ class InboxNonTransactionalMessageHandlerGuardTest {
     }
 
     /**
-     * Stand-in for the consumer an {@code EventProcessor} hands to its {@link Inbox}
+     * Stand-in for the consumer an {@code EventProcessor} hands to its {@link Inbox}: its handler methods live on
+     * another object, so it reports on their behalf instead of using the introspecting default
      */
     private record BoundaryOwningConsumer(boolean hasNonTransactionalMessageHandlers) implements UnitOfWorkBoundaryOwningMessageConsumer {
         @Override
         public void accept(Message message) {
         }
+    }
+
+    /**
+     * A boundary-owning consumer that carries its {@literal @MessageHandler} methods itself, and therefore relies on
+     * {@link UnitOfWorkBoundaryOwningMessageConsumer#hasNonTransactionalMessageHandlers()} introspecting them
+     */
+    private static class SelfHostingBoundaryOwningConsumer implements UnitOfWorkBoundaryOwningMessageConsumer {
+        @Override
+        public void accept(Message message) {
+        }
+
+        @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+        void on(BlockingIOEvent e) {
+        }
+    }
+
+    private static class NonTransactionalHandlers {
+        @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+        void on(BlockingIOEvent e) {
+        }
+    }
+
+    private record BlockingIOEvent() {
     }
 }

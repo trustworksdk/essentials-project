@@ -151,22 +151,7 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
      * @see UnitOfWorkBoundaryOwningMessageConsumer#hasNonTransactionalMessageHandlers()
      */
     public boolean hasNonTransactionalMessageHandlers() {
-        return Methods.methods(invokeMessageHandlerMethodsOn.getClass())
-                      .stream()
-                      .filter(method -> method.getDeclaringClass() != Object.class)
-                      .anyMatch(method -> resolveUnitOfWorkMode(method) == UnitOfWorkMode.NONE);
-    }
-
-    /**
-     * Resolve the {@link UnitOfWorkMode} declared by the given method's {@link MessageHandler} annotation
-     *
-     * @param method the method to resolve the {@link UnitOfWorkMode} for
-     * @return the declared {@link UnitOfWorkMode}, or {@link UnitOfWorkMode#REQUIRED} if the method isn't a
-     * {@link MessageHandler} annotated method
-     */
-    private static UnitOfWorkMode resolveUnitOfWorkMode(Method method) {
-        var messageHandlerAnnotation = method.getAnnotation(MessageHandler.class);
-        return messageHandlerAnnotation != null ? messageHandlerAnnotation.unitOfWork() : UnitOfWorkMode.REQUIRED;
+        return MessageHandlerMethods.declaresNonTransactionalMessageHandlers(invokeMessageHandlerMethodsOn);
     }
 
     public PatternMatchingMessageHandler addInterceptor(MessageHandlerInterceptor interceptor) {
@@ -323,7 +308,7 @@ public class PatternMatchingMessageHandler implements Consumer<Message> {
                                                           }
                                                       });
 
-            if (unitOfWorkFactory != null && resolveUnitOfWorkMode(methodToInvoke) == UnitOfWorkMode.REQUIRED) {
+            if (unitOfWorkFactory != null && MessageHandlerMethods.resolveUnitOfWorkMode(methodToInvoke) == UnitOfWorkMode.REQUIRED) {
                 // This handler owns the UnitOfWork boundary - open one around the interceptor chain, matching the
                 // scope the dispatcher used to provide (i.e. interceptors run inside the UnitOfWork)
                 unitOfWorkFactory.usingUnitOfWork(operationresultinterceptorTypeInterceptorChain::proceed);

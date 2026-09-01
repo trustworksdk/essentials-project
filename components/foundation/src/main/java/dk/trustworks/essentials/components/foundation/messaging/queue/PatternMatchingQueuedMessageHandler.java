@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.shared.reflection.invocation.*;
 
 import java.lang.reflect.Method;
@@ -61,6 +61,7 @@ public abstract class PatternMatchingQueuedMessageHandler implements QueuedMessa
      */
     public PatternMatchingQueuedMessageHandler(Object invokeMessageHandlerMethodsOn) {
         this.invokeMessageHandlerMethodsOn = requireNonNull(invokeMessageHandlerMethodsOn, "No invokeMessageHandlerMethodsOn provided");
+        verifyNonTransactionalMessageHandlersAreSupported(invokeMessageHandlerMethodsOn);
         invoker = createMethodInvoker();
 
     }
@@ -71,7 +72,27 @@ public abstract class PatternMatchingQueuedMessageHandler implements QueuedMessa
      */
     public PatternMatchingQueuedMessageHandler() {
         this.invokeMessageHandlerMethodsOn = this;
+        verifyNonTransactionalMessageHandlersAreSupported(this);
         invoker = createMethodInvoker();
+    }
+
+    /**
+     * A {@link PatternMatchingQueuedMessageHandler} invokes every handler method as-is and never opens a
+     * {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork} of its own, so it cannot honour
+     * {@link MessageHandler#unitOfWork()}. Reject {@link UnitOfWorkMode#NONE} at construction time rather than
+     * silently ignoring it, which would leave the blocking call inside whatever
+     * {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork} the {@link DurableQueues}
+     * implementation wrapped the delivery in.
+     *
+     * @param invokeMessageHandlerMethodsOn the object that carries the {@literal @MessageHandler} annotated methods
+     */
+    private static void verifyNonTransactionalMessageHandlersAreSupported(Object invokeMessageHandlerMethodsOn) {
+        if (MessageHandlerMethods.declaresNonTransactionalMessageHandlers(invokeMessageHandlerMethodsOn)) {
+            throw new IllegalStateException(msg("{} declares one or more @MessageHandler methods with UnitOfWorkMode.{}, which a PatternMatchingQueuedMessageHandler doesn't support - " +
+                                                "it doesn't own the UnitOfWork boundary. Use an Inbox with a consumer that does, e.g. an EventProcessor, for handlers that need to perform blocking I/O",
+                                                invokeMessageHandlerMethodsOn.getClass().getName(),
+                                                UnitOfWorkMode.NONE));
+        }
     }
 
     private PatternMatchingMethodInvoker<Object> createMethodInvoker() {

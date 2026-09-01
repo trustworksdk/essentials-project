@@ -44,8 +44,18 @@ public interface UnitOfWorkBoundaryOwningMessageConsumer extends Consumer<Messag
      * Used by dispatchers to fail fast during start-up in setups where no {@link UnitOfWork}-free window can be
      * provided - e.g. {@link TransactionalMode#FullyTransactional}, where the queue consumer wraps message fetching,
      * handling and acknowledgement in one shared {@link UnitOfWork}.
+     * <p>
+     * The default implementation introspects this consumer's own {@link MessageHandler} annotated methods, which is
+     * the right answer for a consumer that carries its handler methods itself. <b>Override it only when the handler
+     * methods live on another object</b> - a consumer that delegates to a {@link PatternMatchingMessageHandler}, for
+     * instance, must return {@link PatternMatchingMessageHandler#hasNonTransactionalMessageHandlers()} on behalf of
+     * its delegate, since introspecting the wrapper itself finds no handler methods at all.
      *
      * @return true if at least one handler requires the absence of an ambient {@link UnitOfWork}
      */
-    boolean hasNonTransactionalMessageHandlers();
+    default boolean hasNonTransactionalMessageHandlers() {
+        // Deliberately the introspecting variant and not MessageHandlerMethods#hasNonTransactionalMessageHandlers,
+        // which would dispatch straight back to this method
+        return MessageHandlerMethods.declaresNonTransactionalMessageHandlers(this);
+    }
 }

@@ -16,13 +16,13 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.test_data.*;
 import org.junit.jupiter.api.Test;
 
 import java.time.OffsetDateTime;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.*;
 
 class PatternMatchingQueuedMessageHandlerTest {
     @Test
@@ -103,6 +103,45 @@ class PatternMatchingQueuedMessageHandlerTest {
         assertThat(messageHandler.someOtherCommand).isNull();
         assertThat(messageHandler.queuedMessageForSomeOtherCommand).isNull();
         assertThat(messageHandler.unmatchedMessage).isEqualTo(queuedMessage);
+    }
+
+    /**
+     * A {@link PatternMatchingQueuedMessageHandler} never owns the {@link dk.trustworks.essentials.components.foundation.transaction.UnitOfWork}
+     * boundary, so it cannot honour {@link MessageHandler#unitOfWork()} - it must say so rather than silently ignore
+     * {@link UnitOfWorkMode#NONE} and leave the blocking call inside the transaction the delivery was wrapped in.
+     */
+    @Test
+    void a_handler_declaring_UnitOfWorkMode_NONE_is_rejected() {
+        assertThatThrownBy(NonTransactionalPatternMatchingQueuedMessageHandler::new)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("UnitOfWorkMode.NONE")
+                .hasMessageContaining(NonTransactionalPatternMatchingQueuedMessageHandler.class.getName());
+    }
+
+    @Test
+    void a_handler_target_declaring_UnitOfWorkMode_NONE_is_rejected() {
+        assertThatThrownBy(() -> new DelegatingPatternMatchingQueuedMessageHandler(new NonTransactionalHandlers()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("UnitOfWorkMode.NONE")
+                .hasMessageContaining(NonTransactionalHandlers.class.getName());
+    }
+
+    private static class DelegatingPatternMatchingQueuedMessageHandler extends PatternMatchingQueuedMessageHandler {
+        DelegatingPatternMatchingQueuedMessageHandler(Object invokeMessageHandlerMethodsOn) {
+            super(invokeMessageHandlerMethodsOn);
+        }
+    }
+
+    private static class NonTransactionalPatternMatchingQueuedMessageHandler extends PatternMatchingQueuedMessageHandler {
+        @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+        void handle(SomeCommand someCommand) {
+        }
+    }
+
+    private static class NonTransactionalHandlers {
+        @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+        void handle(SomeCommand someCommand) {
+        }
     }
 
     private static class TestPatternMatchingQueuedMessageHandler extends PatternMatchingQueuedMessageHandler {

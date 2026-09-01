@@ -546,14 +546,23 @@ There is no ambient `UnitOfWork` between the two statements, so touching a trans
 | `REQUIRED` (default) | Inside a `UnitOfWork`; joins an active one if present | On normal return / on throw. Historic behaviour |
 | `NONE` | With no `UnitOfWork`, no connection, no open transaction | Handler's own `usingUnitOfWork(...)` / `withUnitOfWork(...)` blocks |
 
-**Who honours it**: only dispatchers that own the `UnitOfWork` boundary — see `UnitOfWorkBoundaryOwningMessageConsumer` and `PatternMatchingMessageHandler.setUnitOfWorkFactory(...)`. A `PatternMatchingMessageHandler` without a `UnitOfWorkFactory`, or a plain `Consumer<Message>`, keeps the historic behaviour where the dispatcher's `UnitOfWork` wraps every handler.
+**Who honours it**: only dispatchers that own the `UnitOfWork` boundary — see `UnitOfWorkBoundaryOwningMessageConsumer` and `PatternMatchingMessageHandler.setUnitOfWorkFactory(...)`. In practice that means an `EventProcessor`; the snippet above is the handler body, not a wiring example. Everything else wraps the delivery in a `UnitOfWork` of its own, so it cannot honour the mode — and rejects it rather than ignoring it, see **Guards** below.
 
 **Two responsibilities the mode shifts onto the handler**:
 
 1. **Idempotency is mandatory.** Delivery is at-least-once and the blocking call is no longer part of the transaction that acknowledges the message. A failure after the call returned but before the tail committed redelivers the message and repeats the call.
 2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (30s by default in the Spring Boot starters). Past that timeout the in-flight message is reset as stuck and can be delivered again *concurrently with the still-running first attempt* — which also degrades `OrderedMessage` per-key ordering for as long as that overlap lasts. Size the client's timeout, not just the happy path.
 
-**Guard**: an `Inbox` rejects a consumer with `NONE` handlers under `TransactionalMode.FullyTransactional` (`IllegalStateException` at start-up), because fetching, handling and acknowledgement share one `UnitOfWork` there that cannot be suspended. Use `TransactionalMode.SingleOperationTransaction`, which is the starters' default.
+**Guards**: `NONE` is never silently ignored. Every dispatcher that cannot provide a `UnitOfWork`-free window throws `IllegalStateException` at wiring/start-up time instead:
+
+| Dispatcher | Rejects `NONE` when | Why |
+|---|---|---|
+| `Inbox` | The consumer is not a `UnitOfWorkBoundaryOwningMessageConsumer` and the `DurableQueues` has a `UnitOfWorkFactory` | The `Inbox` itself wraps every delivery in a `UnitOfWork` |
+| `Inbox` | The consumer owns the boundary, but `TransactionalMode.FullyTransactional` | Fetching, handling and acknowledgement share one `UnitOfWork` that cannot be suspended — use `SingleOperationTransaction`, the starters' default |
+| `Outbox` | Always, when the `DurableQueues` has a `UnitOfWorkFactory` | An `Outbox` has no boundary-owning consumer variant |
+| `PatternMatchingQueuedMessageHandler` | Always, at construction time | It invokes handlers as-is and never owns the boundary |
+
+Whether a consumer needs the window is introspected from the `@MessageHandler` annotations by `MessageHandlerMethods` — nothing has to be declared by hand. The one exception is a consumer whose handler methods live on *another* object: `UnitOfWorkBoundaryOwningMessageConsumer.hasNonTransactionalMessageHandlers()` defaults to introspecting the consumer itself, so a delegating consumer overrides it to answer for its delegate.
 
 For `EventProcessor` handlers — including the `usingUnitOfWork` / `withUnitOfWork` helpers used above and which processor types support the mode — see [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md#blocking-io-in-a-handler-unitofworkmodenone).
 
