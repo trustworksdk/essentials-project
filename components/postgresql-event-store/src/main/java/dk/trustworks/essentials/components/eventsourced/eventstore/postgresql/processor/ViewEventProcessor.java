@@ -31,6 +31,7 @@ import java.util.*;
 import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * Experimental: The {@code ViewEventProcessor} class is an abstraction for processing events that are projected into views (e.g. in a relational database).<br>
@@ -102,6 +103,14 @@ public abstract class ViewEventProcessor extends AbstractEventProcessor {
         started = true;
         var processorName              = requireNonNull(getProcessorName(), "getProcessorName() returned null");
         var subscribeToEventsRelatedTo = requireNonNull(reactsToEventsRelatedToAggregateTypes(), "reactsToEventsRelatedToAggregateTypes() returned null");
+        // A ViewEventProcessor deliberately handles each queued message inside a single UnitOfWork, so that the view
+        // update and the message acknowledgement commit together. There is therefore no UnitOfWork-free window to
+        // offer a UnitOfWorkMode.NONE handler - reject it instead of silently running the blocking call in a transaction.
+        if (patternMatchingMessageHandlerDelegate.hasNonTransactionalMessageHandlers()) {
+            throw new IllegalStateException(msg("ViewEventProcessor '{}' declares one or more @MessageHandler methods with UnitOfWorkMode.NONE, which a ViewEventProcessor doesn't support - " +
+                                                "it handles every message inside a single UnitOfWork. Use an EventProcessor for handlers that need to perform blocking I/O",
+                                                processorName));
+        }
         logger.info("🎑⚙️  [{}] Starting ViewEventProcessor - will subscribe to events related to these AggregatesType's: {}",
                     processorName,
                     subscribeToEventsRelatedTo);

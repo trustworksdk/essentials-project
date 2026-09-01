@@ -4,7 +4,7 @@ kind: view
 bc: market_data
 owner: market-data-team
 status: live
-summary: Serve instrument reference data and suspension state from a projected read model.
+summary: Serve instrument reference data, suspension state and risk-assessment status from a projected read model.
 generator: essentials
 language: java
 
@@ -16,12 +16,15 @@ reads:
   - { name: InstrumentDetails }
 projections:
   - name: InstrumentDetailsProjection
-    from: [InstrumentRegistered, InstrumentRenamed, InstrumentSuspended]
+    from: [InstrumentRegistered, InstrumentRenamed, InstrumentSuspended, InstrumentRiskApproved, InstrumentRiskRejected]
     consistency: eventual
     store: postgresql
 invariants:
   - id: INV-ID-1
-    text: "InstrumentRegistered upserts, so a redelivery re-applies the same reference data rather than failing on the primary key; the two update handlers are naturally idempotent because they assign rather than accumulate"
+    text: "InstrumentRegistered upserts, so a redelivery re-applies the same reference data rather than failing on the primary key; the update handlers are naturally idempotent because they assign rather than accumulate"
+    enforcedBy: InstrumentDetailsProjection
+  - id: INV-ID-2
+    text: "The InstrumentRegistered upsert leaves risk_status alone on conflict, so a redelivered registration cannot reset a recorded risk decision to PENDING"
     enforcedBy: InstrumentDetailsProjection
 forbidden:
   - cross-slice-internal:market_data

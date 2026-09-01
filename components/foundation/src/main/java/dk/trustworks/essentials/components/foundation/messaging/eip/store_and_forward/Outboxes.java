@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward;
 
 import dk.trustworks.essentials.components.foundation.fencedlock.*;
+import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.reactive.EventHandler;
@@ -29,6 +30,7 @@ import java.util.function.Consumer;
 
 import static dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.MessageConsumptionMode.SingleGlobalConsumer;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
+import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 
 /**
  * The {@link Outbox} supports the transactional Store and Forward pattern from Enterprise Integration Patterns supporting At-Least-Once delivery guarantee.<br>
@@ -216,7 +218,30 @@ public interface Outboxes {
             @Override
             public Outbox setMessageConsumer(Consumer<Message> messageConsumer) {
                 this.messageConsumer = requireNonNull(messageConsumer, "No messageConsumer provided");
+                verifyNonTransactionalMessageHandlersAreSupported();
                 return this;
+            }
+
+            /**
+             * An {@link Outbox} always owns the {@link UnitOfWork} boundary itself - see
+             * {@link #handleMessage(QueuedMessage)} - so there is no {@link UnitOfWork}-free window to offer a handler
+             * declared with {@link UnitOfWorkMode#NONE}. Reject it at wiring time rather than silently performing its
+             * blocking call inside a database transaction.
+             */
+            private void verifyNonTransactionalMessageHandlersAreSupported() {
+                // Resolved first, so that a consumer without UnitOfWorkMode.NONE handlers - the common case - causes no
+                // interaction with the DurableQueues here at all
+                if (!MessageHandlerMethods.hasNonTransactionalMessageHandlers(messageConsumer)) {
+                    return;
+                }
+                // Without a UnitOfWorkFactory no UnitOfWork is opened around the delivery either, so the handler does
+                // get the UnitOfWork-free window it asked for
+                if (durableQueues.getUnitOfWorkFactory().isPresent()) {
+                    throw new IllegalStateException(msg("Outbox '{}' has a message consumer with one or more @MessageHandler methods declared with UnitOfWorkMode.NONE, " +
+                                                        "which an Outbox doesn't support - it wraps every message delivery in a UnitOfWork of its own. " +
+                                                        "Use an Inbox with a consumer that owns the UnitOfWork boundary, e.g. an EventProcessor, for handlers that need to perform blocking I/O",
+                                                        config.outboxName));
+                }
             }
 
             @Override

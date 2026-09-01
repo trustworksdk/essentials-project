@@ -516,6 +516,56 @@ public void handle(OrderEvent event) {
 }
 ```
 
+### Blocking I/O in a Message Handler: `UnitOfWorkMode`
+
+**Enum**: `dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode`
+**Attribute**: `MessageHandler.unitOfWork()`, default `REQUIRED`
+
+**Problem**: A `@MessageHandler` method runs inside a `UnitOfWork` by default, and a `UnitOfWork` holds a pooled database connection with an open transaction. A handler that calls an external system therefore parks a connection in `idle in transaction` for the duration of that call — one per parallel consumer — while writing nothing.
+
+**Solution**: Declare the handler `UnitOfWorkMode.NONE`. It is then invoked with **no** `UnitOfWork` active, and wraps its own transactional tail after the blocking call returns.
+
+```java
+new PatternMatchingMessageHandler() {
+    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+    void handle(AssessRiskCommand cmd) {
+        var assessment = riskServiceHttpClient.assess(cmd.instrumentId());   // no connection held
+
+        unitOfWorkFactory.usingUnitOfWork(() -> repository.save(assessment)); // transactional tail
+    }
+
+    @MessageHandler                                                          // REQUIRED (default), unchanged
+    void handle(ProcessOrderCommand cmd) { }
+}
+```
+
+There is no ambient `UnitOfWork` between the two statements, so touching a transactional resource outside the wrapper fails fast instead of silently opening a transaction.
+
+| Mode | Handler invoked | Commit/rollback |
+|------|-----------------|-----------------|
+| `REQUIRED` (default) | Inside a `UnitOfWork`; joins an active one if present | On normal return / on throw. Historic behaviour |
+| `NONE` | With no `UnitOfWork`, no connection, no open transaction | Handler's own `usingUnitOfWork(...)` / `withUnitOfWork(...)` blocks |
+
+**Who honours it**: only dispatchers that own the `UnitOfWork` boundary — see `UnitOfWorkBoundaryOwningMessageConsumer` and `PatternMatchingMessageHandler.setUnitOfWorkFactory(...)`. In practice that means an `EventProcessor`; the snippet above is the handler body, not a wiring example. Everything else wraps the delivery in a `UnitOfWork` of its own, so it cannot honour the mode — and rejects it rather than ignoring it, see **Guards** below.
+
+**Two responsibilities the mode shifts onto the handler**:
+
+1. **Idempotency is mandatory.** Delivery is at-least-once and the blocking call is no longer part of the transaction that acknowledges the message. A failure after the call returned but before the tail committed redelivers the message and repeats the call.
+2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (30s by default in the Spring Boot starters). Past that timeout the in-flight message is reset as stuck and can be delivered again *concurrently with the still-running first attempt* — which also degrades `OrderedMessage` per-key ordering for as long as that overlap lasts. Size the client's timeout, not just the happy path.
+
+**Guards**: `NONE` is never silently ignored. Every dispatcher that cannot provide a `UnitOfWork`-free window throws `IllegalStateException` at wiring/start-up time instead:
+
+| Dispatcher | Rejects `NONE` when | Why |
+|---|---|---|
+| `Inbox` | The consumer is not a `UnitOfWorkBoundaryOwningMessageConsumer` and the `DurableQueues` has a `UnitOfWorkFactory` | The `Inbox` itself wraps every delivery in a `UnitOfWork` |
+| `Inbox` | The consumer owns the boundary, but `TransactionalMode.FullyTransactional` | Fetching, handling and acknowledgement share one `UnitOfWork` that cannot be suspended — use `SingleOperationTransaction`, the starters' default |
+| `Outbox` | Always, when the `DurableQueues` has a `UnitOfWorkFactory` | An `Outbox` has no boundary-owning consumer variant |
+| `PatternMatchingQueuedMessageHandler` | Always, at construction time | It invokes handlers as-is and never owns the boundary |
+
+Whether a consumer needs the window is introspected from the `@MessageHandler` annotations by `MessageHandlerMethods` — nothing has to be declared by hand. The one exception is a consumer whose handler methods live on *another* object: `UnitOfWorkBoundaryOwningMessageConsumer.hasNonTransactionalMessageHandlers()` defaults to introspecting the consumer itself, so a delegating consumer overrides it to answer for its delegate.
+
+For `EventProcessor` handlers — including the `usingUnitOfWork` / `withUnitOfWork` helpers used above and which processor types support the mode — see [LLM-postgresql-event-store.md](./LLM-postgresql-event-store.md#blocking-io-in-a-handler-unitofworkmodenone).
+
 ### Outbox Pattern
 
 **Problem**: Dual write when updating database + publishing to Kafka.

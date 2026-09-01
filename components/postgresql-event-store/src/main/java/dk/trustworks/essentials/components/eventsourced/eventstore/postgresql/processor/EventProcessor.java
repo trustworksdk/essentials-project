@@ -261,6 +261,9 @@ public abstract class EventProcessor extends AbstractEventProcessor {
         }
         patternMatchingInboxMessageHandlerDelegate = new PatternMatchingMessageHandler(this, getMessageHandlerInterceptors());
         patternMatchingInboxMessageHandlerDelegate.allowUnmatchedMessages();
+        // Take over the UnitOfWork boundary from the Inbox, so that each MessageHandler annotated method is invoked
+        // according to its own MessageHandler#unitOfWork() mode - see UnitOfWorkBoundaryOwningMessageConsumer
+        patternMatchingInboxMessageHandlerDelegate.setUnitOfWorkFactory(eventStore.getUnitOfWorkFactory());
         inboxMessageHandlerDelegate = handleQueuedMessageConsumer(patternMatchingInboxMessageHandlerDelegate);
     }
 

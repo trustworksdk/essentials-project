@@ -484,6 +484,8 @@ Base package: `dk.trustworks.essentials.components.eventsourced.eventstore.postg
 
 Note: All `@MessageHandler` annotated methods accept an optional `OrderedMessage` parameter as 2. parameter.
 
+Note: `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` runs a handler with no `UnitOfWork` — and therefore no database connection — held, for handlers doing blocking I/O. Supported by `EventProcessor` only; see [Blocking I/O in a handler](#blocking-io-in-a-handler-unitofworkmodenone).
+
 ### EventProcessor (Inbox-based)
 
 For asynchronous external system integrations (Kafka, email, webhooks), long-running operations, operations needing retry. Events queued to `Inbox` with configurable parallelism and redelivery.
@@ -518,6 +520,64 @@ public class ShippingKafkaPublisher extends EventProcessor {
 ```
 
 **Features**: Exclusive (`FencedLock`), ordered per-aggregate (`OrderedMessage` via `Inbox`), redelivery (`RedeliveryPolicy`), command handling (`@CmdHandler` via `DurableLocalCommandBus`).
+
+#### Blocking I/O in a handler: `UnitOfWorkMode.NONE`
+
+A `@MessageHandler` method runs inside a `UnitOfWork` by default — i.e. holding a pooled connection with an open transaction. For a handler that blocks on an external system (HTTP, SOAP, SFTP, a slow gRPC call) that connection sits in `idle in transaction` for the whole round trip, one per parallel consumer, writing nothing. Declare such a handler `UnitOfWorkMode.NONE` and wrap only the database work that follows it:
+
+```java
+import dk.trustworks.essentials.components.foundation.messaging.MessageHandler;
+import dk.trustworks.essentials.components.foundation.messaging.UnitOfWorkMode;
+
+public class InstrumentRiskApprovalProcessor extends EventProcessor {
+    @Override
+    public String getProcessorName() { return "InstrumentRiskApprovalProcessor"; }
+
+    @Override
+    protected List<AggregateType> reactsToEventsRelatedToAggregateTypes() {
+        return List.of(AggregateType.of("Instruments"));
+    }
+
+    @MessageHandler(unitOfWork = UnitOfWorkMode.NONE)
+    void on(InstrumentRegistered e) {
+        var assessment = riskService.assess(e.instrumentId(), e.symbol());  // blocking, no UnitOfWork, no connection
+
+        usingUnitOfWork(() -> {                                            // the transactional tail
+            var instrument = instruments.getInstrument(e.instrumentId());
+            instrument.recordRiskApproval(assessment.riskRating());
+        });
+    }
+
+    @MessageHandler                                                        // REQUIRED (default), unchanged
+    void on(InstrumentSuspended e) { ... }
+}
+```
+
+**Helpers** (on `AbstractEventProcessor`, available to every processor subclass):
+
+| Helper | Signature | Use |
+|--------|-----------|-----|
+| `usingUnitOfWork(...)` | `void usingUnitOfWork(CheckedRunnable)` | Transactional tail with no result |
+| `withUnitOfWork(...)` | `<R> R withUnitOfWork(CheckedSupplier<R>)` | Transactional tail returning a value |
+
+Both join an already active `UnitOfWork` if there is one. Between the blocking call and the wrapper there is no ambient `UnitOfWork`, so touching a transactional resource there fails fast rather than quietly opening a transaction — loading the aggregate *before* the call is the mistake to watch for.
+
+**Processor support**:
+
+| Processor | `UnitOfWorkMode.NONE` |
+|-----------|----------------------|
+| `EventProcessor` | **Supported.** Its inbox consumer owns the `UnitOfWork` boundary; the event reference is resolved in its own short `UnitOfWork`, and the handler's scope is the handler's own |
+| `ViewEventProcessor` | **Rejected at start-up** (`IllegalStateException`). It handles each message in a single `UnitOfWork` so that the view update and the acknowledgement commit together |
+| `InTransactionEventProcessor` | **Rejected at start-up** (`IllegalStateException`). It processes inside the transaction that appended the event by definition, so there is no `UnitOfWork`-free window. Don't put blocking I/O here |
+
+**Requirements the mode shifts onto the handler**:
+
+1. **Idempotency is mandatory.** The blocking call is no longer part of the transaction that acknowledges the message: a failure after it returned but before the tail committed redelivers the event and repeats the call. Guard on state (e.g. the aggregate applies nothing once the decision exists), don't assume once-only.
+2. **The blocking call must time out well inside `DurableQueues` `messageHandlingTimeout`** (`essentials.durable-queues.message-handling-timeout`, 30s by default). Past it the message is reset as stuck and can be redelivered while the first attempt is still blocked.
+3. **Ordering degrades on that timeout** — a stuck-message reset can hand the same `OrderedMessage` key to another consumer thread, so the per-key guarantee holds only while handlers complete inside the timeout.
+4. **`TransactionalMode.SingleOperationTransaction` is required** for the underlying `DurableQueues`; an `Inbox` rejects `NONE` handlers under `FullyTransactional`. That is the starters' default.
+
+Worked example: `market_data/use_cases/risk_approve_instrument` in `examples/essentials-trading-demo`. See also `UnitOfWorkMode` in [LLM-foundation.md](./LLM-foundation.md#blocking-io-in-a-message-handler-unitofworkmode) for handlers dispatched by an `Inbox`/`Outbox` rather than a processor.
 
 **`@CmdHandler` + Delayed Messages:**
 ```java
@@ -571,6 +631,8 @@ For asynchronous view projections where low latency is critical but occasional f
 If the queue has pending messages for a given aggregate id, new events related to the same aggregate-id are queued to maintain ordering.
 Only supports exclusive processing.
 
+Rejects `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` handlers at start-up: the view update and the acknowledgement commit in one `UnitOfWork` here, which a `NONE` handler would break. Blocking I/O belongs in an `EventProcessor`.
+
 ```java
 import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.processor.ViewEventProcessor;
 
@@ -610,6 +672,12 @@ void on(OrderConfirmed event, OrderedMessage message) {
 |------------|-------------|
 | `(Event)` | Event only |
 | `(Event, OrderedMessage)` | Event + metadata (aggregateId, messageOrder) |
+
+Attributes:
+
+| Attribute | Values | Description |
+|-----------|--------|-------------|
+| `unitOfWork` | `REQUIRED` (default), `NONE` | `REQUIRED` invokes the method inside a `UnitOfWork`. `NONE` invokes it with none active, for blocking I/O — `EventProcessor` only, and the handler wraps its own transactional tail. See [Blocking I/O in a handler](#blocking-io-in-a-handler-unitofworkmodenone) |
 
 ## In-Memory Projections
 
@@ -1026,6 +1094,7 @@ Stream<PersistedEvent> events = eventStore.loadEventsByGlobalOrder(
 - Use immutable event classes (records or final fields)
 - Include `OrderedMessage` parameter in `@MessageHandler` when needed
 - Use durable subscriptions (`EventStoreSubscriptionManager`) for production
+- Declare a blocking-I/O handler `@MessageHandler(unitOfWork = UnitOfWorkMode.NONE)` on an `EventProcessor`, make it idempotent, and time the call out well inside `messageHandlingTimeout`
 
 ### ❌ Don't
 
@@ -1036,6 +1105,7 @@ Stream<PersistedEvent> events = eventStore.loadEventsByGlobalOrder(
 - Forget to sanitize table/column names from external input
 - Use `EventProcessor` for projections - use `InTransactionEventProcessor` or `ViewEventProcessor`
 - Process events outside `UnitOfWork` when using in-transaction subscriptions
+- Perform blocking I/O in a default (`REQUIRED`) handler - it holds a pooled connection in `idle in transaction` for the whole call; use `UnitOfWorkMode.NONE` and wrap the tail
 
 ### Common Mistakes
 

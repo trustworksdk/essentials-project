@@ -18,7 +18,7 @@ mvn spring-boot:run -pl :essentials-trading-demo        # after `docker compose 
 | BC | Aggregates | Slices |
 |---|---|---|
 | `brokerage` | `TradingAccount`, `Trade`, `Settlement` | 19 command, 6 view |
-| `market_data` | `Instrument`, `InstrumentPrice` | 5 command, 2 view |
+| `market_data` | `Instrument`, `InstrumentPrice` | 5 command, 1 automation, 2 view |
 
 Both on the **aggregate write style** (§R5) — `AggregateRoot` + `StatefulAggregateRepository`. Sanctioned
 lane. Do **not** convert to `Decider`s.
@@ -61,6 +61,13 @@ lane. Do **not** convert to `Decider`s.
   this replaced.
 - **Two projections are eventually consistent** (`account_statement`, `trade_settlement_status`). Tests must
   await them. `trade_valuation` likewise.
+- **`market_data.risk_approve_instrument` is the only `UnitOfWorkMode.NONE` handler here**, and the demo's
+  worked example of one. It blocks on a stubbed external risk service with no `UnitOfWork` — hence no pooled
+  connection — and wraps its transactional tail in `usingUnitOfWork(...)`. Three constraints travel with the
+  mode: the handler must be idempotent (the aggregate's risk methods no-op once a decision exists), the
+  blocking call must finish well inside `essentials.durable-queues.message-handling-timeout`
+  (`trading-demo.risk-approval.latency` is 500ms against a 30s default), and it cannot be a
+  `ViewEventProcessor`, which rejects `NONE` outright. Read that slice's `CLAUDE.md` before copying the shape.
 - **`EssentialsWebMvcConfigurer` + `EssentialTypesJacksonModule` are registered in
   `config/TradingDemoWebConfiguration`.** Neither is auto-configuration. Without the first, a typed
   `@PathVariable` is an HTTP 500; without the second, a semantic type in a request/response body has no
