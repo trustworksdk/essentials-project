@@ -151,6 +151,16 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     QueueDepth depth() throws SQLException;
 
     /**
+     * Whether this queue is being served — shards with a live owner, and instances alive.
+     * <p>
+     * Depth says how much work is waiting; this says whether anybody is doing it. They are different
+     * questions and only the second catches a queue that has quietly stopped being consumed. Cheap
+     * enough to poll: one query against the lease table and one against the membership table, both
+     * of which hold a handful of rows per queue.
+     */
+    QueueHealth health() throws SQLException;
+
+    /**
      * Read one message by id, for an admin surface or an operator with a support ticket.
      * <p>
      * A primary-key point lookup that costs delivery nothing. Returns empty if the message has been

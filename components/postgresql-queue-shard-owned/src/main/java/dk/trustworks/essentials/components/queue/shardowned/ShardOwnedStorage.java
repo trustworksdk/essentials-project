@@ -561,6 +561,14 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * Instances heartbeating for this queue, <b>floored at one</b>.
+     * <p>
+     * The floor is for {@code fairShare}, which divides by this and must not divide by zero. It makes
+     * the value wrong for anything that wants to know whether anybody is there at all — zero
+     * instances and one instance are indistinguishable — so a health report must use
+     * {@link #countInstances} instead. Keeping both is deliberate: collapsing them would either
+     * reintroduce a division by zero or make "nobody is consuming this queue" unreportable.
+     *
      * @param staleAfterMillis an instance that has not been seen for this long is presumed gone
      */
     public int countLiveInstances(long staleAfterMillis) throws SQLException {
@@ -573,6 +581,25 @@ public final class ShardOwnedStorage {
             try (var resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return Math.max(1, resultSet.getInt(1));
+            }
+        }
+    }
+
+    /**
+     * Instances heartbeating for this queue, unfloored — the truth, including zero.
+     *
+     * @param staleAfterMillis an instance that has not been seen for this long is presumed gone
+     */
+    public int countInstances(long staleAfterMillis) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT count(*) FROM " + INSTANCE_TABLE
+                     + " WHERE queue_id = ? AND last_seen > now() - make_interval(secs => ? / 1000.0)")) {
+            statement.setShort(1, queueId);
+            statement.setLong(2, staleAfterMillis);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
             }
         }
     }
@@ -651,6 +678,33 @@ public final class ShardOwnedStorage {
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next() ? OptionalInt.of(resultSet.getInt(1)) : OptionalInt.empty();
             }
+        }
+    }
+
+    /**
+     * How many shards of each lane have a live owner, in one query against the lease table.
+     * <p>
+     * The lease table is small — one row per shard per lane — so this is cheap enough to poll, which
+     * is the point: it is the only signal that distinguishes "nobody is consuming this queue" from
+     * "this queue is busy", and those look identical in depth.
+     */
+    public int[] ownedShardsPerLane() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT lane, count(*) FILTER (WHERE owner IS NOT NULL AND lease_until > now())"
+                     + " FROM " + LEASE_TABLE + " WHERE queue_id = ? GROUP BY lane")) {
+            statement.setShort(1, queueId);
+            var owned = new int[]{0, 0};
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    if ("ordered".equals(resultSet.getString(1))) {
+                        owned[1] = resultSet.getInt(2);
+                    } else {
+                        owned[0] = resultSet.getInt(2);
+                    }
+                }
+            }
+            return owned;
         }
     }
 

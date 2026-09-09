@@ -727,6 +727,30 @@ Three deliberate shapes in that binding:
 - **No tag carries the ordering key.** Keys are unbounded — one per customer, per order, per aggregate — and a tag value per key is the standard way to take a metrics backend down. The key reaches `aroundDelivery`, where it belongs.
 - **Depth is opt-in and cached** (`bindQueueDepth`). Every other meter is fed by an event the engine already emits, so it costs an increment. Depth is a query, and Micrometer polls a gauge on every scrape: an unguarded depth gauge would put `2 × shardCount + 1` queries on the database per scrape per process.
 
+**`MessageQueue.health()`** answers the question depth cannot: *is anybody serving this queue?* It
+reports the shard count, how many shards of each lane hold a live lease, and how many instances are
+heartbeating — two cheap queries against the lease and membership tables. `unownedShards()` is the
+number to alert on: zero in steady state, briefly non-zero while shards move, persistently non-zero
+when messages are sitting in shards nobody reads.
+
+That distinction is not academic. Every ownership failure this engine has had — a fair share computed
+against instances that had departed, two processes disagreeing about the shard count, a consumer
+shedding shards to nobody — was invisible in every metric that existed at the time, and surfaced only
+as a backlog with no attributable cause. `bindQueueHealth` publishes it as
+`essentials.queue.shards.unowned`, `…shards.owned` and `…instances`.
+
+Two things about gauges here that were learned the hard way:
+
+- **Instance counting has two meanings and needs two methods.** `countLiveInstances` is floored at one
+  so `fairShare`'s division cannot divide by zero; using it for a health report makes "nobody is
+  consuming" indistinguishable from "one instance", which is precisely the state being reported on.
+  `countInstances` is the unfloored truth.
+- **Every gauge uses Micrometer's `Supplier` form.** The state-object form holds a *weak* reference, so
+  a cache created inside a bind method is collected once nothing else refers to it and the gauge
+  reports `NaN` from then on — silently, at an arbitrary later moment. The depth gauge shipped with
+  that bug and looked correct, because a test asserting straight after binding runs before any
+  collection. There is now a test that forces one first.
+
 The engine's own counters — `cursorReads`, `holesObserved`/`Resolved`/`Abandoned`, `sweepRecoveries`, `backstopPolls`, `wakeupsHonoured`, `localHandoffs`, `fencedOutAcks`, `orderViolations`, `shedsAbandoned`, `takeoverAttemptBumps` — are for debugging the engine, and several of them are what the cost integration tests gate on.
 
 ---

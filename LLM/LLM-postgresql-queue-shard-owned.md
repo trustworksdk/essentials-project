@@ -272,6 +272,29 @@ taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
 
 The concurrency sweep uses a 2 ms handler. A handler that returns immediately is CPU-bound and its optimum is unrelated; one that waits 200 ms has a completely different knee. **Re-run it rather than trusting the default.**
 
+## Is the queue being served?
+
+`queue.health()` -> `QueueHealth(shardCount, unorderedOwned, orderedOwned, liveInstances)`.
+
+**Alert on `unownedShards()`.** Depth tells you how much work is waiting; it cannot tell a queue
+nobody is consuming from a queue that is merely busy, and those diverge only slowly. Zero in steady
+state, briefly non-zero while shards move between instances, persistently non-zero when messages are
+in shards nobody reads.
+
+`liveInstances` below your running process count means colliding instance ids — two processes sharing
+one id count as one instance and are each allowed half the shards.
+
+Via Micrometer, `bindQueueHealth(queue, maxAge)` publishes:
+
+| Meter | Read it for |
+|---|---|
+| `essentials.queue.shards.unowned` | **the alert** — messages in shards nobody is reading |
+| `essentials.queue.shards.owned` (tag `lane`) | coverage per lane |
+| `essentials.queue.instances` | scale events, and id collisions |
+| `essentials.queue.depth` (tag `lane`) | backlog, via `bindQueueDepth` |
+
+Both bindings are opt-in and cached, because a gauge is polled on every scrape and these are queries.
+
 ## Gotchas
 
 - **`SessionScope.KEY` does not exist here** and cannot: per-key exclusivity lives in the owner's memory, and a second party could only enter it by adding a query per message to the ordered fast path. Use `SHARD`.

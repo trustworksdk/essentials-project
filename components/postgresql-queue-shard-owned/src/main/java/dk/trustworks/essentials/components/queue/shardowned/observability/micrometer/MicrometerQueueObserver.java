@@ -56,6 +56,16 @@ public final class MicrometerQueueObserver implements QueueObserver {
     public static final String DEAD_LETTER_COUNTER = "essentials.queue.deadletters";
     public static final String OWNERSHIP_COUNTER   = "essentials.queue.shard.ownership";
     public static final String DEPTH_GAUGE         = "essentials.queue.depth";
+    /** Shards of this queue with a live owner, tagged by lane. */
+    public static final String SHARDS_OWNED_GAUGE  = "essentials.queue.shards.owned";
+    /**
+     * Shards, across both lanes, that no live instance is reading. <b>The one to alert on.</b> Zero in
+     * steady state, briefly non-zero while shards move, persistently non-zero when messages are
+     * sitting in shards nobody reads.
+     */
+    public static final String SHARDS_UNOWNED_GAUGE = "essentials.queue.shards.unowned";
+    /** Instances heartbeating for this queue. Below the number of running processes means colliding ids. */
+    public static final String INSTANCES_GAUGE     = "essentials.queue.instances";
 
     public static final String LANE_TAG   = "lane";
     public static final String CHANGE_TAG = "change";
@@ -170,13 +180,105 @@ public final class MicrometerQueueObserver implements QueueObserver {
         return this;
     }
 
+    /**
+     * The {@code Supplier} form, not {@code Gauge.builder(name, stateObject, fn)}.
+     * <p>
+     * The object form holds a <b>weak</b> reference to the state, so a cache created inside a bind
+     * method is collected as soon as nothing else refers to it and every gauge over it reports
+     * {@code NaN} from then on — silently, at an arbitrary later moment. Retaining it on this observer
+     * is not enough either, since an observer that is itself only referenced by the registry goes the
+     * same way. A supplier is held strongly, so the gauge lives as long as the meter does and the
+     * question of who retains what stops mattering.
+     */
     private void gauge(String lane, CachedDepth snapshot, java.util.function.ToLongFunction<QueueDepth> extractor) {
         var tags = new ArrayList<>(commonTags);
         tags.add(Tag.of(LANE_TAG, lane));
-        Gauge.builder(DEPTH_GAUGE, snapshot, cached -> extractor.applyAsLong(cached.get()))
+        Gauge.builder(DEPTH_GAUGE, () -> extractor.applyAsLong(snapshot.get()))
              .description("messages waiting to be handled")
              .tags(tags)
              .register(registry);
+    }
+
+    /**
+     * Publish whether the queue is being served: owned shards per lane, unowned shards across both,
+     * and live instances.
+     * <p>
+     * Opt-in and cached for the same reason as depth — these are queries and Micrometer polls a gauge
+     * on every scrape. Unlike depth they are cheap ones, against the lease and membership tables,
+     * which hold a handful of rows per queue.
+     * <p>
+     * <b>{@link #SHARDS_UNOWNED_GAUGE} is the one worth an alert.</b> Depth cannot tell a queue nobody
+     * is consuming from a queue that is merely busy; this can. Every ownership failure this engine has
+     * had — a fair share computed against departed instances, two processes disagreeing about the
+     * shard count, a consumer shedding shards to nobody — showed up here first and in nothing else.
+     *
+     * @return this, so it can be chained onto construction
+     */
+    public MicrometerQueueObserver bindQueueHealth(MessageQueue queue, Duration maxAge) {
+        requireNonNull(queue, "No queue provided");
+        requireNonNull(maxAge, "No maxAge provided");
+        var snapshot = new CachedHealth(queue, maxAge.toNanos());
+        // Supplier form throughout, for the reason spelled out on the depth gauge helper.
+        Gauge.builder(SHARDS_OWNED_GAUGE, () -> snapshot.get().unorderedOwned())
+             .description("shards with a live owner")
+             .tags(withCommonTags(Tag.of(LANE_TAG, "unordered")))
+             .register(registry);
+        Gauge.builder(SHARDS_OWNED_GAUGE, () -> snapshot.get().orderedOwned())
+             .description("shards with a live owner")
+             .tags(withCommonTags(Tag.of(LANE_TAG, "ordered")))
+             .register(registry);
+        Gauge.builder(SHARDS_UNOWNED_GAUGE, () -> snapshot.get().unownedShards())
+             .description("shards no live instance is reading")
+             .tags(withCommonTags())
+             .register(registry);
+        Gauge.builder(INSTANCES_GAUGE, () -> snapshot.get().liveInstances())
+             .description("instances heartbeating for this queue")
+             .tags(withCommonTags())
+             .register(registry);
+        return this;
+    }
+
+    private List<Tag> withCommonTags(Tag... extra) {
+        var all = new ArrayList<>(commonTags);
+        all.addAll(List.of(extra));
+        return all;
+    }
+
+    /**
+     * Same shape as {@link CachedDepth}, and for the same reasons: a scrape must not put a query on
+     * the database per meter, and a scrape while the database is unreachable must report the last
+     * known value rather than throw into the registry's scrape loop and take every other meter with
+     * it.
+     */
+    private static final class CachedHealth {
+        private final MessageQueue queue;
+        private final long         maxAgeNanos;
+        private final AtomicReference<QueueHealth> value = new AtomicReference<>(new QueueHealth(0, 0, 0, 0));
+        private final AtomicLong                   readAt = new AtomicLong();
+        /** Explicit, for the overflow reason spelled out on {@link CachedDepth}. */
+        private volatile boolean loaded;
+
+        private CachedHealth(MessageQueue queue, long maxAgeNanos) {
+            this.queue = queue;
+            this.maxAgeNanos = maxAgeNanos;
+        }
+
+        private QueueHealth get() {
+            var now = System.nanoTime();
+            if (loaded && now - readAt.get() < maxAgeNanos) {
+                return value.get();
+            }
+            try {
+                var health = queue.health();
+                value.set(health);
+                readAt.set(now);
+                loaded = true;
+                return health;
+            } catch (SQLException e) {
+                // Report the last known value rather than failing the scrape.
+                return value.get();
+            }
+        }
     }
 
     /**

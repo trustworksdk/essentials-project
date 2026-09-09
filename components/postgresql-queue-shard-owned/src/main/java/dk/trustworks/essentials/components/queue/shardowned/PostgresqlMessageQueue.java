@@ -603,6 +603,18 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     @Override
+    public QueueHealth health() throws SQLException {
+        var owned = storage.ownedShardsPerLane();
+        // The lease TTL is what countLiveInstances treats as the staleness bound, and it is derived
+        // from the settings this queue was built with.
+        // countInstances, not countLiveInstances: the latter is floored at one so fairShare can
+        // divide by it, which would report a queue nobody is consuming as having one instance —
+        // exactly the state this method exists to make visible.
+        return new QueueHealth(shardCount, owned[0], owned[1],
+                               storage.countInstances(Math.max(1_000L, settings.leaseTtlMillis())));
+    }
+
+    @Override
     public Optional<QueuedMessage> getMessage(MessageId messageId) throws SQLException {
         requireNonNull(messageId, "No messageId provided");
         return storage.findMessage(messageId.shard(), messageId.sequence(), isOrdered(messageId))

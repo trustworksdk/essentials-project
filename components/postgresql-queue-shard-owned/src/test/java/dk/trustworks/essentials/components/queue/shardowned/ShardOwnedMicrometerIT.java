@@ -215,6 +215,11 @@ class ShardOwnedMicrometerIT {
         }
 
         @Override
+        public QueueHealth health() throws java.sql.SQLException {
+            return delegate.health();
+        }
+
+        @Override
         public java.util.Optional<QueuedMessage> getMessage(MessageId messageId) throws java.sql.SQLException {
             return delegate.getMessage(messageId);
         }
@@ -272,6 +277,97 @@ class ShardOwnedMicrometerIT {
         @Override
         public boolean isStarted() {
             return delegate.isStarted();
+        }
+    }
+
+    /**
+     * The signal that was missing. Depth cannot tell a queue nobody is consuming from a queue that is
+     * merely busy — every ownership failure this engine has had was invisible in the metrics that
+     * existed at the time, and showed up only as a backlog with no attributable cause.
+     */
+    @Test
+    void unowned_shards_are_visible_while_nobody_is_consuming() throws Exception {
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "health-1")) {
+            var health = queue.health();
+            assertThat(health.shardCount()).isEqualTo(SHARD_COUNT);
+            assertThat(health.unownedShards())
+                    .describedAs("nobody is consuming, so every shard of both lanes is unowned")
+                    .isEqualTo(SHARD_COUNT * 2);
+            assertThat(health.fullyOwned()).isFalse();
+            assertThat(health.liveInstances()).isZero();
+
+            queue.consume((key, payload, payloadType) -> {
+            }, ConsumerOptions.defaults());
+
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(queue.health().fullyOwned())
+                              .describedAs("with a consumer running, every shard has an owner")
+                              .isTrue());
+            assertThat(queue.health().unorderedOwned()).isEqualTo(SHARD_COUNT);
+            assertThat(queue.health().orderedOwned()).isEqualTo(SHARD_COUNT);
+        }
+    }
+
+    @Test
+    void the_health_gauges_reach_the_registry() throws Exception {
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "health-2")) {
+            new MicrometerQueueObserver(registry, List.of(Tag.of(MicrometerQueueObserver.QUEUE_TAG, "orders")))
+                    .bindQueueHealth(queue, Duration.ofMillis(1));
+
+            assertThat(registry.find(MicrometerQueueObserver.SHARDS_UNOWNED_GAUGE).gauge())
+                    .describedAs("registered eagerly, so an alert can exist before the incident does")
+                    .isNotNull();
+            assertThat(registry.find(MicrometerQueueObserver.SHARDS_UNOWNED_GAUGE).gauge().value())
+                    .describedAs("nothing is consuming yet")
+                    .isEqualTo(SHARD_COUNT * 2.0d);
+
+            queue.consume((key, payload, payloadType) -> {
+            }, ConsumerOptions.defaults());
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(registry.find(MicrometerQueueObserver.SHARDS_UNOWNED_GAUGE)
+                                                              .gauge().value())
+                              .describedAs("and drops to zero once the shards are owned")
+                              .isZero());
+            // Leases are taken synchronously by start(); the membership row is written by the first
+            // heartbeat, which is a third of the lease lifetime away. So this has to be awaited, not
+            // asserted alongside the shard gauges.
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(registry.find(MicrometerQueueObserver.INSTANCES_GAUGE)
+                                                              .gauge().value())
+                              .describedAs("the instance registers on its first heartbeat")
+                              .isEqualTo(1.0d));
+        }
+    }
+
+    /**
+     * Micrometer holds a weak reference to a gauge's state, so a cache created as a local in a bind
+     * method is collected once the method returns and every gauge over it reports NaN from then on.
+     * Silently, at an arbitrary later moment.
+     * <p>
+     * A test that asserts straight after binding cannot see this — no collection has happened yet —
+     * which is why both the depth and health gauges looked correct while being broken. This one
+     * forces the collection first.
+     */
+    @Test
+    void gauges_keep_reporting_after_their_state_could_have_been_collected() throws Exception {
+        try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "gc-1")) {
+            new MicrometerQueueObserver(registry, List.of(Tag.of(MicrometerQueueObserver.QUEUE_TAG, "orders")))
+                    .bindQueueDepth(queue, Duration.ofMillis(1))
+                    .bindQueueHealth(queue, Duration.ofMillis(1));
+            queue.enqueue(List.of(Message.of("one".getBytes(StandardCharsets.UTF_8), 1)));
+
+            for (var attempt = 0; attempt < 5; attempt++) {
+                System.gc();
+                Thread.sleep(50);
+            }
+
+            assertThat(registry.find(MicrometerQueueObserver.DEPTH_GAUGE)
+                               .tag(MicrometerQueueObserver.LANE_TAG, "unordered").gauge().value())
+                    .describedAs("the depth gauge must still read the queue, not NaN")
+                    .isEqualTo(1.0d);
+            assertThat(registry.find(MicrometerQueueObserver.SHARDS_UNOWNED_GAUGE).gauge().value())
+                    .describedAs("and so must the ownership gauge")
+                    .isEqualTo(SHARD_COUNT * 2.0d);
         }
     }
 }
