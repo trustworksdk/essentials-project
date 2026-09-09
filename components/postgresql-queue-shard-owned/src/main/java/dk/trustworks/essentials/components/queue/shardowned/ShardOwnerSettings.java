@@ -60,6 +60,19 @@ import java.time.Duration;
  *                       is reordering rather than the duplicate that at-least-once permits. A shed
  *                       that does not finish inside this window is given up and counted, so the
  *                       shard stays where it is — unbalanced but correctly ordered
+ * @param watermarkCap   ordered lane only: how long the safe watermark will wait for a write
+ *                       transaction to end before advancing past it anyway.
+ *                       <p>
+ *                       <b>Not {@code holeExpiry}, and the difference is the point.</b> Both are a
+ *                       "give up waiting" bound, but they are bounded by different things.
+ *                       {@code holeExpiry} had to stay smallish because every unresolved value costs
+ *                       a map entry and a chase query every {@code chaseDelay}; the watermark costs a
+ *                       single deque entry and no query at all, so nothing pushes this down. It should
+ *                       therefore be generous — the horizon normally answers in about one write
+ *                       transaction, and this only exists so an unrelated stuck writer cannot stall
+ *                       the lane indefinitely. Setting it as low as {@code holeExpiry} throws away the
+ *                       exactness the watermark is for and reproduces the mechanism it replaced.
+ *                       Advances that need it are counted as {@code watermarkCapped}
  */
 public record ShardOwnerSettings(int readBatchSize,
                                  int ackBatchSize,
@@ -73,7 +86,8 @@ public record ShardOwnerSettings(int readBatchSize,
                                  Duration maxSweepInterval,
                                  int pumpThreads,
                                  Duration shedGrace,
-                                 Duration leaseTtl) {
+                                 Duration leaseTtl,
+                                 Duration watermarkCap) {
 
     public static ShardOwnerSettings defaults() {
         return new ShardOwnerSettings(500,
@@ -88,7 +102,8 @@ public record ShardOwnerSettings(int readBatchSize,
                                       Duration.ofSeconds(30),
                                       2,
                                       Duration.ofSeconds(5),
-                                      Duration.ofSeconds(30));
+                                      Duration.ofSeconds(30),
+                                      Duration.ofSeconds(60));
     }
 
     /**
@@ -128,5 +143,9 @@ public record ShardOwnerSettings(int readBatchSize,
 
     public long leaseTtlMillis() {
         return leaseTtl.toMillis();
+    }
+
+    public long watermarkCapNanos() {
+        return watermarkCap.toNanos();
     }
 }

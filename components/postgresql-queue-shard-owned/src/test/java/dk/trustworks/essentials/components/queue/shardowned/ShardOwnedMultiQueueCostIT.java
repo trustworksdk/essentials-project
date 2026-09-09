@@ -123,7 +123,7 @@ class ShardOwnedMultiQueueCostIT {
                                       defaults.chaseDelay(), defaults.holeExpiry(), defaults.sweepInterval(),
                                       defaults.maxHolesPerChase(),
                                       defaults.keyConcurrency(), defaults.pollBackstop(), Duration.ofSeconds(30), PUMP_THREADS,
-                                      defaults.shedGrace(), Duration.ofMillis(30000));
+                                      defaults.shedGrace(), Duration.ofMillis(30000), Duration.ofSeconds(60));
     }
 
     private static int liveThreads() {

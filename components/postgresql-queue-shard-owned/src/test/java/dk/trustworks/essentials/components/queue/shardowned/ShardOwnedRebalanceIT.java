@@ -47,7 +47,7 @@ class ShardOwnedRebalanceIT {
     /** Short lease, so a heartbeat and a rebalance happen several times inside the test window. */
     private static final ShardOwnerSettings FAST = new ShardOwnerSettings(
             500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
-            Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000));
+            Duration.ofMillis(300), Duration.ofMillis(100), 1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
 
     @Container
     static PostgreSQLContainer<?> postgres = LabPostgres.create();

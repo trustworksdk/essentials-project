@@ -160,7 +160,8 @@ class ShardOwnedCostDecompositionIT {
                        ? new ShardOwnerSettings(defaults.readBatchSize(), 1, Duration.ZERO,
                                                 defaults.chaseDelay(), defaults.holeExpiry(), defaults.sweepInterval(),
                                                 defaults.maxHolesPerChase(),
-                                                defaults.keyConcurrency(), defaults.pollBackstop(), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(30000))
+                                                defaults.keyConcurrency(), defaults.pollBackstop(), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(30000),
+                                                defaults.watermarkCap())
                        : defaults;
 
         var handled = new AtomicInteger();

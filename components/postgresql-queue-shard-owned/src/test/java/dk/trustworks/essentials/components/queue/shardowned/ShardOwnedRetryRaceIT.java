@@ -86,7 +86,7 @@ class ShardOwnedRetryRaceIT {
         // happening over and over.
         var settings = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                               Duration.ofSeconds(10), Duration.ofMillis(20), 1_000,
-                                              4, Duration.ofMillis(20), Duration.ofSeconds(30), 1, Duration.ofSeconds(5), Duration.ofMillis(30000));
+                                              4, Duration.ofMillis(20), Duration.ofSeconds(30), 1, Duration.ofSeconds(5), Duration.ofMillis(30000), Duration.ofSeconds(60));
 
         var successes  = new CopyOnWriteArrayList<String>();
         var failedOnce = new ConcurrentHashMap<String, Boolean>();

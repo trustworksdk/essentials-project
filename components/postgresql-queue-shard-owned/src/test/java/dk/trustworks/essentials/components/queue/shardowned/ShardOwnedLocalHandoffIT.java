@@ -113,7 +113,7 @@ class ShardOwnedLocalHandoffIT {
         var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1");
         var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                                 Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000));
+                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
         // A handler that never returns: messages are handed off and dispatched, never acknowledged.
         first.startConsuming((payload, payloadType) -> {
             firstReceived.add(new String(payload, StandardCharsets.UTF_8));

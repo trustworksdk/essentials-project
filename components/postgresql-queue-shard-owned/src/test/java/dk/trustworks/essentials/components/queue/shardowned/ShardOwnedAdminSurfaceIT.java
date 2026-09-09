@@ -358,7 +358,7 @@ class ShardOwnedAdminSurfaceIT {
                                       defaults.maxHolesPerChase(), defaults.keyConcurrency(),
                                       defaults.pollBackstop(), defaults.maxSweepInterval(),
                                       defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3));
+                                      Duration.ofSeconds(3), Duration.ofSeconds(60));
     }
 
     /**

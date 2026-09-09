@@ -84,7 +84,7 @@ class ShardOwnedScaleDownIT {
                                       defaults.maxHolesPerChase(), defaults.keyConcurrency(),
                                       Duration.ofMillis(50), Duration.ofSeconds(30),
                                       defaults.pumpThreads(), defaults.shedGrace(),
-                                      Duration.ofSeconds(3));
+                                      Duration.ofSeconds(3), Duration.ofSeconds(60));
     }
 
     @Test

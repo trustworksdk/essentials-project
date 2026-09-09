@@ -76,12 +76,25 @@ public class ShardOwnedQueueProperties {
     private Duration shedGrace = Duration.ofSeconds(5);
     /** How long a shard stays unserved if its owner dies without releasing it. */
     private Duration leaseTtl = Duration.ofSeconds(30);
+    /**
+     * Ordered lane only: how long the safe watermark waits for a write transaction to end before
+     * advancing past it. Deliberately far above {@code holeExpiry} — see {@link ShardOwnerSettings}.
+     */
+    private Duration watermarkCap = Duration.ofSeconds(60);
 
     public ShardOwnerSettings toSettings() {
         return new ShardOwnerSettings(readBatchSize, ackBatchSize, ackFlushInterval, chaseDelay,
                                       holeExpiry, sweepInterval, maxHolesPerChase, keyConcurrency,
                                       pollBackstop, maxSweepInterval, pumpThreads,
-                                      shedGrace, leaseTtl);
+                                      shedGrace, leaseTtl, watermarkCap);
+    }
+
+    public Duration getWatermarkCap() {
+        return watermarkCap;
+    }
+
+    public void setWatermarkCap(Duration watermarkCap) {
+        this.watermarkCap = watermarkCap;
     }
 
     public boolean isInitializeSchema() {

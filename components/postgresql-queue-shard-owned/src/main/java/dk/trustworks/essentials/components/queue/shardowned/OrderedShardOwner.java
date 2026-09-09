@@ -69,8 +69,23 @@ final class OrderedShardOwner implements LeasedOwner {
     private final Map<Long, Integer>          attemptsBySeq = new HashMap<>();
     private final Set<String>                 keysAwaitingRetry = new HashSet<>();
 
-    private long cursor;
-    private final TreeMap<Long, Long> pendingHoles = new TreeMap<>();
+    /**
+     * Where the next cursor read starts. Unlike the unordered lane's cursor this is a <em>safe
+     * watermark</em>, not a high-water mark: it only passes a sequence value once no transaction that
+     * could still commit that value is running. See {@link #advanceWatermark}.
+     */
+    private long safeCursor;
+    /** Highest sequence value observed. The watermark trails this; the gap is the re-read window. */
+    private long maxSeen;
+    /**
+     * Observations waiting for the horizon to retire them, oldest first. Each says "at this moment the
+     * highest value seen was {@code maxSeen}, and these write transactions were running". Once none of
+     * them is running, everything at or below that {@code maxSeen} has resolved.
+     */
+    private final ArrayDeque<WatermarkCandidate> watermarkCandidates = new ArrayDeque<>();
+
+    private record WatermarkCandidate(long maxSeen, Set<Long> runningXids, long observedAtNanos) {
+    }
 
     /** Everything known but not yet delivered, grouped by key and ordered within it. */
     private final Map<String, TreeMap<Long, ShardOwnedStorage.OrderedRow>> readyByKey = new HashMap<>();
@@ -122,7 +137,7 @@ final class OrderedShardOwner implements LeasedOwner {
     private final AtomicBoolean    shedComplete = new AtomicBoolean();
     private volatile long          shedDeadlineNanos;
 
-    private long lastChaseNanos;
+    private long lastHorizonProbeNanos;
     private long lastSweepNanos;
     /**
      * When this shard's earliest delayed row becomes visible, in {@link System#nanoTime()} terms, or
@@ -189,7 +204,9 @@ final class OrderedShardOwner implements LeasedOwner {
             if (!readyByKey.isEmpty() && activeKeys.get() < settings.keyConcurrency()) {
                 return true;
             }
-            if (!pendingHoles.isEmpty() && now - lastChaseNanos >= settings.chaseDelayNanos()) {
+            if (!watermarkCandidates.isEmpty() && now - lastHorizonProbeNanos >= settings.chaseDelayNanos()) {
+                // A value the watermark has not passed yet may have committed since. Paced by
+                // chaseDelay, as the hole chase this replaced was, so re-checking cannot spin.
                 return true;
             }
             return !pendingAcks.isEmpty() && now - lastAckFlushNanos >= settings.ackFlushIntervalNanos();
@@ -237,23 +254,20 @@ final class OrderedShardOwner implements LeasedOwner {
         if (shedComplete.get()) {
             return 0;
         }
-        var rows = storage.readOrderedFromCursor(connection, shard, cursor, settings.readBatchSize());
+        // Read from the WATERMARK, not from the highest value seen, so a value whose transaction had
+        // not committed when an earlier pass went by is read again rather than chased. The window
+        // between the two is bounded by the horizon, not by the backlog, and `seen` deduplicates it.
+        var rows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
         metrics.cursorReads.increment();
         for (var row : rows) {
-            for (var missing = cursor + 1; missing < row.seq(); missing++) {
-                if (pendingHoles.putIfAbsent(missing, System.nanoTime()) == null) {
-                    metrics.holesObserved.increment();
-                }
-            }
-            cursor = Math.max(cursor, row.seq());
+            maxSeen = Math.max(maxSeen, row.seq());
             accept(row);
         }
+        // AFTER the read, never before: a transaction that allocates a value after this probe is not
+        // in the set, and treating it as retired would step over it. See ShardOwnedStorage.
+        advanceWatermark(connection);
 
         var now = System.nanoTime();
-        if (!pendingHoles.isEmpty() && now - lastChaseNanos >= settings.chaseDelayNanos()) {
-            chaseHoles(connection);
-            lastChaseNanos = now;
-        }
         var sweptThisPass = false;
         if (now - lastSweepNanos >= sweepIntervalNanos) {
             sweep(connection);
@@ -453,27 +467,71 @@ final class OrderedShardOwner implements LeasedOwner {
         readyByKey.computeIfAbsent(key, ignored -> new TreeMap<>()).put(keyOrder, row);
     }
 
-    private void chaseHoles(Connection connection) throws SQLException {
-        var candidates = pendingHoles.keySet().stream().limit(settings.maxHolesPerChase()).toList();
-        var found = storage.readOrderedSpecific(connection, shard, candidates);
-        metrics.holeChaseQueries.increment();
-        for (var row : found) {
-            var missedAt = pendingHoles.remove(row.seq());
-            if (missedAt != null) {
-                metrics.holeResolutionNanos.add(System.nanoTime() - missedAt);
-                metrics.holesResolved.increment();
-            }
-            accept(row);
+    /**
+     * Move the watermark up to the newest value the transaction horizon has retired.
+     * <p>
+     * <b>The argument.</b> Sequence values are handed out in increasing order over time — one sequence
+     * object per {@code (queue, shard)}, {@code CACHE 1} — and a transaction is assigned its xid no
+     * later than the value it allocates. So every value at or below {@code maxSeen} was allocated by a
+     * transaction that already held an xid when this owner observed it, and any such transaction still
+     * running is in the set recorded alongside. Once none of that set is running, every value at or
+     * below that {@code maxSeen} has resolved: committed and visible, or aborted and never coming.
+     * <p>
+     * This is what replaces hole detection on this lane, and it is exact where hole detection was a
+     * guess. A gap is not chased, not timed, and not written off after {@code holeExpiry} — it is
+     * simply read again on the next pass, and the cursor does not step over it until the database says
+     * nothing can still fill it.
+     * <p>
+     * <b>The cap.</b> The horizon is database-global, so a long-running <em>writing</em> transaction
+     * anywhere holds it back. Read-only transactions do not, however long they run — only a writer is
+     * assigned an xid. Rather than stall the lane behind an unrelated batch writer, a candidate older
+     * than {@code watermarkCap} is taken anyway and counted. That is the same exposure an abandoned
+     * hole carried, but on its own setting and a far more generous one: nothing about the watermark
+     * pushes the bound down, where {@code holeExpiry} was held low by the cost of the map and the
+     * chase query per unresolved value. Reusing {@code holeExpiry} here would reproduce the mechanism
+     * this replaces rather than replacing it.
+     */
+    private void advanceWatermark(Connection connection) throws SQLException {
+        if (watermarkCandidates.isEmpty() && maxSeen <= safeCursor) {
+            // Fully caught up: nothing to retire and nothing worth recording. This is the idle poll,
+            // which is the overwhelming majority of them, and it must not pay for the horizon probe.
+            return;
         }
         var now = System.nanoTime();
-        pendingHoles.entrySet().removeIf(entry -> {
-            if (now - entry.getValue() > settings.holeExpiryNanos()) {
-                metrics.holesAbandoned.increment();
-                return true;
+        var running = storage.runningWriteTransactionIds(connection);
+        lastHorizonProbeNanos = now;
+        metrics.horizonProbes.increment();
+
+        var advanceTo = -1L;
+        var capped = false;
+        while (!watermarkCandidates.isEmpty()) {
+            var candidate = watermarkCandidates.peekFirst();
+            var retired = Collections.disjoint(candidate.runningXids(), running);
+            var expired = now - candidate.observedAtNanos() > settings.watermarkCapNanos();
+            if (!retired && !expired) {
+                break;
             }
-            return false;
-        });
-        metrics.maxPendingHoles.accumulateAndGet(pendingHoles.size(), Math::max);
+            capped |= !retired;
+            advanceTo = Math.max(advanceTo, candidate.maxSeen());
+            watermarkCandidates.removeFirst();
+        }
+        if (advanceTo > safeCursor) {
+            safeCursor = advanceTo;
+            metrics.watermarkAdvances.increment();
+            if (capped) {
+                metrics.watermarkCapped.increment();
+                log.debug("Ordered shard {}: watermark advanced to {} on the wall-clock cap — a write "
+                          + "transaction outlived holeExpiry", shard, safeCursor);
+            }
+        }
+        if (maxSeen > safeCursor) {
+            // Recorded even when nothing moved this pass: this is the observation a LATER poll
+            // retires. Only recorded while the watermark is actually behind, or the deque would never
+            // empty and the owner would probe the horizon forever on a queue with nothing left to do.
+            watermarkCandidates.addLast(new WatermarkCandidate(maxSeen, running, now));
+            metrics.maxWatermarkLagRows.accumulateAndGet((int) Math.min(Integer.MAX_VALUE, maxSeen - safeCursor),
+                                                         Math::max);
+        }
     }
 
     private void sweep(Connection connection) throws SQLException {

@@ -385,12 +385,22 @@ owner no longer needs to track the highest `seq` it has seen.
 chase path, `holeExpiry`, `maxHolesPerChase`, `chaseDelay`, and the hole half of the ack floor — which
 is the §4.3/§4.4 bug family, historically the most expensive area of this engine.
 
-**What it fixes, not just simplifies.** `OrderedShardOwner` documents that an abandoned hole
-committing late, after a higher `key_order` for the same key has already shipped, is a real ordering
-violation the lane tolerates. A watermark cursor never advances past uncommitted work, so that
-violation stops existing. Delayed messages improve for the same reason: today a future `visible_at` row
-manufactures a hole that is chased, not found, and expired; under a watermark it is simply skipped, and
-the head sweep delivers it exactly as it does now.
+**What it does NOT fix, contrary to an earlier revision of this document.** That revision claimed the
+watermark eliminates the ordering violation `OrderedShardOwner` documents — a message committing late,
+after a higher `key_order` for the same key has already shipped. It does not, and the implementation
+measures `orderViolations = 1` in exactly that scenario. The watermark governs the **cursor**, not
+dispatch: rows read from above the gap are still accepted and still handed to their key. Eliminating
+the violation would mean withholding dispatch until the watermark passes each row, which costs every
+message one write-transaction duration of latency — about 11 ms against a pipeline whose p50 is
+0.44 ms. That is a *strict-ordering mode* worth offering as an option, not a default, and it is not
+part of this design.
+
+What does improve is the cliff. Today an unresolved value is chased until `holeExpiry` and then written
+off, after which only the head sweep finds it — and the sweep backs off to `maxSweepInterval` on a
+quiet shard. The watermark has no equivalent state to write off: the value is simply read again on the
+next pass. Delayed messages get the same treatment for free — a future `visible_at` row manufactures a
+hole today that is chased, not found, and expired; under a watermark it is skipped, and the head sweep
+delivers it exactly as it does now.
 
 **What it risks, and the bound.** The horizon is **database-global**, so a long-running *writing*
 transaction anywhere in the database holds it back and with it the watermark — measured in §4.7 arm D,

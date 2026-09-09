@@ -63,6 +63,22 @@ public final class ShardOwnerMetrics {
     public final LongAdder     holeResolutionNanos  = new LongAdder();
     public final LongAdder     headSweeps           = new LongAdder();
     public final LongAdder     sweepRecoveries      = new LongAdder();
+    /**
+     * Ordered lane only. The hole counters above describe the unordered lane's mechanism; the ordered
+     * lane replaced it with a safe watermark and these describe that one.
+     * <p>
+     * {@code horizonProbes} counts the extra round trip a poll pays to ask which write transactions
+     * are running. {@code watermarkAdvances} counts how often that answer let the cursor move.
+     * {@code watermarkCapped} counts advances forced by the wall-clock cap instead — an advance the
+     * horizon had not authorised, which is the ordered lane's remaining exposure to a late commit and
+     * therefore the number to watch. A non-zero value means some transaction outlived
+     * {@code holeExpiry}, exactly as an abandoned hole did.
+     */
+    public final LongAdder     horizonProbes        = new LongAdder();
+    public final LongAdder     watermarkAdvances    = new LongAdder();
+    public final LongAdder     watermarkCapped      = new LongAdder();
+    /** Rows between the safe watermark and the newest value seen — the size of the re-read window. */
+    public final AtomicInteger maxWatermarkLagRows  = new AtomicInteger();
     public final LongAdder     ackFlushes           = new LongAdder();
     public final LongAdder     handlerFailures      = new LongAdder();
     /**
@@ -148,6 +164,10 @@ public final class ShardOwnerMetrics {
         snapshot.put("keyHeadOfLineBlocks", keyHeadOfLineBlocks.sum());
         snapshot.put("maxPendingHoles", maxPendingHoles.get());
         snapshot.put("maxConcurrentKeys", maxConcurrentKeys.get());
+        snapshot.put("horizonProbes", horizonProbes.sum());
+        snapshot.put("watermarkAdvances", watermarkAdvances.sum());
+        snapshot.put("watermarkCapped", watermarkCapped.sum());
+        snapshot.put("maxWatermarkLagRows", maxWatermarkLagRows.get());
         var resolved = holesResolved.sum();
         snapshot.put("meanHoleResolutionMicros", resolved == 0 ? 0L : holeResolutionNanos.sum() / resolved / 1_000L);
         // Cursor reads per delivered message: the design's claim is that read cost amortises across

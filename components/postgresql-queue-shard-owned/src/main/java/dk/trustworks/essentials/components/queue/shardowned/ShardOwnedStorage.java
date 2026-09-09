@@ -813,6 +813,42 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * The identifiers of every write transaction running right now, which is how the ordered lane
+     * decides when a sequence value it has stepped over can never arrive.
+     * <p>
+     * <b>Why identity and not ordering.</b> The obvious formulation is to keep the highest running
+     * xid and wait for {@code pg_snapshot_xmin} to pass it, but {@code backend_xid} is a 32-bit
+     * {@code xid} that wraps while {@code pg_snapshot_xmin} returns a non-wrapping {@code xid8}, and
+     * there is no cast between them — the comparison would be wrong once per wraparound cycle and
+     * correct in every test. Comparing sets by equality needs no ordering at all. Two identical xids
+     * separated by a full wraparound cannot both appear inside a window measured in milliseconds.
+     * <p>
+     * <b>Why not the snapshot.</b> A snapshot's {@code xmax} is {@code latestCompletedXid + 1}, so a
+     * transaction holding an assigned xid sits at or above it and appears in neither the in-progress
+     * list nor below {@code xmax} — a single running writer reads as {@code 55486:55486:}, an
+     * apparently empty snapshot. Deciding safety from {@code pg_current_snapshot()} alone therefore
+     * steps over live writers. See {@code docs/durable-queue-ordered-routing-design.md} §4.6.
+     * <p>
+     * Read <em>after</em> the value it protects, never before: a transaction that allocates a
+     * sequence value after this returns is not in the set, and must not be treated as retired.
+     */
+    public Set<Long> runningWriteTransactionIds(Connection connection) throws SQLException {
+        // backend_xid is visible to an ordinary role on PostgreSQL 17.5 without pg_read_all_stats,
+        // verified against a role holding only table and sequence privileges. If a deployment ever
+        // redacts it this returns a SUBSET, which is unsafe rather than merely degraded, so the
+        // engine probes for it at start-up rather than trusting it here.
+        try (var statement = connection.prepareStatement(
+                "SELECT backend_xid::text::bigint FROM pg_stat_activity WHERE backend_xid IS NOT NULL");
+             var resultSet = statement.executeQuery()) {
+            var running = new HashSet<Long>();
+            while (resultSet.next()) {
+                running.add(resultSet.getLong(1));
+            }
+            return running;
+        }
+    }
+
     public List<OrderedRow> readOrderedSpecific(Connection connection, int shard, Collection<Long> seqs) throws SQLException {
         if (seqs.isEmpty()) {
             return List.of();

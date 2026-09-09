@@ -57,7 +57,7 @@ public final class ShardOwnedNodeMain {
 
         var settings = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                               Duration.ofMillis(300), Duration.ofMillis(100),
-                                              1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000));
+                                              1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
 
         var queue = new ShardOwnedQueue(dataSource, (short) 1, shardCount, instanceId);
         if ("ordered".equals(lane)) {
