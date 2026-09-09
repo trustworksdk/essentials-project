@@ -190,12 +190,28 @@ The two lanes are not equally pinned, and treating them as one is what made the 
 landed in. Adding shards adds sequences and lease rows; the messages already stored stay where they
 are and are still delivered by whoever owns those shards. There is nothing to re-route.
 
-**Ordered messages are the constraint.** `ShardOwnedSchema.growShardCount(dataSource, name, n)`
-therefore refuses while the ordered lane holds anything for that queue, and refuses to shrink at all.
+**Ordered messages are the constraint, and the mechanism is the modulus.** A key's shard is
+`hash(key) mod shardCount`. Change the count and a key's *next* message hashes to a different shard
+from its *last* one — so one key ends up spread across two shards, with two owners dispatching it
+concurrently. That is reordering, not the duplicate at-least-once permits, and no amount of care at
+the read path can undo it: per-key order here is enforced by one owner holding one shard.
 
-The caller still has to restart instances: the count is baked into every running `ShardOwnedQueue`,
-so until they are all restarted two moduli are in flight. For an unordered-only queue that is
-harmless — every shard has an owner either way, so a rolling restart is fine.
+`ShardOwnedSchema.growShardCount(dataSource, name, n)` therefore **refuses while the ordered lane
+holds anything for that queue**. Once it is empty there is no key whose history could be split, and
+growing is safe.
+
+**Shrinking is refused outright**, for a different reason: messages already sitting in the shards
+being removed would be addressed by nobody. `shardForKey` and the round-robin cursor would both stop
+producing those shard numbers, no consumer would lease them, and the rows would simply stay there.
+There is no safe general answer to where they should go, so the supported route is to drain those
+shards and recreate the queue.
+
+**The caller still has to restart instances**, because the count is baked into every running
+`ShardOwnedQueue` — the database knowing about eight shards changes nothing until the processes do.
+Until they have all restarted, two moduli are in flight at once, which is the same hazard as above
+and the other half of why the ordered lane must be empty first. For an unordered-only queue it is
+harmless: messages have no key, every shard has an owner either way, so a **rolling restart is
+enough — this is not a drain-and-switch.**
 
 ### 2.8 Sequences
 
