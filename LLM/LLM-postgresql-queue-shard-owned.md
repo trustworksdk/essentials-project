@@ -141,6 +141,27 @@ before the median is considered.
 **The knee moves with your workload.** 500 keys and a 2 ms handler; a handler that waits 200 ms or a
 queue with 10 keys has a different answer. Re-run the sweep rather than adopting the table.
 
+#### `shardCount` is a hard cap on how many instances can consume
+
+`fairShare = ceil(shardCount / liveInstances)`, so **at most `shardCount` instances can hold anything
+for that lane**. Eight shards and twelve pods means four pods consume nothing:
+
+| shards | instances | holding a shard | idle |
+|---|---|---|---|
+| 8 | 8 | 8 | 0 |
+| 8 | 12 | 8 | **4** |
+| 16 | 12 | 12 | 0 |
+
+So the rule is **`shardCount` >= the most instances you will ever run for that lane**, which for an
+autoscaled deployment means its maximum replica count — not its current one. At ~0.1 queries/s per
+idle shard that headroom is nearly free.
+
+**Autoscaling specifics.** Membership is a row per instance, refreshed every `leaseTtl / 3` and
+counted live within `leaseTtl`. A gracefully stopped instance deregisters immediately, so scaling in
+frees its shards and lets survivors take them at once. An instance that *crashes* is counted live
+until its row goes stale, which is the same window its leases take to expire — that is the designed
+failover time, not an extra cost. Rows for departed instances are pruned by the heartbeat.
+
 #### ⚠️ Pick the ordered number for your future peak, not today's load
 
 This is the asymmetry that should drive the decision, and the two lanes are not alike:

@@ -410,6 +410,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         heartbeat = runtime.scheduleHeartbeat(() -> {
             try {
                 storage.heartbeatInstance(instanceId);
+                // Garbage collection, not liveness: ten lease lifetimes is far past anything
+                // fairShare looks at, so this can never remove a row that still counts.
+                storage.pruneDepartedInstances(leaseTtlMillis * 10);
             } catch (Exception e) {
                 log.warn("Instance heartbeat failed", e);
             }
@@ -625,6 +628,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // the pumps' outstanding acknowledgements, so it has to happen before the leases go.
         releaseRuntime();
         releaseHeldLeases(held);
+        // Stop counting towards everyone else's fair share. Releasing the leases without this frees
+        // the shards and simultaneously forbids any survivor from taking them, for the whole
+        // staleness window — which makes a graceful scale-in worse for the cluster than a crash.
+        try {
+            storage.deregisterInstance(instanceId);
+        } catch (SQLException e) {
+            log.warn("Instance {} could not deregister on stop; it will age out of the membership "
+                     + "table instead, and survivors will be held at a stale fair share until it does",
+                     instanceId, e);
+        }
         owners.clear();
         ownedShards.clear();
     }

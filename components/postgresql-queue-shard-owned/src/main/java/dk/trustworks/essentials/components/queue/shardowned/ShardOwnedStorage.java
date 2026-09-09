@@ -520,6 +520,47 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * Remove this instance from the membership table on the way out.
+     * <p>
+     * Without it a graceful stop is worse than a crash for the survivors. The departing instance
+     * hands its leases back at once, so the shards are free — but its membership row goes on counting
+     * as live for the whole staleness window, {@code fairShare} stays
+     * {@code ceil(shardCount / liveInstances)} for a cluster that no longer exists, and every survivor
+     * is already at that quota. The shards sit unowned and nobody is allowed to take them. That is
+     * exactly the shape of an autoscaler scaling in.
+     */
+    public void deregisterInstance(String instanceId) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "DELETE FROM " + INSTANCE_TABLE + " WHERE queue_id = ? AND instance_id = ?")) {
+            statement.setShort(1, queueId);
+            statement.setString(2, instanceId);
+            statement.executeUpdate();
+        }
+    }
+
+    /**
+     * Drop membership rows far past any liveness window.
+     * <p>
+     * Rows were only ever upserted, never removed, so an instance id that changes per boot — which is
+     * what an autoscaled deployment produces, and what the Spring starter defaults to — left one row
+     * per pod that had ever run, forever, on a table every heartbeat of every queue scans.
+     * <p>
+     * The cutoff is deliberately far beyond {@code leaseTtl}: this is garbage collection, not liveness,
+     * and a row young enough to matter to {@code fairShare} must never be removed by it.
+     */
+    public int pruneDepartedInstances(long staleAfterMillis) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "DELETE FROM " + INSTANCE_TABLE
+                     + " WHERE queue_id = ? AND last_seen < now() - make_interval(secs => ? / 1000.0)")) {
+            statement.setShort(1, queueId);
+            statement.setLong(2, staleAfterMillis);
+            return statement.executeUpdate();
+        }
+    }
+
+    /**
      * @param staleAfterMillis an instance that has not been seen for this long is presumed gone
      */
     public int countLiveInstances(long staleAfterMillis) throws SQLException {
