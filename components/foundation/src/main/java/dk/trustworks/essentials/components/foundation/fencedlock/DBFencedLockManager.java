@@ -716,7 +716,26 @@ public abstract class DBFencedLockManager<UOW extends UnitOfWork, LOCK extends D
                     var fencedLock = lock.get();
                     fencedLock.registerCallback(lockCallback);
                     locksAcquiredByThisLockManager.put(lockName, (LOCK) fencedLock);
-                    lockCallback.lockAcquired(lock.get());
+                    try {
+                        lockCallback.lockAcquired(fencedLock);
+                    } catch (RuntimeException e) {
+                        // The lock WAS acquired; it is the callback that failed. Keeping the lock would
+                        // be the worst of both outcomes: this instance owns a lock it is not serving,
+                        // no other instance can take it, and no later tick will ever call the callback
+                        // again - the next tick finds the lock already held by this instance and takes
+                        // neither branch below, so the failure is permanent and silent apart from one
+                        // log line whose text says the acquisition failed, when it did not.
+                        //
+                        // Releasing turns that into something recoverable: the next tick tries again,
+                        // and a cause that clears itself (a queue registered a moment later, a
+                        // dependency that finished starting) is picked up without a restart. A cause
+                        // that does not clear logs once per tick, which is the paced, visible failure
+                        // a permanent one should be.
+                        log.error(msg("[{}] Lock '{}' was acquired but its lockAcquired callback failed - releasing it "
+                                      + "so the next attempt can retry rather than holding a lock nothing is serving",
+                                      lockManagerInstanceId, lockName), e);
+                        releaseLock((LOCK) fencedLock);
+                    }
                 } else {
                     if (log.isTraceEnabled()) {
                         log.trace("[{}] Couldn't async Acquire lock '{}' as it is acquired by another Lock Manager instance: {}",
