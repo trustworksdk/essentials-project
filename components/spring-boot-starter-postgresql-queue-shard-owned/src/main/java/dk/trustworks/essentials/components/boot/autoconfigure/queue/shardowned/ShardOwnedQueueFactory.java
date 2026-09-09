@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -39,7 +40,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * rather than left to their leases — a rolling restart hands over immediately instead of leaving
  * every shard dark for the lease TTL.
  */
-public class ShardOwnedQueueFactory implements AutoCloseable {
+public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedQueueFactory.class);
 
     private final DataSource         dataSource;
@@ -104,6 +105,37 @@ public class ShardOwnedQueueFactory implements AutoCloseable {
 
     public MessageQueue queue(String queueName) {
         return queue(QueueName.of(queueName));
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Read from the registry rather than from {@link #queues}, which holds only the names this
+     * process has asked for. An administrative caller listing queues wants what exists, and the two
+     * differ by exactly the queues this pod does not consume — which are the ones most worth looking
+     * at when something is stuck.
+     */
+    @Override
+    public List<QueueName> queueNames() throws SQLException {
+        return ShardOwnedSchema.queueNames(dataSource);
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Building a queue does not start consuming from it — {@code consume(...)} does — so inspecting a
+     * queue this process does not serve leaves the shard leases where they are. It does add the queue
+     * to the cache, which only means it is stopped along with the others on shutdown.
+     */
+    @Override
+    public Optional<MessageQueue> findQueue(QueueName queueName) throws SQLException {
+        requireNonNull(queueName, "No queueName provided");
+        var cached = queues.get(queueName);
+        if (cached != null) {
+            return Optional.of(cached);
+        }
+        return ShardOwnedSchema.resolve(dataSource, queueName)
+                               .map(registered -> queue(registered.name()));
     }
 
     /** The instance identity this process competes for shards under. */

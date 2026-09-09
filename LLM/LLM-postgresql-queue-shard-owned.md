@@ -20,6 +20,7 @@
 - [How to not kill the application](#how-to-not-kill-the-application)
 - [Worked examples](#worked-examples)
 - [Measuring your own deployment](#measuring-your-own-deployment)
+- [Administrative API](#administrative-api)
 - [Gotchas](#gotchas)
 
 ## The one idea
@@ -295,6 +296,65 @@ Via Micrometer, `bindQueueHealth(queue, maxAge)` publishes:
 
 Both bindings are opt-in and cached, because a gauge is polled on every scrape and these are queries.
 
+## Administrative API
+
+`ShardOwnedQueuesApi` is the operator surface over the engine. Registry-scoped (every operation takes
+a `QueueName`), authorised per principal, unchecked, payloads withheld by default.
+
+```java
+var api = new DefaultShardOwnedQueuesApi(securityProvider, queueFactory);  // factory IS a MessageQueues
+
+api.getQueueNames(principal);                                  // every REGISTERED queue, not just this pod's
+api.getQueueStatus(principal, QueueName.of("orders"));         // depth AND ownership, together
+api.getMessage(principal, orders, MessageId.parse("u-3-1042"));
+api.getDeadLetterMessages(principal, orders, 0, 100);
+api.retryMessage(principal, orders, id, Duration.ZERO);
+api.markAsDeadLetterMessage(principal, orders, id, "parked by hand");
+api.resurrectDeadLetterMessage(principal, orders, id);
+api.deleteMessage(principal, orders, id);
+api.purgeQueue(principal, orders);
+```
+
+**Message ids have a text form.** `MessageId.toString()` -> `u-3-1042` (`u`/`o` = lane, then shard,
+then sequence); `MessageId.parse` reads it back. URL-safe without escaping, and the same triple the
+tables use, so it can be pasted into psql.
+
+**Roles**
+
+| Operation | Role (or `ESSENTIALS_ADMIN`) |
+|---|---|
+| all reads | `QUEUE_READER` |
+| seeing message payloads in those reads | `QUEUE_PAYLOAD_READER`, **additionally** |
+| delete, retry, mark-as-dead-letter, resurrect, purge | `QUEUE_WRITER` |
+
+A reader without the payload role still gets the message with `payload` **null** — null, not empty,
+because an empty payload is a legal message. Non-UTF-8 payloads come back as hex, matching the
+`*_readable` views.
+
+**In Spring**, the API bean and its controller appear automatically when
+`spring-boot-starter-admin-api` and an `EssentialsSecurityProvider` are on the classpath. That
+dependency is `provided`, so a queue-only application gets neither the endpoints nor the event store
+the admin API starter brings with it — the context starts fine without them.
+
+Endpoints live under the admin API base path (default `/api/essentials/admin/v1`):
+
+| Method | Path |
+|---|---|
+| `GET` | `/shard-owned-queues` |
+| `GET` | `/shard-owned-queues/{queueName}/status` |
+| `GET` | `/shard-owned-queues/{queueName}/messages/{messageId}` |
+| `GET` | `/shard-owned-queues/{queueName}/dead-letter-messages?offset=&limit=` |
+| `DELETE` | `/shard-owned-queues/{queueName}/messages/{messageId}` |
+| `DELETE` | `/shard-owned-queues/{queueName}/messages` |
+| `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/retry` |
+| `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter` |
+| `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/resurrect` |
+
+**These endpoints are NOT in the generated OpenAPI contract**, and do not appear in the admin API's
+start-up summary of served areas. The engine is unpublished, so it has no `EssentialsAdminApiSpec`
+entry — a published contract cannot describe an artifact that is in no repository. They work; they are
+just not declared.
+
 ## Gotchas
 
 - **`SessionScope.KEY` does not exist here** and cannot: per-key exclusivity lives in the owner's memory, and a second party could only enter it by adding a query per message to the ordered fast path. Use `SHARD`.
@@ -315,4 +375,5 @@ Both bindings are opt-in and cached, because a gauge is polled on every scrape a
   - **A one-heartbeat window remains where instances disagree about the modulus.** Harmless for unordered (round-robin, every shard owned). For ordered, keep producers paused across it — seconds, not a deployment.
 - **Register by name, always.** `registerQueue(ds, QueueName.of("orders"), 8)` interns the name to a `short` and records the shard count with it. Building a queue from a name takes both from the registry, so two processes cannot disagree about the shard count — a disagreement routes the same key to different shards and strands whole shards.
 - **`shardCount` cannot change once registered.** Re-registering with a different count is refused rather than accepted.
-- **Not published.** `maven.deploy.skip=true`, no Spring Boot starter, no admin API, no interceptor chain.
+- **A queue name is unique; a message id is not.** `MessageId` is `(lane, shard, seq)` and sequences are per `(queue, shard)`, so `u-0-1` exists in every queue. Every admin operation therefore takes the queue name too, and there is no `getQueueNameFor(messageId)` — the question has no answer.
+- **Not published.** `maven.deploy.skip=true`. The Spring Boot starter and interceptor chain exist; the admin API's `EssentialsAdminApiSpec` entry does not, and cannot until the engine is published.

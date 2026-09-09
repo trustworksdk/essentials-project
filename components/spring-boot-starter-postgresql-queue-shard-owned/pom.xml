@@ -79,6 +79,37 @@
             <artifactId>micrometer-core</artifactId>
             <optional>true</optional>
         </dependency>
+        <!--
+          provided: this brings the event-store starter with it, and an application that wants a queue
+          and nothing else must not acquire an event store by depending on this starter. The admin
+          endpoints are wired only when these classes are already present, which is exactly the case
+          where the application has chosen the admin API itself.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>spring-boot-starter-admin-api</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!--
+          Both declared directly because the admin API starter also declares them provided, and a
+          provided dependency's provided transitives are omitted rather than inherited.
+
+          Jackson 3 specifically, not the flavor property: Spring Boot's web message conversion is
+          always Jackson 3, so the HTTP layer's correctness must not depend on the flavor chosen for
+          the event store's serialization. Same reasoning as AdminApiJacksonModule's.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>

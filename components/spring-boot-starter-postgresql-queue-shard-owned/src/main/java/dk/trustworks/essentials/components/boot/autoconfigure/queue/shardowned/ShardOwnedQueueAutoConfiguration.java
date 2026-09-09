@@ -16,15 +16,20 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
+import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
+import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
+import dk.trustworks.essentials.components.queue.shardowned.api.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
+import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.slf4j.*;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.*;
+import org.springframework.web.bind.annotation.RestController;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
@@ -116,6 +121,62 @@ public class ShardOwnedQueueAutoConfiguration {
         return new ShardOwnedQueueFactory(dataSource, runtime, settings, instanceId, initializer,
                                           interceptors.orderedStream().toList(),
                                           observers.orderedStream().toList());
+    }
+
+    /**
+     * The administrative surface, wired only when the admin API starter is on the classpath.
+     *
+     * <h2>Why this is conditional rather than always on</h2>
+     * {@code spring-boot-starter-admin-api} brings the event-store starter with it. An application
+     * that wants a queue and nothing else must not acquire an event store by depending on this
+     * starter, so the dependency is {@code provided} and everything here is guarded by the presence
+     * of the classes it needs. An application that already serves the admin API gets these endpoints
+     * by adding no configuration at all.
+     *
+     * <h2>Why the controller is not in the admin API starter</h2>
+     * The engine is unpublished. A controller there would give a published artifact a dependency on
+     * an artifact in no repository, and would put a moving surface inside
+     * {@code EssentialsAdminApiSpec}, whose contract is compatibility-checked. The endpoints
+     * therefore serve under the admin API's base path and use its principal resolution and error
+     * handling, but are not part of its declared contract — they will not appear in the generated
+     * OpenAPI document, nor in the start-up summary of served contract areas. Adding the
+     * {@code EssentialsAdminApiSpec} entries and moving the controller across is one step, and it
+     * belongs with publishing the engine.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass({RestController.class, AdminApiPrincipalResolver.class})
+    public static class ShardOwnedQueuesAdminApiConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean
+        @ConditionalOnBean(EssentialsSecurityProvider.class)
+        public ShardOwnedQueuesApi shardOwnedQueuesApi(EssentialsSecurityProvider securityProvider,
+                                                       ShardOwnedQueueFactory factory) {
+            return new DefaultShardOwnedQueuesApi(securityProvider, factory);
+        }
+
+        @Bean
+        @ConditionalOnMissingBean
+        @ConditionalOnBean({ShardOwnedQueuesApi.class, AdminApiPrincipalResolver.class})
+        public ShardOwnedQueuesController shardOwnedQueuesController(ShardOwnedQueuesApi shardOwnedQueuesApi,
+                                                                     AdminApiPrincipalResolver principalResolver) {
+            log.info("Shard-owned queue admin endpoints are served under the Essentials admin API base path");
+            return new ShardOwnedQueuesController(shardOwnedQueuesApi, principalResolver);
+        }
+
+        /**
+         * Renders this engine's {@code QueueName} as a JSON string.
+         * <p>
+         * Registered here rather than assumed, because the admin API's own Jackson module only covers
+         * {@code CharSequenceType}, and this engine's {@code QueueName} deliberately is not one.
+         * Without it the same concept renders as an object on these endpoints and as a string on the
+         * durable-queues ones.
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        public ShardOwnedQueueJacksonModule shardOwnedQueueJacksonModule() {
+            return new ShardOwnedQueueJacksonModule();
+        }
     }
 
     /**

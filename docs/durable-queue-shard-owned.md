@@ -267,7 +267,7 @@ one owner serving a *range* of virtual shards under a single cursor, which confl
 shard)` sequences — and those exist because a shared sequence manufactured `queues - 1` holes per
 message. It is a structural rework of the read path, not a feature.
 
-**Size it correctly instead.** Given that `shardCount` caps how many instances can consume (§13) and
+**Size it correctly instead.** Given that `shardCount` caps how many instances can consume (§14) and
 an idle shard costs ~0.1 queries/s, over-provisioning an ordered queue is close to free. Setting it to
 the maximum replica count the deployment will ever reach makes growth an event that never happens,
 which is a better outcome than making it cheap.
@@ -755,7 +755,126 @@ The engine's own counters — `cursorReads`, `holesObserved`/`Resolved`/`Abandon
 
 ---
 
-## 13. Configuration
+## 13. Administrative API
+
+The engine's `MessageQueue` is what an application calls: bound to one queue, trusting its caller,
+throwing `SQLException` because the caller is usually inside a transaction that has to decide what a
+failure means. `ShardOwnedQueuesApi` is the operator's surface over the same operations —
+registry-scoped, authorised per principal, unchecked, and with payloads withheld by default.
+
+```mermaid
+flowchart LR
+    HTTP["HTTP client"] --> C["ShardOwnedQueuesController<br/>(admin API base path)"]
+    C -->|"principal"| A["ShardOwnedQueuesApi<br/>authorise · resolve · convert"]
+    A -->|"queueNames / findQueue"| R["MessageQueues<br/>(ShardOwnedQueueFactory)"]
+    R -->|"registry lookup"| DB[("shard_queue_registry")]
+    A -->|"delegate"| Q["MessageQueue<br/>getMessage · delete · retry · …"]
+    Q --> DB2[("lanes · dead letters · leases")]
+```
+
+### 13.1 Every operation takes a queue name
+
+`DurableQueuesApi` addresses a message by `QueueEntryId` alone, because that id is a UUID and globally
+unique. A `MessageId` is `(lane, shard, sequence)` and sequences are per `(queue, shard)` — so `u-0-1`
+exists in every queue that has ever enqueued an unordered message. Dropping the queue name would not
+make the API more convenient; it would make `deleteMessage` delete an arbitrary queue's message. There
+is deliberately no `getQueueNameFor(messageId)` counterpart, because the question has no answer.
+
+### 13.2 The id has a text form
+
+`MessageId.toString()` renders `<lane>-<shard>-<sequence>` — `u-3-1042`, `o-0-7` — and
+`MessageId.parse` reads it back. The lane is one character so the id fits a URL path segment without
+escaping, and it is the same triple the tables use: the lane picks the table, the other two are the
+rest of the primary key, so an id from an HTTP response can be typed straight into `psql`.
+
+By-id lookup itself is not new — `MessageQueue.getMessage(MessageId)` predates this. What was missing
+was any way to *name* a message outside Java.
+
+### 13.3 Roles
+
+| Operation | Role (or `ESSENTIALS_ADMIN`) |
+|---|---|
+| `getQueueNames`, `getQueueStatus`, `getMessage`, `getDeadLetterMessages` | `QUEUE_READER` |
+| message payloads within those responses | `QUEUE_PAYLOAD_READER`, **additionally** |
+| `deleteMessage`, `retryMessage`, `markAsDeadLetterMessage`, `resurrectDeadLetterMessage`, `purgeQueue` | `QUEUE_WRITER` |
+
+A reader without the payload role still gets the message — id, key, attempts, timestamps, last error —
+with `payload` null. Null, not empty: an empty payload is a legal message and has to stay
+distinguishable from one being withheld. That is the shape most administration needs, and it keeps
+message contents behind a role grantable separately from the ability to see that a queue is stuck.
+
+A payload that is not valid UTF-8 comes back as hex, the same rendering the `shard_queue_*_readable`
+views apply (§2.6). Lossy decoding would turn a protobuf payload into U+FFFD noise that still looks
+like text.
+
+### 13.4 Status is depth *and* ownership, in one response
+
+`getQueueStatus` returns both. They answer half a question each: a depth of 40 000 is normal under load
+and an outage when `unownedShards` is non-zero; `unownedShards` of 4 is a rebalance in progress when
+depth is falling and a stall when it is not. Two endpoints would let a dashboard show one without the
+other, which is the failure mode §12 exists to close.
+
+### 13.5 A write races an in-flight delivery, and that cannot be fixed
+
+Whether a message is being delivered right now lives in the owning consumer's memory, not in a column.
+`deleteMessage` on a message a handler is presently running succeeds, and the handler still finishes.
+The engine already tolerates the acknowledgement that follows — it resolves to zero rows, and
+`stillOwns` disambiguates it — so nothing is corrupted. What is not guaranteed is that the handler did
+not run. These are interventions on a running system, not transactional edits.
+
+### 13.6 Where the HTTP layer lives, and why it is not in the admin API starter
+
+The project convention is that an admin operation lives in three synced places: the `*Api` SPI, the
+`EssentialsAdminApiSpec` mapping table, and a controller in `spring-boot-starter-admin-api`. Two of the
+three are built:
+
+| Place | Status |
+|---|---|
+| `ShardOwnedQueuesApi` + `DefaultShardOwnedQueuesApi` | in `postgresql-queue-shard-owned` |
+| `ShardOwnedQueuesController` | in `spring-boot-starter-postgresql-queue-shard-owned` |
+| `EssentialsAdminApiSpec` entries | **not done — blocked on publication** |
+
+Both `admin-api-spec` and `spring-boot-starter-admin-api` are published; this engine is not
+(`maven.deploy.skip=true`). A controller in the published starter would give a published artifact a
+dependency on an artifact in no repository, and a spec entry would put a moving surface inside a
+contract that is compatibility-checked at version `1.0.0`. So the controller ships with the engine's
+own starter and borrows the admin API's conventions — base path, principal resolution, exception
+handling — without extending its contract.
+
+The consequence, stated plainly: **these endpoints do not appear in the generated OpenAPI document,
+nor in the admin API's start-up summary of served contract areas.** Adding the spec entries and moving
+the controller across is one step, and it belongs with publishing the engine.
+
+The dependency on `spring-boot-starter-admin-api` is `provided` — it brings the event-store starter
+with it, and an application that wants a queue and nothing else must not acquire an event store by
+depending on this starter. The endpoints are wired only when the admin API's classes and an
+`EssentialsSecurityProvider` are already present, which is exactly the case where the application has
+chosen the admin API for itself.
+
+### 13.7 Endpoints
+
+All under the admin API base path (`essentials.admin-api.base-path`, default
+`/api/essentials/admin/v1`).
+
+| Method | Path |
+|---|---|
+| `GET` | `/shard-owned-queues` |
+| `GET` | `/shard-owned-queues/{queueName}/status` |
+| `GET` | `/shard-owned-queues/{queueName}/messages/{messageId}` |
+| `GET` | `/shard-owned-queues/{queueName}/dead-letter-messages?offset=&limit=` |
+| `DELETE` | `/shard-owned-queues/{queueName}/messages/{messageId}` |
+| `DELETE` | `/shard-owned-queues/{queueName}/messages` (purge) |
+| `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/retry` |
+| `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter` |
+| `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/resurrect` |
+
+A malformed `messageId` is a 400, not a 500 — `MessageId.parse` throws `IllegalArgumentException`,
+which the admin API's exception handler already maps. A database failure surfaces as
+`MessageQueueException`, which maps to 500.
+
+---
+
+## 14. Configuration
 
 Full reference with sizing formulas and worked examples: [`LLM/LLM-postgresql-queue-shard-owned.md`](../LLM/LLM-postgresql-queue-shard-owned.md). Summarised here only to show which knob governs which mechanism.
 
@@ -794,7 +913,7 @@ shard; under-provisioning costs an outage-shaped migration.
 
 ---
 
-## 14. Guarantees, and what they cost
+## 15. Guarantees, and what they cost
 
 **What the engine guarantees**
 
@@ -825,13 +944,18 @@ shard; under-provisioning costs an outage-shaped migration.
 
 ---
 
-## 15. Map of the code
+## 16. Map of the code
 
 | Class | Responsibility |
 |---|---|
 | `spi/MessageQueue` | The contract. A new interface rather than an implementation of `DurableQueues`; each omission is justified in its javadoc |
 | `spi/` — `Message`, `MessageId`, `QueueName`, `MessageHandler`, `ConsumerOptions`, `Subscription`, `QueueSession`, `SessionScope`, `QueueDepth`, `DeadLetter`, `QueueObserver`, `MessageQueueInterceptor` | The contract's types |
 | `spi/operations/` — `EnqueueMessages`, `HandleMessage` | What an interceptor intercepts |
+| `spi/MessageQueues` | The queues a process can reach, by name. The smallest thing that makes a registry-scoped caller possible over a single-queue `MessageQueue` |
+| `spi/MessageQueueException` | An engine failure, unchecked, for callers with no transaction to roll back |
+| `api/ShardOwnedQueuesApi` | The administrative contract: registry-scoped, per-principal, payloads withheld by default |
+| `api/DefaultShardOwnedQueuesApi` | Authorise, resolve, delegate, convert — and nothing else |
+| `api/ApiShardOwnedMessage` / `ApiShardOwnedQueueStatus` | Its DTOs. Redactable payload, text-form id, depth and ownership together |
 | `ShardOwnedSchema` | DDL for all six tables, the sequences, the name registry, and key-to-shard hashing |
 | `ShardOwnedStorage` | Every SQL statement in the engine — both lanes, the DLQ, leases, membership, sessions |
 | `ShardOwner` | Unordered lane: cursor, holes, in-flight and pending-ack sets, ack floor, head sweep, retries |

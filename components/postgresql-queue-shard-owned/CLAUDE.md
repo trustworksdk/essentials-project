@@ -14,6 +14,7 @@ Every message is assigned to a shard at enqueue. Each shard has exactly one owni
 |---|---|
 | `spi` | `MessageQueue` and its types — a **new contract**, not an implementation of `DurableQueues`. Each omission is justified in `MessageQueue`'s javadoc |
 | `observability.micrometer` | `MicrometerQueueObserver` — binds `QueueObserver` to a `MeterRegistry`. `micrometer-core` is `provided` |
+| `api` | `ShardOwnedQueuesApi` — the **administrative** contract. Registry-scoped, per-principal, payloads redacted. Delegates to `MessageQueue`, implements nothing itself |
 | root | `RowLeaseQueueSession` (MESSAGE/BATCH pull), `ShardQueueSession` (SHARD pull), `ShardOwnedSchema` (three lanes), `ShardOwnedStorage` (all SQL), `ShardOwner` / `OrderedShardOwner` (cursor, holes, retries), `ShardOwnedQueue` (leasing, heartbeat, rebalancing), `ShardWakeupListener` / `ShardWakeup` (Tier 1), `PostgresqlMessageQueue` (SPI implementation) |
 
 ## Gotchas
@@ -125,6 +126,20 @@ Every message is assigned to a shard at enqueue. Each shard has exactly one owni
 
 `LLM/LLM-postgresql-queue-shard-owned.md` — configuration reference, sizing formulas, and the two "how not to kill the database / the application" sections. Keep the formulas there in step with `ShardOwnedMultiQueueCostIT`; they are measured, not asserted.
 
+## Admin API gotchas
+
+- **`MessageQueue` is the engine; `ShardOwnedQueuesApi` is the operator surface.** Same layering as `DurableQueuesApi` over `DurableQueues`. The API authorises, resolves the name, delegates and converts — it must contain no queue logic, or there are two implementations to keep correct and the divergence surfaces first on the path nobody exercises.
+- **`MessageId` had no text form**, which is why by-id operations were reachable only from Java. `toString()`/`parse` render `<lane>-<shard>-<seq>` (`u-3-1042`) — one character for the lane so it fits a URL path segment unescaped, and the same triple the tables use so it can be pasted into psql. By-id *lookup* was never missing; naming a message outside Java was.
+- **A malformed id must be an `IllegalArgumentException`.** An unguarded `split` throws `ArrayIndexOutOfBoundsException`, which the admin API's exception handler maps to 500 — reporting a caller's typo as a server fault.
+- **Every admin operation takes a `QueueName`, and dropping it is a data-loss bug, not an ergonomics one.** Sequences are per `(queue, shard)`, so the first message of every queue has the same id. `an_id_from_one_queue_does_not_address_a_message_in_another` asserts the premise before asserting the protection. There is deliberately no `getQueueNameFor(messageId)`.
+- **A withheld payload is `null`, never `""`.** An empty payload is a legal message and has to stay distinguishable from one being redacted.
+- **Payload rendering must not lossy-decode.** `new String(bytes, UTF_8)` substitutes U+FFFD and makes a protobuf payload look like text. Decode with `REPORT` and fall back to hex — the same rendering `shard_queue_readable()` applies, so an HTTP response and psql show the same string.
+- **The read and write roles must be genuinely different.** An implementation validating `QUEUE_READER` on the write paths passes every functional test in the suite; `a_reader_cannot_write` is the only thing that catches it. Both it and the redaction tests were verified to fail against a deliberately broken implementation.
+- **`MessageQueues` exists because `MessageQueue` is single-queue.** Its `queue_id` is resolved once and then bound into every statement, which is what lets one `ShardRuntime` serve hundreds of queues from five connections — so there is nothing to ask "which queues exist?". `findQueue` returns empty rather than throwing: an unknown name from outside the process is a 404, not a bug.
+- **`queueNames()` reads the registry, not the built queues.** The two differ by exactly the queues this pod does not consume — which are the ones worth looking at when something is stuck.
+
 ## Not built
 
-Tier 3 WAL streaming (its gate says don't — Tier 2 measures 0.44 ms p50). No Spring Boot starter, admin API or interceptor chain.
+Tier 3 WAL streaming (its gate says don't — Tier 2 measures 0.44 ms p50).
+
+The admin surface is 2 of the convention's 3 places: the `*Api` SPI and a controller (in this engine's own starter). The **`EssentialsAdminApiSpec` entry is missing and cannot be added** — `admin-api-spec` is published and this module is not, and its contract is compatibility-checked at `1.0.0`. Consequence: these endpoints are absent from the generated OpenAPI document and from the admin API's start-up summary. Adding the spec entry and moving the controller into `spring-boot-starter-admin-api` is one step, and it belongs with publishing the engine.
