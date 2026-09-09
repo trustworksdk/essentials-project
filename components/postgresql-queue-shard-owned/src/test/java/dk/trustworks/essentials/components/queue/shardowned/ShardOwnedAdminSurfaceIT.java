@@ -360,4 +360,91 @@ class ShardOwnedAdminSurfaceIT {
                                       defaults.pumpThreads(), defaults.shedGrace(),
                                       Duration.ofSeconds(3));
     }
+
+    /**
+     * Redeploying and autoscaling do not change the shard count, so they never open a modulus
+     * window. Worth asserting rather than reasoning about: the reshard hazard is easy to mistake for
+     * a general operational one, and the everyday operations are the ones that must be boring.
+     */
+    @Test
+    void restarting_and_scaling_instances_never_changes_the_shard_count() throws Exception {
+        var name = QueueName.of("steady");
+        ShardOwnedSchema.registerQueue(dataSource, name, 4);
+
+        var counts = new java.util.HashSet<Integer>();
+        var delivered = ConcurrentHashMap.<String>newKeySet();
+
+        PostgresqlMessageQueue previous = null;
+        for (var generation = 0; generation < 3; generation++) {
+            var next = PostgresqlMessageQueue.builder()
+                                             .setDataSource(dataSource)
+                                             .setQueueName(name)
+                                             .setInstanceId("rollout-" + generation)
+                                             .build();
+            next.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                         ConsumerOptions.defaults());
+            counts.add(next.shardCount());
+            next.enqueue(List.of(Message.ordered(("gen" + generation).getBytes(StandardCharsets.UTF_8),
+                                                 1, "key-" + generation, 0L)));
+            if (previous != null) {
+                previous.stop();   // the old pod goes away, as in a rolling deploy
+            }
+            previous = next;
+        }
+        counts.add(previous.shardCount());
+
+        assertThat(counts)
+                .describedAs("every generation saw the same shard count — a redeploy is not a reshard")
+                .containsExactly(4);
+        Awaitility.await().atMost(Duration.ofSeconds(30))
+                  .untilAsserted(() -> assertThat(delivered).hasSize(3));
+        previous.stop();
+    }
+
+    /**
+     * The producing side learns about growth too. Wiring only the consumer side would leave a
+     * producer routing by the old modulus while its own consumers leased the new shards.
+     * <p>
+     * No consumer here on purpose: with one running the rows are deleted as fast as they are
+     * written, so counting what is left measures the consumer rather than the routing.
+     */
+    @Test
+    void a_queue_built_with_a_stale_shard_count_heals_itself_from_the_registry() throws Exception {
+        var name = QueueName.of("stale-belief");
+        var registered = ShardOwnedSchema.registerQueue(dataSource, name, 8);
+
+        try (var queue = new PostgresqlMessageQueue(dataSource, registered.queueId(), 4,
+                                                    "believes-four", ShardOwnerSettings.defaults())) {
+            assertThat(queue.shardCount()).describedAs("it starts out wrong").isEqualTo(4);
+
+            Awaitility.await().atMost(Duration.ofSeconds(40))
+                      .untilAsserted(() -> {
+                          queue.enqueue(Message.of("probe".getBytes(StandardCharsets.UTF_8), 1));
+                          assertThat(queue.shardCount())
+                                  .describedAs("the registry is the single source of truth, for the "
+                                               + "producing side as well as the consuming one")
+                                  .isEqualTo(8);
+                      });
+
+            for (var i = 0; i < 40; i++) {
+                queue.enqueue(Message.of(("after" + i).getBytes(StandardCharsets.UTF_8), 1));
+            }
+            assertThat(distinctShardsUsed(registered.queueId()))
+                    .describedAs("routing uses all eight shards it learned about, not the four it was built with")
+                    .isEqualTo(8);
+        }
+    }
+
+    private int distinctShardsUsed(short queueId) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT count(DISTINCT shard) FROM " + ShardOwnedSchema.UNORDERED_TABLE
+                     + " WHERE queue_id = ?")) {
+            statement.setShort(1, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getInt(1);
+            }
+        }
+    }
 }

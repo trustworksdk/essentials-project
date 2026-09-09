@@ -141,6 +141,38 @@ before the median is considered.
 **The knee moves with your workload.** 500 keys and a 2 ms handler; a handler that waits 200 ms or a
 queue with 10 keys has a different answer. Re-run the sweep rather than adopting the table.
 
+#### When does any of this affect me?
+
+Almost never. The table is the whole answer:
+
+| Operation | Shard count changes? | What you do |
+|---|---|---|
+| **Rolling redeploy** | no | nothing |
+| **Scale up** | no | nothing — new pods register and take a share within a heartbeat |
+| **Scale down / pod evicted** | no | nothing — a graceful stop releases its shards and deregisters immediately |
+| **Crash** | no | nothing — shards move when the lease expires (`leaseTtl`, 30 s default) |
+| **Grow an unordered queue** | yes | `growShardCount(...)`. That is all — routing is round-robin, every shard has an owner either way |
+| **Grow an ordered queue** | yes | the only case with a procedure — see below |
+
+**Redeploys and autoscaling never touch the shard count**, so they never open a window where
+instances disagree about the modulus. Every instance reads the same registry row; a queue built with
+a stale count corrects itself from the registry within a heartbeat. `ShardOwnedAdminSurfaceIT`
+asserts a three-generation rolling deploy with ordered traffic sees one shard count throughout, and
+`ShardOwnedOrderedRebalanceIT` / `ShardOwnedMultiProcessIT` assert no key is ever in two handlers
+while shards move between instances.
+
+**Growing an ordered queue** is the one procedure, and it is rare by design — size the queue so it
+does not happen (see below):
+
+1. Stop producing to that queue, or pick a quiet moment.
+2. Let the ordered lane drain. `growShardCount` refuses while it holds anything, so this checks itself.
+3. `ShardOwnedSchema.growShardCount(dataSource, name, n)`.
+4. Wait one heartbeat (`leaseTtl / 3`, 10 s by default) for every instance to pick it up.
+5. Resume producing.
+
+No deploy, no restart. Steps 1 and 4 exist because a key's shard is `hash(key) mod shardCount`, so
+while instances disagree one key could be handled in two shards at once.
+
 #### `shardCount` is a hard cap on how many instances can consume
 
 `fairShare = ceil(shardCount / liveInstances)`, so **at most `shardCount` instances can hold anything

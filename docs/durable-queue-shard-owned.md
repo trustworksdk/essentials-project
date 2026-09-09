@@ -220,6 +220,28 @@ that is harmless — routing is round-robin and every shard has an owner either 
 coordination at all. For the ordered lane it is the same hazard that requires an empty lane in the
 first place, so producers must stay paused across the window. **Seconds, not a deployment.**
 
+### When this applies, and when it does not
+
+Worth stating plainly, because the reshard window is easy to mistake for a general operational
+hazard. **It is not.** `shardCount` changes only when an operator calls `growShardCount`; every
+instance otherwise reads the same registry row, and an instance constructed with a stale count
+corrects itself from the registry within a heartbeat — on the producing side as well as the consuming
+one.
+
+So a **rolling redeploy**, a **scale up**, a **scale down** and a **crash** all leave the shard count
+untouched and need no procedure at all. Shards move between instances constantly in normal operation;
+that is rebalancing, and per-key ordering across it is asserted by `ShardOwnedOrderedRebalanceIT` and
+`ShardOwnedMultiProcessIT`. A three-generation rolling deploy under ordered traffic is asserted to see
+one shard count throughout.
+
+Growing an **unordered** queue also needs nothing: routing is round-robin, every shard has an owner
+either way, so `growShardCount` and carry on.
+
+Growing an **ordered** queue is the only case with a procedure: quiesce producers, let the lane drain
+(`growShardCount` refuses otherwise, so this checks itself), grow, wait one heartbeat, resume. No
+deploy — and rare by design, since sizing the queue for its maximum replica count makes it an event
+that does not occur.
+
 ### What would remove the remaining constraint, and why we did not build it
 
 The ordered lane still needs a pause-and-drain. Three ways out, recorded so the next person does not

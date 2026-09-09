@@ -47,7 +47,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private final ShardOwnedStorage storage;
     private final DataSource     dataSource;
     private final short          queueId;
-    private final int            shardCount;
+    /**
+     * Refreshed from the registry, because enqueue routing has to learn about a grown shard count
+     * too. Wiring only the consumer side would leave a producer routing keys by the old modulus
+     * while its own consumers leased the new shards — which is the divergence the registry exists to
+     * prevent, reintroduced by fixing half of it.
+     */
+    private volatile int         shardCount;
+    private volatile long        shardCountCheckedAtNanos;
     private final String         instanceId;
 
     private final ShardOwnerSettings settings;
@@ -309,8 +316,44 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private record Routed(Map<Integer, List<Integer>> unordered, Map<Integer, List<Integer>> ordered) {
     }
 
+    /**
+     * How often a producer re-reads the shard count. One query at most this often per producing
+     * process — the same order as a heartbeat, and the only way a process that never consumes can
+     * learn that the queue grew.
+     */
+    private static final long SHARD_COUNT_REFRESH_NANOS = Duration.ofSeconds(10).toNanos();
+
+    /**
+     * Pick up a grown shard count on the producing side.
+     * <p>
+     * Time-guarded rather than per-enqueue: a query on every enqueue would be a per-message cost, and
+     * this engine's whole argument is about what a message costs. Growth is picked up within the
+     * refresh interval, which is the same window the consumer side takes.
+     */
+    private void refreshShardCountIfDue() {
+        var now = System.nanoTime();
+        if (now - shardCountCheckedAtNanos < SHARD_COUNT_REFRESH_NANOS && shardCountCheckedAtNanos != 0L) {
+            return;
+        }
+        shardCountCheckedAtNanos = now;
+        try {
+            var registered = storage.currentShardCount();
+            // Growth only. A smaller count would strand whatever is already in the shards this
+            // producer stopped addressing.
+            if (registered.isPresent() && registered.getAsInt() > shardCount) {
+                log.info("Queue {} grew from {} to {} shards; enqueue routing follows",
+                         queueId, shardCount, registered.getAsInt());
+                shardCount = registered.getAsInt();
+            }
+        } catch (SQLException e) {
+            log.warn("Could not re-read the shard count for queue {}; continuing with {}",
+                     queueId, shardCount, e);
+        }
+    }
+
     /** Decide the lane and shard of every message, keeping each one's position in the input. */
     private Routed route(List<Message> messages) {
+        refreshShardCountIfDue();
         var unorderedByShard = new LinkedHashMap<Integer, List<Integer>>();
         var orderedByShard   = new LinkedHashMap<Integer, List<Integer>>();
         for (var position = 0; position < messages.size(); position++) {
