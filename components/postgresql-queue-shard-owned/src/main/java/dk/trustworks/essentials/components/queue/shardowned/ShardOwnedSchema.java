@@ -54,6 +54,10 @@ public final class ShardOwnedSchema {
     public static final String SESSION_FENCE_SEQUENCE = "shard_queue_session_fence";
     public static final String REGISTRY_TABLE = "shard_queue_registry";
     public static final String QUEUE_ID_SEQUENCE = "shard_queue_id_seq";
+    /** Views that render {@code bytea} payloads as text, for reading a queue in {@code psql}. */
+    public static final String UNORDERED_VIEW   = "shard_queue_unordered_readable";
+    public static final String ORDERED_VIEW     = "shard_queue_ordered_readable";
+    public static final String DLQ_VIEW         = "shard_queue_dead_letter_readable";
 
     /**
      * The framework's bootstrap advisory-lock key, so this engine's DDL serialises behind the same
@@ -263,6 +267,42 @@ public final class ShardOwnedSchema {
             // predicates; keeping their ranges disjoint removes a whole class of confusion.
             statement.execute("CREATE SEQUENCE IF NOT EXISTS " + SESSION_FENCE_SEQUENCE
                               + " START WITH 1 INCREMENT BY 1");
+
+            // Payloads are bytea because the database never looks inside them, and that is what
+            // makes the write path cheap. The cost is that `SELECT payload FROM ...` in psql returns
+            // \x7b226f... and an operator holding a support ticket cannot read their own message.
+            //
+            // A view fixes the ergonomics without touching the storage: the bytes stay bytes, the
+            // hot path is unchanged, and nothing here is queried by the engine. Payloads that are
+            // valid UTF-8 — which JSON, XML and text all are — render as text; anything else falls
+            // back to hex rather than raising, because a view that throws on one binary row is worse
+            // than one that shows it as hex.
+            statement.execute("CREATE OR REPLACE FUNCTION shard_queue_readable(payload bytea)"
+                              + " RETURNS text AS $$"
+                              + " BEGIN RETURN convert_from(payload, 'UTF8');"
+                              + " EXCEPTION WHEN others THEN RETURN encode(payload, 'hex');"
+                              + " END $$ LANGUAGE plpgsql IMMUTABLE");
+            statement.execute("CREATE OR REPLACE VIEW " + UNORDERED_VIEW + " AS"
+                              + " SELECT r.queue_name, u.queue_id, u.shard, u.seq, u.payload_type,"
+                              + "        shard_queue_readable(u.payload) AS payload,"
+                              + "        u.attempts, u.enqueued_at, u.visible_at,"
+                              + "        u.visible_at <= now() AS deliverable"
+                              + "   FROM " + UNORDERED_TABLE + " u"
+                              + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = u.queue_id");
+            statement.execute("CREATE OR REPLACE VIEW " + ORDERED_VIEW + " AS"
+                              + " SELECT r.queue_name, o.queue_id, o.shard, o.msg_key, o.key_order, o.seq,"
+                              + "        o.payload_type, shard_queue_readable(o.payload) AS payload,"
+                              + "        o.attempts, o.enqueued_at, o.visible_at,"
+                              + "        o.visible_at <= now() AS deliverable"
+                              + "   FROM " + ORDERED_TABLE + " o"
+                              + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = o.queue_id");
+            statement.execute("CREATE OR REPLACE VIEW " + DLQ_VIEW + " AS"
+                              + " SELECT r.queue_name, d.queue_id, d.shard, d.source_lane, d.msg_key,"
+                              + "        d.key_order, d.seq, d.payload_type,"
+                              + "        shard_queue_readable(d.payload) AS payload,"
+                              + "        d.attempts, d.last_error, d.dead_lettered_at"
+                              + "   FROM " + DLQ_TABLE + " d"
+                              + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = d.queue_id");
         });
     }
 
@@ -276,6 +316,9 @@ public final class ShardOwnedSchema {
     public static void recreate(DataSource dataSource) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
         withBootstrapLock(dataSource, statement -> {
+            for (var view : List.of(UNORDERED_VIEW, ORDERED_VIEW, DLQ_VIEW)) {
+                statement.execute("DROP VIEW IF EXISTS " + view);
+            }
             for (var table : List.of(UNORDERED_TABLE, ORDERED_TABLE, DLQ_TABLE,
                                      LEASE_TABLE, INSTANCE_TABLE, REGISTRY_TABLE)) {
                 statement.execute("DROP TABLE IF EXISTS " + table);
@@ -362,6 +405,80 @@ public final class ShardOwnedSchema {
         }
         registerQueue(dataSource, registered.queueId(), shardCount);
         return registered;
+    }
+
+    /**
+     * Grow a queue's shard count.
+     *
+     * <h2>Why this is possible at all, when the count is described as fixed</h2>
+     * The two lanes are not equally pinned, and treating them as one is what made the count look
+     * immutable.
+     * <p>
+     * <b>Unordered messages are assigned round-robin.</b> Nothing about them depends on which shard
+     * they landed in — no key hashes to it, no ordering rests on it. Adding shards adds sequences and
+     * lease rows; the messages already stored stay where they are and are still delivered by whoever
+     * owns those shards. There is nothing to re-route.
+     * <p>
+     * <b>Ordered messages are the constraint.</b> A key's shard is {@code hash(key) mod shardCount},
+     * so changing the count sends a key's future messages to a different shard from its past ones —
+     * two owners for one key, which is reordering rather than the duplicate at-least-once permits.
+     * This therefore refuses while the ordered lane holds anything for the queue.
+     *
+     * <h2>What the caller still has to do</h2>
+     * Shard count is baked into every running {@code ShardOwnedQueue}, so growing it in the database
+     * changes nothing until instances are restarted — and until they all are, two moduli are in
+     * flight at once. For an unordered-only queue that is harmless: every shard has an owner either
+     * way, so a rolling restart is fine. With ordered traffic it is not, which is the other half of
+     * why the ordered lane must be empty.
+     * <p>
+     * <b>Shrinking is not supported.</b> Messages in the shards being removed would be addressed by
+     * nobody, and there is no safe general answer to where they should go — drain those shards and
+     * recreate the queue instead.
+     *
+     * @return the queue as it now stands
+     * @throws IllegalStateException if the count is not an increase, or the ordered lane is not empty
+     */
+    public static RegisteredQueue growShardCount(DataSource dataSource, QueueName name, int newShardCount) throws SQLException {
+        requireNonNull(dataSource, "No dataSource provided");
+        requireNonNull(name, "No queue name provided");
+        var current = resolve(dataSource, name)
+                .orElseThrow(() -> new IllegalStateException("Queue '" + name + "' is not registered"));
+        if (newShardCount <= current.shardCount()) {
+            throw new IllegalStateException(
+                    "Queue '" + name + "' has " + current.shardCount() + " shards and can only grow: "
+                    + newShardCount + " is not an increase. Shrinking would leave the messages in the "
+                    + "removed shards addressed by nobody");
+        }
+        var orderedRemaining = countOrdered(dataSource, current.queueId());
+        if (orderedRemaining > 0) {
+            throw new IllegalStateException(
+                    "Queue '" + name + "' still holds " + orderedRemaining + " ordered message(s). A key's "
+                    + "shard is hash(key) mod shardCount, so growing the count now would send a key's "
+                    + "next message to a different shard from its last one — two owners for one key, "
+                    + "which reorders it. Let the ordered lane drain first");
+        }
+
+        registerQueue(dataSource, current.queueId(), newShardCount);
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "UPDATE " + REGISTRY_TABLE + " SET shard_count = ? WHERE queue_id = ?")) {
+            statement.setInt(1, newShardCount);
+            statement.setShort(2, current.queueId());
+            statement.executeUpdate();
+        }
+        return new RegisteredQueue(name, current.queueId(), newShardCount);
+    }
+
+    private static long countOrdered(DataSource dataSource, short queueId) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT count(*) FROM " + ORDERED_TABLE + " WHERE queue_id = ?")) {
+            statement.setShort(1, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getLong(1);
+            }
+        }
     }
 
     /** What a name is interned to, or empty if it has never been registered. */

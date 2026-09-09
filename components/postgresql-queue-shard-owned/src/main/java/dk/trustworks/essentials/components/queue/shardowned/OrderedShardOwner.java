@@ -23,7 +23,6 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import java.util.function.BiConsumer;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 

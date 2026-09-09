@@ -104,6 +104,11 @@ Every message is assigned to a shard at enqueue. Each shard has exactly one owni
 - **Only `EnqueueMessages` and `HandleMessage` are interceptable.** The other SPI members gain no capability from it — an observer already sees them and nothing useful substitutes for their results.
 - **Not proceeding on `HandleMessage` acknowledges the message.** A dropped message and a handled one look identical afterwards; say so wherever this is documented.
 
+- **By-id operations do NOT need a claim flag, and the SPI javadoc used to say they did.** `MessageId` is `(lane, shard, seq)` and the primary key is `(queue_id, shard, seq)` — addressing a row is a point lookup. The claim write this design removes is paid per *delivery*; an admin write is paid per *administrator*. Those were priced as if they were the same frequency. Acknowledgement stays session-scoped, because the engine cannot know an arbitrary caller did the work.
+- **A by-id write races an in-flight delivery and cannot be fixed.** In-flight lives in the owner's memory. The mismatched ack is already tolerated (`stillOwns` disambiguates it); what is not guaranteed is that the handler did not run. Document it, do not try to close it.
+- **The readable views are ergonomics, not storage.** `shard_queue_*_readable` render `bytea` via `shard_queue_readable()`, which falls back to hex on non-UTF-8 — a view that raises on one binary row is worse than one that shows hex. `recreate` must drop the views before the tables.
+- **`shardCount` can grow, and only the ordered lane pins it.** Unordered is round-robin so nothing depends on a message's shard; ordered is `hash(key) mod shardCount`, so growing mid-flight puts one key in two shards. `growShardCount` refuses while the ordered lane is non-empty and refuses to shrink. Instances must be restarted afterwards — the count is baked into a running queue.
+
 ## Consumer docs
 
 `LLM/LLM-postgresql-queue-shard-owned.md` — configuration reference, sizing formulas, and the two "how not to kill the database / the application" sections. Keep the formulas there in step with `ShardOwnedMultiQueueCostIT`; they are measured, not asserted.

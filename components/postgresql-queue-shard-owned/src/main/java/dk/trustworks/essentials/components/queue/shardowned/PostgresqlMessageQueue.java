@@ -560,6 +560,40 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     @Override
+    public Optional<QueuedMessage> getMessage(MessageId messageId) throws SQLException {
+        requireNonNull(messageId, "No messageId provided");
+        return storage.findMessage(messageId.shard(), messageId.sequence(), isOrdered(messageId))
+                      .map(stored -> new QueuedMessage(messageId, stored.key(), stored.payload(),
+                                                       stored.payloadType(), stored.attempts(),
+                                                       stored.enqueuedAt(), stored.visibleAt()));
+    }
+
+    @Override
+    public boolean deleteMessage(MessageId messageId) throws SQLException {
+        requireNonNull(messageId, "No messageId provided");
+        return storage.deleteMessage(messageId.shard(), messageId.sequence(), isOrdered(messageId));
+    }
+
+    @Override
+    public boolean retryMessage(MessageId messageId, Duration delay) throws SQLException {
+        requireNonNull(messageId, "No messageId provided");
+        requireNonNull(delay, "No delay provided");
+        return storage.retryMessage(messageId.shard(), messageId.sequence(), isOrdered(messageId),
+                                    Math.max(0L, delay.toMillis()));
+    }
+
+    @Override
+    public boolean markAsDeadLetter(MessageId messageId, String reason) throws SQLException {
+        requireNonNull(messageId, "No messageId provided");
+        return storage.deadLetterMessage(messageId.shard(), messageId.sequence(), isOrdered(messageId),
+                                         reason == null ? "marked as dead letter by an administrator" : reason);
+    }
+
+    private static boolean isOrdered(MessageId messageId) {
+        return messageId.lane() == MessageId.Lane.ORDERED;
+    }
+
+    @Override
     public List<DeadLetter> deadLetters(int offset, int limit) throws SQLException {
         return storage.deadLetters(offset, limit).stream()
                       .map(row -> new DeadLetter(new MessageId("ordered".equals(row.lane())

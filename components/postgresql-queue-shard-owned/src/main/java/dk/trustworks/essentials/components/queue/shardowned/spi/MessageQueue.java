@@ -50,11 +50,19 @@ import java.util.*;
  *         — a caller-controlled transaction boundary, a caller-driven loop, and a long-running
  *         handler — behind one signature. {@link #openSession} serves them explicitly instead.</dd>
  *
- *     <dt>Acknowledge, delete, retry and dead-letter by message id, from any caller</dt>
- *     <dd>These assume any caller may act on any message, which is only true when every message
- *         carries a claim flag. Supporting them here would mean writing that flag back per message —
- *         the single largest cost the design removes. Under ownership these are operations on a
- *         {@link QueueSession}, which is the thing that actually holds the right to perform them.</dd>
+ *     <dt>Acknowledging a message by id from any caller</dt>
+ *     <dd>Acknowledgement is what the owner does when a handler returns, and letting an arbitrary
+ *         caller do it means the engine cannot know whether the work was done. That one stays a
+ *         {@link QueueSession} operation, which is the thing that actually holds the right.
+ *         <p>
+ *         <b>The rest of the by-id family is now supported, and an earlier version of this javadoc
+ *         was wrong to exclude it.</b> It argued that acting on a message by id requires a per-message
+ *         claim flag, which conflated two different things: addressing a row, and knowing whether
+ *         someone is working on it. A {@link MessageId} is {@code (lane, shard, seq)} and the primary
+ *         key is {@code (queue_id, shard, seq)}, so addressing costs a point lookup and no flag at
+ *         all. The claim write the design removes is paid once per <em>delivery</em>; an
+ *         administrative write is paid once per <em>administrator</em>. Those are not the same
+ *         frequency and should never have been priced as if they were.</dd>
  * </dl>
  *
  * <h2>What it required that this one keeps</h2>
@@ -141,6 +149,47 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * Messages enqueued and not yet acknowledged, per lane. Cheap enough to poll for monitoring.
      */
     QueueDepth depth() throws SQLException;
+
+    /**
+     * Read one message by id, for an admin surface or an operator with a support ticket.
+     * <p>
+     * A primary-key point lookup that costs delivery nothing. Returns empty if the message has been
+     * handled, deleted, or moved to the dead letter lane — see {@link #deadLetters}.
+     */
+    Optional<QueuedMessage> getMessage(MessageId messageId) throws SQLException;
+
+    /**
+     * Remove one message without delivering it.
+     * <p>
+     * <b>Races a delivery in progress, and cannot be made not to.</b> Whether a message is currently
+     * in a handler lives in the owner's memory, so nothing this call can read will tell it. Deleting
+     * a message the owner is holding means the handler still runs to completion and its
+     * acknowledgement then matches no row — which the engine already tolerates, because a fenced-out
+     * owner produces the same thing. The message is gone either way; what is not guaranteed is that
+     * its handler did not run.
+     *
+     * @return false if it was already gone
+     */
+    boolean deleteMessage(MessageId messageId) throws SQLException;
+
+    /**
+     * Make a message deliverable again after {@code delay}, resetting its attempt count.
+     * <p>
+     * For an operator releasing a message stuck behind a long backoff. Same race as
+     * {@link #deleteMessage}: if a handler is running, it may complete and acknowledge, and the retry
+     * is then lost rather than doubled.
+     *
+     * @return false if the message no longer exists
+     */
+    boolean retryMessage(MessageId messageId, Duration delay) throws SQLException;
+
+    /**
+     * Park a message in the dead letter lane whatever its attempt count, for a poison message an
+     * operator wants out of the way now rather than after the policy is exhausted.
+     *
+     * @return false if the message no longer exists
+     */
+    boolean markAsDeadLetter(MessageId messageId, String reason) throws SQLException;
 
     List<DeadLetter> deadLetters(int offset, int limit) throws SQLException;
 

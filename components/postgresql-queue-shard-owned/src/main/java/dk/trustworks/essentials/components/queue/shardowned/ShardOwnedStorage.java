@@ -900,6 +900,85 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * Read one message by its id.
+     * <p>
+     * A primary-key point lookup: {@code MessageId} is {@code (lane, shard, seq)} and the primary key
+     * is {@code (queue_id, shard, seq)}. It needs no claim flag, touches no index the fast path uses,
+     * and costs delivery nothing — the SPI's own justification for omitting by-id operations
+     * conflated addressing a row with knowing whether someone is working on it.
+     */
+    public Optional<StoredMessage> findMessage(int shard, long seq, boolean ordered) throws SQLException {
+        var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
+        var key = ordered ? "msg_key" : "NULL::text";
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT " + key + ", payload, payload_type, attempts, enqueued_at, visible_at"
+                     + " FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+            statement.setShort(1, queueId);
+            statement.setShort(2, (short) shard);
+            statement.setLong(3, seq);
+            try (var resultSet = statement.executeQuery()) {
+                if (!resultSet.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new StoredMessage(resultSet.getString(1),
+                                                     resultSet.getBytes(2),
+                                                     resultSet.getInt(3),
+                                                     resultSet.getInt(4),
+                                                     resultSet.getTimestamp(5).toInstant(),
+                                                     resultSet.getTimestamp(6).toInstant()));
+            }
+        }
+    }
+
+    public record StoredMessage(String key, byte[] payload, int payloadType, int attempts,
+                                java.time.Instant enqueuedAt, java.time.Instant visibleAt) {
+    }
+
+    /** Remove one message by id. Returns false if it was already gone. */
+    public boolean deleteMessage(int shard, long seq, boolean ordered) throws SQLException {
+        var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "DELETE FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+            statement.setShort(1, queueId);
+            statement.setShort(2, (short) shard);
+            statement.setLong(3, seq);
+            return statement.executeUpdate() > 0;
+        }
+    }
+
+    /**
+     * Make one message deliverable again after {@code delayMillis}, resetting its attempt count.
+     * Server-side {@code now()}, like every other durable moment here.
+     */
+    public boolean retryMessage(int shard, long seq, boolean ordered, long delayMillis) throws SQLException {
+        var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "UPDATE " + table + " SET attempts = 0, visible_at = now() + make_interval(secs => ? / 1000.0)"
+                     + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
+            statement.setLong(1, delayMillis);
+            statement.setShort(2, queueId);
+            statement.setShort(3, (short) shard);
+            statement.setLong(4, seq);
+            return statement.executeUpdate() > 0;
+        }
+    }
+
+    /** Park one message in the dead letter lane by id, whatever its attempt count. */
+    public boolean deadLetterMessage(int shard, long seq, boolean ordered, String reason) throws SQLException {
+        var table = ordered ? ORDERED_TABLE : UNORDERED_TABLE;
+        try (var connection = dataSource.getConnection()) {
+            if (findMessage(shard, seq, ordered).isEmpty()) {
+                return false;
+            }
+            moveToDeadLetter(connection, table, ordered ? "ordered" : "unordered", shard, seq, reason);
+            return true;
+        }
+    }
+
+    /**
      * Put a dead letter back in its lane and remove it from the parking table, atomically.
      * <p>
      * The attempt count is reset, because resurrection is a human deciding the message deserves a

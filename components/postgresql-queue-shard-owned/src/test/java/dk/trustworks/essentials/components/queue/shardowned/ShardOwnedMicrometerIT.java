@@ -215,6 +215,26 @@ class ShardOwnedMicrometerIT {
         }
 
         @Override
+        public java.util.Optional<QueuedMessage> getMessage(MessageId messageId) throws java.sql.SQLException {
+            return delegate.getMessage(messageId);
+        }
+
+        @Override
+        public boolean deleteMessage(MessageId messageId) throws java.sql.SQLException {
+            return delegate.deleteMessage(messageId);
+        }
+
+        @Override
+        public boolean retryMessage(MessageId messageId, Duration delay) throws java.sql.SQLException {
+            return delegate.retryMessage(messageId, delay);
+        }
+
+        @Override
+        public boolean markAsDeadLetter(MessageId messageId, String reason) throws java.sql.SQLException {
+            return delegate.markAsDeadLetter(messageId, reason);
+        }
+
+        @Override
         public List<DeadLetter> deadLetters(int offset, int limit) throws java.sql.SQLException {
             return delegate.deadLetters(offset, limit);
         }

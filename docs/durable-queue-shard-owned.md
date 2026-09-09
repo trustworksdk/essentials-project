@@ -168,7 +168,36 @@ CREATE TABLE shard_queue_instance (
 
 Membership needs its own table because the lease table cannot answer "how many instances are there". An instance holding no shards — the one that most needs counting, since it is waiting for a share — leaves no trace in the lease table.
 
-### 2.6 Sequences
+### 2.6 Reading a queue in psql
+
+Payloads are `bytea` because the database never looks inside them, which is what keeps the write path
+cheap — and what makes `SELECT payload` return `\x7b226f...` to an operator holding a support ticket.
+
+Three views fix the ergonomics without touching the storage: `shard_queue_unordered_readable`,
+`shard_queue_ordered_readable` and `shard_queue_dead_letter_readable`. Each joins the registry so the
+queue's *name* is a column rather than an interned id, and renders the payload through
+`shard_queue_readable(bytea)`, which returns text for valid UTF-8 — JSON, XML and plain text all
+qualify — and falls back to hex otherwise rather than raising. A view that throws on one binary row
+would be worse than one that shows it as hex.
+
+The bytes stay bytes; the engine reads none of this.
+
+### 2.7 Growing a queue's shard count
+
+The two lanes are not equally pinned, and treating them as one is what made the count look immutable.
+
+**Unordered messages are assigned round-robin**, so nothing about them depends on which shard they
+landed in. Adding shards adds sequences and lease rows; the messages already stored stay where they
+are and are still delivered by whoever owns those shards. There is nothing to re-route.
+
+**Ordered messages are the constraint.** `ShardOwnedSchema.growShardCount(dataSource, name, n)`
+therefore refuses while the ordered lane holds anything for that queue, and refuses to shrink at all.
+
+The caller still has to restart instances: the count is baked into every running `ShardOwnedQueue`,
+so until they are all restarted two moduli are in flight. For an unordered-only queue that is
+harmless — every shard has an owner either way, so a rolling restart is fine.
+
+### 2.8 Sequences
 
 Two per `(queue, shard)`: `shard_queue_seq_q<queue>_s<shard>` for the unordered lane and `shard_queue_ordered_seq_q<queue>_s<shard>` for the ordered one, both `CACHE 1` so an allocated value is one that will be committed. Plus one global `shard_queue_session_fence`, from which pull sessions draw **negative** fences so they can never collide with an owner fence in the shared `lease` column.
 
@@ -672,14 +701,14 @@ Full reference with sizing formulas and worked examples: [`LLM/LLM-postgresql-qu
 **What it does not**
 
 - Exactly-once delivery, cross-service messaging, or ordering across shards.
-- Ordering across a `shardCount` change. Shards are fixed at schema creation; changing the count re-routes keys and breaks ordering for in-flight work. There is no supported re-shard procedure.
+- Ordering across a `shardCount` change **while the ordered lane holds messages**. A key's shard is `hash(key) mod shardCount`, so growing the count would send a key's next message to a different shard from its last. `ShardOwnedSchema.growShardCount` refuses in that state. Growing is supported once the ordered lane is empty, and at any time for an unordered-only queue — see §2.7. Shrinking is not supported at all: the messages in the removed shards would be addressed by nobody.
 - `SessionScope.KEY` (§10).
 
 **Known gaps** — features described in the contract or in the module's own documentation that are not implemented:
 
 | Gap | Detail |
 |---|---|
-| No admin API | The engine implements its own `MessageQueue` SPI, not `DurableQueues`, so none of the surrounding Essentials machinery consumes it. A Spring Boot starter exists (`components/spring-boot-starter-postgresql-queue-shard-owned`) and wires the engine's own contract, including interceptor and observer beans |
+| No admin **UI** | The engine implements its own `MessageQueue` SPI, not `DurableQueues`, so none of the surrounding Essentials machinery consumes it. A Spring Boot starter exists (`components/spring-boot-starter-postgresql-queue-shard-owned`) and wires the engine's own contract, including interceptor and observer beans |
 | No semantic type for `instanceId` | Deliberate. `QueueName` is a local record for the same reason: the `types` module carries kotlin-reflect and kotlin-stdlib at compile scope, which is a poor trade for a wrapper in a module that otherwise depends on `shared` alone. The transposition hazard — a `short`, an `int` and a `String` in a row — is closed instead by the builders, which name every argument |
 
 **Not measured** — absence of a result, not a passing one. Network partitions between live nodes, genuinely separate hosts with independent clocks, soaks longer than a few minutes, payload size distributions beyond a uniform 200 bytes, and throughput on hardware that can hold a throughput number still. See [`durable-queue-measurements.md`](./durable-queue-measurements.md) §4 for what this lab can and cannot resolve.
