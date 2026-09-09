@@ -232,22 +232,38 @@ class ShardOwnedAdminSurfaceIT {
     }
 
     /** Growing while ordered messages exist would send a key's next message to a different shard. */
+    /**
+     * The inverse of what this test used to assert, and the whole point of the fixed routing space.
+     * <p>
+     * Growing was refused while the ordered lane held anything, because a key's shard was
+     * {@code hash(key) mod shardCount} and growing sent a key's next message to a different shard from
+     * its last. An operator could not satisfy that except by stopping the producers, so the count was
+     * frozen for the life of the queue and had to be guessed correctly once. The ordered lane now
+     * routes on a fixed space of its own and never reads this number, so growing it with ordered
+     * traffic in flight moves nothing.
+     */
     @Test
-    void growing_is_refused_while_the_ordered_lane_holds_anything() throws Exception {
+    void growing_is_allowed_while_the_ordered_lane_holds_messages() throws Exception {
         var name = QueueName.of("ordered-pinned");
         ShardOwnedSchema.registerQueue(dataSource, name, 2);
+        var key = "key";
         try (var queue = PostgresqlMessageQueue.builder()
                                                .setDataSource(dataSource)
                                                .setQueueName(name)
                                                .setInstanceId("pinned")
                                                .build()) {
-            queue.enqueue(List.of(Message.ordered("k1".getBytes(StandardCharsets.UTF_8), 1, "key", 0L)));
+            queue.enqueue(List.of(Message.ordered("k1".getBytes(StandardCharsets.UTF_8), 1, key, 0L)));
         }
 
-        assertThatThrownBy(() -> ShardOwnedSchema.growShardCount(dataSource, name, 4))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("ordered")
-                .hasMessageContaining("reorders");
+        var unitBefore = ShardOwnedSchema.unitForKey(key);
+        var grown = ShardOwnedSchema.growShardCount(dataSource, name, 4);
+
+        assertThat(grown.shardCount())
+                .as("the unordered lane's shard count grows with ordered messages still in flight")
+                .isEqualTo(4);
+        assertThat(ShardOwnedSchema.unitForKey(key))
+                .as("and the ordered key has not moved, because it never depended on that number")
+                .isEqualTo(unitBefore);
     }
 
     @Test

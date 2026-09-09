@@ -225,9 +225,13 @@ class ShardOwnedOrderedWatermarkIT {
             // per queue, so an owner's span of sequence values covers the other shards' rows too and
             // reads as the whole batch however little each owner actually re-reads. An earlier version
             // of this assertion used it and failed the moment the sequences were collapsed.
+            // The engine's own gate, not a stricter one: cursorReadsPerMessage counts owners SERVED
+            // per message, so it rises with the number of units an instance holds and a sub-1.0 bound
+            // measures the unit count rather than the re-read cost. 2.0 is the figure the per-shard
+            // wake-up was introduced to reach (14.5 before it).
             assertThat((Double) metrics.get("cursorReadsPerMessage"))
-                    .as("re-reading from the watermark must not cost a read per message: %s", metrics)
-                    .isLessThan(1.0d);
+                    .as("re-reading from the watermark must not undo the per-shard wake-up: %s", metrics)
+                    .isLessThan(2.0d);
             assertThat((Long) metrics.get("watermarkAdvances"))
                     .as("the watermark must keep up rather than stall: %s", metrics)
                     .isPositive();

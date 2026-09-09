@@ -99,14 +99,17 @@ class ShardOwnedOrderedRebalanceIT {
             first.startConsumingOrdered((key, payload, payloadType) -> {
             }, fast(Duration.ofSeconds(5)), SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(10))
-                      .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+                      .untilAsserted(() -> assertThat(first.shardsHeld())
+                              .isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
 
             second.startConsumingOrdered((key, payload, payloadType) -> {
             }, fast(Duration.ofSeconds(5)), SHARD_COUNT);
 
             Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
-                assertThat(first.shardsHeld()).as("incumbent must come down to its fair share").isEqualTo(4);
-                assertThat(second.shardsHeld()).as("joiner must reach its fair share").isEqualTo(4);
+                assertThat(first.shardsHeld()).as("incumbent must come down to its fair share")
+                        .isEqualTo(ShardOwnedSchema.ORDERED_UNITS / 2);
+                assertThat(second.shardsHeld()).as("joiner must reach its fair share")
+                        .isEqualTo(ShardOwnedSchema.ORDERED_UNITS / 2);
             });
             // Shedding is what made it possible, so it must actually have happened rather than the
             // split arising some other way.
@@ -231,10 +234,11 @@ class ShardOwnedOrderedRebalanceIT {
             // Enough per-consumer parallelism to hold a stuck handler on every shard at once. With
             // the default of ten across eight shards some shards had none, drained cleanly, and the
             // shed succeeded — which is the opposite of what this test is about.
-            first.setParallelConsumers(SHARD_COUNT * 8);
+            first.setParallelConsumers(ShardOwnedSchema.ORDERED_UNITS * 8);
             first.startConsumingOrdered(stuck, fast(Duration.ofMillis(500)), SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(10))
-                      .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
+                      .untilAsserted(() -> assertThat(first.shardsHeld())
+                              .isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
 
             // One message per shard-worth of keys, so every shard has a handler stuck in it.
             enqueueOrdered(first, 512, 1);
@@ -249,14 +253,14 @@ class ShardOwnedOrderedRebalanceIT {
             // Correctness over balance: the shard is still here, not handed over mid-key.
             assertThat(first.shardsHeld())
                     .as("a shard whose keys are still in handlers must not be released")
-                    .isGreaterThan(4);
+                    .isGreaterThan(ShardOwnedSchema.ORDERED_UNITS / 2);
 
             // Once the handlers finish, the shed that was retried on a later tick succeeds and the
             // split converges — the abandon is a delay, not a permanent degradation.
             blockHandlers.countDown();
             Awaitility.await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> {
-                assertThat(first.shardsHeld()).isEqualTo(4);
-                assertThat(second.shardsHeld()).isEqualTo(4);
+                assertThat(first.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS / 2);
+                assertThat(second.shardsHeld()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS / 2);
             });
             assertThat(first.metrics().shedsCompleted.sum()).isPositive();
         } finally {

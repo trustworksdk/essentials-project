@@ -290,9 +290,11 @@ class ShardOwnedMicrometerIT {
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "health-1")) {
             var health = queue.health();
             assertThat(health.shardCount()).isEqualTo(SHARD_COUNT);
+            assertThat(health.orderedUnits()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
             assertThat(health.unownedShards())
-                    .describedAs("nobody is consuming, so every shard of both lanes is unowned")
-                    .isEqualTo(SHARD_COUNT * 2);
+                    .describedAs("nobody is consuming, so every unit of both lanes is unowned — and "
+                                 + "the two lanes have different totals now")
+                    .isEqualTo(SHARD_COUNT + ShardOwnedSchema.ORDERED_UNITS);
             assertThat(health.fullyOwned()).isFalse();
             assertThat(health.liveInstances()).isZero();
 
@@ -304,7 +306,7 @@ class ShardOwnedMicrometerIT {
                               .describedAs("with a consumer running, every shard has an owner")
                               .isTrue());
             assertThat(queue.health().unorderedOwned()).isEqualTo(SHARD_COUNT);
-            assertThat(queue.health().orderedOwned()).isEqualTo(SHARD_COUNT);
+            assertThat(queue.health().orderedOwned()).isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
         }
     }
 
@@ -319,7 +321,7 @@ class ShardOwnedMicrometerIT {
                     .isNotNull();
             assertThat(registry.find(MicrometerQueueObserver.SHARDS_UNOWNED_GAUGE).gauge().value())
                     .describedAs("nothing is consuming yet")
-                    .isEqualTo(SHARD_COUNT * 2.0d);
+                    .isEqualTo(SHARD_COUNT + ShardOwnedSchema.ORDERED_UNITS * 1.0d);
 
             queue.consume((key, payload, payloadType) -> {
             }, ConsumerOptions.defaults());
@@ -367,7 +369,7 @@ class ShardOwnedMicrometerIT {
                     .isEqualTo(1.0d);
             assertThat(registry.find(MicrometerQueueObserver.SHARDS_UNOWNED_GAUGE).gauge().value())
                     .describedAs("and so must the ownership gauge")
-                    .isEqualTo(SHARD_COUNT * 2.0d);
+                    .isEqualTo(SHARD_COUNT + ShardOwnedSchema.ORDERED_UNITS * 1.0d);
         }
     }
 }

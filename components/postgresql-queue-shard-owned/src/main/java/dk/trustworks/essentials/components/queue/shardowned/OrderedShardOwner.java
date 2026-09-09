@@ -49,7 +49,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * it cannot happen. Whether that count is zero under realistic producers is a measurement, not an
  * assumption.
  */
-final class OrderedShardOwner implements BatchReadableOwner {
+final class OrderedShardOwner implements LeasedOwner {
     private static final Logger log = LoggerFactory.getLogger(OrderedShardOwner.class);
 
     private final ShardOwnedStorage             storage;
@@ -83,14 +83,6 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * them is running, everything at or below that {@code maxSeen} has resolved.
      */
     private final ArrayDeque<WatermarkCandidate> watermarkCandidates = new ArrayDeque<>();
-    /** Rows the pump read on this owner's behalf, consumed by the next pass. Pump thread only. */
-    private BatchRead pendingBatch;
-
-    private record BatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
-                             List<ShardOwnedStorage.OrderedRow> sweptRows,
-                             OptionalLong nextVisibleMillis) {
-    }
-
     private record WatermarkCandidate(long maxSeen, Set<Long> runningXids, long observedAtNanos) {
     }
 
@@ -257,43 +249,15 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
 
     @Override
-    public long batchReadCursor() {
-        return safeCursor;
-    }
-
-    @Override
-    public boolean batchSweepDue() {
-        return System.nanoTime() - lastSweepNanos >= sweepIntervalNanos;
-    }
-
-    @Override
-    public void applyBatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
-                               List<ShardOwnedStorage.OrderedRow> sweptRows,
-                               OptionalLong nextVisibleMillis) {
-        pendingBatch = new BatchRead(cursorRows, sweptRows, nextVisibleMillis);
-    }
-
-    @Override
     public int pumpOnce(Connection connection) throws SQLException {
         if (shedComplete.get()) {
             return 0;
         }
-        // Taken once, so a batch cannot be applied twice if a pass is repeated for any reason.
-        var batch = pendingBatch;
-        pendingBatch = null;
-
         // Read from the WATERMARK, not from the highest value seen, so a value whose transaction had
         // not committed when an earlier pass went by is read again rather than chased. The window
         // between the two is bounded by the horizon, not by the backlog, and `seen` deduplicates it.
-        List<ShardOwnedStorage.OrderedRow> rows;
-        if (batch != null) {
-            rows = batch.cursorRows();
-        } else {
-            rows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
-            metrics.orderedReadStatements.increment();
-        }
-        // Counts owners SERVED, not statements issued — the two stopped being the same when the pump
-        // began batching. orderedReadStatements is the one to compare against.
+        var rows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
+        metrics.orderedReadStatements.increment();
         metrics.cursorReads.increment();
         for (var row : rows) {
             maxSeen = Math.max(maxSeen, row.seq());
@@ -305,13 +269,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
         var now = System.nanoTime();
         var sweptThisPass = false;
-        if (batch != null && batch.sweptRows() != null) {
-            applySweptRows(batch.sweptRows(), batch.nextVisibleMillis());
-            lastSweepNanos = now;
-            sweptThisPass = true;
-        } else if (now - lastSweepNanos >= sweepIntervalNanos) {
-            // Reached whether or not a batch was applied: only the CURSOR read is batched today, so
-            // the sweep is still this owner's own two statements.
+        if (now - lastSweepNanos >= sweepIntervalNanos) {
             sweep(connection);
             lastSweepNanos = now;
             sweptThisPass = true;

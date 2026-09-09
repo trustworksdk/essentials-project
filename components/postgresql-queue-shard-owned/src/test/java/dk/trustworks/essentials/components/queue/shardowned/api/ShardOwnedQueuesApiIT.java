@@ -109,13 +109,15 @@ class ShardOwnedQueuesApiIT {
         assertThat(status.unorderedDepth()).isEqualTo(1);
         assertThat(status.orderedDepth()).isEqualTo(1);
         assertThat(status.unownedShards())
-                .describedAs("nothing is consuming, so every shard of both lanes is unowned - which is "
-                             + "the state depth alone cannot express and this endpoint exists to expose")
-                .isEqualTo(8);
+                .describedAs("nothing is consuming, so every unit of both lanes is unowned - which is "
+                             + "the state depth alone cannot express and this endpoint exists to expose. "
+                             + "The lanes have different totals: 4 unordered shards, and the ordered "
+                             + "lane's fixed unit space")
+                .isEqualTo(4 + ShardOwnedSchema.ORDERED_UNITS);
         assertThat(status.fullyOwned()).isFalse();
         assertThat(status.maxInstances())
-                .describedAs("shardCount caps how many instances can hold anything for a lane")
-                .isEqualTo(4);
+                .describedAs("the larger of the two lanes' ceilings caps horizontal scale")
+                .isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
     }
 
     @Test

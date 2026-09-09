@@ -46,6 +46,30 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  */
 public final class ShardOwnedSchema {
 
+    /**
+     * The ordered lane's routing space. Fixed, not configurable, and frozen for the life of the
+     * schema.
+     * <p>
+     * This is the defect this constant exists to remove. A key's owner was {@code hash(key) mod
+     * shardCount}, so {@code shardCount} decided both where a key lives and how many consumers can
+     * share the work — and changing it moved every key, which is why the ordered lane could never
+     * change it in a running system and a user had to guess correctly once, with no way back. Fixing
+     * the routing space separates the two: growing the number of consumers now moves UNITS between
+     * owners, and a unit's contents never move.
+     * <p>
+     * Sixty-four because it must exceed the largest useful instance count and nothing more:
+     * {@code ShardOwnedShardCountSweepIT} put the throughput knee at four, with eight buying 95% of
+     * what sixteen does, so sixty-four is already far past the point of return. Larger is not free —
+     * idle poll cost is linear in units held and does not amortise — and smaller would cap horizontal
+     * scale at a number someone could actually reach. See
+     * {@code docs/durable-queue-ordered-routing-design.md} §5.1.
+     * <p>
+     * The UNORDERED lane keeps a configurable shard count. It has no routing problem — placement is
+     * round-robin, so nothing depends on the count — and it can therefore still grow with a single
+     * call.
+     */
+    public static final int ORDERED_UNITS = 64;
+
     public static final String UNORDERED_TABLE = "shard_queue_unordered";
     public static final String ORDERED_TABLE   = "shard_queue_ordered";
     public static final String DLQ_TABLE       = "shard_queue_dead_letter";
@@ -436,7 +460,7 @@ public final class ShardOwnedSchema {
      * recreate the queue instead.
      *
      * @return the queue as it now stands
-     * @throws IllegalStateException if the count is not an increase, or the ordered lane is not empty
+     * @throws IllegalStateException if the count is not an increase
      */
     public static RegisteredQueue growShardCount(DataSource dataSource, QueueName name, int newShardCount) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
@@ -449,15 +473,15 @@ public final class ShardOwnedSchema {
                     + newShardCount + " is not an increase. Shrinking would leave the messages in the "
                     + "removed shards addressed by nobody");
         }
-        var orderedRemaining = countOrdered(dataSource, current.queueId());
-        if (orderedRemaining > 0) {
-            throw new IllegalStateException(
-                    "Queue '" + name + "' still holds " + orderedRemaining + " ordered message(s). A key's "
-                    + "shard is hash(key) mod shardCount, so growing the count now would send a key's "
-                    + "next message to a different shard from its last one — two owners for one key, "
-                    + "which reorders it. Let the ordered lane drain first");
-        }
-
+        // No ordered-lane guard, and its removal is the point of the fixed routing space.
+        //
+        // This used to refuse while the ordered lane held anything, because a key's shard was
+        // hash(key) mod shardCount and growing the count sent a key's next message to a different
+        // shard from its last — two owners for one key. There was no way for an operator to satisfy
+        // that except stopping the producers, which is an outage rather than a procedure, so the count
+        // was effectively frozen for the life of the queue. The ordered lane now routes on a fixed
+        // space of its own (ORDERED_UNITS) and does not consult this number at all, so growing it
+        // moves nothing and can happen with ordered traffic in flight.
         registerQueue(dataSource, current.queueId(), newShardCount);
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
@@ -467,6 +491,16 @@ public final class ShardOwnedSchema {
             statement.executeUpdate();
         }
         return new RegisteredQueue(name, current.queueId(), newShardCount);
+    }
+
+    private static void seedLane(java.sql.PreparedStatement statement, short queueId, String lane, int units)
+            throws SQLException {
+        for (var shard = 0; shard < units; shard++) {
+            statement.setShort(1, queueId);
+            statement.setString(2, lane);
+            statement.setShort(3, (short) shard);
+            statement.addBatch();
+        }
     }
 
     private static long countOrdered(DataSource dataSource, short queueId) throws SQLException {
@@ -553,14 +587,10 @@ public final class ShardOwnedSchema {
              var statement = connection.prepareStatement(
                      "INSERT INTO " + LEASE_TABLE + " (queue_id, lane, shard, owner, fence, lease_until) "
                      + "VALUES (?, ?, ?, NULL, 0, now()) ON CONFLICT DO NOTHING")) {
-            for (var lane : new String[]{"unordered", "ordered"}) {
-                for (var shard = 0; shard < shardCount; shard++) {
-                    statement.setShort(1, queueId);
-                    statement.setString(2, lane);
-                    statement.setShort(3, (short) shard);
-                    statement.addBatch();
-                }
-            }
+            // Per lane, because the two no longer have the same number of units: the ordered lane's
+            // space is fixed at ORDERED_UNITS and the unordered lane's is the caller's shard count.
+            seedLane(statement, queueId, "unordered", shardCount);
+            seedLane(statement, queueId, "ordered", ORDERED_UNITS);
             statement.executeBatch();
         }
     }
@@ -593,6 +623,11 @@ public final class ShardOwnedSchema {
      * not a correctness problem — but the routing space is chosen once and then frozen, and the cost
      * of avoiding it is one multiply and two shifts on the enqueue path.
      */
+    /** The ordered lane's routing function: fixed space, no count to get wrong. */
+    public static int unitForKey(String key) {
+        return shardForKey(key, ORDERED_UNITS);
+    }
+
     public static int shardForKey(String key, int shardCount) {
         return Math.floorMod(mix(key.hashCode()), shardCount);
     }

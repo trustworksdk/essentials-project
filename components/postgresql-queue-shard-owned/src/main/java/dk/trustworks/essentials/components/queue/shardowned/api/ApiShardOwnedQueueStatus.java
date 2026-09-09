@@ -34,9 +34,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                      above zero is the alerting condition; briefly non-zero is a rebalance
  * @param liveInstances instances heartbeating for this queue. Below the number of running processes
  *                      means two of them share an instance id, which halves the share each may hold
- * @param maxInstances  the most instances that can hold anything for one lane, which is
- *                      {@code shardCount}. Deploying more than this leaves the extras consuming
- *                      nothing — it is a ceiling on horizontal scale, not just on throughput
+ * @param maxInstances  the most instances that can hold anything for this queue. The two lanes have
+ *                      different ceilings — the unordered lane's is {@code shardCount}, which an
+ *                      operator chooses and can grow, and the ordered lane's is its fixed unit space
+ *                      — so this is the larger of the two. Deploying more than this leaves the extras
+ *                      consuming nothing; it is a ceiling on horizontal scale, not just on throughput
  */
 public record ApiShardOwnedQueueStatus(QueueName queueName,
                                        int shardCount,
@@ -64,6 +66,6 @@ public record ApiShardOwnedQueueStatus(QueueName queueName,
                                             health.unownedShards(),
                                             health.fullyOwned(),
                                             health.liveInstances(),
-                                            health.shardCount());
+                                            Math.max(health.shardCount(), health.orderedUnits()));
     }
 }

@@ -99,10 +99,8 @@ final class ShardPump implements Runnable {
                 while (running.get()) {
                     var delivered = 0;
                     var statementFailed = false;
-                    // needsAttention has a side effect — it consumes the shard's wake-up flag — so it
-                    // must be asked exactly once per owner per pass. Collecting the attentive owners
-                    // first is what lets their reads be batched without asking twice and losing a
-                    // signal.
+                    // needsAttention has a side effect — it consumes the shard's wake-up flag — so
+                    // it must be asked exactly once per owner per pass.
                     var attentive = new ArrayList<LeasedOwner>();
                     for (var owner : owners) {
                         // Before the first pump, never after. Pumps start before any shard has been
@@ -122,8 +120,6 @@ final class ShardPump implements Runnable {
                         }
                         attentive.add(owner);
                     }
-
-                    batchRead(connection, attentive);
 
                     for (var owner : attentive) {
                         try {
@@ -192,53 +188,6 @@ final class ShardPump implements Runnable {
                     return;
                 }
             }
-        }
-    }
-
-    /**
-     * Issue this pass's ordered-lane reads once for every shard that wants one, rather than once per
-     * shard. Three statements per pass instead of three per shard — see {@link BatchReadableOwner} for
-     * why that matters and for why it is an idle-cost mechanism rather than a throughput one.
-     * <p>
-     * <b>Failure here is not failure of the pass.</b> Every owner is simply left without a batch and
-     * reads for itself, which is what it did before this existed — the same reasoning as the per-owner
-     * catch above, applied to the one place that is no longer per-owner.
-     */
-    private void batchRead(Connection connection, List<LeasedOwner> attentive) {
-        var batchable = new ArrayList<BatchReadableOwner>();
-        for (var owner : attentive) {
-            if (owner instanceof BatchReadableOwner readable) {
-                batchable.add(readable);
-            }
-        }
-        if (batchable.size() < 2) {
-            // One shard is not worth a wider statement, and zero is not worth a statement at all.
-            return;
-        }
-        var shards  = new int[batchable.size()];
-        var cursors = new long[batchable.size()];
-        for (var index = 0; index < batchable.size(); index++) {
-            shards[index] = batchable.get(index).shard();
-            cursors[index] = batchable.get(index).batchReadCursor();
-        }
-        try {
-            // A FULL batch per shard, never a share of one: the batched read has to return exactly
-            // what the per-shard read it replaces would have returned, or an owner sees a different
-            // amount of its own backlog depending on how many siblings were attentive.
-            var cursorRows = storage.readOrderedFromCursors(connection, shards, cursors,
-                                                            settings.readBatchSize());
-            metrics.orderedReadStatements.increment();
-            for (var owner : batchable) {
-                // The head sweep is NOT batched. Batching it slowed delivery badly — 380 then 280 of
-                // 1 000 inside a minute against 1 000 in under three seconds with per-shard sweeps —
-                // and the cause is not yet found. The reads themselves are equivalent
-                // (ShardOwnedBatchedReadIT), so it is in how the swept rows are applied, not in the
-                // statement. Until that is understood the sweep stays where it works.
-                owner.applyBatchRead(cursorRows.getOrDefault(owner.shard(), List.of()), null,
-                                     OptionalLong.empty());
-            }
-        } catch (SQLException | RuntimeException e) {
-            log.warn("{}: batched read failed; this pass falls back to one read per shard", name, e);
         }
     }
 

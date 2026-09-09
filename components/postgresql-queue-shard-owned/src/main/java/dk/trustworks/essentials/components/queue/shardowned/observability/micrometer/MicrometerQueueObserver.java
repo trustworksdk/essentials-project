@@ -253,7 +253,7 @@ public final class MicrometerQueueObserver implements QueueObserver {
     private static final class CachedHealth {
         private final MessageQueue queue;
         private final long         maxAgeNanos;
-        private final AtomicReference<QueueHealth> value = new AtomicReference<>(new QueueHealth(0, 0, 0, 0));
+        private final AtomicReference<QueueHealth> value = new AtomicReference<>(new QueueHealth(0, 0, 0, 0, 0));
         private final AtomicLong                   readAt = new AtomicLong();
         /** Explicit, for the overflow reason spelled out on {@link CachedDepth}. */
         private volatile boolean loaded;

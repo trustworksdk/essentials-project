@@ -189,7 +189,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         requireNonNull(messages, "No messages provided");
         var byShard = new HashMap<Integer, List<ShardOwnedStorage.OrderedPayload>>();
         for (var message : messages) {
-            byShard.computeIfAbsent(ShardOwnedSchema.shardForKey(message.key(), shardCount), s -> new ArrayList<>())
+            byShard.computeIfAbsent(ShardOwnedSchema.unitForKey(message.key()), s -> new ArrayList<>())
                    .add(message);
         }
         try (var connection = dataSource.getConnection()) {
@@ -270,6 +270,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var handler = activeOrderedHandler;
         var settings = activeSettings;
         var redeliveryPolicy = activePolicy;
+
+        // The caller's maxShards does NOT apply to this lane, and honouring it would strand messages.
+        //
+        // It used to mean "how many of the queue's shards will I serve", and callers passed the shard
+        // count. The ordered lane's routing space is now fixed at ORDERED_UNITS and is no longer the
+        // caller's number, so a caller still passing eight would hold eight of sixty-four units and
+        // leave fifty-six owned by nobody — every key hashing to one of them silently undelivered.
+        // How the units are split across instances is what fairShare decides; how many one instance
+        // may hold is not a thing a caller can usefully know.
+        maxShardsHeld = ShardOwnedSchema.ORDERED_UNITS;
         var maxShards = maxShardsHeld;
 
         // BEFORE the acquire loop, and from leaseTtl rather than from holeExpiry. This lane still
@@ -283,7 +293,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
 
         var leased = new ArrayList<int[]>();
-        for (var shard = 0; shard < shardCount && leased.size() < maxShards; shard++) {
+        for (var shard = 0; shard < ShardOwnedSchema.ORDERED_UNITS && leased.size() < maxShards; shard++) {
             var fence = storage.acquireLease("ordered", shard, instanceId, leaseTtlMillis);
             if (fence.isPresent()) {
                 leased.add(new int[]{shard, fence.get().intValue()});
@@ -310,7 +320,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     public long orderedRemaining() throws SQLException {
         var remaining = 0L;
-        for (var shard = 0; shard < shardCount; shard++) {
+        for (var shard = 0; shard < ShardOwnedSchema.ORDERED_UNITS; shard++) {
             remaining += storage.countOrderedRemaining(shard);
         }
         return remaining;
@@ -511,7 +521,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     private void rebalance() throws SQLException {
         var liveInstances = storage.countLiveInstances(leaseTtlMillis);
-        var fairShare = Math.min(maxShardsHeld, (shardCount + liveInstances - 1) / liveInstances);
+        // Per lane: the ordered lane's unit space is fixed and the unordered lane's is configurable,
+        // so one fair share for both would hand this instance a quota computed against the wrong
+        // number and leave units permanently unowned.
+        var units = "ordered".equals(activeLane) ? ShardOwnedSchema.ORDERED_UNITS : shardCount;
+        var fairShare = Math.min(maxShardsHeld, (units + liveInstances - 1) / liveInstances);
 
         // Drop owners that have lost their lease — through fencing, or through a renewal refused
         // while this node was paused — BEFORE deciding what to acquire.
@@ -616,7 +630,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private void acquireFreeOrderedShards(int fairShare) throws SQLException {
         var limit = Math.min(fairShare, maxShardsHeld);
         var heldShards = owners.stream().filter(LeasedOwner::leaseHeld).map(LeasedOwner::shard).collect(java.util.stream.Collectors.toSet());
-        for (var shard = 0; shard < shardCount && heldShards.size() < limit; shard++) {
+        for (var shard = 0; shard < ShardOwnedSchema.ORDERED_UNITS && heldShards.size() < limit; shard++) {
             if (heldShards.contains(shard)) {
                 continue;
             }

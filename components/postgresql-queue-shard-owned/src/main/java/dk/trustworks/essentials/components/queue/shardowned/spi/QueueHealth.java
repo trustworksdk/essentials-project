@@ -39,13 +39,23 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  *                       below the number of running processes is itself a finding
  */
 public record QueueHealth(int shardCount,
+                          int orderedUnits,
                           int unorderedOwned,
                           int orderedOwned,
                           int liveInstances) {
 
-    /** Shards, across both lanes, that no live instance is reading. Alert on this being persistently above zero. */
+    /**
+     * Shards, across both lanes, that no live instance is reading. Alert on this being persistently
+     * above zero.
+     * <p>
+     * The two lanes are counted against DIFFERENT totals. The unordered lane has {@code shardCount}
+     * shards, which the operator chose and can grow; the ordered lane has a fixed
+     * {@code orderedUnits}, because its routing space cannot depend on a number that changes. Summing
+     * one of them twice — which this did while the counts happened to be equal — reports a healthy
+     * queue as short of owners, or a stranded one as fine.
+     */
     public int unownedShards() {
-        return Math.max(0, (shardCount * 2) - unorderedOwned - orderedOwned);
+        return Math.max(0, (shardCount + orderedUnits) - unorderedOwned - orderedOwned);
     }
 
     /** True when every shard of both lanes has a live owner. */

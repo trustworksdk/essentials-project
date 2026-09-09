@@ -359,7 +359,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         for (var position = 0; position < messages.size(); position++) {
             var message = messages.get(position);
             var shard = message.isOrdered()
-                        ? ShardOwnedSchema.shardForKey(message.key(), shardCount)
+                        ? ShardOwnedSchema.unitForKey(message.key())
                         : Math.floorMod(enqueueShardCursor.getAndIncrement(), shardCount);
             (message.isOrdered() ? orderedByShard : unorderedByShard)
                     .computeIfAbsent(shard, ignored -> new ArrayList<>())
@@ -594,10 +594,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     @Override
     public QueueDepth depth() throws SQLException {
         var unordered = 0L;
-        var ordered = 0L;
         for (var shard = 0; shard < shardCount; shard++) {
             unordered += storage.countRemaining(shard);
-            ordered += storage.countOrderedRemaining(shard);
+        }
+        // Counted against the ordered lane's own, fixed space rather than the unordered shard count.
+        var ordered = 0L;
+        for (var unit = 0; unit < ShardOwnedSchema.ORDERED_UNITS; unit++) {
+            ordered += storage.countOrderedRemaining(unit);
         }
         return new QueueDepth(unordered, ordered, storage.countDeadLetters());
     }
@@ -610,7 +613,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // countInstances, not countLiveInstances: the latter is floored at one so fairShare can
         // divide by it, which would report a queue nobody is consuming as having one instance —
         // exactly the state this method exists to make visible.
-        return new QueueHealth(shardCount, owned[0], owned[1],
+        return new QueueHealth(shardCount, ShardOwnedSchema.ORDERED_UNITS, owned[0], owned[1],
                                storage.countInstances(Math.max(1_000L, settings.leaseTtlMillis())));
     }
 
