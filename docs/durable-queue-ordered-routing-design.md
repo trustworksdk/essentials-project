@@ -494,6 +494,23 @@ failure and no fallback taken. Bisecting split it cleanly:
   statement**, since the statements are proven equivalent. Neutralising the batched next-visible does
   not fix it, so it is the swept rows themselves. Left per-shard until understood.
 
+Instrumenting the failing configuration says it is **starvation, not slow work**. With batched sweeps,
+600 of 1 000 messages arrive in sixty seconds and the counters read:
+
+| counter | batched sweep | meaning |
+|---|---|---|
+| `cursorReads` | 193 over 60 s, 8 shards | ~24 passes per shard per minute — the pump is barely running |
+| `headSweeps` | 59 | sweeps are rare, not frequent |
+| `horizonProbes` | 10 | `advanceWatermark` returned early almost every pass |
+| `maxWatermarkLagSeq` | 1 000 | the watermark never advanced off the start |
+
+So the owners are not being pumped, rather than being pumped and doing too much. That points at the
+interaction between a batched sweep and the two things that decide whether an owner is pumped at all —
+`needsAttention` and `parkDeadlineMillis`, both of which read `lastSweepNanos` and `sweepIntervalNanos`,
+and `adjustSweepBackoff`, which doubles the interval to a thirty-second ceiling on any pass that swept
+and delivered nothing. The next attempt should start by logging that interval per owner rather than by
+re-reading the SQL.
+
 Two things follow for whoever finishes it.
 
 **Most of the win is still in the sweep.** Two of the three statements are the sweep pair, so batching
