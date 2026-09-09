@@ -458,6 +458,35 @@ its own units is signalled.
 The net is a smaller engine than the one that exists today, with one fewer configurable number and one
 fewer subsystem.
 
+## 5.7 Build order, and why it is not the obvious one
+
+The obvious order is routing first — it is the defect this document exists for. That order is wrong,
+and §4.2 is what says so.
+
+1. **The watermark (§5.3), on today's per-shard schema.** Today's sequences are dense, so a watermark
+   is strictly more conservative than hole detection: it is a drop-in that needs no schema change and
+   no routing change, and the existing suite validates it. It is worth having on its own, and it
+   removes the only reason per-unit sequences existed. **Done.**
+2. **The read and the polling (§4.1, §5.5).** One `LATERAL` query, one wake-up, one park per *owner*
+   instead of per unit.
+3. **The routing space (§5.1).** Only now.
+
+Doing 3 before 2 regresses the thing this engine is most careful about. §4.2 measures the idle poll at
+three buffers per unit held, linear and unamortised, and today each unit is its own owner with its own
+wake-up, park and query. Going from eight units to sixty-four without step 2 is therefore sixty-four
+queries and sixty-four parks per poll cycle rather than eight — about 6.4 queries/s per queue idle
+against 0.8, or **1 920/s across 300 queues against 240**. That is the budget `ShardOwnedMultiQueueCostIT`
+exists to hold.
+
+Step 2 does not depend on step 3: at today's eight units it is already one round trip instead of eight
+for the same twenty-four buffers. It is what makes a large routing space affordable, so it goes first.
+
+Two pieces of step 3 do not depend on step 2 and have landed early, because both are cheap and both
+get harder to change later: the hash mixer of §5.1, and collapsing the ordered lane to one sequence
+per `(queue, lane)` — safe as soon as step 1 removed the density requirement, and it retires the
+"sixty-four sequence objects per queue" objection before it can be raised. The unordered lane keeps
+its per-shard sequences, because it still detects holes by density.
+
 ## 6. Open questions, in the order they should be answered
 
 Four questions are now closed: counter-table contention by §4.4, range splitting by §5.4 choosing sets

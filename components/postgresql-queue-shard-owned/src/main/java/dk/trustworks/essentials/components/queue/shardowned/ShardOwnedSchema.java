@@ -523,11 +523,25 @@ public final class ShardOwnedSchema {
         // Under the bootstrap lock like every other DDL path here: every instance calls this at
         // start-up, so CREATE SEQUENCE IF NOT EXISTS races exactly the way CREATE TABLE does.
         withBootstrapLock(dataSource, statement -> {
+            // ONE sequence for the whole ordered lane, not one per shard.
+            //
+            // Per-shard sequences existed to keep values dense within a shard, because that density
+            // was how the ordered lane told an uncommitted value from someone else's. It no longer
+            // decides that by density — see OrderedShardOwner.advanceWatermark — so the only thing
+            // per-shard ordered sequences still cost is relations: one per shard per queue, which is
+            // what makes a large routing space unaffordable across many queues. Collapsing them also
+            // makes an ordered `seq` unique within the queue, which retires the trap that seq 1 exists
+            // in every shard.
+            //
+            // The unordered lane is NOT collapsed. It still detects holes by density, and its
+            // range-delete acknowledgement is bounded by a floor that depends on it.
+            //
+            // CACHE 1 so an allocated value is one that will be committed, and because the watermark's
+            // safety argument rests on values being handed out in wall-clock order. Never raise it.
+            statement.execute("CREATE SEQUENCE IF NOT EXISTS " + orderedSequenceName(queueId)
+                              + " START WITH 1 INCREMENT BY 1 CACHE 1");
             for (var shard = 0; shard < shardCount; shard++) {
-                // CACHE 1 so an allocated value is one that will be committed.
                 statement.execute("CREATE SEQUENCE IF NOT EXISTS " + sequenceName(queueId, shard)
-                                  + " START WITH 1 INCREMENT BY 1 CACHE 1");
-                statement.execute("CREATE SEQUENCE IF NOT EXISTS " + orderedSequenceName(queueId, shard)
                                   + " START WITH 1 INCREMENT BY 1 CACHE 1");
             }
         });
@@ -555,16 +569,45 @@ public final class ShardOwnedSchema {
         return "shard_queue_seq_q" + queueId + "_s" + shard;
     }
 
-    public static String orderedSequenceName(short queueId, int shard) {
-        return "shard_queue_ordered_seq_q" + queueId + "_s" + shard;
+    /** One per queue, not one per shard — see the reasoning in {@link #registerQueue}. */
+    public static String orderedSequenceName(short queueId) {
+        return "shard_queue_ordered_seq_q" + queueId;
     }
 
     /**
      * Same key, same shard — which is what makes per-key ordering a consequence of ownership rather
      * than something a query has to enforce. {@code String.hashCode} is specified, so the mapping is
      * stable across JVMs and across restarts.
+     * <p>
+     * <b>The hash is mixed before the modulus.</b> {@code String.hashCode} is a {@code 31}-polynomial
+     * and {@code floorMod} against a power of two keeps only its low bits, which for structured keys
+     * are not well spread. Measured over 1 024 keys into 64 units, mean 16 per unit:
+     * <pre>
+     *   key shape            unmixed                 mixed
+     *   ORDER-&lt;n&gt;            54/64 units, max 39     64/64 units, max 24
+     *   acct-&lt;n&gt;-EU          52/64 units, max 42     64/64 units, max 25
+     *   ORDER-%08d step 64   63/64 units, max 33     64/64 units, max 24
+     * </pre>
+     * So the unmixed hash leaves up to a fifth of the space unused and overloads its worst unit by
+     * about 2.6x the mean, against 1.6x mixed. That is a skew in how evenly consumers share the work,
+     * not a correctness problem — but the routing space is chosen once and then frozen, and the cost
+     * of avoiding it is one multiply and two shifts on the enqueue path.
      */
     public static int shardForKey(String key, int shardCount) {
-        return Math.floorMod(key.hashCode(), shardCount);
+        return Math.floorMod(mix(key.hashCode()), shardCount);
+    }
+
+    /**
+     * MurmurHash3's 32-bit finalizer. Chosen because it is fixed, published and short: this value is
+     * baked into where every key lives, so it must never be "improved" later.
+     */
+    private static int mix(int hash) {
+        var h = hash;
+        h ^= h >>> 16;
+        h *= 0x85ebca6b;
+        h ^= h >>> 13;
+        h *= 0xc2b2ae35;
+        h ^= h >>> 16;
+        return h;
     }
 }

@@ -529,7 +529,7 @@ final class OrderedShardOwner implements LeasedOwner {
             // retires. Only recorded while the watermark is actually behind, or the deque would never
             // empty and the owner would probe the horizon forever on a queue with nothing left to do.
             watermarkCandidates.addLast(new WatermarkCandidate(maxSeen, running, now));
-            metrics.maxWatermarkLagRows.accumulateAndGet((int) Math.min(Integer.MAX_VALUE, maxSeen - safeCursor),
+            metrics.maxWatermarkLagSeq.accumulateAndGet((int) Math.min(Integer.MAX_VALUE, maxSeen - safeCursor),
                                                          Math::max);
         }
     }

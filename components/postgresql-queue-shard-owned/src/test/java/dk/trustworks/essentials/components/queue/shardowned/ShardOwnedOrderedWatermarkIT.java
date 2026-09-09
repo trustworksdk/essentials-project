@@ -220,12 +220,17 @@ class ShardOwnedOrderedWatermarkIT {
                       .untilAsserted(() -> assertThat(queue.orderedRemaining()).isZero());
 
             var metrics = queue.metrics().snapshot();
-            // The re-read window is what the watermark costs. Measured at 8-20 rows against a 1 200/s
-            // outbox workload; a batch enqueued in one transaction should sit far below that, and a
-            // window that grows without bound would mean the horizon is never retiring anything.
-            assertThat((Integer) metrics.get("maxWatermarkLagRows"))
-                    .as("the re-read window must stay small: %s", metrics)
-                    .isLessThan(keyCount * perKey);
+            // The re-read window is what the watermark costs, and cursorReadsPerMessage is the honest
+            // way to size it. maxWatermarkLagSeq cannot be: the ordered lane draws from ONE sequence
+            // per queue, so an owner's span of sequence values covers the other shards' rows too and
+            // reads as the whole batch however little each owner actually re-reads. An earlier version
+            // of this assertion used it and failed the moment the sequences were collapsed.
+            assertThat((Double) metrics.get("cursorReadsPerMessage"))
+                    .as("re-reading from the watermark must not cost a read per message: %s", metrics)
+                    .isLessThan(1.0d);
+            assertThat((Long) metrics.get("watermarkAdvances"))
+                    .as("the watermark must keep up rather than stall: %s", metrics)
+                    .isPositive();
             assertThat((Long) metrics.get("watermarkCapped"))
                     .as("no advance should need the wall-clock cap when nothing holds a transaction "
                         + "open: %s", metrics)

@@ -774,7 +774,7 @@ public final class ShardOwnedStorage {
                 statement.setShort(2, (short) shard);
                 statement.setString(3, message.key());
                 statement.setLong(4, message.keyOrder());
-                statement.setString(5, ShardOwnedSchema.orderedSequenceName(queueId, shard));
+                statement.setString(5, ShardOwnedSchema.orderedSequenceName(queueId));
                 statement.setBytes(6, message.payload());
                 statement.setInt(7, message.payloadType());
                 statement.setLong(8, message.delayMillis());
@@ -849,19 +849,10 @@ public final class ShardOwnedStorage {
         }
     }
 
-    public List<OrderedRow> readOrderedSpecific(Connection connection, int shard, Collection<Long> seqs) throws SQLException {
-        if (seqs.isEmpty()) {
-            return List.of();
-        }
-        var sql = "SELECT seq, msg_key, key_order, payload, payload_type FROM " + ORDERED_TABLE
-                  + " WHERE queue_id = ? AND shard = ? AND seq = ANY(?) AND visible_at <= now()";
-        try (var statement = connection.prepareStatement(sql)) {
-            statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
-            statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
-            return readOrderedRows(statement);
-        }
-    }
+    // readOrderedSpecific is gone with the hole chase it existed for. The ordered lane no longer
+    // queries for a value it stepped over, because it no longer steps over one: the cursor waits and
+    // the next ordinary read picks the value up. The unordered lane keeps its equivalent
+    // (readSpecific), which is still the chase path there.
 
     public List<OrderedRow> sweepOrderedFromHead(Connection connection, int shard, int limit) throws SQLException {
         var sql = "SELECT seq, msg_key, key_order, payload, payload_type FROM " + ORDERED_TABLE
@@ -1144,7 +1135,7 @@ public final class ShardOwnedStorage {
         // backed-off interval is up to maxSweepInterval — thirty seconds of a resurrected message
         // sitting there for no reason. Taking a new value puts it ahead of the cursor, where the
         // notification issued below actually means something.
-        var sequence = ordered ? ShardOwnedSchema.orderedSequenceName(queueId, shard)
+        var sequence = ordered ? ShardOwnedSchema.orderedSequenceName(queueId)
                                : ShardOwnedSchema.sequenceName(queueId, shard);
         var selected = ordered
                        ? "queue_id, shard, msg_key, key_order, nextval('" + sequence + "'), payload, payload_type, 0"
