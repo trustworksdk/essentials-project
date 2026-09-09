@@ -117,10 +117,13 @@ try (var connection = dataSource.getConnection()) {
 | `maxShards` | unbounded | Cap on shards this instance holds |
 | `maxAttempts` / `retryDelay` / `retryMultiplier` / `maxRetryDelay` | 3 / 100 ms / 2.0 / 30 s | Redelivery policy |
 
-### `shardCount` — per queue, set at registration
+### `shardCount` — the UNORDERED lane's parallelism, set at registration
 
-Shards are the unit of parallelism **and** of ordering. Measured by `ShardOwnedShardCountSweepIT`
-(ordered lane, 500 keys, 2 ms handler, `keyConcurrency` 8, interleaved arms):
+`shardCount` applies to the **unordered lane only**. The ordered lane routes on a fixed space of its
+own (`ShardOwnedSchema.ORDERED_UNITS`, 64) that nothing configures — see the next section.
+
+Shards are the unit of parallelism. A historic sweep on the ordered lane (500 keys, 2 ms handler,
+`keyConcurrency` 8, interleaved arms) measured where the return sits:
 
 | shards | % of peak | msg/s per shard | concurrency ceiling |
 |---|---|---|---|
@@ -133,14 +136,23 @@ Shards are the unit of parallelism **and** of ordering. Measured by `ShardOwnedS
 **The knee is at 4, and 8 buys 95% of what 16 does.** Return per shard collapses after 4 — the same
 shape as `parallelConsumers`, and for the same reason: the ceiling is `shardCount x keyConcurrency`,
 and past the point where that exceeds the work available, more shards buy idle cost and nothing else.
-Idle cost is ~0.1 queries/s per owned shard per lane.
-
 One shard is also the *least predictable* arm: 74% spread against 3% at eight, because everything
-serialises through one owner. If your ordered throughput matters, one shard is the wrong answer even
-before the median is considered.
+serialises through one owner.
 
 **The knee moves with your workload.** 500 keys and a 2 ms handler; a handler that waits 200 ms or a
-queue with 10 keys has a different answer. Re-run the sweep rather than adopting the table.
+queue with 10 keys has a different answer.
+
+#### The ordered lane has no shard count, and that is the point
+
+It used to. A key's shard was `hash(key) mod shardCount`, so the number decided both where a key lives
+and how many consumers could share the work — and changing it moved every key. `growShardCount`
+therefore refused while the ordered lane held anything, and the only way to satisfy that was to stop
+producing, which is an outage rather than a procedure. The count was frozen for the life of the queue
+and had to be guessed correctly, once.
+
+There is now nothing to guess. Ordered keys hash into a fixed 64-unit space; consumers own **units**,
+and adding a consumer moves units rather than keys. Sixty-four is far past the useful instance count
+(the knee above is at 4), so it is a ceiling nobody reaches rather than a number to size.
 
 #### When does any of this affect me?
 
@@ -152,42 +164,33 @@ Almost never. The table is the whole answer:
 | **Scale up** | no | nothing — new pods register and take a share within a heartbeat |
 | **Scale down / pod evicted** | no | nothing — a graceful stop releases its shards and deregisters immediately |
 | **Crash** | no | nothing — shards move when the lease expires (`leaseTtl`, 30 s default) |
-| **Grow an unordered queue** | yes | `growShardCount(...)`. That is all — routing is round-robin, every shard has an owner either way |
-| **Grow an ordered queue** | yes | the only case with a procedure — see below |
+| **Grow an unordered queue** | yes | `growShardCount(...)`. That is all |
+| **Grow an ordered queue** | n/a | nothing to grow — the routing space is fixed |
+
+`growShardCount` no longer has an ordered-lane precondition: it can be called with ordered traffic in
+flight, because the ordered lane does not read the number. It still refuses to **shrink** — messages in
+the removed shards would be addressed by nobody.
 
 **Redeploys and autoscaling never touch the shard count**, so they never open a window where
-instances disagree about the modulus. Every instance reads the same registry row; a queue built with
-a stale count corrects itself from the registry within a heartbeat. `ShardOwnedAdminSurfaceIT`
-asserts a three-generation rolling deploy with ordered traffic sees one shard count throughout, and
-`ShardOwnedOrderedRebalanceIT` / `ShardOwnedMultiProcessIT` assert no key is ever in two handlers
-while shards move between instances.
+instances disagree about the modulus. `ShardOwnedAdminSurfaceIT` asserts a three-generation rolling
+deploy with ordered traffic sees one shard count throughout, and `ShardOwnedOrderedRebalanceIT` /
+`ShardOwnedMultiProcessIT` assert no key is ever in two handlers while shards move between instances.
 
-**Growing an ordered queue** is the one procedure, and it is rare by design — size the queue so it
-does not happen (see below):
+#### Each lane caps how many instances can consume it
 
-1. Stop producing to that queue, or pick a quiet moment.
-2. Let the ordered lane drain. `growShardCount` refuses while it holds anything, so this checks itself.
-3. `ShardOwnedSchema.growShardCount(dataSource, name, n)`.
-4. Wait one heartbeat (`leaseTtl / 3`, 10 s by default) for every instance to pick it up.
-5. Resume producing.
+`fairShare = ceil(units / liveInstances)` per lane, so **at most `units` instances can hold anything
+for that lane** — `shardCount` for unordered, 64 for ordered. Eight unordered shards and twelve pods
+means four pods consume nothing from that lane:
 
-No deploy, no restart. Steps 1 and 4 exist because a key's shard is `hash(key) mod shardCount`, so
-while instances disagree one key could be handled in two shards at once.
-
-#### `shardCount` is a hard cap on how many instances can consume
-
-`fairShare = ceil(shardCount / liveInstances)`, so **at most `shardCount` instances can hold anything
-for that lane**. Eight shards and twelve pods means four pods consume nothing:
-
-| shards | instances | holding a shard | idle |
+| unordered shards | instances | holding a shard | idle |
 |---|---|---|---|
 | 8 | 8 | 8 | 0 |
 | 8 | 12 | 8 | **4** |
 | 16 | 12 | 12 | 0 |
 
-So the rule is **`shardCount` >= the most instances you will ever run for that lane**, which for an
-autoscaled deployment means its maximum replica count — not its current one. At ~0.1 queries/s per
-idle shard that headroom is nearly free.
+So the rule is **`shardCount` >= the most instances you will ever run**, which for an autoscaled
+deployment means its maximum replica count — not its current one. The ordered lane needs no such rule.
+`QueueHealth.maxInstances` reports the larger of the two ceilings.
 
 **Instance identity is the hostname** by default (`Network.hostName()`, as the fenced lock manager and scheduler use), overridable with `essentials.shard-owned-queue.instance-id`. Set it where one host runs several instances: two processes sharing an id look like one instance, so each is allowed only half the shards.
 
@@ -204,15 +207,11 @@ This is the asymmetry that should drive the decision, and the two lanes are not 
 - **Unordered — err low.** Growing is one call to `ShardOwnedSchema.growShardCount(...)`. Running
   consumers pick it up on their next heartbeat; nothing to restart, nothing to pause. Start at 1–2
   and grow when you measure a reason.
-- **Ordered — err high.** Growing requires the ordered lane to be **empty** first, because a key's
-  shard is `hash(key) mod shardCount` and two moduli in flight put one key under two owners. So:
-  pause ordered producers for that queue, let it drain, call `growShardCount` (it refuses if the lane
-  is not empty), resume. **No restart and no deploy** — the same heartbeat pickup as unordered.
-  Seconds to a minute of paused producers on one queue, not an outage.
+- **Ordered — nothing to size.** The lane routes on a fixed 64-unit space, so there is no number to
+  choose and no procedure to grow it. This used to be the asymmetry that mattered: growing required
+  the lane to be empty, and the only way to empty it was to stop producing.
 
-Given ~0.1 queries/s per idle shard, over-provisioning an ordered queue is close to free and
-under-provisioning is not. **8 is a defensible starting point for an ordered queue you expect to be
-busy; 1–2 for one you do not.**
+So the decision is the unordered lane's alone: **start at 1–2 and grow when you measure a reason.**
 
 ## Sizing and scaling
 

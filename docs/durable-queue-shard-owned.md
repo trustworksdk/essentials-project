@@ -190,15 +190,20 @@ The two lanes are not equally pinned, and treating them as one is what made the 
 landed in. Adding shards adds sequences and lease rows; the messages already stored stay where they
 are and are still delivered by whoever owns those shards. There is nothing to re-route.
 
-**Ordered messages are the constraint, and the mechanism is the modulus.** A key's shard is
-`hash(key) mod shardCount`. Change the count and a key's *next* message hashes to a different shard
-from its *last* one — so one key ends up spread across two shards, with two owners dispatching it
-concurrently. That is reordering, not the duplicate at-least-once permits, and no amount of care at
-the read path can undo it: per-key order here is enforced by one owner holding one shard.
+**Ordered messages used to be the constraint, and the mechanism was the modulus.** A key's shard was
+`hash(key) mod shardCount`. Change the count and a key's *next* message hashed to a different shard
+from its *last* — one key spread across two shards, two owners dispatching it concurrently. That is
+reordering, not the duplicate at-least-once permits, and no care at the read path can undo it, because
+per-key order here is enforced by one owner holding one unit.
 
-`ShardOwnedSchema.growShardCount(dataSource, name, n)` therefore **refuses while the ordered lane
-holds anything for that queue**. Once it is empty there is no key whose history could be split, and
-growing is safe.
+`growShardCount` therefore refused while the ordered lane held anything. That refusal could not be
+satisfied: nothing lets an operator quiesce producers, so the count was frozen for the life of the
+queue and had to be guessed correctly the first time.
+
+**The ordered lane now hashes into a fixed space of its own** — `ShardOwnedSchema.ORDERED_UNITS` — and
+never reads `shardCount`. A key's unit does not move when the shard count changes, so
+`ShardOwnedSchema.growShardCount(dataSource, name, n)` has no ordered-lane precondition and can be
+called with ordered traffic in flight. Consumers own *units*; adding a consumer moves units, not keys.
 
 **Shrinking is refused outright**, for a different reason: messages already sitting in the shards
 being removed would be addressed by nobody. `shardForKey` and the round-robin cursor would both stop
@@ -237,15 +242,30 @@ one shard count throughout.
 Growing an **unordered** queue also needs nothing: routing is round-robin, every shard has an owner
 either way, so `growShardCount` and carry on.
 
-Growing an **ordered** queue is the only case with a procedure: quiesce producers, let the lane drain
-(`growShardCount` refuses otherwise, so this checks itself), grow, wait one heartbeat, resume. No
-deploy — and rare by design, since sizing the queue for its maximum replica count makes it an event
-that does not occur.
+Growing an **ordered** queue is not a thing: the lane routes on a fixed unit space
+(`ShardOwnedSchema.ORDERED_UNITS`) that `shardCount` does not reach, so there is nothing to grow and
+`growShardCount` no longer has an ordered-lane precondition. It used to be the one case with a
+procedure — quiesce producers, drain, grow, resume — which was not a procedure at all, because
+nothing let an operator quiesce.
 
-### What would remove the remaining constraint, and why we did not build it
+### How the constraint was removed — and what this section got wrong
 
-The ordered lane still needs a pause-and-drain. Three ways out, recorded so the next person does not
-have to re-derive them:
+**Built.** The ordered lane no longer has a shard count, and the option below that this section
+dismissed as "a structural rework of the read path" is the one that shipped. Kept because its
+objections were specific and worth reading against what actually resolved them:
+
+- It priced a unit at "an owner object, a wake-up, a cursor, **two sequences** and ~0.1 queries/s",
+  and rejected 256 units at 512 sequences per queue. Correct arithmetic, wrong premise. The ordered
+  lane now draws from **one sequence per queue**, so units cost no sequences at all.
+- It said making that affordable "conflicts with per-`(queue, shard)` sequences — and those exist
+  because a shared sequence manufactured `queues - 1` holes per message". That was the true blocker,
+  and it fell to a different change: the ordered lane stopped detecting holes by density and now asks
+  the transaction horizon directly, so a shared sequence manufactures nothing.
+- What remains open is the cost it correctly identified: idle queries per unit, still three statements
+  per unit per sweep, still unbatched, and still **unmeasured** for the ordered lane at 64 units.
+
+So the structural objection was real and was removed by a change nobody had in mind when this was
+written. The three options as they stood:
 
 **Doubling-only split.** Restrict growth to `N -> 2N`. Then `hash(K) mod 2N` is either `S` or `S+N`
 and nothing else, so each old shard splits in exactly two — and if one owner holds *both* halves
@@ -267,16 +287,18 @@ one owner serving a *range* of virtual shards under a single cursor, which confl
 shard)` sequences — and those exist because a shared sequence manufactured `queues - 1` holes per
 message. It is a structural rework of the read path, not a feature.
 
-**Size it correctly instead.** Given that `shardCount` caps how many instances can consume (§14) and
-an idle shard costs ~0.1 queries/s, over-provisioning an ordered queue is close to free. Setting it to
-the maximum replica count the deployment will ever reach makes growth an event that never happens,
-which is a better outcome than making it cheap.
+**Size it correctly instead.** The option taken at the time: over-provision, since an idle shard costs
+~0.1 queries/s and `shardCount` caps how many instances can consume. It was the wrong answer, and
+worth saying why — it made the guess cheaper to get right rather than removing it, and a user who
+guessed wrong still had no way back.
 
 ### 2.8 Sequences
 
-Two per `(queue, shard)`: `shard_queue_seq_q<queue>_s<shard>` for the unordered lane and `shard_queue_ordered_seq_q<queue>_s<shard>` for the ordered one, both `CACHE 1` so an allocated value is one that will be committed. Plus one global `shard_queue_session_fence`, from which pull sessions draw **negative** fences so they can never collide with an owner fence in the shared `lease` column.
+One per `(queue, shard)` for the **unordered** lane (`shard_queue_seq_q<queue>_s<shard>`) and one per queue for the **ordered** lane (`shard_queue_ordered_seq_q<queue>`), both `CACHE 1` so an allocated value is one that will be committed. Plus one global `shard_queue_session_fence`, from which pull sessions draw **negative** fences so they can never collide with an owner fence in the shared `lease` column.
 
-The per-`(queue, shard)` scoping is load-bearing. The cursor treats any sequence value it steps over as a hole to be chased, so a counter shared between queues would manufacture `queues − 1` holes per message. A dense sequence per queue is what makes "a gap means an uncommitted transaction" a true statement.
+The per-`(queue, shard)` scoping is load-bearing **for the unordered lane**. Its cursor treats any sequence value it steps over as a hole to be chased, so a counter shared between queues would manufacture `queues − 1` holes per message. A dense sequence per queue is what makes "a gap means an uncommitted transaction" a true statement there.
+
+The ordered lane does not need it, which is why it has one sequence per queue rather than 64. It no longer infers anything from density: its cursor is a safe watermark that advances only once the transaction horizon says no running writer could still commit a lower value, so sparse sequence values within a unit mean nothing to it. `CACHE 1` matters more there, not less — the watermark's safety argument rests on values being handed out in wall-clock order.
 
 ---
 
@@ -911,11 +933,9 @@ expensive a wrong answer is, though neither costs a deploy:
 - **Unordered** — call `growShardCount` and carry on. Routing is round-robin, so nothing depends on
   which shard a message landed in, and running consumers pick the new count up on their next
   heartbeat (§2.7).
-- **Ordered** — the lane has to be empty first, because a key's shard is `hash(key) mod shardCount`
-  and changing the modulus mid-flight would send a key's next message to a different shard from its
-  last. So: pause ordered producers for that queue, let consumers drain what is there, call
-  `growShardCount` (it refuses if the lane is not empty, so this cannot be got wrong), resume.
-  Seconds to a minute of paused producers on one queue.
+- **Ordered** — nothing to do. The lane hashes keys into a fixed unit space of its own and never reads
+  `shardCount`, so growing the count moves no key and can happen with ordered traffic in flight. This
+  bullet used to describe a pause-and-drain; there was no pause to perform.
 
 **No restart, and no redeploy, in either case.** `ShardOwnedQueue.refreshShardCount` re-reads the
 registry on the heartbeat and `rebalance` acquires up to the new count;
