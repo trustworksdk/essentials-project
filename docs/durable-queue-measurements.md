@@ -1,6 +1,6 @@
 # Durable Queue Measurements — current implementation vs. shard-owned engine
 
-Consolidated results. The reasoning behind each number lives in [durable-queue-next-gen-design.md](./durable-queue-next-gen-design.md); this document is the numbers themselves, so they can be quoted without reading the design.
+Consolidated results. How the engine works: [durable-queue-shard-owned.md](./durable-queue-shard-owned.md). This document is the numbers themselves, so they can be quoted without reading the design.
 
 **Every figure here was produced by the same harness, on the same machine, in the same session.** Cross-session comparison is not supported — see [Environment](#environment) for why.
 
@@ -169,6 +169,49 @@ What the soak *does* confirm is structural rather than temporal:
 
 ⚠️ **Six minutes at 300 a second is 108 000 messages, and that is a small soak.** Bloat and vacuum debt are effects of hours and of higher rates. "No drift observed here" is not "no drift exists" — it means the hypothesis was not confirmed at this scale, and a genuine pre-release soak still has to run for hours. The design's dead-tuple argument should be quoted as a structural cost difference, which is measured, rather than as a predicted degradation, which is not.
 
+## 3.6 Throughput, threads and connections, side by side
+
+`EngineResourceComparisonIT` (perf lab, `-Dbenchmark.run=true`), 20 000 messages of 200 bytes, three
+interleaved repetitions per arm, all four arms in one run:
+
+| Arm | msg/s | IQR | slowest..fastest run | threads | held conns |
+|---|---|---|---|---|---|
+| baseline, 20 ms poll, 20 consumers | 996 | 0.4% | 990..998 | 51 | 18 |
+| baseline, 20 ms poll, **40** consumers | 1 980 | 0.3% | 1975..1986 | 70 | **31** |
+| baseline, **5 ms** poll, 20 consumers | 3 915 | 0.1% | 3915..3924 | 36 | 17 |
+| shard-owned | ⚠️ 3 767 | **78.2%** | **3745..9634** | 36 | **7** |
+
+### ⚠️ The throughput column is not a result
+
+**The shard-owned figure must not be quoted.** Three identical repetitions produced 3 745 and 9 634 —
+one run 2.6× another. That is this lab, not the engine, and it is the same instability §4 documents;
+the test prints a warning above 25% so the number cannot be lifted out of the table innocently.
+
+**And the baseline's throughput is a configuration choice, not a property.** All three baseline arms
+land on `parallelConsumers × pollsPerSecond` to within 0.5% — 996 against 1 000, 1 980 against 2 000,
+3 915 against 4 000 — at an interquartile range of 0.4% or better. They are stable *because they are
+not measuring the database at all*; they are measuring a timer. Choosing a 20 ms poll makes the
+baseline look four times slower than choosing 5 ms, and neither number describes the engine. A single
+throughput ratio between these two implementations is therefore meaningless, which is why four arms
+are needed to say anything at all.
+
+### What the arms do establish
+
+Both of the baseline's routes to more throughput cost something, and the arms price them:
+
+- **More consumers.** 20 → 40 doubled throughput and cost **+13 held connections** (18 → 31) and
+  +19 threads. Every consumer needs a connection to acknowledge on, so its throughput and its pool
+  use cannot be tuned independently.
+- **A faster poll.** 20 ms → 5 ms quadrupled throughput at no connection cost (18 → 17) — but at four
+  times the query rate against a database that was never the bottleneck.
+
+The shard-owned engine pays neither: **7 held connections**, being `pumpThreads + 1` for the whole
+process, unchanged by shard count, queue count, consumer count or load. That is a property of the
+design rather than of the operating point, which is why the test asserts the *mechanism* — that
+doubling the baseline's consumers really does cost connections — rather than just the gap.
+
+---
+
 ## 4. Environment
 
 | | |
@@ -189,11 +232,49 @@ What the soak *does* confirm is structural rather than temporal:
 
 ---
 
+## 4.5 Choosing between the two implementations
+
+Not a ranking. The two differ in what they are *good at*, and the honest split is narrower than a
+headline comparison suggests.
+
+**Reach for the shard-owned engine when**
+
+| Because | Measured |
+|---|---|
+| Latency matters | 0.44 ms p50 / 0.97 ms p99, against 20.7 / 27.1 at the shipped 20 ms poll. Push, not poll — there is no interval to tune |
+| Volume makes per-message cost matter | −65 to −72% WAL bytes; dead tuples 1.98 → 1.00; row updates 1.00 → **0**, because ownership removes the claim write. Index 5.2× smaller after a 6-minute soak |
+| The process holds many queues | Connections are `pumpThreads + 1` **per process** — 5 at 300 queues — rather than growing with consumers |
+| Per-key ordering must hold across processes | Verified across ~19 lease lifetimes with a third node joining mid-run. The current implementation's own docs say ordering does not hold across instances |
+| An outbox needs atomicity *and* working retries | `enqueue(Connection, …)` joins the caller's transaction while attempt counting stays outside its rollback scope. `TransactionalMode.FullyTransactional` gives one or the other |
+
+**Stay on the current implementation when** — and this is the longer list today
+
+| Because |
+|---|
+| **It is shipped, published and in production.** The shard-owned engine has none of those |
+| You use Inbox, Outbox, `EventProcessor` or `DurableLocalCommandBus` — all consume `DurableQueues`, which this engine deliberately does not implement |
+| You use the admin API or UI to inspect, retry or resurrect messages. There is no admin surface here |
+| You need by-id operations from any caller (`getQueuedMessage`, `retryMessage`, `markAsDeadLetterMessage`). Those assume a claim flag on every message — the largest cost this design removes |
+| You want to read payloads in `psql`. This engine stores `bytea`; the current one stores JSON |
+| You need MongoDB as well as PostgreSQL |
+| You cannot accept an immutable `shardCount`. Changing it re-routes every key, so sizing it wrong is a drain-and-switch rather than a config change |
+| You rely on `DurableQueues` being a stable API. This SPI is explicitly still moving |
+
+**What is *not* a differentiator: raw throughput.** At a 5 ms poll the current implementation moved
+3 915 msg/s at 0.1% spread; the shard-owned engine's figure in the same run is unquotable. What the
+comparison actually shows is that it reached that class of throughput on **7 connections instead of
+17–31**, with no poll interval — the cost of the throughput differs far more than the throughput does.
+
+**They are not mutually exclusive.** Both can run against the same database on different tables, so
+adoption can be per queue: move the latency-sensitive or high-volume ones and leave the rest.
+
+---
+
 ## 5. What has not been measured
 
 Stated so that absence is not mistaken for a passing result.
 
-- **Network partitions and clock skew.** `NextGenMultiProcessIT` runs engine instances as separate operating-system processes and kills one with `SIGKILL`, so real process death is covered. A node that is *alive but partitioned* — the case the fencing design exists for — is not: simulating it needs network control the current harness does not have.
+- **Network partitions and clock skew.** `ShardOwnedMultiProcessIT` runs engine instances as separate operating-system processes and kills one with `SIGKILL`, so real process death is covered. A node that is *alive but partitioned* — the case the fencing design exists for — is not: simulating it needs network control the current harness does not have.
 - **Containers as separate hosts.** The node processes share a machine and a kernel clock. Genuinely separate hosts, with independent clocks and a real network between them, are untested.
 - **Sustained soak.** The longest run is 60 seconds. Vacuum behaviour, index bloat and p99 drift over hours are unmeasured — and the current implementation's dead-tuple advantage is precisely the kind of thing that only shows up there.
 - **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
@@ -209,12 +290,12 @@ The engine and its semantics tests are `components/postgresql-queue-shard-owned`
 ```bash
 # Cost comparison and decomposition (benchmark-gated, ~10 minutes)
 taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
-  -Dit.test='NextGenVsBaselineCostIT,NextGenCostDecompositionIT' \
+  -Dit.test='ShardOwnedVsBaselineCostIT,ShardOwnedCostDecompositionIT' \
   -Dbenchmark.run=true -Dlab.pg.cpuset=4-7 -Dlab.pg.shared-buffers=512MB
 
 # Latency comparison
 taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
-  -Dit.test='NextGenLatencyIT' -Dbenchmark.run=true -Dlab.pg.cpuset=4-7
+  -Dit.test='ShardOwnedLatencyIT' -Dbenchmark.run=true -Dlab.pg.cpuset=4-7
 
 # Current-implementation baseline profiles and capacity sweep
 taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
@@ -260,7 +341,7 @@ Each shard now has its own wake-up which cascades to its pump's. The listener si
 
 ### The duplicates: explained and fixed
 
-`NextGenCostDecompositionIT` reported 20 007 handler invocations for 20 000 messages, and the latency benchmark 2 001 for 2 000. Not the equality assertion being wrong — a real race, and it had a specific cause.
+`ShardOwnedCostDecompositionIT` reported 20 007 handler invocations for 20 000 messages, and the latency benchmark 2 001 for 2 000. Not the equality assertion being wrong — a real race, and it had a specific cause.
 
 The head sweep deliberately does **not** exclude locally handed-off rows, so that a hand-off lost between commit and dispatch is still delivered. That backstop has a window: between an enqueue committing and `handOffLocally` being called, the sweep can read the row and deliver it — and once it has been acknowledged and deleted, the hand-off delivers it again with nothing left to deduplicate against.
 
@@ -317,7 +398,7 @@ Everything reported for multiple queues until now came from five queues at four 
 
 The 25-queue measurement above showed 150 held connections — six per queue. At three hundred queues that is 1 800, which is not a viable system. The right question was asked: why does the design need this many? It does not. Every remaining per-queue cost was scoping, not design.
 
-- **The listener.** `NextGenListener` listens on one global channel and the payload already carries `queueId:lane:shard`. One listener can demultiplex for every queue and both lanes. It was per-queue only because it was constructed inside `NextGenQueue` — fifty connections at twenty-five queues doing the work of one.
+- **The listener.** `ShardWakeupListener` listens on one global channel and the payload already carries `queueId:lane:shard`. One listener can demultiplex for every queue and both lanes. It was per-queue only because it was constructed inside `ShardOwnedQueue` — fifty connections at twenty-five queues doing the work of one.
 - **The pumps.** A pump holds a connection and calls `owner.pumpOnce(connection)`. `queue_id` is a bind parameter in every statement, not a property of a connection, so one pump can serve shards of any queue and either lane. Scoping pumps to a queue was the same mistake as scoping them to a shard, one level up.
 - **The heartbeat.** One scheduled thread per queue, running a handful of queries every ten seconds.
 
@@ -334,7 +415,7 @@ The 25-queue measurement above showed 150 held connections — six per queue. At
 
 **What still scales is the idle query rate**, and it scales with *shards owned* rather than with queues: 4.0 queries per second per owned shard, which at 300 queues x 8 shards x 2 lanes is 4 800 owners and 18 252 queries a second doing nothing. That floor is a 500 ms sweep plus a 500 ms backstop poll, so it is directly tunable — five-second intervals would make it 1 800/s — at the cost of how quickly a lost notification is recovered from. It is the remaining scaling axis and it is a configuration decision rather than a structural one, but it should not be left at the default for a process with thousands of shards.
 
-**The per-queue fallback is a footgun and behaved like one.** A `NextGenQueue` built without a runtime stands one up for itself, which is right for a single queue and wrong for a hundred: the first run at 100 queues created 100 runtimes and exhausted a 500-connection pool. The gate now asserts that held connections do not scale with queue count, so that mistake cannot pass again.
+**The per-queue fallback is a footgun and behaved like one.** A `ShardOwnedQueue` built without a runtime stands one up for itself, which is right for a single queue and wrong for a hundred: the first run at 100 queues created 100 runtimes and exhausted a 500-connection pool. The gate now asserts that held connections do not scale with queue count, so that mistake cannot pass again.
 
 
 ---
@@ -395,7 +476,7 @@ The two lanes were bounded by nothing comparable. Ordered handlers ran on unboun
 
 ### Two further defects this surfaced
 
-**The straggler delete was bounded by the acknowledgement floor, and had no business being.** The floor exists because a range delete `seq <= n` would sweep up rows that were never delivered. A *targeted* delete addresses exactly the sequence values this owner handled, so it can remove nothing it did not deliver. Applying one rule to both cost real time: under asynchronous delivery the floor is pinned by the oldest of up to `handlerConcurrency` in-flight messages, so everything finished behind a slow handler waited for it. With inline delivery there was only ever one in flight, which is why it never showed — 43 of 1 000 messages left undeleted after twenty seconds.
+**The straggler delete was bounded by the acknowledgement floor, and had no business being.** The floor exists because a range delete `seq <= n` would sweep up rows that were never delivered. A *targeted* delete addresses exactly the sequence values this owner handled, so it can remove nothing it did not deliver. Applying one rule to both cost real time: under asynchronous delivery the floor is pinned by the oldest in-flight message, so everything finished behind a slow handler waited for it. With inline delivery there was only ever one in flight, which is why it never showed — 43 of 1 000 messages left undeleted after twenty seconds.
 
 **`parkDeadlineMillis` did not count pending acknowledgements.** It accounted for the next sweep and the next retry only, so with the sweep backed off to thirty seconds a late-arriving acknowledgement could wait that long to be flushed. Fixing it also repaired something previously written up as an accepted trade:
 
@@ -412,7 +493,6 @@ The two lanes were bounded by nothing comparable. Ordered handlers ran on unboun
 |---|---|---|
 | `pumpThreads` | 2 | **Measured.** Held connections are `pumpThreads + 1`; one pump versus two changed nothing in the idle query rate and the reads are I/O-bound. Two gives three connections and a spare thread when one blocks. |
 | `ConsumerOptions.parallelConsumers` | 8 | **Measured**, and deliberately not the fastest value &mdash; see the sweep below. |
-| `handlerConcurrency` | 512 | Process-wide **ceiling**, not the knob. |
 | `keyConcurrency` | 8 | Unchanged: per-shard ordered concurrency. |
 | `sweepInterval` / `maxSweepInterval` | 500 ms / 30 s | **Measured.** 4.05 idle queries/s per shard down to 0.10. |
 
@@ -421,7 +501,7 @@ The two lanes were bounded by nothing comparable. Ordered handlers ran on unboun
 So there are two levels now, because they answer different questions:
 
 - **`ConsumerOptions.parallelConsumers`** &mdash; per consumer, the knob, named as in the current implementation. Default 10.
-- **`ShardOwnerSettings.handlerConcurrency`** &mdash; a ceiling over the sum of them, so whatever the handlers contend for cannot be swamped by everyone's ambitions at once. Default 512.
+- A process-wide ceiling (`handlerConcurrency`, default 512) existed alongside it and has since been removed: it was never measured, and at 512 it could not bind before any plausible shared resource was exhausted.
 
 Both are sized against whatever the *handlers* contend for, usually a connection pool, which is separate from the engine's own `pumpThreads + 1`. Thirty-two parallel consumers against a Hikari pool of ten will starve; these settings exist to be set.
 
@@ -429,7 +509,7 @@ Both are sized against whatever the *handlers* contend for, usually a connection
 
 I claimed this could not be measured, on the grounds that throughput at saturation varies 861% on this hardware. **That was wrong, and the distinction matters.** That figure is for an *absolute* throughput number. Choosing `parallelConsumers` needs to know where *more* concurrency stops buying anything, which is a comparison between arms — and `AbRunner` interleaves arms in one container in one run, so the drift that ruins an absolute figure is largely common to all of them. It is the same reason the WAL comparison holds to an interquartile range of a few tenths of a percent while raw throughput swings.
 
-`NextGenConcurrencySweepIT` drains 4 000 messages through a **2 ms handler** across 8 shards. The handler has to block, or the question is meaningless: a handler that returns immediately is CPU-bound and its optimum is one thread per core whatever the queue does.
+`ShardOwnedConcurrencySweepIT` drains 4 000 messages through a **2 ms handler** across 8 shards. The handler has to block, or the question is meaningless: a handler that returns immediately is CPU-bound and its optimum is one thread per core whatever the queue does.
 
 | parallelConsumers | drain ms (median) | IQR | msg/s | gain over previous |
 |---|---|---|---|---|
