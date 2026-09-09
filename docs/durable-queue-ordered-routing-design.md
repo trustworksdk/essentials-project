@@ -481,6 +481,27 @@ exists to hold.
 Step 2 does not depend on step 3: at today's eight units it is already one round trip instead of eight
 for the same twenty-four buffers. It is what makes a large routing space affordable, so it goes first.
 
+**Step 2 was attempted and reverted, and what it found changes what it is for.** The batched shape
+itself worked — the three statements an owner issues (cursor read, head sweep, next-visible) became
+three per pump pass, using the `LATERAL` form of §4.1, with a fallback to per-owner reads if the wide
+statement fails. Two things came out of it:
+
+- **It stalls delivery, cause not yet found.** The 8-shard ordered test delivered 380 of 1 000 and then
+  made no progress, with no statement failure logged and no fallback taken — so the batched statements
+  succeeded and returned something the owners then handled differently from the per-shard reads. It is
+  a real defect in the change, not a flake, and it reproduces.
+- **There is usually nothing to batch under load.** `needsAttention` consumes a per-shard wake-up, and
+  that mechanism exists precisely so a pump reads only the shard that was signalled (14.5 cursor reads
+  per message before it, 2.0 after). So on a busy queue typically ONE shard is attentive per pass and
+  the batch has a single member. Measured on the 4-shard watermark test: statements issued equalled
+  owners served, meaning the batch never formed.
+
+That second point is the useful one. Batching is **an idle-cost mechanism, not a throughput one** — its
+win is concentrated in the case where many shards' sweeps come due together, which is exactly the case
+that decides how large a routing space costs. It should be specified and tested that way, against a
+quiet queue's queries-per-second, rather than against a workload where the per-shard wake-up has
+already made it a no-op.
+
 Two pieces of step 3 do not depend on step 2 and have landed early, because both are cheap and both
 get harder to change later: the hash mixer of §5.1, and collapsing the ordered lane to one sequence
 per `(queue, lane)` — safe as soon as step 1 removed the density requirement, and it retires the
