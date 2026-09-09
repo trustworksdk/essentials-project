@@ -18,7 +18,7 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
 
 import dk.trustworks.essentials.shared.Lifecycle;
 
-import java.sql.SQLException;
+import java.sql.*;
 import java.time.Duration;
 import java.util.*;
 
@@ -77,6 +77,30 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     }
 
     /**
+     * Enqueue inside a transaction the caller controls — the outbox case.
+     * <p>
+     * The messages are written on {@code connection} and nothing is committed here: <b>the caller's
+     * commit decides</b>, so business writes and the enqueue land together or not at all. A rollback
+     * takes the messages with it, and the wake-up notification goes with them, because it is issued
+     * inside the same transaction rather than sent alongside it.
+     * <p>
+     * A {@code java.sql.Connection} rather than a unit-of-work type, deliberately. This module depends
+     * on nothing but {@code shared}, and a connection is what every caller can produce — Spring's
+     * {@code DataSourceUtils.getConnection}, a JDBI handle's {@code getConnection}, or a plain
+     * {@code DataSource}. Taking a framework's transaction abstraction here would make the queue
+     * depend on the framework rather than the other way round.
+     * <p>
+     * The connection must already be in a transaction ({@code autoCommit == false}). A connection in
+     * autocommit mode cannot express "together with my business writes", which is the entire point,
+     * so passing one is a programming error rather than a slower path.
+     */
+    List<MessageId> enqueue(Connection connection, List<Message> messages) throws SQLException;
+
+    default MessageId enqueue(Connection connection, Message message) throws SQLException {
+        return enqueue(connection, List.of(message)).getFirst();
+    }
+
+    /**
      * Consume with a handler. The engine leases shards, enforces per-key order, retries and
      * dead-letters according to {@code policy}, and acknowledges on the handler's behalf.
      *
@@ -101,6 +125,17 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * added afterwards would silently see nothing.
      */
     MessageQueue addObserver(QueueObserver observer);
+
+    /**
+     * Attach an interceptor to the enqueue and delivery paths.
+     * <p>
+     * Unlike an observer, an interceptor can change what happens — see
+     * {@link MessageQueueInterceptor} for the distinction and for why only those two operations are
+     * interceptable. Ordered by {@link dk.trustworks.essentials.shared.interceptor.InterceptorOrder}.
+     * <p>
+     * Must be called before {@link #consume}, for the same reason observers must.
+     */
+    MessageQueue addInterceptor(MessageQueueInterceptor interceptor);
 
     /**
      * Messages enqueued and not yet acknowledged, per lane. Cheap enough to poll for monitoring.

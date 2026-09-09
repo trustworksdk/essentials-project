@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import java.sql.*;
+
 /**
  * A shard owner whose right to act expires and must be renewed.
  * <p>
@@ -28,7 +30,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
  * The tests did not catch it because they finish well inside the lease lifetime. Nothing about a
  * short test can distinguish "the lease is being renewed" from "the lease has not expired yet".
  */
-public interface LeasedOwner {
+interface LeasedOwner {
 
     /**
      * One iteration of the read-dispatch-acknowledge loop, on a connection the caller owns.
@@ -41,7 +43,7 @@ public interface LeasedOwner {
      *
      * @return how much work was done, so the pump knows whether to park
      */
-    int pumpOnce(java.sql.Connection connection) throws java.sql.SQLException;
+    int pumpOnce(Connection connection) throws SQLException;
 
     /**
      * Does this owner have anything to do — a wake-up of its own, work handed to it locally, a retry
@@ -56,10 +58,10 @@ public interface LeasedOwner {
     boolean needsAttention();
 
     /** Called once per connection, including after a reconnect. */
-    void onTakeover(java.sql.Connection connection) throws java.sql.SQLException;
+    void onTakeover(Connection connection) throws SQLException;
 
     /** Flush outstanding acknowledgements while the fence is still valid. */
-    void flushOnStop(java.sql.Connection connection) throws java.sql.SQLException;
+    void flushOnStop(Connection connection) throws SQLException;
 
     /**
      * Longest this owner may be parked before it needs attention regardless of notifications — a

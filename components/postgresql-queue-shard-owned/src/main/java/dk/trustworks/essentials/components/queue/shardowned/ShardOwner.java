@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import org.slf4j.*;
 
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -46,14 +46,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Single-threaded ownership is what makes the hole set, the in-flight set and the cursor safe to
  * keep as plain fields.
  */
-public final class ShardOwner implements LeasedOwner {
+final class ShardOwner implements LeasedOwner {
     private static final Logger log = LoggerFactory.getLogger(ShardOwner.class);
 
-    private final NextGenStorage      storage;
+    private final ShardOwnedStorage      storage;
     private final int                 shard;
     private final long                fence;
     private final ShardOwnerSettings  settings;
-    private final Consumer<byte[]>    handler;
+    private final PayloadHandler      handler;
     private final ShardOwnerMetrics   metrics;
     private final RedeliveryPolicy    redeliveryPolicy;
     private final ShardWakeup         wakeup;
@@ -83,7 +83,7 @@ public final class ShardOwner implements LeasedOwner {
      * sweep is what still delivers the message, filtered by the owner's own in-memory dedup. Making
      * the sweep exclude them would turn a lost hand-off into a permanently stuck message.
      */
-    private final ConcurrentLinkedQueue<NextGenStorage.Row> localHandoffs = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<ShardOwnedStorage.Row> localHandoffs = new ConcurrentLinkedQueue<>();
 
     /**
      * The in-memory retry schedule — §4.6's timer wheel at the scale one shard needs.
@@ -116,12 +116,19 @@ public final class ShardOwner implements LeasedOwner {
      */
     private long sweepIntervalNanos;
     private long lastAckFlushNanos;
+    /**
+     * When this shard's earliest delayed row becomes visible, in {@link System#nanoTime()} terms, or
+     * {@link Long#MAX_VALUE} when nothing is waiting. Refreshed by the sweep and used as a park
+     * deadline, so a delayed message wakes the pump when it is due rather than when the backstop
+     * happens to fire.
+     */
+    private long nextVisibleAtNanos = Long.MAX_VALUE;
 
-    public ShardOwner(NextGenStorage storage,
+    ShardOwner(ShardOwnedStorage storage,
                       int shard,
                       long fence,
                       ShardOwnerSettings settings,
-                      Consumer<byte[]> handler,
+                      PayloadHandler handler,
                       ShardOwnerMetrics metrics,
                       RedeliveryPolicy redeliveryPolicy,
                       ShardWakeup wakeup,
@@ -173,6 +180,11 @@ public final class ShardOwner implements LeasedOwner {
         if (now - lastSweepNanos >= sweepIntervalNanos) {
             return true;
         }
+        // A delayed message that has come due. Its row was invisible when the cursor passed it, so
+        // nothing else will notice it has become visible.
+        if (nextVisibleAtNanos != Long.MAX_VALUE && now >= nextVisibleAtNanos) {
+            return true;
+        }
         synchronized (stateLock) {
             if (!retrySchedule.isEmpty() && retrySchedule.peek().dueNanos() <= now) {
                 return true;
@@ -185,12 +197,12 @@ public final class ShardOwner implements LeasedOwner {
     }
 
     @Override
-    public void onTakeover(java.sql.Connection connection) throws SQLException {
+    public void onTakeover(Connection connection) throws SQLException {
         metrics.takeoverAttemptBumps.add(storage.bumpAttemptsOnTakeover(connection, shard));
     }
 
     @Override
-    public void flushOnStop(java.sql.Connection connection) throws SQLException {
+    public void flushOnStop(Connection connection) throws SQLException {
         flushAcks(connection, true);
     }
 
@@ -201,6 +213,9 @@ public final class ShardOwner implements LeasedOwner {
         // time to run each of its shards' sweeps, whatever the backstop happens to be set to.
         var untilSweep = (sweepIntervalNanos - (now - lastSweepNanos)) / 1_000_000L;
         var deadline = Math.max(0L, untilSweep);
+        if (nextVisibleAtNanos != Long.MAX_VALUE) {
+            deadline = Math.min(deadline, Math.max(0L, (nextVisibleAtNanos - now) / 1_000_000L));
+        }
         synchronized (stateLock) {
             if (!retrySchedule.isEmpty()) {
                 var untilRetry = Math.max(0L, (retrySchedule.peek().dueNanos() - now) / 1_000_000L);
@@ -222,14 +237,14 @@ public final class ShardOwner implements LeasedOwner {
      * Accept a message the local enqueue already holds. Called after its transaction commits — never
      * before, or a rollback would deliver a message that does not exist.
      */
-    public void handOffLocally(NextGenStorage.Row row) {
+    public void handOffLocally(ShardOwnedStorage.Row row) {
         localHandoffs.add(row);
         metrics.localHandoffs.increment();
         wakeup.signal();
     }
 
     @Override
-    public int pumpOnce(java.sql.Connection connection) throws SQLException {
+    public int pumpOnce(Connection connection) throws SQLException {
         // Nothing useful to read with no budget to dispatch into: the rows would only be re-read.
         // Acknowledgements still have to go out, or the shard would never retire what it finished.
         if (dispatch.saturated()) {
@@ -293,30 +308,39 @@ public final class ShardOwner implements LeasedOwner {
             delivered += chaseHoles(connection);
             lastChaseNanos = now;
         }
+        var sweptThisPass = false;
         if (now - lastSweepNanos >= sweepIntervalNanos) {
             delivered += sweepFromHead(connection);
             lastSweepNanos = now;
+            sweptThisPass = true;
         }
         maybeFlush(connection, now);
-        adjustSweepBackoff(delivered);
+        adjustSweepBackoff(delivered, sweptThisPass);
         return delivered;
     }
 
     /**
      * Grow the sweep interval while nothing arrives, and snap it back the instant something does.
-     * Doubling rather than a fixed long interval so a shard that goes quiet for a second is not then
-     * slow to recover a lost notification, while one quiet for a minute costs almost nothing.
+     * <p>
+     * <b>Only when a sweep actually ran.</b> This used to double on every pump iteration, and a pump
+     * iterates whenever any shard it serves has work — not on the sweep cadence. An idle shard beside
+     * a busy one therefore reached the thirty-second ceiling within milliseconds instead of over half
+     * a minute, which is not a tuning nicety: the sweep is how a delayed message is noticed and how a
+     * lost notification is recovered, so both silently became thirty-second operations.
      */
-    private void adjustSweepBackoff(int delivered) {
+    private void adjustSweepBackoff(int delivered, boolean sweptThisPass) {
         if (delivered > 0) {
             sweepIntervalNanos = settings.sweepIntervalNanos();
+            return;
+        }
+        if (!sweptThisPass) {
             return;
         }
         var ceiling = Math.max(settings.sweepIntervalNanos(), settings.maxSweepIntervalNanos());
         sweepIntervalNanos = Math.min(ceiling, sweepIntervalNanos * 2);
     }
 
-    private void maybeFlush(java.sql.Connection connection, long now) throws SQLException {
+    private void maybeFlush(Connection connection, long now) throws SQLException {
         boolean due;
         synchronized (stateLock) {
             due = !pendingAcks.isEmpty()
@@ -330,7 +354,7 @@ public final class ShardOwner implements LeasedOwner {
     }
 
 
-    private int chaseHoles(java.sql.Connection connection) throws SQLException {
+    private int chaseHoles(Connection connection) throws SQLException {
         List<Long> candidates;
         synchronized (stateLock) {
             candidates = pendingHoles.keySet().stream().limit(settings.maxHolesPerChase()).toList();
@@ -377,10 +401,14 @@ public final class ShardOwner implements LeasedOwner {
      * recognised — which is how a late commit behind the cursor, or work a crashed owner abandoned,
      * still gets delivered without any of it being tracked durably.
      */
-    private int sweepFromHead(java.sql.Connection connection) throws SQLException {
+    private int sweepFromHead(Connection connection) throws SQLException {
         var rows = storage.sweepFromHead(connection, shard, settings.readBatchSize(), fence,
                                          settings.holeExpiry().toMillis());
         metrics.headSweeps.increment();
+        var untilNext = storage.millisUntilNextVisible(connection, shard);
+        nextVisibleAtNanos = untilNext.isPresent()
+                             ? System.nanoTime() + untilNext.getAsLong() * 1_000_000L
+                             : Long.MAX_VALUE;
         var delivered = 0;
         for (var row : rows) {
             if (!dispatch.tryAcquire()) {
@@ -412,7 +440,7 @@ public final class ShardOwner implements LeasedOwner {
      * through {@link ShardOwnerSettings#pumpThreads}, whereas the alternative was an engine whose
      * tests passed while the mechanism underneath them had stopped working.
      */
-    private boolean deliver(NextGenStorage.Row row) {
+    private boolean deliver(ShardOwnedStorage.Row row) {
         synchronized (stateLock) {
             if (inFlight.contains(row.seq()) || pendingAcks.contains(row.seq())) {
                 // Already ours. Hand the permit back — it was taken speculatively by the caller.
@@ -430,22 +458,22 @@ public final class ShardOwner implements LeasedOwner {
         return true;
     }
 
-    private void runHandler(NextGenStorage.Row row) {
+    private void runHandler(ShardOwnedStorage.Row row) {
         var handled = false;
         try {
             try {
-            handler.accept(row.payload());
-            // An interrupted handler has NOT necessarily finished its work. A handler that catches
-            // InterruptedException and returns normally — which is what well-behaved code does on
-            // shutdown — would otherwise be indistinguishable from success, and the message would be
-            // acknowledged without having been processed. That is silent message loss, and it showed
-            // up the first time the crash-recovery test ran: the outgoing owner acked everything it
-            // had dispatched, leaving the incoming owner nothing to redeliver.
-            if (Thread.currentThread().isInterrupted()) {
-                metrics.abandonedOnInterrupt.increment();
-            } else {
-                handled = true;
-            }
+                handler.handle(row.payload(), row.payloadType());
+                // An interrupted handler has NOT necessarily finished its work. A handler that catches
+                // InterruptedException and returns normally — which is what well-behaved code does on
+                // shutdown — would otherwise be indistinguishable from success, and the message would
+                // be acknowledged without having been processed. That is silent message loss, and it
+                // showed up the first time the crash-recovery test ran: the outgoing owner acked
+                // everything it had dispatched, leaving the incoming owner nothing to redeliver.
+                if (Thread.currentThread().isInterrupted()) {
+                    metrics.abandonedOnInterrupt.increment();
+                } else {
+                    handled = true;
+                }
             } catch (RuntimeException e) {
                 metrics.handlerFailures.increment();
                 // Inside the in-flight slot, deliberately. Releasing the slot first let the pump
@@ -479,7 +507,7 @@ public final class ShardOwner implements LeasedOwner {
     /**
      * Failure path. Rare, so it is allowed to be expensive — one HOT update, or a dead-letter move.
      */
-    private void onFailure(NextGenStorage.Row row, RuntimeException cause) {
+    private void onFailure(ShardOwnedStorage.Row row, RuntimeException cause) {
         int attempts;
         synchronized (stateLock) {
             attempts = attemptsBySeq.merge(row.seq(), 1, Integer::sum);
@@ -489,7 +517,7 @@ public final class ShardOwner implements LeasedOwner {
         metrics.observer().deliveryFailed(null, attempts, cause);
         try (var connection = storage.connection()) {
             if (redeliveryPolicy.isExhausted(attempts)) {
-                storage.moveToDeadLetter(connection, NextGenSchema.UNORDERED_TABLE, "unordered", shard, row.seq(),
+                storage.moveToDeadLetter(connection, ShardOwnedSchema.UNORDERED_TABLE, "unordered", shard, row.seq(),
                                          cause.getClass().getName() + ": " + cause.getMessage());
                 synchronized (stateLock) {
                     attemptsBySeq.remove(row.seq());
@@ -501,7 +529,7 @@ public final class ShardOwner implements LeasedOwner {
                 return;
             }
             var delay = redeliveryPolicy.delayAfter(attempts);
-            storage.scheduleRetry(connection, NextGenSchema.UNORDERED_TABLE, shard, row.seq(), attempts, delay.toMillis());
+            storage.scheduleRetry(connection, ShardOwnedSchema.UNORDERED_TABLE, shard, row.seq(), attempts, delay.toMillis());
             synchronized (stateLock) {
                 retrySchedule.add(new Retry(System.nanoTime() + delay.toNanos(), row));
             }
@@ -515,7 +543,7 @@ public final class ShardOwner implements LeasedOwner {
     /**
      * Re-dispatch whatever has come due, straight from memory.
      */
-    private int dispatchDueRetries(java.sql.Connection connection, long now) {
+    private int dispatchDueRetries(Connection connection, long now) {
         var delivered = 0;
         while (dispatch.tryAcquire()) {
             Retry retry;
@@ -542,7 +570,7 @@ public final class ShardOwner implements LeasedOwner {
         inFlight.remove(seq);
     }
 
-    private record Retry(long dueNanos, NextGenStorage.Row row) {
+    private record Retry(long dueNanos, ShardOwnedStorage.Row row) {
     }
 
     /**
@@ -551,7 +579,7 @@ public final class ShardOwner implements LeasedOwner {
      * Because the owner reads in sequence order, what it has handled is usually a contiguous prefix,
      * so the common case collapses to a single range delete over physically adjacent rows.
      */
-    private void flushAcks(java.sql.Connection connection, boolean force) throws SQLException {
+    private void flushAcks(Connection connection, boolean force) throws SQLException {
         long contiguousThrough;
         List<Long> stragglers;
         // Everything below reads three collections the handler threads mutate. Iterating them
@@ -559,56 +587,56 @@ public final class ShardOwner implements LeasedOwner {
         // catch — so the pump thread died and took every shard it served with it. Exactly 250 of
         // 1 000 messages went missing, which is one shard of four.
         synchronized (stateLock) {
-        if (pendingAcks.isEmpty()) {
-            return;
-        }
-        // The range delete may not cross anything still outstanding, and "outstanding" includes
-        // pending HOLES as well as in-flight messages.
-        //
-        // This is a genuine contradiction in the design as first written: §4.3 acknowledges a
-        // contiguous prefix with `DELETE ... WHERE seq <= n`, while §4.4 has the cursor advance past
-        // a hole rather than stall on it. Together those lose messages. A hole at seq N is a row
-        // that has not committed yet; once it commits it sits BELOW the acked prefix, so the next
-        // range delete removes it without it ever having been delivered. It reproduced as 896 of 900
-        // messages delivered, every run, as soon as the test constructed the hazard deliberately
-        // instead of hoping for it.
-        //
-        // The floor is therefore the lowest sequence value that is either in flight or a known hole.
-        // Nothing at or above it may be deleted, however contiguous the prefix looks.
-        var inFlightFloor = inFlight.isEmpty() ? Long.MAX_VALUE : inFlight.first();
-        var holeFloor = pendingHoles.isEmpty() ? Long.MAX_VALUE : pendingHoles.firstKey();
-        var safeFloor = Math.min(inFlightFloor, holeFloor);
-
-        contiguousThrough = 0L;
-        var expected = pendingAcks.first();
-        for (var seq : pendingAcks) {
-            if (seq != expected || seq >= safeFloor) {
-                break;
+            if (pendingAcks.isEmpty()) {
+                return;
             }
-            contiguousThrough = seq;
-            expected = seq + 1;
-        }
-
-        stragglers = new ArrayList<>();
-        for (var seq : pendingAcks) {
-            // NOT bounded by safeFloor. The floor exists because a range delete `seq <= n` would
-            // sweep up rows that were never delivered — a hole that commits late, sitting below the
-            // acked prefix. A targeted delete addresses exactly the sequence values this owner
-            // handled, so it can remove nothing it did not deliver, and the floor has no business
-            // restricting it.
+            // The range delete may not cross anything still outstanding, and "outstanding" includes
+            // pending HOLES as well as in-flight messages.
             //
-            // Applying the floor to both was over-generalising one rule, and it cost real time:
-            // under asynchronous delivery the floor is pinned by the oldest of up to
-            // `handlerConcurrency` in-flight messages, so everything finished behind a slow handler
-            // waited for it. With inline delivery there was only ever one in flight, which is why it
-            // never showed.
-            if (seq > contiguousThrough) {
-                stragglers.add(seq);
+            // This is a genuine contradiction in the design as first written: §4.3 acknowledges a
+            // contiguous prefix with `DELETE ... WHERE seq <= n`, while §4.4 has the cursor advance past
+            // a hole rather than stall on it. Together those lose messages. A hole at seq N is a row
+            // that has not committed yet; once it commits it sits BELOW the acked prefix, so the next
+            // range delete removes it without it ever having been delivered. It reproduced as 896 of 900
+            // messages delivered, every run, as soon as the test constructed the hazard deliberately
+            // instead of hoping for it.
+            //
+            // The floor is therefore the lowest sequence value that is either in flight or a known hole.
+            // Nothing at or above it may be deleted, however contiguous the prefix looks.
+            var inFlightFloor = inFlight.isEmpty() ? Long.MAX_VALUE : inFlight.first();
+            var holeFloor = pendingHoles.isEmpty() ? Long.MAX_VALUE : pendingHoles.firstKey();
+            var safeFloor = Math.min(inFlightFloor, holeFloor);
+
+            contiguousThrough = 0L;
+            var expected = pendingAcks.first();
+            for (var seq : pendingAcks) {
+                if (seq != expected || seq >= safeFloor) {
+                    break;
+                }
+                contiguousThrough = seq;
+                expected = seq + 1;
             }
-        }
-        if (contiguousThrough == 0 && stragglers.isEmpty()) {
-            return;
-        }
+
+            stragglers = new ArrayList<>();
+            for (var seq : pendingAcks) {
+                // NOT bounded by safeFloor. The floor exists because a range delete `seq <= n` would
+                // sweep up rows that were never delivered — a hole that commits late, sitting below the
+                // acked prefix. A targeted delete addresses exactly the sequence values this owner
+                // handled, so it can remove nothing it did not deliver, and the floor has no business
+                // restricting it.
+                //
+                // Applying the floor to both was over-generalising one rule, and it cost real time:
+                // under asynchronous delivery the floor is pinned by the oldest of up to
+                // in-flight messages, so everything finished behind a slow handler
+                // waited for it. With inline delivery there was only ever one in flight, which is why it
+                // never showed.
+                if (seq > contiguousThrough) {
+                    stragglers.add(seq);
+                }
+            }
+            if (contiguousThrough == 0 && stragglers.isEmpty()) {
+                return;
+            }
         }
 
         // The round trip happens outside the monitor, so handlers finishing are not blocked on it.

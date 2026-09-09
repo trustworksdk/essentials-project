@@ -38,12 +38,12 @@
     <properties>
         <!--
           NOT a published artifact yet. The project's rule is that central APIs are stable and break
-          only on a major version; this SPI is still changing (pull sessions are designed but not
-          built, and the ordered lane does not rebalance), so publishing it would commit to a contract
-          that is not ready. It builds and tests with the reactor so it does not rot, and the flag
-          comes off when those gaps close.
+          only on a major version; this SPI is still changing, so publishing it would commit to a
+          contract that is not ready. The open gaps are listed under "Known gaps" in
+          docs/durable-queue-shard-owned.md §13. It builds and tests with the reactor so it does not
+          rot, and the flag comes off when those gaps close.
 
-          See docs/durable-queue-next-gen-design.md and docs/durable-queue-measurements.md.
+          See docs/durable-queue-shard-owned.md and docs/durable-queue-measurements.md.
         -->
         <maven.deploy.skip>true</maven.deploy.skip>
     </properties>
@@ -81,6 +81,23 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+          The construction-ergonomics guard. archunit-junit5 supplies the engine; foundation-test
+          supplies the shared rule definitions (EssentialsConstructionRules) and nothing else — this
+          module's production code still depends on `shared` alone.
+        -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit-junit5.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation-test</artifactId>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

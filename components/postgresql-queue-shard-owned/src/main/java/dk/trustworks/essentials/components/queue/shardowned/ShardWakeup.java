@@ -28,12 +28,12 @@ package dk.trustworks.essentials.components.queue.shardowned;
  * The permit count is capped at one: many notifications for the same shard mean the same thing, and
  * an owner drains everything it can see on each pass.
  */
-public final class ShardWakeup {
+final class ShardWakeup {
     private final Object      lock = new Object();
     private final ShardWakeup parent;
     private boolean           signalled;
 
-    public ShardWakeup() {
+    ShardWakeup() {
         this(null);
     }
 
@@ -44,7 +44,7 @@ public final class ShardWakeup {
      *               them. That amplification measured 14.5 cursor reads per message at eight shards
      *               on two pumps.
      */
-    public ShardWakeup(ShardWakeup parent) {
+    ShardWakeup(ShardWakeup parent) {
         this.parent = parent;
     }
 

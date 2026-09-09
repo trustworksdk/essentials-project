@@ -21,46 +21,49 @@ import java.util.concurrent.*;
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
- * Where handlers run, and how many may run at once — one budget for the whole process.
+ * Where handlers run, and how many may run at once.
  * <p>
  * The two together rather than separately because they are never useful apart: an executor without a
  * bound is what let the ordered lane put ~19 000 handler invocations in flight at three hundred
  * queues, and a bound without an executor is what left the unordered lane running handlers inline on
  * the pump thread, capping the entire process at {@code pumpThreads} concurrent handlers.
  * <p>
+ * <b>There was a second, process-wide ceiling here and it was removed.</b> It was documented as the
+ * backstop that stops the sum of every consumer's ambitions swamping whatever the handlers contend
+ * for — usually a connection pool — and its default was 512. Nothing measured that number, nothing
+ * derived it, and no test exercised it as a bound. Against a default Hikari pool of ten it was fifty
+ * times too high to protect anything, and at the default {@code parallelConsumers} of eight it took
+ * sixty-four consumers in one process before it engaged at all. A ceiling that cannot bind before
+ * the resource it guards is exhausted is not a backstop; it is a number that makes a reader think
+ * the question has been handled. {@code parallelConsumers} is the bound, per consumer, and it is
+ * the one with a measured sweep behind it.
+ * <p>
  * <b>A permit is taken before the cursor advances past a message, never after.</b> That ordering is
  * the whole discipline: a row whose permit could not be taken must still be there for the next read,
  * and advancing the cursor past it would leave it to the head sweep. Getting this backwards is what
  * turned nearly every message into a phantom hole the first time asynchronous delivery was attempted.
  */
-public record HandlerDispatch(Executor executor, Semaphore processPermits, Semaphore consumerPermits) {
+record HandlerDispatch(Executor executor, Semaphore consumerPermits) {
 
     public HandlerDispatch {
         requireNonNull(executor, "No executor provided");
-        requireNonNull(processPermits, "No processPermits provided");
         requireNonNull(consumerPermits, "No consumerPermits provided");
     }
 
     /**
      * A view of this dispatch bounded to one consumer.
      * <p>
-     * <b>Two levels, because they answer different questions.</b> The consumer's own bound is what a
-     * caller sets to say how much parallelism this queue deserves — the same thing
-     * {@code ConsumeFromQueue.parallelConsumers} means in the current implementation. The process
-     * bound is a ceiling over all of them, so that whatever the handlers contend for, usually a
-     * connection pool, cannot be swamped by the sum of everyone's ambitions. One number could not do
-     * both: a single process-wide budget lets one busy queue starve every other.
+     * {@code parallelConsumers} is the bound, and the only one: a caller says how much parallelism
+     * this queue deserves, and the engine holds it to that. There used to be a second, process-wide
+     * ceiling underneath — see the class javadoc for why it went.
      */
     public HandlerDispatch forConsumer(int parallelConsumers) {
-        return new HandlerDispatch(executor, processPermits,
-                                   new Semaphore(Math.max(1, parallelConsumers)));
+        return new HandlerDispatch(executor, new Semaphore(Math.max(1, parallelConsumers)));
     }
 
     /** Inline and unbounded — for tests that want no concurrency at all. */
     public static HandlerDispatch inline() {
-        return new HandlerDispatch(Runnable::run,
-                                   new Semaphore(Integer.MAX_VALUE),
-                                   new Semaphore(Integer.MAX_VALUE));
+        return new HandlerDispatch(Runnable::run, new Semaphore(Integer.MAX_VALUE));
     }
 
     /**
@@ -69,23 +72,15 @@ public record HandlerDispatch(Executor executor, Semaphore processPermits, Semap
      * cannot deadlock either way — it is chosen so the cheaper, more contended check comes first.
      */
     public boolean tryAcquire() {
-        if (!consumerPermits.tryAcquire()) {
-            return false;
-        }
-        if (!processPermits.tryAcquire()) {
-            consumerPermits.release();
-            return false;
-        }
-        return true;
+        return consumerPermits.tryAcquire();
     }
 
     public void release() {
-        processPermits.release();
         consumerPermits.release();
     }
 
     public boolean saturated() {
-        return consumerPermits.availablePermits() == 0 || processPermits.availablePermits() == 0;
+        return consumerPermits.availablePermits() == 0;
     }
 
     public void execute(Runnable task) {

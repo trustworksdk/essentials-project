@@ -50,7 +50,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public final class RowLeaseQueueSession implements QueueSession {
     private static final Logger log = LoggerFactory.getLogger(RowLeaseQueueSession.class);
 
-    private final NextGenStorage storage;
+    private final ShardOwnedStorage storage;
     private final DataSource     dataSource;
     private final int            shardCount;
     private final long           fence;
@@ -62,7 +62,7 @@ public final class RowLeaseQueueSession implements QueueSession {
     private       int                nextShard;
     private       boolean            closed;
 
-    RowLeaseQueueSession(NextGenStorage storage, DataSource dataSource, int shardCount,
+    RowLeaseQueueSession(ShardOwnedStorage storage, DataSource dataSource, int shardCount,
                          SessionScope scope, Duration leaseDuration) throws SQLException {
         this.storage = requireNonNull(storage, "No storage provided");
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
@@ -134,7 +134,7 @@ public final class RowLeaseQueueSession implements QueueSession {
         try (var connection = dataSource.getConnection()) {
             // Hand it straight back rather than waiting out the lease: the caller has told us it is
             // not working on it any more, so holding it hidden would be a delay with no purpose.
-            storage.scheduleRetry(connection, NextGenSchema.UNORDERED_TABLE, id.shard(), id.sequence(),
+            storage.scheduleRetry(connection, ShardOwnedSchema.UNORDERED_TABLE, id.shard(), id.sequence(),
                                   1, 0L);
             storage.releaseSessionRow(connection, id.shard(), id.sequence(), fence);
         }

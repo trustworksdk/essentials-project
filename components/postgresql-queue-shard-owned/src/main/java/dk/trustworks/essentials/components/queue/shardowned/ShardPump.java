@@ -46,10 +46,10 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * retrying: if the database is genuinely gone the heartbeat cannot renew either, every owner is
  * marked lost, and the loop exits.
  */
-public final class ShardPump implements Runnable {
+final class ShardPump implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(ShardPump.class);
 
-    private final NextGenStorage       storage;
+    private final ShardOwnedStorage       storage;
     private final ShardOwnerSettings   settings;
     private final ShardOwnerMetrics    metrics;
     private final ShardWakeup          wakeup = new ShardWakeup();
@@ -58,7 +58,7 @@ public final class ShardPump implements Runnable {
     private final AtomicBoolean        flushOnExit;
     private final String               name;
 
-    public ShardPump(NextGenStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
+    ShardPump(ShardOwnedStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
                      AtomicBoolean running, AtomicBoolean flushOnExit, String name) {
         this.storage = requireNonNull(storage, "No storage provided");
         this.settings = requireNonNull(settings, "No settings provided");
@@ -98,6 +98,7 @@ public final class ShardPump implements Runnable {
 
                 while (running.get()) {
                     var delivered = 0;
+                    var statementFailed = false;
                     for (var owner : owners) {
                         // Before the first pump, never after. Pumps start before any shard has been
                         // leased and rebalancing adds shards later, so an owner's first iteration is
@@ -123,6 +124,23 @@ public final class ShardPump implements Runnable {
                             // with this owner is its own problem; the rest keep running.
                             log.error("{}: shard {} threw; continuing with the other shards",
                                       name, owner.shard(), e);
+                        } catch (SQLException e) {
+                            // A failing STATEMENT is not a failing CONNECTION, and conflating them
+                            // is worse than either. Letting this reach the reconnect loop below made
+                            // a permanently-broken statement — a bad cast, a missing column, a
+                            // constraint — look exactly like a database blip: the pump reconnected
+                            // several times a second, forever, logging at WARN, while every shard it
+                            // served quietly stopped delivering. Nothing failed and nothing alerted.
+                            //
+                            // So ask the connection whether it is actually broken. If it is, rethrow
+                            // and let the reconnect loop do its job; if it is not, this is a bug in
+                            // one owner's SQL and it is treated like any other bug in one owner.
+                            if (!connection.isValid(1)) {
+                                throw e;
+                            }
+                            statementFailed = true;
+                            log.error("{}: shard {} issued a statement that failed on a healthy "
+                                      + "connection; continuing with the other shards", name, owner.shard(), e);
                         }
                     }
                     owners.removeIf(owner -> {
@@ -133,7 +151,14 @@ public final class ShardPump implements Runnable {
                         return true;
                     });
 
-                    if (delivered == 0) {
+                    if (statementFailed) {
+                        // Paced like the reconnect path, and for the same reason. A statement that
+                        // fails permanently — a blocked delete, a full disk, a broken constraint —
+                        // otherwise spins this loop as fast as the database can refuse it: measured
+                        // at 8 405 stack traces in one test run. Not reconnecting was right; not
+                        // pacing was not.
+                        TimeUnit.MILLISECONDS.sleep(200L);
+                    } else if (delivered == 0) {
                         park();
                     }
                 }

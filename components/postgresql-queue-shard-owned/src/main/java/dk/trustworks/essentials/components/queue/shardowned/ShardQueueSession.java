@@ -46,7 +46,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 public final class ShardQueueSession implements QueueSession {
     private static final Logger log = LoggerFactory.getLogger(ShardQueueSession.class);
 
-    private final NextGenStorage storage;
+    private final ShardOwnedStorage storage;
     private final DataSource     dataSource;
     private final String         sessionId;
     private final long           leaseMillis;
@@ -56,7 +56,7 @@ public final class ShardQueueSession implements QueueSession {
     private final Map<Integer, Long> cursors = new HashMap<>();
     private boolean closed;
 
-    ShardQueueSession(NextGenStorage storage,
+    ShardQueueSession(ShardOwnedStorage storage,
                       DataSource dataSource,
                       String sessionId,
                       int shardCount,
@@ -140,7 +140,7 @@ public final class ShardQueueSession implements QueueSession {
             // A pulled message that failed goes back with a short backoff. The session does not track
             // attempts in memory — it may be gone before the retry is due — so the durable count on
             // the row is what the redelivery policy sees, which is what it is there for.
-            storage.scheduleRetry(connection, NextGenSchema.UNORDERED_TABLE, id.shard(), id.sequence(), 1, 1_000L);
+            storage.scheduleRetry(connection, ShardOwnedSchema.UNORDERED_TABLE, id.shard(), id.sequence(), 1, 1_000L);
         }
         cursors.merge(id.shard(), id.sequence() - 1, Math::min);
     }

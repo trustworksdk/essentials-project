@@ -19,7 +19,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import org.slf4j.*;
 
-import java.sql.SQLException;
+import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -50,14 +50,14 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * it cannot happen. Whether that count is zero under realistic producers is a measurement, not an
  * assumption.
  */
-public final class OrderedShardOwner implements LeasedOwner {
+final class OrderedShardOwner implements LeasedOwner {
     private static final Logger log = LoggerFactory.getLogger(OrderedShardOwner.class);
 
-    private final NextGenStorage             storage;
+    private final ShardOwnedStorage             storage;
     private final int                        shard;
     private final long                       fence;
     private final ShardOwnerSettings         settings;
-    private final BiConsumer<String, byte[]> handler;
+    private final OrderedPayloadHandler      handler;
     private final ShardOwnerMetrics          metrics;
     private final RedeliveryPolicy           redeliveryPolicy;
 
@@ -74,7 +74,7 @@ public final class OrderedShardOwner implements LeasedOwner {
     private final TreeMap<Long, Long> pendingHoles = new TreeMap<>();
 
     /** Everything known but not yet delivered, grouped by key and ordered within it. */
-    private final Map<String, TreeMap<Long, NextGenStorage.OrderedRow>> readyByKey = new HashMap<>();
+    private final Map<String, TreeMap<Long, ShardOwnedStorage.OrderedRow>> readyByKey = new HashMap<>();
     /** Keys with a message currently in a handler. At most one per key, which is what enforces FIFO. */
     private final Set<String> keysInFlight = new HashSet<>();
     /** Highest key_order handed to a handler per key, used to detect ordering violations. */
@@ -108,7 +108,7 @@ public final class OrderedShardOwner implements LeasedOwner {
     /**
      * Tier 1, which this lane went without.
      * <p>
-     * It used to sleep {@link ShardOwnerSettings#idleParkMicros} — 200 microseconds — and re-query.
+     * It used to sleep 200 microseconds and re-query.
      * That park paces nothing: the loop runs as fast as the database can answer, so twenty idle
      * ordered owners measured 52 000 queries a second between them. The mechanism to avoid that was
      * already built, tested and measured; it was simply never wired to this lane, and every headline
@@ -126,6 +126,13 @@ public final class OrderedShardOwner implements LeasedOwner {
     private long lastChaseNanos;
     private long lastSweepNanos;
     /**
+     * When this shard's earliest delayed row becomes visible, in {@link System#nanoTime()} terms, or
+     * {@link Long#MAX_VALUE} when nothing is waiting. See {@link ShardOwner} — the ordered lane needs
+     * it for the same reason and would otherwise deliver a delayed message whenever the backed-off
+     * sweep next happened to run.
+     */
+    private long nextVisibleAtNanos = Long.MAX_VALUE;
+    /**
      * Current sweep interval, doubling while the shard stays empty and reset the moment anything
      * arrives. The sweep is the backstop for a lost notification, not the delivery path, so a quiet
      * shard sweeping every thirty seconds instead of twice a second costs recovery time for a rare
@@ -135,11 +142,11 @@ public final class OrderedShardOwner implements LeasedOwner {
     private long sweepIntervalNanos;
     private long lastAckFlushNanos;
 
-    public OrderedShardOwner(NextGenStorage storage,
+    OrderedShardOwner(ShardOwnedStorage storage,
                              int shard,
                              long fence,
                              ShardOwnerSettings settings,
-                             BiConsumer<String, byte[]> handler,
+                             OrderedPayloadHandler handler,
                              ShardOwnerMetrics metrics,
                              RedeliveryPolicy redeliveryPolicy,
                              String instanceId,
@@ -168,6 +175,9 @@ public final class OrderedShardOwner implements LeasedOwner {
         if (now - lastSweepNanos >= sweepIntervalNanos) {
             return true;
         }
+        if (nextVisibleAtNanos != Long.MAX_VALUE && now >= nextVisibleAtNanos) {
+            return true;
+        }
         if (shedding.get()) {
             // A shed only progresses when this owner is pumped, so it must not be skipped for being
             // quiet — a shard nobody is enqueueing to is exactly the one that drains fastest.
@@ -188,12 +198,12 @@ public final class OrderedShardOwner implements LeasedOwner {
     }
 
     @Override
-    public void onTakeover(java.sql.Connection connection) throws SQLException {
+    public void onTakeover(Connection connection) throws SQLException {
         metrics.takeoverAttemptBumps.add(storage.bumpOrderedAttemptsOnTakeover(connection, shard));
     }
 
     @Override
-    public void flushOnStop(java.sql.Connection connection) throws SQLException {
+    public void flushOnStop(Connection connection) throws SQLException {
         flushAcks(connection);
     }
 
@@ -201,6 +211,9 @@ public final class OrderedShardOwner implements LeasedOwner {
     public long parkDeadlineMillis() {
         var now = System.nanoTime();
         var untilSweep = (sweepIntervalNanos - (now - lastSweepNanos)) / 1_000_000L;
+        if (nextVisibleAtNanos != Long.MAX_VALUE) {
+            untilSweep = Math.min(untilSweep, Math.max(0L, (nextVisibleAtNanos - now) / 1_000_000L));
+        }
         var deadline = Math.max(0L, untilSweep);
         synchronized (stateLock) {
             if (!retrySchedule.isEmpty()) {
@@ -219,26 +232,9 @@ public final class OrderedShardOwner implements LeasedOwner {
         return deadline;
     }
 
-    /**
-     * Park until something arrives, a retry falls due, or the backstop expires. Correctness never
-     * depends on the notification: the backstop and the head sweep both still run, so losing every
-     * notification costs latency and nothing else.
-     */
-    private void parkUntilWork() throws InterruptedException {
-        var wait = settings.pollBackstopMillis();
-        synchronized (stateLock) {
-            if (!retrySchedule.isEmpty()) {
-                var untilRetry = (retrySchedule.peek().dueNanos() - System.nanoTime()) / 1_000_000L;
-                wait = Math.max(1L, Math.min(wait, untilRetry));
-            }
-        }
-        if (wakeup.await(wait)) {
-            metrics.wakeupsHonoured.increment();
-        }
-    }
 
     @Override
-    public int pumpOnce(java.sql.Connection connection) throws SQLException {
+    public int pumpOnce(Connection connection) throws SQLException {
         if (shedComplete.get()) {
             return 0;
         }
@@ -259,9 +255,11 @@ public final class OrderedShardOwner implements LeasedOwner {
             chaseHoles(connection);
             lastChaseNanos = now;
         }
+        var sweptThisPass = false;
         if (now - lastSweepNanos >= sweepIntervalNanos) {
             sweep(connection);
             lastSweepNanos = now;
+            sweptThisPass = true;
         }
 
         dispatchDueRetries(now);
@@ -277,21 +275,32 @@ public final class OrderedShardOwner implements LeasedOwner {
             flushAcks(connection);
             lastAckFlushNanos = now;
         }
-        adjustSweepBackoff(delivered);
+        adjustSweepBackoff(delivered, sweptThisPass);
         return delivered;
     }
 
-    /** See {@code ShardOwner.adjustSweepBackoff}. */
-    private void adjustSweepBackoff(int delivered) {
+    /**
+     * Grow the sweep interval while nothing arrives, and snap it back the instant something does.
+     * <p>
+     * <b>Only when a sweep actually ran.</b> This used to double on every pump iteration, and a pump
+     * iterates whenever any shard it serves has work — not on the sweep cadence. An idle shard beside
+     * a busy one therefore reached the thirty-second ceiling within milliseconds instead of over half
+     * a minute, which is not a tuning nicety: the sweep is how a delayed message is noticed and how a
+     * lost notification is recovered, so both silently became thirty-second operations.
+     */
+    private void adjustSweepBackoff(int delivered, boolean sweptThisPass) {
         if (delivered > 0) {
             sweepIntervalNanos = settings.sweepIntervalNanos();
+            return;
+        }
+        if (!sweptThisPass) {
             return;
         }
         var ceiling = Math.max(settings.sweepIntervalNanos(), settings.maxSweepIntervalNanos());
         sweepIntervalNanos = Math.min(ceiling, sweepIntervalNanos * 2);
     }
 
-    private void accept(NextGenStorage.OrderedRow row) {
+    private void accept(ShardOwnedStorage.OrderedRow row) {
         synchronized (stateLock) {
             if (!seen.add(row.seq())) {
                 return;
@@ -354,9 +363,9 @@ public final class OrderedShardOwner implements LeasedOwner {
         return submitted;
     }
 
-    private void runHandler(String key, long keyOrder, NextGenStorage.OrderedRow row) {
+    private void runHandler(String key, long keyOrder, ShardOwnedStorage.OrderedRow row) {
         try {
-            handler.accept(key, row.payload());
+            handler.handle(key, row.payload(), row.payloadType());
             synchronized (stateLock) {
                 if (Thread.currentThread().isInterrupted()) {
                     metrics.abandonedOnInterrupt.increment();
@@ -384,14 +393,10 @@ public final class OrderedShardOwner implements LeasedOwner {
     }
 
     /**
-     * Put a message back at its key's head so the key retries it before anything later — otherwise a
-     * failure would silently reorder the key.
-     */
-    /**
      * Failure path for a key. Either schedule a retry that keeps the key blocked, or park the
      * message and let the key move on — a dead letter must not stall its key forever.
      */
-    private void onFailure(String key, long keyOrder, NextGenStorage.OrderedRow row, RuntimeException cause) {
+    private void onFailure(String key, long keyOrder, ShardOwnedStorage.OrderedRow row, RuntimeException cause) {
         int attempts;
         synchronized (stateLock) {
             attempts = attemptsBySeq.merge(row.seq(), 1, Integer::sum);
@@ -399,7 +404,7 @@ public final class OrderedShardOwner implements LeasedOwner {
         metrics.observer().deliveryFailed(key, attempts, cause);
         try (var connection = storage.connection()) {
             if (redeliveryPolicy.isExhausted(attempts)) {
-                storage.moveToDeadLetter(connection, NextGenSchema.ORDERED_TABLE, "ordered", shard, row.seq(),
+                storage.moveToDeadLetter(connection, ShardOwnedSchema.ORDERED_TABLE, "ordered", shard, row.seq(),
                                          cause.getClass().getName() + ": " + cause.getMessage());
                 synchronized (stateLock) {
                     attemptsBySeq.remove(row.seq());
@@ -411,7 +416,7 @@ public final class OrderedShardOwner implements LeasedOwner {
                 return;
             }
             var delay = redeliveryPolicy.delayAfter(attempts);
-            storage.scheduleRetry(connection, NextGenSchema.ORDERED_TABLE, shard, row.seq(), attempts, delay.toMillis());
+            storage.scheduleRetry(connection, ShardOwnedSchema.ORDERED_TABLE, shard, row.seq(), attempts, delay.toMillis());
             synchronized (stateLock) {
                 keysAwaitingRetry.add(key);
                 retrySchedule.add(new OrderedRetry(System.nanoTime() + delay.toNanos(), key, keyOrder, row));
@@ -437,15 +442,19 @@ public final class OrderedShardOwner implements LeasedOwner {
         }
     }
 
-    private record OrderedRetry(long dueNanos, String key, long keyOrder, NextGenStorage.OrderedRow row) {
+    private record OrderedRetry(long dueNanos, String key, long keyOrder, ShardOwnedStorage.OrderedRow row) {
     }
 
-    private void requeue(String key, long keyOrder, NextGenStorage.OrderedRow row) {
+    /**
+     * Put a message back at its key's head so the key retries it before anything later — otherwise a
+     * failure would silently reorder the key.
+     */
+    private void requeue(String key, long keyOrder, ShardOwnedStorage.OrderedRow row) {
         seen.remove(row.seq());
         readyByKey.computeIfAbsent(key, ignored -> new TreeMap<>()).put(keyOrder, row);
     }
 
-    private void chaseHoles(java.sql.Connection connection) throws SQLException {
+    private void chaseHoles(Connection connection) throws SQLException {
         var candidates = pendingHoles.keySet().stream().limit(settings.maxHolesPerChase()).toList();
         var found = storage.readOrderedSpecific(connection, shard, candidates);
         metrics.holeChaseQueries.increment();
@@ -468,9 +477,13 @@ public final class OrderedShardOwner implements LeasedOwner {
         metrics.maxPendingHoles.accumulateAndGet(pendingHoles.size(), Math::max);
     }
 
-    private void sweep(java.sql.Connection connection) throws SQLException {
+    private void sweep(Connection connection) throws SQLException {
         var rows = storage.sweepOrderedFromHead(connection, shard, settings.readBatchSize());
         metrics.headSweeps.increment();
+        var untilNext = storage.millisUntilNextVisible(connection, ShardOwnedSchema.ORDERED_TABLE, shard);
+        nextVisibleAtNanos = untilNext.isPresent()
+                             ? System.nanoTime() + untilNext.getAsLong() * 1_000_000L
+                             : Long.MAX_VALUE;
         for (var row : rows) {
             var known = false;
             synchronized (stateLock) {
@@ -483,7 +496,7 @@ public final class OrderedShardOwner implements LeasedOwner {
         }
     }
 
-    private void flushAcks(java.sql.Connection connection) throws SQLException {
+    private void flushAcks(Connection connection) throws SQLException {
         List<Long> batch;
         synchronized (stateLock) {
             if (pendingAcks.isEmpty()) {
@@ -535,7 +548,7 @@ public final class OrderedShardOwner implements LeasedOwner {
      * Drive one step of a shed. Returns true when the owner should stop, which happens either because
      * the shard quiesced (and is now ready to be released) or because the grace ran out.
      */
-    private boolean advanceShed(java.sql.Connection connection) throws SQLException {
+    private boolean advanceShed(Connection connection) throws SQLException {
         int inFlight;
         synchronized (stateLock) {
             inFlight = keysInFlight.size();

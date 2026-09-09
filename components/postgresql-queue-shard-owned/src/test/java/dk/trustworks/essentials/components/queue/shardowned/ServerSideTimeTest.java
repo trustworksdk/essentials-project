@@ -40,8 +40,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ServerSideTimeTest {
 
-    private static final Path STORAGE = Path.of("src/main/java/dk/trustworks/essentials/components/queue/shardowned/NextGenStorage.java");
-    private static final Path SCHEMA  = Path.of("src/main/java/dk/trustworks/essentials/components/queue/shardowned/NextGenSchema.java");
+    private static final Path STORAGE = Path.of("src/main/java/dk/trustworks/essentials/components/queue/shardowned/ShardOwnedStorage.java");
+    private static final Path SCHEMA  = Path.of("src/main/java/dk/trustworks/essentials/components/queue/shardowned/ShardOwnedSchema.java");
 
     @Test
     void no_client_supplied_timestamp_is_ever_written_to_the_database() throws Exception {

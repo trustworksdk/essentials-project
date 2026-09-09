@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import dk.trustworks.essentials.shared.Lifecycle;
 import org.slf4j.*;
 
 import javax.sql.DataSource;
@@ -29,7 +30,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The threads and connections every queue in a process shares.
  * <p>
  * <b>Why this exists.</b> Pumps, the wake-up listener and the heartbeat were all scoped to a single
- * {@link NextGenQueue}, so database contact scaled with the number of queues: {@code (pumps x lanes +
+ * {@link ShardOwnedQueue}, so database contact scaled with the number of queues: {@code (pumps x lanes +
  * lanes) x queues} held connections, which is 150 at twenty-five queues and about 1 800 at three
  * hundred. None of that is required by shard ownership. A shard's identity is a row in the lease
  * table, its state is a few fields in memory, and {@code queue_id} is a bind parameter in every
@@ -43,12 +44,12 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *   threads     = pumpThreads + 2        (pumps, listener, heartbeat)
  * </pre>
  * <p>
- * <b>The wake-up channel was already global.</b> {@link NextGenListener} listens on one channel and
+ * <b>The wake-up channel was already global.</b> {@link ShardWakeupListener} listens on one channel and
  * the payload carries {@code queueId:lane:shard}, so a single listener demultiplexes to the right
  * shard of the right lane of the right queue. Nothing had to change for that — it was always able to
  * serve every queue, and was simply being constructed once per queue.
  */
-public final class ShardRuntime implements AutoCloseable {
+public final class ShardRuntime implements Lifecycle, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ShardRuntime.class);
 
     /**
@@ -60,8 +61,14 @@ public final class ShardRuntime implements AutoCloseable {
      * 500-connection pool on the first attempt. A default that degrades as the caller adds queues is
      * the wrong default, not a caveat to document — so doing nothing now gets the shared runtime, and
      * a private one has to be asked for.
+     * <p>
+     * <b>Keyed by identity, not by equality.</b> A {@code DataSource} is a resource rather than a
+     * value, and the wrappers a framework puts around one — Spring's
+     * {@code LazyConnectionDataSourceProxy} and {@code TransactionAwareDataSourceProxy} among them —
+     * are free to define equality however they like. Two distinct pools comparing equal would share
+     * one runtime and one set of connections drawn from the wrong pool; identity cannot do that.
      */
-    private static final Map<DataSource, Shared> SHARED = new HashMap<>();
+    private static final Map<DataSource, Shared> SHARED = new IdentityHashMap<>();
 
     private record Shared(ShardRuntime runtime, int borrowers) {
     }
@@ -69,6 +76,17 @@ public final class ShardRuntime implements AutoCloseable {
     static synchronized ShardRuntime acquireShared(DataSource dataSource, ShardOwnerSettings settings) {
         var existing = SHARED.get(dataSource);
         if (existing != null) {
+            // The first borrower's settings are the ones in force, because the pumps, the listener
+            // and the handler budget were sized from them and are already running. Saying so is the
+            // point: a second queue asking for four pump threads and silently getting two is the
+            // kind of thing that is only discovered while reading a heap dump.
+            if (!existing.runtime().settings.equals(settings)) {
+                log.warn("A shared ShardRuntime for this DataSource already exists and was built with "
+                         + "different settings; the settings passed here are ignored. Construct the "
+                         + "ShardRuntime yourself and pass it to every ShardOwnedQueue if the process "
+                         + "needs a specific configuration. In force: {}. Ignored: {}",
+                         existing.runtime().settings, settings);
+            }
             SHARED.put(dataSource, new Shared(existing.runtime(), existing.borrowers() + 1));
             return existing.runtime();
         }
@@ -88,27 +106,25 @@ public final class ShardRuntime implements AutoCloseable {
             return;
         }
         SHARED.remove(dataSource);
-        existing.runtime().close();
+        existing.runtime().stop();
     }
 
     private final DataSource                dataSource;
     private final ShardOwnerSettings        settings;
     private final ShardOwnerMetrics         metrics;
-    private final AtomicBoolean             running = new AtomicBoolean(true);
+    private final AtomicBoolean             running = new AtomicBoolean();
     private final AtomicBoolean             flushOnExit = new AtomicBoolean(true);
     private final List<ShardPump>           pumps = new ArrayList<>();
     private final Map<String, ShardWakeup>  wakeups = new ConcurrentHashMap<>();
-    private final ExecutorService           pumpExecutor;
-    private final ExecutorService           handlerExecutor;
-    private final ScheduledExecutorService  heartbeat;
-    private final NextGenListener           listener;
     /**
-     * The process-wide handler bound. A permit is taken before a message is dispatched and returned
-     * when its handler finishes, so both lanes and every queue draw on the same budget — and a
-     * deployment can size it against whatever the handlers actually contend for, usually a connection
-     * pool, rather than against an accident of how many shards happen to be owned.
+     * Recreated by every {@link #start()}, because an {@code ExecutorService} cannot be restarted
+     * once shut down. This is what makes the runtime genuinely restartable rather than merely
+     * stoppable — the same distinction {@code ShardOwnedQueue.stop()} had to make.
      */
-    private final Semaphore                 handlerPermits;
+    private ExecutorService                 pumpExecutor;
+    private ExecutorService                 handlerExecutor;
+    private ScheduledExecutorService        heartbeat;
+    private ShardWakeupListener             listener;
 
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings) {
         this(dataSource, settings, new ShardOwnerMetrics());
@@ -118,26 +134,44 @@ public final class ShardRuntime implements AutoCloseable {
         this.dataSource = requireNonNull(dataSource, "No dataSource provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
+        start();
+    }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Idempotent, and restartable after {@link #stop()}: the executors and the listener are built
+     * here rather than in the constructor, because none of them can be revived once shut down.
+     */
+    @Override
+    public synchronized void start() {
+        if (!running.compareAndSet(false, true)) {
+            return;
+        }
+        pumps.clear();
         var pumpCount = Math.max(1, settings.pumpThreads());
-        this.pumpExecutor = Executors.newFixedThreadPool(pumpCount, named("ng-pump"));
+        this.pumpExecutor = Executors.newFixedThreadPool(pumpCount, named("shard-queue-pump"));
         // Handlers are user code that mostly waits. One virtual thread per message in flight, shared
         // by every queue, rather than a platform pool sized per shard.
         this.handlerExecutor = Executors.newVirtualThreadPerTaskExecutor();
-        this.handlerPermits = new Semaphore(Math.max(1, settings.handlerConcurrency()));
-        this.heartbeat = Executors.newSingleThreadScheduledExecutor(named("ng-heartbeat"));
+        this.heartbeat = Executors.newSingleThreadScheduledExecutor(named("shard-queue-heartbeat"));
 
         // A storage handle bound to no queue in particular: the pumps only use it to open connections,
         // and every statement an owner issues carries its own queue id.
-        var connections = new NextGenStorage(dataSource, (short) 0);
+        var connections = new ShardOwnedStorage(dataSource, (short) 0);
         for (var index = 0; index < pumpCount; index++) {
             var pump = new ShardPump(connections, settings, metrics, running, flushOnExit, "pump-" + index);
             pumps.add(pump);
             pumpExecutor.submit(pump);
         }
-        this.listener = new NextGenListener(dataSource, wakeups);
+        this.listener = new ShardWakeupListener(dataSource, wakeups);
         // Started here, after it is fully constructed, rather than from inside its own constructor.
         this.listener.start();
+    }
+
+    @Override
+    public boolean isStarted() {
+        return running.get();
     }
 
     private static ThreadFactory named(String prefix) {
@@ -155,7 +189,7 @@ public final class ShardRuntime implements AutoCloseable {
      */
     ShardWakeup wakeupFor(short queueId, String lane, int shard) {
         var pump = pumpFor(queueId, lane, shard);
-        return wakeups.computeIfAbsent(NextGenListener.key(queueId, lane, shard),
+        return wakeups.computeIfAbsent(ShardWakeupListener.key(queueId, lane, shard),
                                        ignored -> new ShardWakeup(pump.wakeup()));
     }
 
@@ -173,17 +207,11 @@ public final class ShardRuntime implements AutoCloseable {
     }
 
     void forget(short queueId, String lane, int shard) {
-        wakeups.remove(NextGenListener.key(queueId, lane, shard));
+        wakeups.remove(ShardWakeupListener.key(queueId, lane, shard));
     }
 
     HandlerDispatch dispatch(int parallelConsumers) {
-        return new HandlerDispatch(handlerExecutor, handlerPermits,
-                                   new Semaphore(Math.max(1, parallelConsumers)));
-    }
-
-    /** In-flight handler invocations across the process, for the cost gate. */
-    public int handlersInFlight() {
-        return Math.max(0, settings.handlerConcurrency() - handlerPermits.availablePermits());
+        return new HandlerDispatch(handlerExecutor, new Semaphore(Math.max(1, parallelConsumers)));
     }
 
     /** Register a queue's heartbeat. One scheduler thread runs every queue's renewals and rebalances. */
@@ -203,9 +231,26 @@ public final class ShardRuntime implements AutoCloseable {
         return pumps.size();
     }
 
+    /** Equivalent to {@link #stop()}, so try-with-resources and a container both work. */
     @Override
     public void close() {
-        running.set(false);
+        stop();
+    }
+
+    @Override
+    public synchronized void stop() {
+        if (!running.compareAndSet(true, false)) {
+            return;
+        }
+        // Signal the PUMPS, not only the shards.
+        //
+        // A shard's wake-up cascades to its pump, so signalling shards happens to release any pump
+        // that serves one. A pump serving none is released by nothing — and that is the common case
+        // at shutdown, in a process that configured the engine but never consumed, or whose shards
+        // were released first. It then sleeps out its whole park, up to max(pollBackstop,
+        // maxSweepInterval), before it notices `running` is false: a thirty-second shutdown, which
+        // in a Spring application is thirty seconds added to every restart.
+        pumps.forEach(pump -> pump.wakeup().signal());
         wakeups.values().forEach(ShardWakeup::signal);
         listener.stop();
         heartbeat.shutdownNow();
@@ -219,6 +264,8 @@ public final class ShardRuntime implements AutoCloseable {
             pumpExecutor.shutdownNow();
         }
         handlerExecutor.shutdown();
+        // Cleared so a restart does not signal wake-ups belonging to owners that no longer exist.
+        wakeups.clear();
         log.debug("Shard runtime stopped");
     }
 }

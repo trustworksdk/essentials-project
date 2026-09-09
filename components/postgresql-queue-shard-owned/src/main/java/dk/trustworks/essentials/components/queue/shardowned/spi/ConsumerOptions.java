@@ -20,10 +20,6 @@ import java.time.Duration;
 
 /**
  * Consumption settings.
- * <p>
- * Notably absent: a thread count. Concurrency is shard count times per-key parallelism, both of which
- * the engine decides, and offering a knob that cannot affect either would be a lie in the shape of an
- * option.
  *
  * @param maxShards         upper bound on shards this consumer holds; rebalancing keeps instances
  *                          within a fair share of each other regardless
@@ -31,19 +27,15 @@ import java.time.Duration;
  * @param retryDelay        first backoff
  * @param retryMultiplier   1.0 for fixed backoff, above 1.0 for exponential
  * @param maxRetryDelay     backoff ceiling
- */
-/**
  * @param parallelConsumers how many handler invocations THIS consumer may have in flight.
  *                          <p>
  *                          Per consumer, deliberately, and named as in {@code ConsumeFromQueue} where
  *                          it means the same thing. A single process-wide budget was the wrong shape:
  *                          it lets one busy queue starve every other, and it gives a caller no way to
- *                          say that this queue deserves four handlers and that one thirty-two. The
- *                          process-wide {@code handlerConcurrency} remains, but as a ceiling that
- *                          protects whatever the handlers contend for — not as the knob.
+ *                          say that this queue deserves four handlers and that one thirty-two.
  *                          <p>
  *                          <b>The default of 8 is measured, and it is deliberately not the fastest
- *                          value.</b> {@code NextGenConcurrencySweepIT} drains a fixed workload
+ *                          value.</b> {@code ShardOwnedConcurrencySweepIT} drains a fixed workload
  *                          through a 2 ms handler at 1, 2, 4 … 128 parallel consumers, interleaved so
  *                          that the drift which ruins an absolute throughput figure is common to
  *                          every arm:

@@ -78,6 +78,17 @@ public final class MicrometerQueueObserver implements QueueObserver {
     }
 
     /**
+     * Tag every meter with the queue's name.
+     * <p>
+     * The overload exists so the tag comes from the same {@link QueueName} the engine was built with
+     * rather than from a string retyped at the call site — a metrics tag that disagrees with the
+     * queue it describes is worse than no tag, because a dashboard cannot tell.
+     */
+    public MicrometerQueueObserver(MeterRegistry registry, QueueName queueName) {
+        this(registry, List.of(Tag.of(QUEUE_TAG, requireNonNull(queueName, "No queueName provided").value())));
+    }
+
+    /**
      * @param commonTags applied to every meter — typically the queue's name and the module, so several
      *                   queues in one process stay distinguishable
      */

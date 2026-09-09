@@ -28,7 +28,12 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
 @FunctionalInterface
 public interface MessageHandler {
     /**
-     * @param key the ordering key for an ordered message, null otherwise
+     * @param key         the ordering key for an ordered message, null otherwise
+     * @param payload     the bytes as enqueued; this engine never looks inside them
+     * @param payloadType the discriminator supplied at enqueue. Opaque to the engine — it is stored,
+     *                    carried through dead-lettering and handed back here, and nothing else. What
+     *                    the number means is entirely the application's contract; see
+     *                    {@link Message#payloadType()}
      */
-    void handle(String key, byte[] payload) throws Exception;
+    void handle(String key, byte[] payload, int payloadType) throws Exception;
 }

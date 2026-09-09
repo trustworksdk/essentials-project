@@ -25,6 +25,16 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * out of a decision it has no stake in — the measurements put JSON's contribution to per-message
  * write volume at 3%, so there is nothing here worth spending a coupling on.
  *
+ * @param payloadType a discriminator the application defines, so a handler can tell what the bytes
+ *              are without unpacking them first. <b>Opaque to the engine.</b> It is stored, carried
+ *              through dead-lettering and resurrection, and handed back to the handler; it is never
+ *              compared, indexed or interpreted, and nothing validates it.
+ *              <p>
+ *              There is deliberately no registry mapping it to a type name, which means the mapping
+ *              lives in each application — two services disagreeing about what {@code 1} means is not
+ *              something this engine can detect. An earlier draft described it as an "interned FQCN"
+ *              and justified it as keeping an index dense; neither was true, since the column is in
+ *              no index and nothing interns it.
  * @param key   the ordering key, or null for the unordered lane. Messages sharing a key are delivered
  *              in {@code keyOrder} and never concurrently
  * @param keyOrder position within the key, supplied by the producer because only the producer knows
@@ -43,6 +53,22 @@ public record Message(byte[] payload, int payloadType, String key, long keyOrder
 
     public static Message ordered(byte[] payload, int payloadType, String key, long keyOrder) {
         return new Message(payload, payloadType, requireNonNull(key, "No key provided"), keyOrder, java.time.Duration.ZERO);
+    }
+
+    /**
+     * Deliverable no earlier than {@code delay} from now.
+     * <p>
+     * "From now" is the database's now, not this JVM's: the delay is applied server-side at insert,
+     * so a delayed message does not depend on the enqueueing node's clock any more than a lease does.
+     */
+    public static Message delayed(byte[] payload, int payloadType, java.time.Duration delay) {
+        return new Message(payload, payloadType, null, 0L, requireNonNull(delay, "No delay provided"));
+    }
+
+    public static Message delayedOrdered(byte[] payload, int payloadType, String key, long keyOrder,
+                                         java.time.Duration delay) {
+        return new Message(payload, payloadType, requireNonNull(key, "No key provided"), keyOrder,
+                           requireNonNull(delay, "No delay provided"));
     }
 
     public boolean isOrdered() {

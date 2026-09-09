@@ -27,8 +27,20 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * The default is derived from the message rather than configured, because for ordered messages the
  * choice is not a preference. A puller holding individual messages of a key cannot stop the shard's
  * owner dispatching a later one concurrently — the per-key in-flight set that enforces order lives in
- * the owner's memory, and the puller is elsewhere. Ordered pull therefore requires {@link #KEY} or
- * wider.
+ * the owner's memory, and the puller is elsewhere. Ordered pull therefore requires {@link #SHARD}.
+ *
+ * <h2>Why there is no KEY scope</h2>
+ * The taxonomy this enum comes from has a per-key rung: "ordering safe, blocks only that key". It is
+ * absent here rather than present-and-throwing, because it cannot be built in this engine and a
+ * constant that always throws is a worse API than one that does not exist.
+ * <p>
+ * Per-key order here is enforced by an in-memory set of the keys a shard's owner currently has in
+ * flight. A session in another process cannot enter that set, and for it to take one key safely the
+ * owner would have to re-check the database before dispatching each key — a query per message on the
+ * ordered fast path, which is exactly the cost ordering-by-ownership exists to avoid. The rung is
+ * free in a claim-based queue, where every dispatch already reads and writes; it is not free here.
+ * On the ordered lane the unit of exclusivity <em>is</em> the shard, so {@link #SHARD} is the answer
+ * rather than a fallback.
  */
 public enum SessionScope {
     /**
@@ -44,17 +56,6 @@ public enum SessionScope {
      * every row in one statement either way. What differs is how much a session holds at once.
      */
     BATCH,
-    /**
-     * Every message of a key.
-     * <p>
-     * <b>Not implementable in this engine, and the reason is structural.</b> Per-key order is enforced
-     * by an in-memory set of the keys a shard's owner has in flight; a session in another process
-     * cannot enter that set, and for it to take one key safely the owner would have to re-check the
-     * database before dispatching each key — a query per message on the fast path, which is exactly
-     * the cost ordering-by-ownership exists to avoid. On the ordered lane the unit of exclusivity is
-     * the shard, so {@link #SHARD} is the answer rather than a fallback.
-     */
-    KEY,
     /** A whole shard. No per-message write at all. Ordering safe, blocks the shard. */
     SHARD
 }
