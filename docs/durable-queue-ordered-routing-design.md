@@ -504,12 +504,26 @@ Instrumenting the failing configuration says it is **starvation, not slow work**
 | `horizonProbes` | 10 | `advanceWatermark` returned early almost every pass |
 | `maxWatermarkLagSeq` | 1 000 | the watermark never advanced off the start |
 
-So the owners are not being pumped, rather than being pumped and doing too much. That points at the
-interaction between a batched sweep and the two things that decide whether an owner is pumped at all —
-`needsAttention` and `parkDeadlineMillis`, both of which read `lastSweepNanos` and `sweepIntervalNanos`,
-and `adjustSweepBackoff`, which doubles the interval to a thirty-second ceiling on any pass that swept
-and delivered nothing. The next attempt should start by logging that interval per owner rather than by
-re-reading the SQL.
+So the owners are not being pumped, rather than being pumped and doing too much.
+
+A second round of probes tested the obvious explanation — that the sweep backoff runs away and parks
+the pump — and **disproved it as the cause**, while turning up something stranger:
+
+- **The backoff does run away.** Every one of the eight shards walks the full ladder to the
+  thirty-second ceiling: 1 000 → 2 000 → 4 000 → 8 000 → 16 000 → 30 000 ms.
+- **But the pump is not parking on it.** Park waits are almost all short — 1 ms fourteen times,
+  ~500 ms ten times, ~1 s four times, and a single 7.5 s. Perhaps fifteen seconds of parking in sixty.
+- **And the batched statements are fast and empty.** 250 µs to 2 ms per call, returning zero rows,
+  because the shards that still hold work are not the ones in the batch.
+- **The batch forms in only 18 of ~123 passes**, since 95 of them have a single attentive owner.
+
+That leaves a gap that none of the three explanations covers: the pump makes about 123 passes in sixty
+seconds while neither parking nor querying for most of that time, and the difference from the green
+configuration is confined to eighteen passes in which swept rows were supplied. Time is going somewhere
+inside `pumpOnce` other than the batched reads — the remaining candidates being `flushAcks`,
+`dispatchReadyKeys` under `stateLock` contending with the handler threads, or the interaction of
+`applySweptRows` with `seen` while handlers hold the lock. The backoff to thirty seconds is then a
+consequence of the slowness rather than its cause, and chasing it further would be chasing a symptom.
 
 Two things follow for whoever finishes it.
 
