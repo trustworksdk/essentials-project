@@ -206,12 +206,49 @@ producing those shard numbers, no consumer would lease them, and the rows would 
 There is no safe general answer to where they should go, so the supported route is to drain those
 shards and recreate the queue.
 
-**The caller still has to restart instances**, because the count is baked into every running
-`ShardOwnedQueue` — the database knowing about eight shards changes nothing until the processes do.
-Until they have all restarted, two moduli are in flight at once, which is the same hazard as above
-and the other half of why the ordered lane must be empty first. For an unordered-only queue it is
-harmless: messages have no key, every shard has an owner either way, so a **rolling restart is
-enough — this is not a drain-and-switch.**
+**No restart is needed.** The count used to be fixed at construction, so growing a queue meant
+redeploying every instance — the operationally expensive half of resharding, and an artefact of where
+the number was stored rather than anything the design required. The heartbeat re-reads `shard_count`
+from the registry every tick, and the acquire loop in `rebalance()` then takes the new shards on its
+own, because it has always iterated to `shardCount`. Growth is picked up within one heartbeat
+interval (`leaseTtl / 3`, ten seconds by default). Only ever upward: a registry reporting *fewer*
+shards is ignored and logged, because dropping shards at runtime would strand whatever is in them.
+
+**What remains is a two-moduli window of one heartbeat.** Instances pick the new count up
+independently, so briefly some route by the old modulus and some by the new. For the unordered lane
+that is harmless — routing is round-robin and every shard has an owner either way, so growth needs no
+coordination at all. For the ordered lane it is the same hazard that requires an empty lane in the
+first place, so producers must stay paused across the window. **Seconds, not a deployment.**
+
+### What would remove the remaining constraint, and why we did not build it
+
+The ordered lane still needs a pause-and-drain. Three ways out, recorded so the next person does not
+have to re-derive them:
+
+**Doubling-only split.** Restrict growth to `N -> 2N`. Then `hash(K) mod 2N` is either `S` or `S+N`
+and nothing else, so each old shard splits in exactly two — and if one owner holds *both* halves
+during the transition it sees every message for every affected key. Per-key order is preserved by the
+existing `keysInFlight` set, and ordering within a key still works because `readyByKey` sorts by the
+producer-assigned `key_order` rather than by `seq`, so the halves having separate sequences does not
+matter. Unpair once shard `S` holds no rows older than the growth: one cheap query per sweep. This
+removes the drain entirely. The costs are that growth becomes doubling-only — 8→16→32, never 8→12 —
+and that it needs a transition mode, which is the same class of change (ordering across a topology
+change) that took three attempts to test honestly for the ordered shed. Worth building if a real
+deployment finds the pause blocking; not before.
+
+**Virtual shards / consistent hashing.** The textbook answer: fix the partition space large, map
+virtual shards onto physical owners, and growth becomes pure rebalancing — which already exists. It
+fits this engine badly. A shard here is not a cheap bucket: it is an owner object, a wake-up, a
+cursor, two sequences and ~0.1 queries/s. At 256 virtual shards across two lanes that is roughly
+25 queries/s idle *per queue*, plus 512 lease rows and 512 sequences. Making it affordable would mean
+one owner serving a *range* of virtual shards under a single cursor, which conflicts with per-`(queue,
+shard)` sequences — and those exist because a shared sequence manufactured `queues - 1` holes per
+message. It is a structural rework of the read path, not a feature.
+
+**Size it correctly instead.** Given that `shardCount` caps how many instances can consume (§13) and
+an idle shard costs ~0.1 queries/s, over-provisioning an ordered queue is close to free. Setting it to
+the maximum replica count the deployment will ever reach makes growth an event that never happens,
+which is a better outcome than making it cheap.
 
 ### 2.8 Sequences
 

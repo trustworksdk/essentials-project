@@ -639,6 +639,21 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * The shard count the registry currently holds for this queue, or empty if it has no registry row
+     * — a queue registered by raw id rather than by name has nothing to grow.
+     */
+    public OptionalInt currentShardCount() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT shard_count FROM " + REGISTRY_TABLE + " WHERE queue_id = ?")) {
+            statement.setShort(1, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? OptionalInt.of(resultSet.getInt(1)) : OptionalInt.empty();
+            }
+        }
+    }
+
     public long countRemaining(int shard) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(

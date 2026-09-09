@@ -270,4 +270,94 @@ class ShardOwnedAdminSurfaceIT {
             return values;
         }
     }
+
+    /**
+     * A running consumer must pick up a grown shard count without being restarted.
+     * <p>
+     * The count used to be fixed at construction, so growing a queue meant redeploying every
+     * instance — the operationally expensive half of resharding, and an artefact of where the number
+     * lived rather than anything the design required. The heartbeat already reads the database and
+     * already rebalances every tick.
+     */
+    @Test
+    void a_running_consumer_picks_up_a_grown_shard_count_without_a_restart() throws Exception {
+        var name = QueueName.of("grow-live");
+        ShardOwnedSchema.registerQueue(dataSource, name, 2);
+
+        var delivered = ConcurrentHashMap.<String>newKeySet();
+        try (var queue = PostgresqlMessageQueue.builder()
+                                               .setDataSource(dataSource)
+                                               .setQueueName(name)
+                                               .setInstanceId("grow-live-1")
+                                               .setSettings(fastHeartbeat())
+                                               .build()) {
+            var subscription = queue.consume(
+                    (key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                    ConsumerOptions.defaults());
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .untilAsserted(() -> assertThat(subscription.shardsHeld()).isEqualTo(2));
+
+            // Grow it underneath the running consumer. No restart, no redeploy.
+            ShardOwnedSchema.growShardCount(dataSource, name, 8);
+
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(subscription.shardsHeld())
+                              .describedAs("the running consumer takes the new shards on a heartbeat")
+                              .isEqualTo(8));
+
+            // And it must actually deliver from them: enqueue enough to reach every shard.
+            for (var i = 0; i < 200; i++) {
+                queue.enqueue(Message.of(("g" + i).getBytes(StandardCharsets.UTF_8), 1));
+            }
+            Awaitility.await().atMost(Duration.ofSeconds(30))
+                      .untilAsserted(() -> assertThat(delivered)
+                              .describedAs("messages routed to the newly added shards are delivered")
+                              .hasSize(200));
+        }
+    }
+
+    /** A registry reporting fewer shards must be ignored, not obeyed — the difference is stranded rows. */
+    @Test
+    void a_shrunken_registry_count_is_ignored_by_a_running_consumer() throws Exception {
+        var name = QueueName.of("shrink-live");
+        var registered = ShardOwnedSchema.registerQueue(dataSource, name, 4);
+
+        try (var queue = PostgresqlMessageQueue.builder()
+                                               .setDataSource(dataSource)
+                                               .setQueueName(name)
+                                               .setInstanceId("shrink-live-1")
+                                               .setSettings(fastHeartbeat())
+                                               .build()) {
+            var subscription = queue.consume((key, payload, payloadType) -> {
+            }, ConsumerOptions.defaults());
+            Awaitility.await().atMost(Duration.ofSeconds(20))
+                      .untilAsserted(() -> assertThat(subscription.shardsHeld()).isEqualTo(4));
+
+            // growShardCount refuses to shrink, so write it directly — this asserts the engine's own
+            // guard rather than the schema helper's.
+            try (var connection = dataSource.getConnection();
+                 var statement = connection.prepareStatement(
+                         "UPDATE " + ShardOwnedSchema.REGISTRY_TABLE + " SET shard_count = 2 WHERE queue_id = ?")) {
+                statement.setShort(1, registered.queueId());
+                statement.executeUpdate();
+            }
+
+            Thread.sleep(4_000);
+            assertThat(subscription.shardsHeld())
+                    .describedAs("dropping shards at runtime would strand whatever is in them")
+                    .isEqualTo(4);
+        }
+    }
+
+    /** Heartbeat at a third of the lease, so growth is observed in seconds rather than in ten. */
+    private static ShardOwnerSettings fastHeartbeat() {
+        var defaults = ShardOwnerSettings.defaults();
+        return new ShardOwnerSettings(defaults.readBatchSize(), defaults.ackBatchSize(),
+                                      defaults.ackFlushInterval(), defaults.chaseDelay(),
+                                      defaults.holeExpiry(), defaults.sweepInterval(),
+                                      defaults.maxHolesPerChase(), defaults.keyConcurrency(),
+                                      defaults.pollBackstop(), defaults.maxSweepInterval(),
+                                      defaults.pumpThreads(), defaults.shedGrace(),
+                                      Duration.ofSeconds(3));
+    }
 }

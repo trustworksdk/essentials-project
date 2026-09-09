@@ -256,7 +256,8 @@ The concurrency sweep uses a 2 ms handler. A handler that returns immediately is
 - **`shardCount` can GROW**, via `ShardOwnedSchema.growShardCount(ds, name, n)`.
   - Refused while the **ordered lane** holds anything: a key's shard is `hash(key) mod shardCount`, so changing the count sends a key's next message to a different shard from its last — one key, two owners, reordered.
   - **Shrinking is never allowed**: messages already in the removed shards would be addressed by nobody. Drain those shards and recreate the queue instead.
-  - **Restart instances afterwards** — the count is baked into a running queue, and until they have all restarted two moduli are in flight. For an unordered-only queue a **rolling restart is enough**; it is not a drain-and-switch.
+  - **No restart needed.** A running queue re-reads `shard_count` on each heartbeat and takes the new shards within one interval (`leaseTtl / 3`, 10s by default). A registry reporting *fewer* shards is ignored — dropping shards at runtime would strand what is in them.
+  - **A one-heartbeat window remains where instances disagree about the modulus.** Harmless for unordered (round-robin, every shard owned). For ordered, keep producers paused across it — seconds, not a deployment.
 - **Register by name, always.** `registerQueue(ds, QueueName.of("orders"), 8)` interns the name to a `short` and records the shard count with it. Building a queue from a name takes both from the registry, so two processes cannot disagree about the shard count — a disagreement routes the same key to different shards and strands whole shards.
 - **`shardCount` cannot change once registered.** Re-registering with a different count is refused rather than accepted.
 - **Not published.** `maven.deploy.skip=true`, no Spring Boot starter, no admin API, no interceptor chain.

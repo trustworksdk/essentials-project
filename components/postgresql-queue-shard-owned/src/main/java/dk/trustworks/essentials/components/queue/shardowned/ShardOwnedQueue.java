@@ -48,7 +48,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private final ShardOwnedStorage storage;
     private final DataSource     dataSource;
     private final short          queueId;
-    private final int            shardCount;
+    /**
+     * Mutable, and read on the enqueue path as well as by the heartbeat, because a queue picks up a
+     * grown shard count at runtime rather than needing the process restarted. See
+     * {@link #refreshShardCount()}.
+     */
+    private volatile int         shardCount;
     private final String         instanceId;
 
     private final AtomicBoolean       running = new AtomicBoolean();
@@ -416,6 +421,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             } catch (Exception e) {
                 log.warn("Instance heartbeat failed", e);
             }
+            try {
+                refreshShardCount();
+            } catch (Exception e) {
+                log.warn("Could not re-read the shard count for queue {}", queueId, e);
+            }
             for (var owner : owners) {
                 if (!owner.leaseHeld()) {
                     continue;
@@ -453,6 +463,43 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * Releasing before acquiring, and only ever releasing what this instance itself holds, is what
      * keeps two instances from tugging the same shard back and forth.
      */
+    /**
+     * Pick up a shard count that has grown in the registry, without restarting the process.
+     * <p>
+     * The count used to be fixed at construction, so growing a queue meant redeploying every
+     * instance — the operationally expensive half of resharding, and an artefact of where the number
+     * was stored rather than anything the design required. The heartbeat already reads the database
+     * every tick and already rebalances; noticing one more column is the whole change, and the
+     * acquire loop in {@link #rebalance()} then takes the new shards on its own because it has always
+     * iterated to {@code shardCount}.
+     * <p>
+     * <b>What this does not remove is the two-moduli window.</b> Instances pick the new count up
+     * independently, so for up to one heartbeat interval some are routing keys by the old modulus and
+     * some by the new. For the unordered lane that is harmless — routing is round-robin, every shard
+     * has an owner either way. For the ordered lane it is the same hazard that makes growth require
+     * an empty lane in the first place, so the operator must still not be producing ordered messages
+     * across the window. The window is now seconds rather than a deployment.
+     * <p>
+     * Only ever upward. A registry that reported a smaller count would strand the messages in the
+     * shards this instance stopped looking at, so it is refused and logged rather than obeyed.
+     */
+    private void refreshShardCount() throws SQLException {
+        var registered = storage.currentShardCount();
+        if (registered.isEmpty() || registered.getAsInt() == shardCount) {
+            return;
+        }
+        var updated = registered.getAsInt();
+        if (updated < shardCount) {
+            log.warn("Queue {} reports {} shards in the registry but this instance holds {}; ignoring, "
+                     + "because dropping shards at runtime would strand whatever is in them",
+                     queueId, updated, shardCount);
+            return;
+        }
+        log.info("Queue {} grew from {} to {} shards; picking it up without a restart",
+                 queueId, shardCount, updated);
+        shardCount = updated;
+    }
+
     private void rebalance() throws SQLException {
         var liveInstances = storage.countLiveInstances(leaseTtlMillis);
         var fairShare = Math.min(maxShardsHeld, (shardCount + liveInstances - 1) / liveInstances);
