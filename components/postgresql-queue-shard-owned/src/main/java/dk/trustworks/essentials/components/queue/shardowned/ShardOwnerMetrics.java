@@ -74,6 +74,14 @@ public final class ShardOwnerMetrics {
      * therefore the number to watch. A non-zero value means some transaction outlived
      * {@code watermarkCap}, exactly as an abandoned hole outlived {@code holeExpiry}.
      */
+    /**
+     * Statements actually issued for the ordered lane's reads, as against {@code cursorReads}, which
+     * counts how many owners were served. An owner that reads for itself issues three — cursor read,
+     * head sweep, next-visible — so before batching the two moved together. It is now the measure of
+     * whether the pump's batching is working, and the only honest way to state the idle cost of a
+     * given shard count.
+     */
+    public final LongAdder     orderedReadStatements = new LongAdder();
     public final LongAdder     horizonProbes        = new LongAdder();
     public final LongAdder     watermarkAdvances    = new LongAdder();
     public final LongAdder     watermarkCapped      = new LongAdder();
@@ -171,6 +179,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("keyHeadOfLineBlocks", keyHeadOfLineBlocks.sum());
         snapshot.put("maxPendingHoles", maxPendingHoles.get());
         snapshot.put("maxConcurrentKeys", maxConcurrentKeys.get());
+        snapshot.put("orderedReadStatements", orderedReadStatements.sum());
         snapshot.put("horizonProbes", horizonProbes.sum());
         snapshot.put("watermarkAdvances", watermarkAdvances.sum());
         snapshot.put("watermarkCapped", watermarkCapped.sum());

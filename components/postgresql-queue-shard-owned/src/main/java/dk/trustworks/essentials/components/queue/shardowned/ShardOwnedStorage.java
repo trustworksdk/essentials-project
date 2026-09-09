@@ -854,6 +854,120 @@ public final class ShardOwnedStorage {
     // the next ordinary read picks the value up. The unordered lane keeps its equivalent
     // (readSpecific), which is still the chase path there.
 
+    /**
+     * The cursor read for MANY shards in one statement.
+     * <p>
+     * <b>Why {@code LATERAL} and not a join.</b> The obvious shape — a list of per-shard cursors joined
+     * to the table — is plan-unstable: the planner merge-joins it, pushes the cursor down to a join
+     * filter and scans the whole discovery index (68 ms under backlog, 234 ms on a sparse wake-up,
+     * against 0.6 ms for the nested loop it picks in the third case). A per-row {@code LIMIT} inside a
+     * {@code LATERAL} cannot be satisfied by a merge join, so the nested loop stops being a preference
+     * and becomes the only legal plan.
+     *
+     * @param perShardLimit rows per shard. NOT a share of one batch: each shard must be able to return
+     *                      as much as it would have on its own, or this returns a different result
+     *                      from the per-shard reads it replaces.
+     * @return rows by shard; a shard with nothing to return is absent rather than empty
+     */
+    public Map<Integer, List<OrderedRow>> readOrderedFromCursors(Connection connection,
+                                                                 int[] shards,
+                                                                 long[] cursors,
+                                                                 int perShardLimit) throws SQLException {
+        if (shards.length == 0) {
+            return Map.of();
+        }
+        var sql = "SELECT x.shard, x.seq, x.msg_key, x.key_order, x.payload, x.payload_type"
+                  + " FROM unnest(?::int[], ?::bigint[]) AS cur(shard, cursor),"
+                  + " LATERAL (SELECT o.shard, o.seq, o.msg_key, o.key_order, o.payload, o.payload_type"
+                  + "          FROM " + ORDERED_TABLE + " o"
+                  + "          WHERE o.queue_id = ? AND o.shard = cur.shard::smallint AND o.seq > cur.cursor"
+                  + "            AND o.visible_at <= now()"
+                  + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x";
+        try (var statement = connection.prepareStatement(sql)) {
+            statement.setArray(1, connection.createArrayOf("int", boxed(shards)));
+            statement.setArray(2, connection.createArrayOf("bigint", boxed(cursors)));
+            statement.setShort(3, queueId);
+            return readOrderedRowsByShard(statement);
+        }
+    }
+
+    /** The head sweep for MANY shards in one statement. Same shape and reason as {@link #readOrderedFromCursors}. */
+    public Map<Integer, List<OrderedRow>> sweepOrderedFromHeads(Connection connection, int[] shards,
+                                                                int perShardLimit) throws SQLException {
+        if (shards.length == 0) {
+            return Map.of();
+        }
+        var sql = "SELECT x.shard, x.seq, x.msg_key, x.key_order, x.payload, x.payload_type"
+                  + " FROM unnest(?::int[]) AS s(shard),"
+                  + " LATERAL (SELECT o.shard, o.seq, o.msg_key, o.key_order, o.payload, o.payload_type"
+                  + "          FROM " + ORDERED_TABLE + " o"
+                  + "          WHERE o.queue_id = ? AND o.shard = s.shard::smallint AND o.visible_at <= now()"
+                  + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x";
+        try (var statement = connection.prepareStatement(sql)) {
+            statement.setArray(1, connection.createArrayOf("int", boxed(shards)));
+            statement.setShort(2, queueId);
+            return readOrderedRowsByShard(statement);
+        }
+    }
+
+    /**
+     * When each shard's earliest delayed row becomes visible, for MANY shards in one statement. The
+     * SERVER computes the interval, as the single-shard form does — subtracting a client clock is what
+     * makes node skew matter, and this engine does not have that bug anywhere else.
+     *
+     * @return milliseconds until the next visible row, by shard; a shard with nothing delayed is absent
+     */
+    public Map<Integer, Long> millisUntilNextVisibleByShard(Connection connection, String table,
+                                                            int[] shards) throws SQLException {
+        if (shards.length == 0) {
+            return Map.of();
+        }
+        try (var statement = connection.prepareStatement(
+                "SELECT shard, EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000 FROM " + table
+                + " WHERE queue_id = ? AND shard = ANY(?) AND visible_at > now() GROUP BY shard")) {
+            statement.setShort(1, queueId);
+            statement.setArray(2, connection.createArrayOf("int", boxed(shards)));
+            try (var resultSet = statement.executeQuery()) {
+                var byShard = new HashMap<Integer, Long>();
+                while (resultSet.next()) {
+                    var millis = resultSet.getDouble(2);
+                    if (!resultSet.wasNull()) {
+                        byShard.put(resultSet.getInt(1), Math.max(0L, (long) millis));
+                    }
+                }
+                return byShard;
+            }
+        }
+    }
+
+    private Map<Integer, List<OrderedRow>> readOrderedRowsByShard(PreparedStatement statement) throws SQLException {
+        try (var resultSet = statement.executeQuery()) {
+            var byShard = new HashMap<Integer, List<OrderedRow>>();
+            while (resultSet.next()) {
+                byShard.computeIfAbsent(resultSet.getInt(1), ignored -> new ArrayList<>())
+                       .add(new OrderedRow(resultSet.getLong(2), resultSet.getString(3), resultSet.getLong(4),
+                                           resultSet.getBytes(5), resultSet.getInt(6)));
+            }
+            return byShard;
+        }
+    }
+
+    private static Integer[] boxed(int[] values) {
+        var boxed = new Integer[values.length];
+        for (var index = 0; index < values.length; index++) {
+            boxed[index] = values[index];
+        }
+        return boxed;
+    }
+
+    private static Long[] boxed(long[] values) {
+        var boxed = new Long[values.length];
+        for (var index = 0; index < values.length; index++) {
+            boxed[index] = values[index];
+        }
+        return boxed;
+    }
+
     public List<OrderedRow> sweepOrderedFromHead(Connection connection, int shard, int limit) throws SQLException {
         var sql = "SELECT seq, msg_key, key_order, payload, payload_type FROM " + ORDERED_TABLE
                   + " WHERE queue_id = ? AND shard = ? AND visible_at <= now() ORDER BY seq LIMIT " + limit;

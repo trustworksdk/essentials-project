@@ -481,26 +481,33 @@ exists to hold.
 Step 2 does not depend on step 3: at today's eight units it is already one round trip instead of eight
 for the same twenty-four buffers. It is what makes a large routing space affordable, so it goes first.
 
-**Step 2 was attempted and reverted, and what it found changes what it is for.** The batched shape
-itself worked — the three statements an owner issues (cursor read, head sweep, next-visible) became
-three per pump pass, using the `LATERAL` form of §4.1, with a fallback to per-owner reads if the wide
-statement fails. Two things came out of it:
+**Step 2 is half done, and the halves came apart in a useful way.** An owner with work issues three
+statements — cursor read, head sweep, next-visible. Batching all three slowed delivery badly: 380, then
+280, of 1 000 within a minute, against 1 000 in under three seconds unbatched, with no statement
+failure and no fallback taken. Bisecting split it cleanly:
 
-- **It stalls delivery, cause not yet found.** The 8-shard ordered test delivered 380 of 1 000 and then
-  made no progress, with no statement failure logged and no fallback taken — so the batched statements
-  succeeded and returned something the owners then handled differently from the per-shard reads. It is
-  a real defect in the change, not a flake, and it reproduces.
-- **There is usually nothing to batch under load.** `needsAttention` consumes a per-shard wake-up, and
-  that mechanism exists precisely so a pump reads only the shard that was signalled (14.5 cursor reads
-  per message before it, 2.0 after). So on a busy queue typically ONE shard is attentive per pass and
-  the batch has a single member. Measured on the 4-shard watermark test: statements issued equalled
-  owners served, meaning the batch never formed.
+- **The batched cursor read is correct and is now in place.** `ShardOwnedBatchedReadIT` compares it
+  against the per-shard read it replaces — same sequence values, same order, same keys, at cursors at
+  the head, mid-shard and past the end — and the same for the batched sweep and next-visible. Batched
+  cursor read with per-shard sweeps passes the full suite.
+- **The batched sweep is not, and the cause is in how swept rows are APPLIED rather than in the
+  statement**, since the statements are proven equivalent. Neutralising the batched next-visible does
+  not fix it, so it is the swept rows themselves. Left per-shard until understood.
 
-That second point is the useful one. Batching is **an idle-cost mechanism, not a throughput one** — its
-win is concentrated in the case where many shards' sweeps come due together, which is exactly the case
-that decides how large a routing space costs. It should be specified and tested that way, against a
-quiet queue's queries-per-second, rather than against a workload where the per-shard wake-up has
-already made it a no-op.
+Two things follow for whoever finishes it.
+
+**Most of the win is still in the sweep.** Two of the three statements are the sweep pair, so batching
+only the cursor read saves at most one in three, and only when two or more ordered owners are attentive
+in the same pass.
+
+**Which is rarer than it looks, and that reframes the whole step.** `needsAttention` consumes a
+per-shard wake-up — the mechanism that took cursor reads per message from 14.5 to 2.0 — so on a busy
+queue typically ONE shard is attentive per pass and the batch has a single member. Measured on the
+4-shard watermark test before the split: statements issued equalled owners served, meaning the batch
+never formed at all. Batching is therefore **an idle-cost mechanism, not a throughput one**: its win is
+the case where many shards' sweeps fall due together, which is precisely the case that decides how
+large a routing space costs. It has to be gated on a quiet queue's queries-per-second, not on a
+workload where the per-shard wake-up has already made it a no-op.
 
 Two pieces of step 3 do not depend on step 2 and have landed early, because both are cheap and both
 get harder to change later: the hash mixer of §5.1, and collapsing the ordered lane to one sequence
