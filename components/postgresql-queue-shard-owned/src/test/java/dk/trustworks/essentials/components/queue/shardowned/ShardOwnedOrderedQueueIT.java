@@ -200,10 +200,12 @@ class ShardOwnedOrderedQueueIT {
     @Test
     void an_ordered_owner_renews_its_lease_and_is_refused_once_superseded() throws Exception {
         var received = Collections.synchronizedList(new ArrayList<Long>());
-        // Lease lifetime is holeExpiry x 3 = 900ms, so the idle period below spans several renewals.
+        // Lease lifetime is leaseTtl = 1s, renewed on a 333ms heartbeat, so the idle period below
+        // spans several renewals. It used to read "holeExpiry x 3 = 900ms" — that derivation was the
+        // defect `an_ordered_lease_lasts_leaseTtl_not_a_multiple_of_holeExpiry` now guards.
         var shortLease = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
                                                 Duration.ofMillis(300), Duration.ofMillis(100),
-                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000));
+                                                1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
             queue.startConsumingOrdered((key, payload, payloadType) -> received.add(Long.parseLong(
@@ -279,6 +281,58 @@ class ShardOwnedOrderedQueueIT {
             assertThat(storage.acknowledgeOrdered(connection, 0, seqs, "instance-2", newFence))
                     .as("the current owner must still be able to acknowledge")
                     .isEqualTo(2);
+        }
+    }
+
+    /**
+     * The ordered lane's first lease must come from {@code leaseTtl}, not from a multiple of
+     * {@code holeExpiry}.
+     * <p>
+     * That derivation was removed when {@code leaseTtl} became its own setting, because the two are
+     * bounded by unrelated things — but it was only removed from the unordered path. Left on this one
+     * the consequence is not the slow failover the original note describes: with a small
+     * {@code holeExpiry} the lane leases its shards for a fraction of a second while the heartbeat
+     * that renews them runs on {@code leaseTtl / 3}, so every owner is fenced out of its own
+     * acknowledgements and stops before the first renewal is due. Delivery then ends silently, part
+     * way through a workload.
+     * <p>
+     * The gap between the two settings is what makes this detectable, so it is the whole point of the
+     * numbers below: {@code holeExpiry} 200 ms against {@code leaseTtl} 30 s, and a workload that
+     * starts after three times the former has elapsed.
+     */
+    @Test
+    void an_ordered_lease_lasts_leaseTtl_not_a_multiple_of_holeExpiry() throws Exception {
+        var received = Collections.synchronizedList(new ArrayList<Long>());
+        var settings = new ShardOwnerSettings(500, 200, Duration.ofMillis(1), Duration.ofMillis(2),
+                                              Duration.ofMillis(200),   // holeExpiry: x3 is 600ms
+                                              Duration.ofMillis(100), 1_000, 8, Duration.ofMillis(50),
+                                              Duration.ofSeconds(30), 2, Duration.ofSeconds(5),
+                                              Duration.ofSeconds(30),   // leaseTtl: renewal is 10s away
+                                              Duration.ofSeconds(60));
+
+        try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
+            queue.startConsumingOrdered((key, payload, payloadType) -> received.add(Long.parseLong(
+                    new String(payload, StandardCharsets.UTF_8))), settings, SHARD_COUNT);
+
+            // Past 3 x holeExpiry, and nowhere near either leaseTtl or the first heartbeat renewal.
+            Thread.sleep(1_500L);
+
+            queue.enqueueOrdered(List.of(new OrderedPayload("lease-probe", 0,
+                                                            "1".getBytes(StandardCharsets.UTF_8), 1)));
+
+            Awaitility.await().atMost(Duration.ofSeconds(15))
+                      .untilAsserted(() -> assertThat(received)
+                              .as("the owner must still hold its lease and still be delivering")
+                              .containsExactly(1L));
+            Awaitility.await().atMost(Duration.ofSeconds(15))
+                      .untilAsserted(() -> assertThat(queue.orderedRemaining())
+                              .as("and must still be able to acknowledge under its own fence")
+                              .isZero());
+
+            var metrics = queue.metrics().snapshot();
+            assertThat((Long) metrics.get("fencedOutAcks"))
+                    .as("no owner should be fenced out of its own acknowledgements: %s", metrics)
+                    .isZero();
         }
     }
 

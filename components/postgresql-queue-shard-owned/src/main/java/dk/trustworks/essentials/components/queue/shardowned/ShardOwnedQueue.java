@@ -272,14 +272,23 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var redeliveryPolicy = activePolicy;
         var maxShards = maxShardsHeld;
 
+        // BEFORE the acquire loop, and from leaseTtl rather than from holeExpiry. This lane still
+        // derived its first lease as holeExpiry x 3 — the derivation that was removed when leaseTtl
+        // became its own setting, fixed on the unordered path and missed here. The two are bounded by
+        // unrelated things, and the consequence is not a slow failover but a dead lease: with a
+        // holeExpiry of 200 ms the lane leases its shards for 600 ms, while the heartbeat that renews
+        // them runs on leaseTtl / 3. Every owner is then fenced out of its own acknowledgements long
+        // before the first renewal, and stops. No existing test saw it because they all either finish
+        // inside 3 x holeExpiry or set holeExpiry high enough that it happens to exceed their runtime.
+        leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
+
         var leased = new ArrayList<int[]>();
         for (var shard = 0; shard < shardCount && leased.size() < maxShards; shard++) {
-            var fence = storage.acquireLease("ordered", shard, instanceId, settings.holeExpiry().toMillis() * 3);
+            var fence = storage.acquireLease("ordered", shard, instanceId, leaseTtlMillis);
             if (fence.isPresent()) {
                 leased.add(new int[]{shard, fence.get().intValue()});
             }
         }
-        leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
 
         ensureRuntime(settings);
         for (var entry : leased) {
