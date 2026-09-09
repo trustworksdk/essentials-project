@@ -204,6 +204,7 @@
         <module>components/postgresql-event-store</module>
         <module>components/postgresql-queue</module>
         <module>components/postgresql-queue-shard-owned</module>
+        <module>components/postgresql-queue-shard-owned-adapter</module>
         <module>components/spring-boot-starter-postgresql-queue-shard-owned</module>
         <module>components/spring-postgresql-event-store</module>
         <module>components/springdata-mongo-distributed-fenced-lock</module>

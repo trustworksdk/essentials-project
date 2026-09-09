@@ -201,12 +201,14 @@ failover time, not an extra cost. Rows for departed instances are pruned by the 
 
 This is the asymmetry that should drive the decision, and the two lanes are not alike:
 
-- **Unordered — err low.** Growing is `ShardOwnedSchema.growShardCount(...)` plus a **rolling
-  restart**. Under-provisioning is cheap to fix, so start at 1–2 and grow when you measure a reason.
-- **Ordered — err high.** Growing requires the ordered lane to be **empty** and **every instance
-  restarted together**, because a key's shard is `hash(key) mod shardCount` and two moduli in flight
-  put one key under two owners. In practice that means **draining the queue and redeploying**, so
-  under-provisioning is an outage-shaped fix rather than a config change.
+- **Unordered — err low.** Growing is one call to `ShardOwnedSchema.growShardCount(...)`. Running
+  consumers pick it up on their next heartbeat; nothing to restart, nothing to pause. Start at 1–2
+  and grow when you measure a reason.
+- **Ordered — err high.** Growing requires the ordered lane to be **empty** first, because a key's
+  shard is `hash(key) mod shardCount` and two moduli in flight put one key under two owners. So:
+  pause ordered producers for that queue, let it drain, call `growShardCount` (it refuses if the lane
+  is not empty), resume. **No restart and no deploy** — the same heartbeat pickup as unordered.
+  Seconds to a minute of paused producers on one queue, not an outage.
 
 Given ~0.1 queries/s per idle shard, over-provisioning an ordered queue is close to free and
 under-provisioning is not. **8 is a defensible starting point for an ordered queue you expect to be

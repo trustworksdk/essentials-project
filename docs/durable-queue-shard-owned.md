@@ -906,10 +906,25 @@ lane, so shards past the knee buy overhead and nothing else. Full table in
 [`durable-queue-measurements.md`](./durable-queue-measurements.md) §3.7.
 
 **Size an ordered queue for its future peak, not today's load.** The two lanes differ in how
-expensive a wrong answer is: unordered can be grown with a rolling restart (§2.7), so starting low is
-cheap to correct, while ordered needs the lane empty and every instance restarted together — in
-practice a drain and a redeploy. Over-provisioning an ordered queue costs ~0.1 queries/s per extra
-shard; under-provisioning costs an outage-shaped migration.
+expensive a wrong answer is, though neither costs a deploy:
+
+- **Unordered** — call `growShardCount` and carry on. Routing is round-robin, so nothing depends on
+  which shard a message landed in, and running consumers pick the new count up on their next
+  heartbeat (§2.7).
+- **Ordered** — the lane has to be empty first, because a key's shard is `hash(key) mod shardCount`
+  and changing the modulus mid-flight would send a key's next message to a different shard from its
+  last. So: pause ordered producers for that queue, let consumers drain what is there, call
+  `growShardCount` (it refuses if the lane is not empty, so this cannot be got wrong), resume.
+  Seconds to a minute of paused producers on one queue.
+
+**No restart, and no redeploy, in either case.** `ShardOwnedQueue.refreshShardCount` re-reads the
+registry on the heartbeat and `rebalance` acquires up to the new count;
+`a_running_consumer_picks_up_a_grown_shard_count_without_a_restart` asserts it. Earlier versions of
+this section said instances had to be restarted together — that was stale, and it survived into two
+other documents.
+
+Over-provisioning an ordered queue costs ~0.1 queries/s per extra shard, so the asymmetry still says
+size it generously up front: the correction is cheap, but not free, and it is easier not to need it.
 
 ---
 
