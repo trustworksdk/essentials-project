@@ -212,6 +212,40 @@ doubling the baseline's consumers really does cost connections — rather than j
 
 ---
 
+## 3.7 What shardCount buys
+
+`ShardOwnedShardCountSweepIT` (perf lab, `-Dbenchmark.run=true`), ordered lane, 500 keys, 2 ms
+handler, `keyConcurrency` 8, three interleaved repetitions per arm:
+
+| shards | msg/s | IQR | % of peak | msg/s per shard | ceiling (`shards x keyConcurrency`) |
+|---|---|---|---|---|---|
+| 1 | 1 155 | 74.0% | 48% | 1 155 | 8 |
+| 2 | 1 849 | 26.4% | 77% | 925 | 16 |
+| **4** | 2 152 | 8.0% | **89%** | 538 | 32 |
+| **8** | 2 281 | 2.9% | **95%** | 285 | 64 |
+| 16 | 2 408 | 2.7% | 100% | 151 | 128 |
+
+**Absolute msg/s is not a result** — this lab moves by an order of magnitude between sessions, and
+the arms are interleaved precisely so the *shape* survives that. What the shape says: the knee is at
+4, 8 buys 95% of what 16 does, and return per shard collapses from 1 155 to 151. Past the point where
+`shardCount x keyConcurrency` exceeds the work available, more shards buy idle cost — measured
+elsewhere at ~0.1 queries/s per owned shard per lane — and nothing else.
+
+**One shard is also the least predictable arm**, at 74% spread against 3% at eight, because
+everything serialises through a single owner. If ordered throughput matters at all, one shard is the
+wrong answer before its median is even considered.
+
+**The knee moves with the workload.** A handler that waits 200 ms, or a queue with ten keys rather
+than five hundred, has a different answer; the sweep is provided to be re-run rather than quoted.
+
+This is the number that was missing. The engine shipped saying shards are "the unit of parallelism
+and of ordering" and that a quiet queue should have fewer than a busy one — both true, neither a
+number — and the worked examples' "8 for busy, 1–2 for quiet" rested on nothing measured. That is the
+same shape as the process-wide handler ceiling removed in §4.5, and it matters more here, because on
+the ordered lane the decision cannot be revisited without draining the lane and redeploying.
+
+---
+
 ## 4. Environment
 
 | | |

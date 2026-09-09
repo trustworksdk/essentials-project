@@ -696,7 +696,18 @@ Full reference with sizing formulas and worked examples: [`LLM/LLM-postgresql-qu
 | `maxShards` | unbounded | cap on shards this consumer holds |
 | `maxAttempts` / `retryDelay` / `retryMultiplier` / `maxRetryDelay` | 3 / 100 ms / 2.0 / 30 s | §9 |
 
-`shardCount` is per queue and fixed at schema creation. Shards are the unit of parallelism **and** of ordering, and idle cost follows owned shards rather than queues — so a low-traffic queue should not be given eight shards because a busy one has eight.
+`shardCount` is per queue and set at registration. Shards are the unit of parallelism **and** of
+ordering. Measured on the ordered lane (500 keys, 2 ms handler, `keyConcurrency` 8, interleaved arms):
+**the knee is at 4 shards — 89% of peak — and 8 buys 95% of what 16 does**, while return per shard
+falls from 1 155 to 151 msg/s across that range. Idle cost is ~0.1 queries/s per owned shard per
+lane, so shards past the knee buy overhead and nothing else. Full table in
+[`durable-queue-measurements.md`](./durable-queue-measurements.md) §3.7.
+
+**Size an ordered queue for its future peak, not today's load.** The two lanes differ in how
+expensive a wrong answer is: unordered can be grown with a rolling restart (§2.7), so starting low is
+cheap to correct, while ordered needs the lane empty and every instance restarted together — in
+practice a drain and a redeploy. Over-provisioning an ordered queue costs ~0.1 queries/s per extra
+shard; under-provisioning costs an outage-shaped migration.
 
 ---
 

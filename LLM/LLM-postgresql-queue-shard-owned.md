@@ -116,9 +116,45 @@ try (var connection = dataSource.getConnection()) {
 | `maxShards` | unbounded | Cap on shards this instance holds |
 | `maxAttempts` / `retryDelay` / `retryMultiplier` / `maxRetryDelay` | 3 / 100 ms / 2.0 / 30 s | Redelivery policy |
 
-### `shardCount` — per queue, fixed at registration
+### `shardCount` — per queue, set at registration
 
-Shards are the unit of parallelism **and** of ordering. More shards means more concurrent consumers and finer rebalancing; it also means more owners, and idle cost scales with owned shards rather than queues. **Do not give a low-traffic queue eight shards because a busy one has eight.**
+Shards are the unit of parallelism **and** of ordering. Measured by `ShardOwnedShardCountSweepIT`
+(ordered lane, 500 keys, 2 ms handler, `keyConcurrency` 8, interleaved arms):
+
+| shards | % of peak | msg/s per shard | concurrency ceiling |
+|---|---|---|---|
+| 1 | 48% | 1 155 | 8 |
+| 2 | 77% | 925 | 16 |
+| **4** | **89%** | 538 | 32 |
+| **8** | **95%** | 285 | 64 |
+| 16 | 100% | 151 | 128 |
+
+**The knee is at 4, and 8 buys 95% of what 16 does.** Return per shard collapses after 4 — the same
+shape as `parallelConsumers`, and for the same reason: the ceiling is `shardCount x keyConcurrency`,
+and past the point where that exceeds the work available, more shards buy idle cost and nothing else.
+Idle cost is ~0.1 queries/s per owned shard per lane.
+
+One shard is also the *least predictable* arm: 74% spread against 3% at eight, because everything
+serialises through one owner. If your ordered throughput matters, one shard is the wrong answer even
+before the median is considered.
+
+**The knee moves with your workload.** 500 keys and a 2 ms handler; a handler that waits 200 ms or a
+queue with 10 keys has a different answer. Re-run the sweep rather than adopting the table.
+
+#### ⚠️ Pick the ordered number for your future peak, not today's load
+
+This is the asymmetry that should drive the decision, and the two lanes are not alike:
+
+- **Unordered — err low.** Growing is `ShardOwnedSchema.growShardCount(...)` plus a **rolling
+  restart**. Under-provisioning is cheap to fix, so start at 1–2 and grow when you measure a reason.
+- **Ordered — err high.** Growing requires the ordered lane to be **empty** and **every instance
+  restarted together**, because a key's shard is `hash(key) mod shardCount` and two moduli in flight
+  put one key under two owners. In practice that means **draining the queue and redeploying**, so
+  under-provisioning is an outage-shaped fix rather than a config change.
+
+Given ~0.1 queries/s per idle shard, over-provisioning an ordered queue is close to free and
+under-provisioning is not. **8 is a defensible starting point for an ordered queue you expect to be
+busy; 1–2 for one you do not.**
 
 ## Sizing and scaling
 
