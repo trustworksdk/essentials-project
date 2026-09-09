@@ -261,4 +261,23 @@ class ShardOwnedQueueAutoConfigurationIT {
             };
         }
     }
+
+    /**
+     * The instance identity is the hostname, as everywhere else in Essentials — the fenced lock
+     * manager and the scheduler both use {@code Network.hostName()} bare. An operator correlating a
+     * shard hand-over with a lock hand-over should not have to translate between naming schemes, and
+     * a per-boot UUID means nothing in a log line or in the membership table.
+     */
+    @Test
+    void the_instance_id_defaults_to_the_hostname() {
+        runner().run(context -> assertThat(context.getBean(ShardOwnedQueueFactory.class).instanceId())
+                .isEqualTo(dk.trustworks.essentials.shared.network.Network.hostName()));
+    }
+
+    @Test
+    void the_instance_id_can_be_overridden_where_the_hostname_is_not_unique_per_process() {
+        runner().withPropertyValues("essentials.shard-owned-queue.instance-id=pod-7-consumer-a")
+                .run(context -> assertThat(context.getBean(ShardOwnedQueueFactory.class).instanceId())
+                        .isEqualTo("pod-7-consumer-a"));
+    }
 }

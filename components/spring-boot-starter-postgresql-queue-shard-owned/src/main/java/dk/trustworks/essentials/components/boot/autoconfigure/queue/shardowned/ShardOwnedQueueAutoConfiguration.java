@@ -28,7 +28,7 @@ import org.springframework.context.annotation.Bean;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
-import java.util.UUID;
+import dk.trustworks.essentials.shared.network.Network;
 
 /**
  * Auto-configuration for the shard-owned PostgreSQL queue engine.
@@ -119,13 +119,21 @@ public class ShardOwnedQueueAutoConfiguration {
     }
 
     /**
-     * A random id per boot. Deliberately not the hostname: two instances on one host would collide,
-     * and a colliding instance id makes two processes look like one to the fair-share rebalance.
-     * Set {@code essentials.shard-owned-queue.instance-id} where the platform offers something both
-     * stable and unique.
+     * The hostname, which is what the rest of Essentials uses to identify an instance — the fenced
+     * lock manager and {@code DefaultEssentialsScheduler} both take {@code Network.hostName()} bare.
+     * <p>
+     * This was a random UUID per boot, on the reasoning that two instances sharing a host would
+     * collide. They would, and a collision halves the fair share because two processes look like one
+     * — but a UUID buys that at the cost of an id that means nothing in a log line, nothing in the
+     * membership table, and changes on every restart. In the deployment that matters the hostname is
+     * the pod name and is already unique, and where it is not, the fix is to set
+     * {@code essentials.shard-owned-queue.instance-id} rather than to make every id unreadable.
+     * <p>
+     * Consistency with the rest of the framework also matters here: an operator correlating a shard
+     * hand-over with a lock hand-over should not have to translate between two naming schemes.
      */
     private static String defaultInstanceId() {
-        return "shard-owned-" + UUID.randomUUID();
+        return Network.hostName();
     }
 
     /**

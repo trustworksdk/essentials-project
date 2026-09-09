@@ -40,11 +40,12 @@ public class ShardOwnedQueueProperties {
     private boolean initializeSchema = true;
 
     /**
-     * Identifies this process among the instances competing for a queue's shards. Defaults to a
-     * random id per boot.
+     * Identifies this process among the instances competing for a queue's shards. Defaults to the
+     * hostname, matching how the fenced lock manager and the scheduler identify an instance.
      * <p>
-     * A <em>stable</em> id is worth setting where the platform provides one — a pod name, a task
-     * arn — because it is what a log line or the membership table shows when shards move.
+     * Set it where the hostname is <em>not</em> unique per process — several instances on one host,
+     * or a container platform that does not give each one its own. Two processes sharing an id look
+     * like one to the fair-share rebalance, which halves the shards each of them is allowed to hold.
      */
     private String instanceId;
 

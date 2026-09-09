@@ -156,6 +156,8 @@ So the rule is **`shardCount` >= the most instances you will ever run for that l
 autoscaled deployment means its maximum replica count — not its current one. At ~0.1 queries/s per
 idle shard that headroom is nearly free.
 
+**Instance identity is the hostname** by default (`Network.hostName()`, as the fenced lock manager and scheduler use), overridable with `essentials.shard-owned-queue.instance-id`. Set it where one host runs several instances: two processes sharing an id look like one instance, so each is allowed only half the shards.
+
 **Autoscaling specifics.** Membership is a row per instance, refreshed every `leaseTtl / 3` and
 counted live within `leaseTtl`. A gracefully stopped instance deregisters immediately, so scaling in
 frees its shards and lets survivors take them at once. An instance that *crashes* is counted live
