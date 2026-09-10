@@ -72,7 +72,12 @@ class ServerSideTimeTest {
     @Test
     void temporal_columns_default_to_the_server_clock() throws Exception {
         var schema = Files.readString(SCHEMA);
-        for (var column : new String[]{"enqueued_at", "visible_at", "lease_until", "last_seen", "dead_lettered_at"}) {
+        // lease_until is deliberately absent from this list, and the two reasons are different. On
+        // the LEASE table it no longer exists: a unit's liveness is its owner's instance row, so
+        // there is no per-unit expiry to default. On the UNORDERED table it exists but is nullable
+        // on purpose — NULL is a Tier 2 pre-claim and a set value is a pull session's row lease, a
+        // distinction a NOT NULL DEFAULT would erase.
+        for (var column : new String[]{"enqueued_at", "visible_at", "last_seen", "dead_lettered_at"}) {
             assertThat(schema)
                     .as("%s must default to the server clock", column)
                     .containsPattern(column + "\\s+timestamptz\\s+NOT NULL DEFAULT now\\(\\)");

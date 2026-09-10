@@ -622,7 +622,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     @Override
     public QueueHealth health() throws SQLException {
-        var owned = storage.ownedShardsPerLane();
+        var owned = storage.ownedShardsPerLane(Math.max(1_000L, settings.leaseTtlMillis()));
         // The lease TTL is what countLiveInstances treats as the staleness bound, and it is derived
         // from the settings this queue was built with.
         // countInstances, not countLiveInstances: the latter is floored at one so fairShare can

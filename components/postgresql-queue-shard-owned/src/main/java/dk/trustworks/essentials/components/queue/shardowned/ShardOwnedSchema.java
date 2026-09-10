@@ -242,7 +242,21 @@ public final class ShardOwnedSchema {
                                   shard       smallint    NOT NULL,
                                   owner       text,
                                   fence       bigint      NOT NULL DEFAULT 0,
-                                  lease_until timestamptz NOT NULL DEFAULT now(),
+                                  -- NULL for an instance-owned unit, set for a pull session's.
+                                  --
+                                  -- An instance's units carry no expiry: their liveness is the
+                                  -- owner's row in shard_queue_instance, which the heartbeat
+                                  -- refreshes once per queue. Storing an expiry per unit meant
+                                  -- WRITING one row per unit held on every heartbeat, which at a
+                                  -- sixty-four-unit ordered space became the engine's dominant idle
+                                  -- cost — 17 lease writes a second against 6.8 reads, idle.
+                                  -- Correctness never rested on the expiry; it rests on the fence.
+                                  --
+                                  -- A SHARD-scope pull session is not an instance and heartbeats
+                                  -- nothing, so it keeps a real expiry and renews it. Both kinds
+                                  -- live in this column, and which one applies is decided by whether
+                                  -- it is NULL.
+                                  lease_until timestamptz,
                                   -- Lane is part of the key because the two lanes are separate tables
                                   -- with separate owners. Sharing a lease row made them compete: an
                                   -- unordered message could land in a shard leased by the ordered
@@ -683,8 +697,8 @@ public final class ShardOwnedSchema {
     private static void seedLeases(DataSource dataSource, short queueId, int shardCount) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
-                     "INSERT INTO " + LEASE_TABLE + " (queue_id, lane, shard, owner, fence, lease_until) "
-                     + "VALUES (?, ?, ?, NULL, 0, now()) ON CONFLICT DO NOTHING")) {
+                     "INSERT INTO " + LEASE_TABLE + " (queue_id, lane, shard, owner, fence) "
+                     + "VALUES (?, ?, ?, NULL, 0) ON CONFLICT DO NOTHING")) {
             // Per lane, because the two no longer have the same number of units: the ordered lane's
             // space is fixed at ORDERED_UNITS and the unordered lane's is the caller's shard count.
             seedLane(statement, queueId, "unordered", shardCount);

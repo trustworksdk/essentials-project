@@ -359,7 +359,7 @@ public final class ShardOwnedStorage {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
                      "SELECT 1 FROM " + LEASE_TABLE + " WHERE queue_id = ? AND lane = ? AND shard = ?"
-                     + " AND owner = ? AND fence = ? AND lease_until > now()")) {
+                     + " AND owner = ? AND fence = ?")) {
             statement.setShort(1, queueId);
             statement.setString(2, lane);
             statement.setShort(3, (short) shard);
@@ -507,7 +507,7 @@ public final class ShardOwnedStorage {
     private static String stillOwnedClause() {
         return " AND EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
                + " WHERE l.queue_id = u.queue_id AND l.lane = 'unordered' AND l.shard = u.shard"
-               + " AND l.owner = ? AND l.fence = ? AND l.lease_until > now())";
+               + " AND l.owner = ? AND l.fence = ?)";
     }
 
     /**
@@ -619,7 +619,10 @@ public final class ShardOwnedStorage {
     public void releaseLease(String lane, int shard, String owner) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
-                     "UPDATE " + LEASE_TABLE + " SET lease_until = now() - interval '1 millisecond'"
+                     // owner = NULL, not a back-dated expiry: there is no expiry any more. The
+                     // fence is still deliberately NOT bumped — the next acquirer bumps it, because
+                     // bumping here would invalidate this owner's own in-flight acknowledgements.
+                     "UPDATE " + LEASE_TABLE + " SET owner = NULL"
                      + " WHERE queue_id = ? AND lane = ? AND shard = ? AND owner = ?")) {
             statement.setShort(1, queueId);
             statement.setString(2, lane);
@@ -634,21 +637,112 @@ public final class ShardOwnedStorage {
      *
      * @return the fence held, or empty if another instance holds an unexpired lease
      */
+    /**
+     * The fences this instance still holds on one lane, in ONE statement — and a READ, not a write.
+     * <p>
+     * This replaced a per-unit lease renewal, which is the whole point. The heartbeat's job here is
+     * to notice that a unit was taken away and stop the owner immediately, rather than let it find
+     * out at acknowledgement time when it may already have dispatched work its successor is also
+     * dispatching. Noticing is a question, not an assertion of ownership, so it does not need to
+     * write anything: liveness now comes from the instance row, and the fence answers "is this still
+     * mine".
+     * <p>
+     * Measured before the change, five idle queues holding 170 units: 17 lease writes a second
+     * against 6.8 reads — 71% of an idle engine's cost was renewing rows to say nothing had changed.
+     *
+     * @return the fence currently recorded for each shard this instance still owns, by shard
+     */
+    public Map<Integer, Long> heldFences(String lane, int[] shards, String owner) throws SQLException {
+        if (shards.length == 0) {
+            return Map.of();
+        }
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT shard, fence FROM " + LEASE_TABLE
+                     + " WHERE queue_id = ? AND lane = ? AND owner = ? AND shard = ANY(?)")) {
+            statement.setShort(1, queueId);
+            statement.setString(2, lane);
+            statement.setString(3, owner);
+            statement.setArray(4, connection.createArrayOf("int", boxed(shards)));
+            try (var resultSet = statement.executeQuery()) {
+                var fences = new HashMap<Integer, Long>();
+                while (resultSet.next()) {
+                    fences.put(resultSet.getInt(1), resultSet.getLong(2));
+                }
+                return fences;
+            }
+        }
+    }
+
+    /**
+     * Whether a lease row's owner is gone, for the two kinds of owner this table holds.
+     * <p>
+     * An <b>instance</b> leaves {@code lease_until} NULL and is judged by its row in
+     * {@code shard_queue_instance}, which the heartbeat refreshes once per queue. It used to leave an
+     * expiry instead, which meant WRITING one row per unit held on every heartbeat: invisible at a
+     * handful of shards per lane, and the engine's dominant idle cost at a fixed sixty-four-unit
+     * ordered space — measured at 17 lease writes a second against 6.8 reads, across five idle
+     * queues. Liveness is a property of the instance, not of each unit it happens to hold.
+     * <p>
+     * A <b>pull session</b> is not an instance and heartbeats nothing, so it sets a real expiry and
+     * renews it. That path is unchanged.
+     * <p>
+     * Correctness never rested on the expiry either way: it rests on the FENCE. An owner whose unit
+     * is taken finds its fence bumped and its writes refused.
+     * <p>
+     * Binds one {@code ttlMillis} parameter, in statement order.
+     */
+    private static String ownerIsGoneClause() {
+        return " ((l.lease_until IS NOT NULL AND l.lease_until <= now())"
+               + "  OR (l.lease_until IS NULL AND NOT EXISTS (SELECT 1 FROM " + INSTANCE_TABLE + " i"
+               + "        WHERE i.queue_id = l.queue_id AND i.instance_id = l.owner"
+               + "          AND i.last_seen > now() - make_interval(secs => ? / 1000.0))))";
+    }
+
+    /**
+     * Take or renew a unit for a pull SESSION, which is not an instance and heartbeats nothing, so it
+     * carries a real expiry. See {@link #ownerIsGoneClause()}.
+     */
+    public Optional<Long> acquireSessionLease(String lane, int shard, String sessionId, long ttlMillis)
+            throws SQLException {
+        var sql = "UPDATE " + LEASE_TABLE + " l"
+                  + " SET owner = ?, lease_until = now() + make_interval(secs => ? / 1000.0),"
+                  + "     fence = CASE WHEN l.owner = ? THEN l.fence ELSE l.fence + 1 END"
+                  + " WHERE l.queue_id = ? AND l.lane = ? AND l.shard = ?"
+                  + "   AND (l.owner IS NULL OR l.owner = ? OR" + ownerIsGoneClause() + ")"
+                  + " RETURNING l.fence";
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(sql)) {
+            statement.setString(1, sessionId);
+            statement.setLong(2, ttlMillis);
+            statement.setString(3, sessionId);
+            statement.setShort(4, queueId);
+            statement.setString(5, lane);
+            statement.setShort(6, (short) shard);
+            statement.setString(7, sessionId);
+            statement.setLong(8, ttlMillis);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? Optional.of(resultSet.getLong(1)) : Optional.empty();
+            }
+        }
+    }
+
     public Optional<Long> acquireLease(String lane, int shard, String owner, long ttlMillis) throws SQLException {
-        var sql = "UPDATE " + LEASE_TABLE
-                  + " SET owner = ?, fence = CASE WHEN owner = ? THEN fence ELSE fence + 1 END,"
-                  + "     lease_until = now() + make_interval(secs => ? / 1000.0)"
-                  + " WHERE queue_id = ? AND lane = ? AND shard = ? AND (lease_until < now() OR owner = ? OR owner IS NULL)"
-                  + " RETURNING fence";
+        var sql = "UPDATE " + LEASE_TABLE + " l"
+                  + " SET owner = ?, lease_until = NULL,"
+                  + "     fence = CASE WHEN l.owner = ? THEN l.fence ELSE l.fence + 1 END"
+                  + " WHERE l.queue_id = ? AND l.lane = ? AND l.shard = ?"
+                  + "   AND (l.owner IS NULL OR l.owner = ? OR" + ownerIsGoneClause() + ")"
+                  + " RETURNING l.fence";
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(sql)) {
             statement.setString(1, owner);
             statement.setString(2, owner);
-            statement.setLong(3, ttlMillis);
-            statement.setShort(4, queueId);
-            statement.setString(5, lane);
-            statement.setShort(6, (short) shard);
-            statement.setString(7, owner);
+            statement.setShort(3, queueId);
+            statement.setString(4, lane);
+            statement.setShort(5, (short) shard);
+            statement.setString(6, owner);
+            statement.setLong(7, ttlMillis);
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next() ? Optional.of(resultSet.getLong(1)) : Optional.empty();
             }
@@ -718,12 +812,14 @@ public final class ShardOwnedStorage {
      * is the point: it is the only signal that distinguishes "nobody is consuming this queue" from
      * "this queue is busy", and those look identical in depth.
      */
-    public int[] ownedShardsPerLane() throws SQLException {
+    public int[] ownedShardsPerLane(long ttlMillis) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
-                     "SELECT lane, count(*) FILTER (WHERE owner IS NOT NULL AND lease_until > now())"
-                     + " FROM " + LEASE_TABLE + " WHERE queue_id = ? GROUP BY lane")) {
-            statement.setShort(1, queueId);
+                     "SELECT l.lane, count(*) FILTER (WHERE l.owner IS NOT NULL AND NOT"
+                     + ownerIsGoneClause() + ")"
+                     + " FROM " + LEASE_TABLE + " l WHERE l.queue_id = ? GROUP BY l.lane")) {
+            statement.setLong(1, ttlMillis);
+            statement.setShort(2, queueId);
             var owned = new int[]{0, 0};
             try (var resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
@@ -1038,7 +1134,7 @@ public final class ShardOwnedStorage {
                 "DELETE FROM " + ORDERED_TABLE + " o WHERE o.queue_id = ? AND o.shard = ? AND o.seq = ANY(?)"
                 + " AND EXISTS (SELECT 1 FROM " + LEASE_TABLE + " l"
                 + " WHERE l.queue_id = o.queue_id AND l.lane = 'ordered' AND l.shard = o.shard"
-                + " AND l.owner = ? AND l.fence = ? AND l.lease_until > now())")) {
+                + " AND l.owner = ? AND l.fence = ?)")) {
             statement.setShort(1, queueId);
             statement.setShort(2, (short) shard);
             statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));

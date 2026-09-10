@@ -68,7 +68,7 @@ public final class ShardQueueSession implements QueueSession {
         this.leaseMillis = Math.max(1_000L, requireNonNull(leaseDuration, "No leaseDuration provided").toMillis());
 
         for (var shard = 0; shard < shardCount && held.size() < maxShards; shard++) {
-            var fence = storage.acquireLease("unordered", shard, sessionId, leaseMillis);
+            var fence = storage.acquireSessionLease("unordered", shard, sessionId, leaseMillis);
             if (fence.isPresent()) {
                 held.add(new int[]{shard, fence.get().intValue()});
             }
@@ -150,7 +150,7 @@ public final class ShardQueueSession implements QueueSession {
         requireOpen();
         var stillHeld = true;
         for (var entry : held) {
-            var renewed = storage.acquireLease("unordered", entry[0], sessionId, leaseMillis);
+            var renewed = storage.acquireSessionLease("unordered", entry[0], sessionId, leaseMillis);
             if (renewed.isEmpty() || renewed.get() != entry[1]) {
                 stillHeld = false;
             }

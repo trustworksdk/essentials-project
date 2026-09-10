@@ -314,6 +314,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // before the first renewal, and stops. No existing test saw it because they all either finish
         // inside 3 x holeExpiry or set holeExpiry high enough that it happens to exceed their runtime.
         leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
+        // BEFORE acquiring anything. A unit owned by an instance carries no expiry — its liveness is
+        // this row — so an owner that has not registered yet looks DEAD to everyone else, and its
+        // units are takeable the moment it acquires them. Registration used to happen on the first
+        // heartbeat, ten seconds in, which left every instance stealing every other instance's units
+        // for the first ten seconds of its life.
+        storage.heartbeatInstance(instanceId);
 
         var leased = new ArrayList<int[]>();
         for (var shard = 0; shard < orderedUnits() && leased.size() < maxShards; shard++) {
@@ -373,6 +379,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
         var leased = new ArrayList<int[]>();
         leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
+        // BEFORE acquiring anything. A unit owned by an instance carries no expiry — its liveness is
+        // this row — so an owner that has not registered yet looks DEAD to everyone else, and its
+        // units are takeable the moment it acquires them. Registration used to happen on the first
+        // heartbeat, ten seconds in, which left every instance stealing every other instance's units
+        // for the first ten seconds of its life.
+        storage.heartbeatInstance(instanceId);
         for (var shard = 0; shard < shardCount && leased.size() < maxShards; shard++) {
             var fence = storage.acquireLease("unordered", shard, instanceId, leaseTtlMillis);
             if (fence.isPresent()) {
@@ -468,22 +480,38 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             } catch (Exception e) {
                 log.warn("Could not re-read the shard count for queue {}", queueId, e);
             }
-            for (var owner : owners) {
-                if (!owner.leaseHeld()) {
+            // ONE READ per lane, not one write per owned unit. There is nothing to renew: a unit's
+            // liveness is its owner's instance row, which heartbeatInstance above already refreshed —
+            // one row per queue rather than one per unit held. All that remains is to notice a unit
+            // that was taken away and stop its owner at once, rather than let it discover that at
+            // acknowledgement time with work already dispatched.
+            for (var lane : new String[]{"unordered", "ordered"}) {
+                var held = owners.stream()
+                                 .filter(LeasedOwner::leaseHeld)
+                                 .filter(owner -> lane.equals(owner.lane()))
+                                 .toList();
+                if (held.isEmpty()) {
                     continue;
                 }
                 try {
-                    var renewed = storage.acquireLease(owner.lane(), owner.shard(), instanceId, leaseTtlMillis);
-                    if (renewed.isPresent() && renewed.get() == owner.fence()) {
-                        metrics.leaseRenewals.increment();
-                    } else {
-                        // Either refused, or granted under a NEW fence — which means the shard was
-                        // taken and handed back. Both mean this owner's fence is stale.
-                        metrics.leasesLost.increment();
-                        owner.onLeaseLost();
+                    var shards = new int[held.size()];
+                    for (var index = 0; index < held.size(); index++) {
+                        shards[index] = held.get(index).shard();
+                    }
+                    var fences = storage.heldFences(lane, shards, instanceId);
+                    for (var owner : held) {
+                        var fence = fences.get(owner.shard());
+                        if (fence != null && fence == owner.fence()) {
+                            metrics.leaseRenewals.increment();
+                        } else {
+                            // Absent, or back under a NEW fence — the unit was taken and handed on.
+                            // Both mean this owner's fence is stale.
+                            metrics.leasesLost.increment();
+                            owner.onLeaseLost();
+                        }
                     }
                 } catch (Exception e) {
-                    log.warn("Lease renewal failed for shard {}", owner.shard(), e);
+                    log.warn("Lease check failed for {} shards on the {} lane", held.size(), lane, e);
                 }
             }
             try {

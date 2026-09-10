@@ -106,6 +106,27 @@ class ShardOwnedMultiQueueCostIT {
         return dataSource.getHikariPoolMXBean().getActiveConnections();
     }
 
+    /**
+     * Row updates against the lease table — the heartbeat's cost, and the one this engine is least
+     * entitled to be casual about.
+     * <p>
+     * The design's signature property is that the steady-state path issues no claim write:
+     * {@code n_tup_upd} on the message tables is zero. The lease table is not on that path, but the
+     * heartbeat renews ONE ROW PER OWNED UNIT, so it is a write cadence that scales with units held
+     * rather than with queues — and raising the ordered lane from a handful of shards to a fixed
+     * space of sixty-four multiplied it without anything noticing.
+     */
+    private long leaseRowUpdates() throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT n_tup_upd FROM pg_stat_user_tables WHERE relname = ?")) {
+            statement.setString(1, ShardOwnedSchema.LEASE_TABLE);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getLong(1) : 0L;
+            }
+        }
+    }
+
     /** Transactions committed against this database — a fair proxy for queries, since every read runs autocommit. */
     private long transactions() throws Exception {
         try (var connection = dataSource.getConnection();
@@ -165,8 +186,15 @@ class ShardOwnedMultiQueueCostIT {
 
             // Idle query rate, over a window with no traffic at all.
             var transactionsStart = transactions();
-            TimeUnit.SECONDS.sleep(5);
-            var idleQueriesPerSecond = (transactions() - transactionsStart) / 5L;
+            var leaseUpdatesStart = leaseRowUpdates();
+            var unitsHeld         = queues.stream().mapToInt(ShardOwnedQueue::shardsHeld).sum();
+            // Longer than one HEARTBEAT (leaseTtl / 3 = 10s), not just longer than one sweep. A 5s
+            // window reported zero lease updates and zero queries, which is a sampling artefact
+            // rather than a result: the renewal simply had not fired inside it.
+            var windowSeconds = 30L;
+            TimeUnit.SECONDS.sleep(windowSeconds);
+            var idleQueriesPerSecond  = (transactions() - transactionsStart) / (double) windowSeconds;
+            var leaseUpdatesPerSecond = (leaseRowUpdates() - leaseUpdatesStart) / (double) windowSeconds;
 
             // Handler pools are created lazily, so an idle engine understates its thread count badly.
             // Drive every shard so the ordered lane's per-owner pools actually populate.
@@ -189,6 +217,13 @@ class ShardOwnedMultiQueueCostIT {
             log.warn("threads:            {} (+{})", threadsAfter, threadsAfter - threadsBefore);
             log.warn("backend connections:{} (+{})", connectionsAfter, connectionsAfter - connectionsBefore);
             log.warn("queries/second:     {}", idleQueriesPerSecond);
+            log.warn("units held:         {} ({} unordered shards + {} ordered units per queue)",
+                     unitsHeld, SHARD_COUNT, ShardOwnedSchema.ORDERED_UNITS);
+            log.warn("lease UPDATEs/s:    {}  ({} per owned unit per second)",
+                     leaseUpdatesPerSecond,
+                     unitsHeld == 0 ? 0.0 : leaseUpdatesPerSecond / (double) unitsHeld);
+            log.warn("idle queries per owned unit: {}",
+                     unitsHeld == 0 ? 0.0 : idleQueriesPerSecond / (double) unitsHeld);
             log.warn("per queue:          {} threads, {} connections",
                      (threadsAfter - threadsBefore) / (double) QUEUES,
                      (connectionsAfter - connectionsBefore) / (double) QUEUES);

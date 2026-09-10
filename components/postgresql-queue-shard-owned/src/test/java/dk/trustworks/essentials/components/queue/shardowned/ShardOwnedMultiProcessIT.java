@@ -413,10 +413,16 @@ class ShardOwnedMultiProcessIT {
      * from either process, because in a multi-process test no participant has the whole picture.
      */
     private Set<String> liveLeaseOwners() throws SQLException {
+        // Liveness is the OWNER's instance row, not a per-unit expiry. An instance-owned lease has
+        // lease_until NULL by design — the heartbeat refreshes one instance row per queue instead of
+        // one lease row per unit held — so asking the lease table alone would report nobody.
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
-                     "SELECT DISTINCT owner FROM " + ShardOwnedSchema.LEASE_TABLE
-                     + " WHERE queue_id = ? AND lane = 'unordered' AND owner IS NOT NULL AND lease_until > now()")) {
+                     "SELECT DISTINCT l.owner FROM " + ShardOwnedSchema.LEASE_TABLE + " l"
+                     + " WHERE l.queue_id = ? AND l.lane = 'unordered' AND l.owner IS NOT NULL"
+                     + "   AND EXISTS (SELECT 1 FROM " + ShardOwnedSchema.INSTANCE_TABLE + " i"
+                     + "                WHERE i.queue_id = l.queue_id AND i.instance_id = l.owner"
+                     + "                  AND i.last_seen > now() - interval '30 seconds')")) {
             statement.setShort(1, QUEUE_ID);
             try (var resultSet = statement.executeQuery()) {
                 var owners = new HashSet<String>();
