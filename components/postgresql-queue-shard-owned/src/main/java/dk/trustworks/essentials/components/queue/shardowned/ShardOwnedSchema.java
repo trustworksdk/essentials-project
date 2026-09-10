@@ -422,9 +422,33 @@ public final class ShardOwnedSchema {
      *                               count would re-route every key and strand whole shards
      */
     public static RegisteredQueue registerQueue(DataSource dataSource, QueueName name, int shardCount) throws SQLException {
+        return registerQueue(dataSource, name, shardCount, ORDERED_UNITS);
+    }
+
+    /**
+     * Register a queue with an explicit ordered routing space.
+     * <p>
+     * <b>Only for a queue that will be consumed by more instances than {@link #ORDERED_UNITS}.</b> The
+     * space caps how many instances can hold ordered units for this queue, and exceeding it degrades
+     * rather than breaks — the surplus instances idle on that lane and recover if the count drops — so
+     * the default is the right answer unless you already know it is not.
+     * <p>
+     * It is frozen for the life of the queue's data, because a key's unit is
+     * {@code mix(hash(key)) mod} this number. That is safe to fix per queue in a way it was never safe
+     * to fix globally: the value is recorded here and every process routes by what it finds, so
+     * upgrading the framework's default changes nothing for a queue that already exists.
+     * <p>
+     * Measured cost of a larger space, one queue, idle: 64 / 256 / 1024 units all sit at 1.2 to 1.3
+     * queries a second, because the reads are batched per queue and an instance-owned unit carries no
+     * lease to renew. What does grow is per-unit state — a lease row and an owner object each — so a
+     * process running hundreds of queues should not raise this without reason.
+     */
+    public static RegisteredQueue registerQueue(DataSource dataSource, QueueName name, int shardCount,
+                                                int orderedUnits) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
         requireNonNull(name, "No queue name provided");
         requireTrue(shardCount > 0, "shardCount must be positive");
+        requireTrue(orderedUnits > 0, "orderedUnits must be positive");
 
         var existing = resolve(dataSource, name);
         if (existing.isEmpty()) {
@@ -436,7 +460,7 @@ public final class ShardOwnedSchema {
                          + " ON CONFLICT (queue_name) DO NOTHING")) {
                 statement.setString(1, name.value());
                 statement.setInt(2, shardCount);
-                statement.setInt(3, ORDERED_UNITS);
+                statement.setInt(3, orderedUnits);
                 statement.executeUpdate();
             }
             // Read back rather than trusting the insert: on conflict it wrote nothing, because
@@ -458,7 +482,8 @@ public final class ShardOwnedSchema {
         // step this engine exists to avoid, and the same non-procedure §1 of the design rejects for
         // shardCount. Routing reads the queue's own recorded space instead, so a build with a
         // different default simply uses it for queues it creates and leaves existing ones alone.
-        registerQueue(dataSource, registered.queueId(), shardCount);
+        // Seeded against the space this queue actually has, which may not be this build's default.
+        registerQueue(dataSource, registered.queueId(), shardCount, registered.orderedUnits());
         return registered;
     }
 
@@ -665,6 +690,11 @@ public final class ShardOwnedSchema {
      * created as.
      */
     public static void registerQueue(DataSource dataSource, short queueId, int shardCount) throws SQLException {
+        registerQueue(dataSource, queueId, shardCount, ORDERED_UNITS);
+    }
+
+    public static void registerQueue(DataSource dataSource, short queueId, int shardCount,
+                                     int orderedUnits) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
         // Under the bootstrap lock like every other DDL path here: every instance calls this at
         // start-up, so CREATE SEQUENCE IF NOT EXISTS races exactly the way CREATE TABLE does.
@@ -691,10 +721,11 @@ public final class ShardOwnedSchema {
                                   + " START WITH 1 INCREMENT BY 1 CACHE 1");
             }
         });
-        seedLeases(dataSource, queueId, shardCount);
+        seedLeases(dataSource, queueId, shardCount, orderedUnits);
     }
 
-    private static void seedLeases(DataSource dataSource, short queueId, int shardCount) throws SQLException {
+    private static void seedLeases(DataSource dataSource, short queueId, int shardCount, int orderedUnits)
+            throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
                      "INSERT INTO " + LEASE_TABLE + " (queue_id, lane, shard, owner, fence) "
@@ -702,7 +733,7 @@ public final class ShardOwnedSchema {
             // Per lane, because the two no longer have the same number of units: the ordered lane's
             // space is fixed at ORDERED_UNITS and the unordered lane's is the caller's shard count.
             seedLane(statement, queueId, "unordered", shardCount);
-            seedLane(statement, queueId, "ordered", ORDERED_UNITS);
+            seedLane(statement, queueId, "ordered", orderedUnits);
             statement.executeBatch();
         }
     }

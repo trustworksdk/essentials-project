@@ -228,6 +228,53 @@ class ShardOwnedRoutingSpaceIT {
         throw new IllegalStateException("no key distinguishes the two spaces");
     }
 
+    /**
+     * The ceiling is now a per-queue decision rather than a property of the build, which is what
+     * stops it being absolute. A queue that will be consumed by more instances than the default
+     * allows can simply be created with a larger space — and everything else keeps the default,
+     * because a larger space costs per-unit state that a process running hundreds of queues should
+     * not pay without reason.
+     */
+    @Test
+    void a_queue_can_be_created_with_a_larger_routing_space() throws Exception {
+        var name  = QueueName.of("space-larger");
+        var wider = ShardOwnedSchema.ORDERED_UNITS * 4;
+        var registered = ShardOwnedSchema.registerQueue(dataSource, name, SHARD_COUNT, wider);
+
+        assertThat(registered.orderedUnits()).isEqualTo(wider);
+
+        // Seeded against the queue's own space, or the extra units would have no lease row and could
+        // never be owned.
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT count(*) FROM " + ShardOwnedSchema.LEASE_TABLE
+                     + " WHERE queue_id = ? AND lane = 'ordered'")) {
+            statement.setShort(1, registered.queueId());
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                assertThat(resultSet.getInt(1))
+                        .as("every unit of the wider space needs a lease row")
+                        .isEqualTo(wider);
+            }
+        }
+
+        // And a key routes into the wider space, not the default one.
+        var key = keyRoutedDifferentlyBy(wider);
+        try (var queue = new ShardOwnedQueue(dataSource, registered.queueId(), SHARD_COUNT, "wide-1")) {
+            queue.enqueueOrdered(List.of(new OrderedPayload(key, 0,
+                                                            "x".getBytes(StandardCharsets.UTF_8), 1)));
+        }
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT shard FROM " + ShardOwnedSchema.ORDERED_TABLE + " WHERE queue_id = ?")) {
+            statement.setShort(1, registered.queueId());
+            try (var resultSet = statement.executeQuery()) {
+                assertThat(resultSet.next()).isTrue();
+                assertThat(resultSet.getInt(1)).isEqualTo(ShardOwnedSchema.unitForKey(key, wider));
+            }
+        }
+    }
+
     @Test
     void the_routing_space_a_queue_was_created_under_is_recorded() throws Exception {
         var name = QueueName.of("space-recorded");
