@@ -13,6 +13,8 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `TradingLoadGeneratorController` | The harness's own admin API |
 | `TradingDashboard*` | The lightweight status screen and its SSE stream |
 | `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
+| `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
+| `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N` |
 
 ## Why these are not slices
 
@@ -73,3 +75,41 @@ read it by accident. The authoritative latest price is always the `InstrumentPri
 
 See `../../REFACTORING_PLAN.md` § Open questions for the argument that it belongs in `market_data`
 instead.
+
+## The shard-owned queue exercise
+
+`QueueLoadGenerator` exists because the queue engine is unpublished and experimental: this app is
+where it meets a real Spring application, a shared connection pool and a database that is also
+serving an event store. Three things it caught that the engine's own tests could not, all of them
+misuse rather than engine defects — which is the point of an integration demo.
+
+- **`@Scheduled` is inert here.** The demo has no `@EnableScheduling`, so the annotation binds,
+  validates and never fires. A load generator that generates no load is the quietest possible
+  failure. Own a `ScheduledExecutorService`, as `TradingLoadGeneratorManager` does.
+- **`MessageQueue.consume` covers BOTH lanes.** The lane is chosen by the message — `Message.of` is
+  unordered, `Message.ordered` carries a key — not by the consumer. A second `consume()` on the same
+  queue is therefore a *competing consumer with its own instance identity*, not "the other lane":
+  registering one per lane delivered price ticks to the ordered handler, dead-lettered 1 934 of them
+  for failing to parse as a sequence number, and reported two live instances for one process. Use one
+  subscription and discriminate on `payloadType`.
+- **`key_order` allocation must be atomic with the enqueue that carries it.** `key_order` is the
+  producer's statement of what order means, so the engine can only deliver a key in that order if
+  numbering and committing agree. With a sustained arm and a spike arm numbering the same keys, a
+  spike spends seconds inserting 50 000 rows while the sustained arm takes a *higher* `key_order` and
+  commits it *first* — 7 390 ordering violations in one spike, the engine faithfully reporting a
+  defect in the code feeding it. A real producer gets this free from one aggregate under one unit of
+  work; a two-armed generator has to arrange it.
+
+Measured after those three were fixed, one instance, 4 unordered shards and 64 ordered units:
+
+| | |
+|---|---|
+| spike | 100 000 messages (50 000 per lane) in one call |
+| backlog at t+5s | 39 739 unordered, 34 257 ordered |
+| fully drained | t+20s, roughly 5 000 msg/s combined |
+| ordering violations | 0, against a 34 000-deep ordered queue |
+| dead letters | 0 |
+| ownership | 4 + 64 units, `fullyOwned` throughout |
+
+`unownedShards` is the field to watch, not depth: depth cannot tell "nobody is consuming" from
+"busy", and this engine's ownership failures have historically been invisible in depth alone.

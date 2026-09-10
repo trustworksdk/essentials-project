@@ -31,6 +31,17 @@ essentials:
     shared-queue-statistics-table-name: durable_queues_statistics
     enable-queue-statistics-ttl: true
     queue-statistics-ttl-duration: 90
+  # The shard-owned queue engine. The queue is declared here as data — name to unordered shard
+  # count — because a name in a YAML file cannot become a bean name without inventing a mapping
+  # that would then be part of the contract. The ordered lane takes no count: it routes on its own
+  # fixed space, recorded per queue when the queue is created.
+  shard-owned-queue:
+    enabled: true
+    initialize-schema: true
+    pump-threads: 2
+    queues:
+      trading-events: 4
+
   fenced-lock-manager:
     fenced-locks-table-name: fenced_locks
     lock-confirmation-interval: 5s
