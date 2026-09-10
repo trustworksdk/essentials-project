@@ -73,18 +73,23 @@ public class ShardOwnedDurableQueuesBuilder {
     }
 
     /**
-     * Register an unknown queue name on first use, with this many shards. Zero — the default — fails
-     * instead.
+     * Register an unknown queue name on first use, with this many <em>unordered</em> shards. Zero —
+     * the default — fails instead.
+     *
+     * <h2>This number is the unordered lane's alone</h2>
+     * The ordered lane does not take a shard count. It routes keys over a fixed space
+     * ({@code ShardOwnedSchema.ORDERED_UNITS}) that is recorded on the queue's registry row when the
+     * queue is registered and never changes afterwards, so an auto-registered queue's ordered lane is
+     * already correct whatever is passed here.
      *
      * <h2>Read this before setting it</h2>
      * {@code DurableQueues} invents a queue on first use, so {@code getOrCreateInbox("x")} on a name
      * nobody configured is normal there. The shard-owned engine will not invent a shard count, because
-     * the count caps how many instances can ever consume the queue and can be raised but never lowered.
+     * the count caps how many instances can ever consume the queue's unordered lane and can be raised
+     * but never lowered.
      * <p>
-     * Correcting it later is not expensive, and earlier versions of this javadoc overstated it: an
-     * unordered queue grows with a single {@code growShardCount} call that running consumers pick up on
-     * their next heartbeat, and an ordered one needs its lane empty first — pause that queue's ordered
-     * producers, let it drain, grow, resume. No restart and no deploy either way.
+     * Correcting it later is cheap: {@code growShardCount} is a single call that running consumers
+     * pick up on their next heartbeat, with no restart, no deploy and nothing to drain.
      * <p>
      * So this is a convenience worth having, not a trap: 8 is a reasonable value if you want it — the
      * measured knee is at 4, and 8 buys 95% of what 16 does. The default is still to leave it alone,

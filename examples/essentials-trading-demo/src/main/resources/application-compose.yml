@@ -27,7 +27,10 @@ essentials:
     max-polling-interval: 2s
     transactional-mode: singleoperationtransaction
     verbose-tracing: false
-    enable-queue-statistics: true
+    # Off (which is also the default): it triggers on the `durable_queues` table, and this demo runs
+    # durable queues on the shard-owned engine. Turn it back on alongside
+    # trading-demo.shard-owned-durable-queues=false.
+    enable-queue-statistics: false
     shared-queue-statistics-table-name: durable_queues_statistics
     enable-queue-statistics-ttl: true
     queue-statistics-ttl-duration: 90

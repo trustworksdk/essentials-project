@@ -15,6 +15,7 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N` |
+| `ShardOwnedDurableQueuesConfiguration` | Puts the app's whole `DurableQueues` — every `EventProcessor`'s Inbox included — on the shard-owned engine. Property-gated so the default engine stays an A/B |
 
 ## Why these are not slices
 
@@ -113,3 +114,52 @@ Measured after those three were fixed, one instance, 4 unordered shards and 64 o
 
 `unownedShards` is the field to watch, not depth: depth cannot tell "nobody is consuming" from
 "busy", and this engine's ownership failures have historically been invisible in depth alone.
+
+## The Inbox exercise, which is the more honest one
+
+`QueueLoadGenerator`'s handler sleeps a millisecond. Real handlers open a unit of work and write SQL,
+and the way to exercise that without writing a fake is to put the app's own `DurableQueues` on the
+engine: an `EventProcessor` forwards what it consumes through an `Inbox`, and an `Inbox` is a queue.
+`ShardOwnedDurableQueuesConfiguration` does that, so the four projections are delivered by the engine
+and their handlers do the real work. The engine auto-registers the queues the processors invent:
+
+```
+DefaultCommandQueue | Inbox:TradeSettlementProjection | Inbox:TradeValuationProjection
+InstrumentDetailsProjection:queue | TradingAccountStatementProjection:queue | trading-events
+```
+
+What this caught that the engine's own tests and the synthetic generator could not:
+
+- **`ViewEventProcessor` called `queuedMessage.getId()` in log arguments.** Arguments are evaluated
+  eagerly, so it ran on every delivery whatever the level. `getId()` is the `QueueEntryId`, which the
+  adapter's codec packs from `(QueueName, MessageId)`, and the push path has no `MessageId` — the
+  engine's `MessageHandler` gets `(key, payload, payloadType)`. The adapter throws there rather than
+  stub an id, so every projection message dead-lettered from a log statement nobody had enabled.
+  Now trace-level behind `isTraceEnabled()`, which is what a per-message statement should have been
+  anyway. The reminder is that the partial-message contract has to hold for *callers*, not just for
+  the adapter's own tests.
+
+The demo also had to turn `enable-queue-statistics` back off — it was explicitly on here, and it
+installs a trigger on the `durable_queues` table, which only `PostgresqlDurableQueues` creates. Not
+a gap in the adapter: the setting is off by default and is going away in the next major.
+
+### Measured, one instance, 4 unordered shards and 64 ordered units per queue
+
+Trade bursts stop contributing at `maxGeneratedTrades` (500), so the spike lever is price updates —
+also the heavier message, since each one updates every trade on its instrument (~250 rows). Eight
+concurrent producers × 5 000:
+
+| | |
+|---|---|
+| peak backlog | ~2 450 on `Inbox:TradeValuationProjection` |
+| peak lag | ~8s, held flat while producers ran |
+| drain | 2 441 → 0 in ~4s once producers stopped (~600/s, each message a bulk `UPDATE`) |
+| dead letters | 0 |
+| errors | 0 |
+| fence | 1 on all 12 lanes throughout — no ownership churn under load |
+
+The shape is the finding: lag plateaus rather than growing without bound while producers run, and the
+backlog only appears once *producers* are made concurrent. A single synchronous burst endpoint cannot
+outrun the projections — 4 000 price updates in 6s never took the Inbox past a depth of 8. That the
+fence never moved is what the instance-liveness redesign was for; a lease-expiry design would have
+churned ownership exactly here, under load, while the pool was contended.
