@@ -1,579 +1,271 @@
-# Making the Ordered Lane's Shard Count Adjustable
+# The Ordered Lane: Routing, Cursor and Ownership
 
-**Status: BUILT.** The ordered lane no longer has a shard count. §4 records the measurements that
-shaped the design; §5 is the design as implemented, with §5.7 tracking what landed in what order.
-§6 is what remains open.
+How the shard-owned engine delivers per-key FIFO, as built. Unordered-lane mechanics are in
+`durable-queue-shard-owned.md`; this covers what the ordered lane does differently — routing,
+discovery — and the liveness model underneath both lanes.
 
-What shipped, against what this document originally proposed:
+The three properties everything here serves:
 
-| §5 | Built as | |
-|---|---|---|
-| Fixed routing space | `ShardOwnedSchema.ORDERED_UNITS` = 64, frozen | ✅ |
-| Ownership by unit *set*, today's lease protocol | unchanged acquire/shed, `fairShare` per lane | ✅ |
-| One sequence per `(queue, lane)` | ordered lane only; unordered keeps per-shard | ✅ |
-| Safe watermark instead of hole detection | `OrderedShardOwner.advanceWatermark` | ✅ |
-| One read per owner, not per unit | batched per queue per pump pass | ✅ |
-| Hash mixed before the modulus | MurmurHash3 finalizer | ✅ |
+- **A key's messages are handled one at a time, in `key_order`,** by one consumer.
+- **No decision an operator makes is unrecoverable,** and no failure needs a human to heal it.
+- **Idle cost follows the number of queues a process serves,** not how finely the work is divided.
 
-Revision note, in the order the measurements landed:
+---
 
-- The **first draft** proposed a 1024-bucket routing space with per-bucket sequence allocation from a
-  counter table, and named counter-table contention as its first open question. Measured: no (§4.4).
-  Its read shape was rejected too (§4.1), and §4.2 put a ceiling on how many units an owner can hold.
-- The **second draft** replaced density with a snapshot-horizon watermark. Its safety test was
-  **unsafe** — `pg_snapshot_xmax` does not bound running xids, and the rig reproduced the trap before
-  the design would have (§4.6). §5.3 states the corrected test, which needs a different and more
-  expensive primitive (§4.5) and a specific sampling order.
-- The watermark **passes its gate** (§4.7): it trails by about one write-transaction duration, the
-  re-read window is 8 to 20 rows, and only long-running *writing* transactions stall it — the second
-  draft overstated that risk.
-- The batched read took **three attempts** (§5.7). The first two failed on the same mistake, which
-  neither symptom pointed at: a pump is process-wide and its storage handle is bound to queue id 0.
+## 1. Routing: a fixed space, chosen per queue
 
-## 1. The problem, stated without euphemism
-
-`shardCount` is chosen once when a queue is registered, and for the **ordered lane it cannot be
-changed afterwards in a running system.**
-
-`ShardOwnedSchema.growShardCount` exists and appears to offer a way out. It does not, because it
-refuses while the ordered lane holds any message, and there is no mechanism by which an operator can
-empty that lane except by stopping the producers — which is an outage of that flow, not an operational
-procedure. Earlier revisions of the engine's documentation described this as "pause producers, drain,
-grow, resume" as though it were a runbook. It is not one. There is no pause.
-
-The consequence is that a user must guess a number correctly, up front, with no way back. That is not
-an acceptable property for a component in an application where things go wrong, and it is the reason
-this document exists.
-
-The unordered lane does not have this problem: routing is round-robin, so no message's placement
-depends on the count, `growShardCount` is a single call, and running consumers pick the new value up
-on the next heartbeat (`a_running_consumer_picks_up_a_grown_shard_count_without_a_restart`).
-
-## 2. Why it happens
-
-One number does two unrelated jobs:
+A key's owner is its **unit**:
 
 ```java
-// ShardOwnedSchema.shardForKey
-shard = hash(key) mod shardCount     // (a) which unit a key is routed to
+unit = mix(hash(key)) mod orderedUnits
 ```
 
-and `shardCount` is *also* how many units exist to be owned — one lease row, one owner, one sequence
-each. So changing how many consumers can share the work also changes where every key lives, and a key
-that moves while it has messages in flight is a key with two owners, which reorders it.
+`orderedUnits` is recorded in the registry when the queue is created and never changes for that
+queue. `ShardOwnedSchema.ORDERED_UNITS` (64) is only the **default** for a queue being created;
+`registerQueue(dataSource, name, shardCount, orderedUnits)` takes an explicit value.
 
-Every partitioned system separates these two. This one does not, and that is the whole defect.
+Two things follow, and they are the point of the design.
 
-## 3. The constraint that turned out not to be one
+**Consumers scale without moving keys.** The routing space and the number of consumers are separate
+numbers. Adding an instance moves *units* between owners — which `beginShedding()` already does
+correctly — and never changes which unit a key belongs to. There is no reshard, no drain, and no
+window in which one key has two owners.
 
-The fix in shape is a fixed routing space: hash keys into units that never change, and let owners hold
-*sets* of units. Growing the number of owners then moves units, not keys.
+**Upgrading the framework cannot re-route live data.** Every process routes by the value it finds in
+the registry, so changing the default affects queues created afterwards and nothing else.
 
-The earlier draft treated one property as a hard requirement and designed around it, at considerable
-cost. The property is **density**: a hole — a row whose sequence value the cursor has passed but whose
-transaction had not committed when the read happened — is detected today by noticing a gap in a
-sequence that is otherwise contiguous, because sequences are allocated per `(queue, shard)`. Share one
-sequence across a larger routing space and an owner holding 1/8 of it sees 7 of every 8 values as a
-gap, chases each, finds nothing, and abandons it after `holeExpiry`.
+**The hash is mixed before the modulus.** `String.hashCode` is a 31-polynomial and `floorMod` against
+a power of two keeps only its low bits, which for structured keys are not well spread. Over 1 024 keys
+into 64 units, mean 16 per unit:
 
-Accepting density as a requirement forces one of two bad options — a sequence object per routing unit
-(too many relations), or per-unit allocation from a counter table (a row lock on the enqueue path).
-The earlier draft chose the counter table. §4.4 measures what that costs.
-
-The requirement is wrong, and the reason is worth stating plainly, because it is the load-bearing
-insight of this revision:
-
-> Density is not what hole detection needs. It is one way to obtain what hole detection needs, which
-> is **an answer to "is it safe to advance the cursor past this value yet"**. PostgreSQL answers that
-> question directly, exactly, and for a tenth of a microsecond, from the transaction snapshot — with
-> no reference to how values are allocated.
-
-§5.3 gives the argument and §4.5 prices the primitive. Once the cursor can be advanced safely without
-density, per-unit sequences are unnecessary, the counter table is unnecessary, and hole chasing,
-`holeExpiry` and the hole half of the ack floor are all deleted rather than reworked.
-
-## 4. What was measured
-
-PostgreSQL 17.5, `max_parallel_workers_per_gather = 0` (an owner holds one connection and never gets a
-gather on this path). Fixture: a table shaped like `shard_queue_ordered` with `shard` widened to a
-1024-value `bucket`, 2 000 000 rows inserted round-robin across the buckets so the heap is in enqueue
-order and *not* clustered by bucket, `seq` dense per bucket (max 1954 per bucket), 200-byte payloads.
-948 MB total — 744 MB heap, 60 MB discovery index.
-
-**Correction to the earlier draft.** Its fixture used `PRIMARY KEY (queue_id, bucket, seq)`. The
-engine's ordered table is `PRIMARY KEY (queue_id, shard, msg_key, key_order)` with discovery on the
-*secondary* index `shard_queue_ordered_seq (queue_id, shard, seq)` — the primary key serves key lookup,
-not the cursor. Everything below is measured on the engine's real shape. The earlier draft's headline
-result survives the correction, because the index doing the work was always the discovery index.
-
-### 4.1 Reading a bucket range: three shapes, three verdicts
-
-All against a 128-bucket range, `LIMIT 100`, in three states an owner is actually in — **backlog**
-(cursors far behind, plenty to return), **near-idle** (cursors at the head of every bucket, nothing to
-return — by far the most frequent poll), and **sparse wake-up** (one bucket has new work, 127 are
-drained — what a `ShardWakeup` notification produces).
-
-| Read shape | backlog | near-idle | sparse wake-up |
-|---|---|---|---|
-| **A** single composite row-value cursor `(bucket, seq) > (…)` | 107 buf, **0.62 ms** | 1 970 buf, **10.16 ms** | — |
-| **B** per-bucket cursor list as a plain join | 135 977 buf, **68.1 ms** | 384 buf, 0.61 ms | 502 016 buf, **234.4 ms** |
-| **C** per-bucket cursor list via `LATERAL` + inner `LIMIT` | 1 418 buf, **1.68 ms** | 384 buf, **0.74 ms** | 393 buf, **0.23 ms** |
-| **C′** same, cursors bound as two arrays (what pgjdbc sends) | 1 412 buf, **0.94 ms** | — | 393 buf, **0.19 ms** |
-| today, for reference: one query per unit, single unit | 110 buf, 0.20 ms | 3 buf, 0.012 ms | — |
-
-**Shape A is not viable.** It is the shape the earlier draft proposed, and its good number is real —
-the row-value comparison is pushed into the index condition, one index scan, 0.62 ms over two million
-rows:
-
-```
-Limit (actual time=0.043..0.592 rows=100)
-  ->  Index Scan using ord_seq on ord
-        Index Cond: ((queue_id = 1) AND (bucket >= 128) AND (bucket < 256)
-                     AND (ROW(bucket, seq) > ROW('128'::smallint, '900'::bigint)))
-        Buffers: shared hit=6 read=101
-```
-
-But the earlier draft measured only the backlog state. Near-idle, with the cursor at the end of the
-range, the planner abandons the discovery index for `ord_visible`, adds an Incremental Sort, reads
-1 953 rows to return none, and takes **10.16 ms** — sixteen times the cost of the state that has work
-to do, in the state the engine spends almost all its time in. Dropping the redundant lower bucket
-bound does not help (1 958 buffers, 1.85 ms).
-
-There is a second, independent defect in shape A that the measurement makes concrete. A single
-composite cursor cannot represent per-bucket progress: with the cursor at `(200, 1954)` the scan
-resumes at bucket 201 *from seq 0*, and returns 100 rows the owner has already delivered (103 buffers,
-0.18 ms — fast, and wrong). The earlier draft's §5.4 argued this is acceptable because acknowledged
-rows are deleted, so a re-read only re-reads what is still in flight. Under backlog that is exactly
-the failure: every poll returns rows already in flight and the owner makes no progress. **Per-bucket
-cursors are required, not a more precise alternative.**
-
-**Shape B is plan-unstable, which is worse than slow.** Given a list of per-bucket cursors as an
-ordinary join, the planner picks a Merge Join in two of the three states, pushes the per-bucket cursor
-down to a *join filter*, and scans the whole discovery index: 68 ms under backlog, **234 ms** on the
-sparse wake-up, half a million buffers. It picks the nested loop only in the near-idle state, where it
-is excellent. A read shape whose cost varies by three orders of magnitude with the planner's mood
-cannot go on this path.
-
-**Shape C is the one to build.** Wrapping the per-bucket read in `LATERAL` with its own `LIMIT` makes
-the nested loop *structural* rather than a planner choice — a merge join cannot satisfy a per-row
-limit — and it is stable and fast in all three states:
-
-```sql
-SELECT x.bucket, x.seq, x.msg_key, x.key_order, x.payload_type
-FROM unnest(?::smallint[], ?::bigint[]) AS cur(unit, cursor),
-LATERAL (SELECT o.bucket, o.seq, o.msg_key, o.key_order, o.payload_type
-         FROM shard_queue_ordered o
-         WHERE o.queue_id = ? AND o.bucket = cur.unit AND o.seq > cur.cursor
-           AND o.visible_at <= now()
-         ORDER BY o.seq LIMIT ?) x          -- inner limit: per-unit fair share
-ORDER BY x.bucket, x.seq LIMIT ?;
-```
-
-```
-Limit (actual time=0.905..0.914 rows=100)
-  ->  Nested Loop (actual time=0.056..0.813 rows=1024)
-        ->  Function Scan on cur (rows=128)
-        ->  Limit (actual time=0.004..0.005 rows=8 loops=128)
-              ->  Index Scan using ord_seq on ord o
-                    Index Cond: ((queue_id = 1) AND (bucket = cur.b) AND (seq > cur.c))
-```
-
-The inner `LIMIT` is not only a plan-stability device. It fair-shares the read across the owner's
-units, so one hot unit cannot monopolise a batch and starve the other 127 — which the ordered lane
-wants anyway. Binding the cursors as two arrays rather than a literal `VALUES` list is both what
-pgjdbc would send and slightly faster.
-
-### 4.2 The idle poll costs three buffers per unit held, linearly
-
-The near-idle poll is the one that multiplies by deployment size: an owner pays it roughly twice a
-second per queue whether or not there is work. Warm, one query, nothing to return:
-
-| units held | buffers | time |
+| key shape | unmixed | mixed |
 |---|---|---|
-| 8 | 24 | 0.019 ms |
-| 32 | 96 | 0.063 ms |
-| 64 | 192 | 0.074 ms |
-| 128 | 384 | 0.142 ms |
-| 1024 | 3 072 | 1.158 ms |
+| `ORDER-<n>` | 54/64 units, busiest 39 | 64/64, busiest 24 |
+| `acct-<n>-EU` | 52/64 units, busiest 42 | 64/64, busiest 25 |
+| zero-padded, step 64 | 63/64 units, busiest 33 | 64/64, busiest 24 |
 
-Three buffers per unit — one index descent each — and it does not amortise. **The range read makes
-round trips O(1) per owner; it does not make units free.** At 8 units held it is a strict improvement
-on today (one query and 24 buffers, against eight queries and 24 buffers). At 1024 it is 1.16 ms per
-poll, and one instance owning the whole routing space across 300 queues would spend about 70% of a
-core on polls that return nothing.
+A skew in how evenly consumers share work rather than a correctness problem — but the mapping is
+frozen for the life of a queue's data, and the fix is one multiply and two shifts on the enqueue path.
+`ShardRoutingTest` pins both the property and the defect in the obvious implementation.
 
-This is the measurement that sets the routing space. It rejects "1024 units, ownership by range"
-independently of anything to do with sequences, and it does so through the same multi-queue budget
-`ShardOwnedMultiQueueCostIT` already guards.
+### Sizing
 
-### 4.3 Acknowledging a scattered set within a unit stays an index scan
+The space caps how many instances can hold ordered units for that queue. Exceeding it **degrades**:
+surplus instances hold nothing on that lane, nothing is lost, duplicated or reordered, and it recovers
+on its own when the instance count drops. Measured with 65 instances against 64 units, they converge
+to 64 holders of one unit each and one idle.
 
-0.076 ms, unchanged from the earlier draft — the ack path is not affected by any of this.
+Raise it at creation only for a queue you already know will be consumed by more instances than the
+default allows. Steady-state cost is flat in the space (§7), but per-unit *state* is not — a lease row
+and an owner object each — so a process running hundreds of queues should keep the default.
 
-```
-Delete on ord
-  ->  Index Scan using ord_pkey
-        Index Cond: ((queue_id = 1) AND (bucket = 200) AND (seq = ANY ('{5,9,17,33}')))
-```
+---
 
-### 4.4 Counter-table allocation holds a row lock for the caller's whole transaction
+## 2. Sequences: one per queue
 
-Uncontended, the earlier draft's number reproduces: a block allocation is a primary-key update at
-0.062 ms. Uncontended was never the question. The engine's headline case is the Outbox — enqueue
-inside the caller's business transaction — and a row lock is held to **commit**, not to statement end.
+The ordered lane draws `seq` from a single sequence per `(queue, lane)`, `CACHE 1`.
 
-Producer A holds a 200 ms business transaction after allocating; producer B allocates concurrently.
-The harness baseline (process start plus connect) is ~42 ms, so anything near 42 ms did not block:
+Not one per unit: per-unit sequences existed to keep values dense within a unit, and density was how
+the lane used to tell an uncommitted value from another unit's. It does not decide that by density any
+more (§3), so the only thing per-unit sequences would still cost is relations — which is what would
+make a large routing space unaffordable across many queues.
 
-| producer B does | elapsed |
-|---|---|
-| counter table, **same** unit as A | **211 ms** — waits out A's entire transaction |
-| counter table, different unit (control) | 42 ms — no wait |
-| `nextval` on the same sequence as A (today's path) | 44 ms — no wait |
-| counter table, one unit, after A allocated a **1024-unit batch** | **217 ms** |
+Consequences worth knowing:
 
-The last row is the one that settles it. Ordered enqueue routes per key, so a large batch of distinct
-keys touches essentially every unit and takes a lock on every one of them. Any other producer then
-blocks, whichever unit it wanted. Today that same batch takes no locks at all.
+- An ordered `seq` is unique within its queue, which retires the trap that seq 1 exists in every shard.
+- An owner's sequence values are **sparse** within its unit. Fine for a watermark; not fine for hole
+  detection, which is why the unordered lane keeps its per-shard sequences.
+- `CACHE 1` is a correctness requirement, not a nicety: §3's argument rests on values being handed out
+  in wall-clock order, which per-backend caching breaks.
 
-There is no way to hold the lock more briefly from inside a caller-supplied transaction: savepoints do
-not release locks, and PostgreSQL has no autonomous transaction without an extension. Sorting units
-within a batch is still mandatory if a counter table is ever used — otherwise two batches deadlock —
-but it removes only the deadlock, not the serialisation.
+---
 
-**Open question 1 of the earlier draft is answered: no.**
+## 3. The cursor is a safe watermark
 
-### 4.5 The snapshot horizon costs 0.086 ms per poll, not 0.098 µs
+The ordered lane does not detect holes. It never advances its cursor past a value a running
+transaction could still commit, so there is nothing to chase.
 
-`pg_snapshot_xmin(pg_current_snapshot())` is effectively free — 100 000 calls in 9.79 ms, **0.098 µs
-per call**. But it is not sufficient on its own, for the reason in §4.6, and the primitive that is
-sufficient costs more:
+### The rule
 
-| primitive | cost | note |
-|---|---|---|
-| `pg_snapshot_xmin(pg_current_snapshot())` | 0.098 µs | needed, not sufficient |
-| `max(backend_xid)` over `pg_stat_activity` | **0.086 ms** | the bound §5.3 actually needs |
-| `nextval` on a `CACHE 1` sequence | 0.18 µs | today's enqueue path, unchanged |
+At any instant, let
 
-0.086 ms once per poll roughly doubles the idle-poll cost measured in §4.2 (0.074 ms at 64 units held),
-which is still comfortably inside the multi-queue budget but is not the rounding error the first draft
-of §5.3 implied.
-
-`backend_xid` for other users' backends was readable by an ordinary `LOGIN` role on 17.5 with no
-`pg_read_all_stats` grant — verified against a role holding only table and sequence privileges. Do not
-carry that assumption to another major version or a managed provider without re-checking it; if it
-ever redacts, the algorithm silently computes too low a bound and advances the watermark over live
-writers.
-
-### 4.6 The obvious formulation of the safety test is unsafe
-
-The first draft of §5.3 proposed advancing the watermark when
-`pg_snapshot_xmin(pg_current_snapshot()) >= pg_snapshot_xmax(X)`. **That test is wrong**, and the
-measurement rig fell into it before the design would have.
-
-A snapshot's `xmax` is `latestCompletedXid + 1`, so a transaction that has been *assigned* an xid and
-is still running sits at or above `xmax` and appears in neither the in-progress list nor below `xmax`.
-A single running writer is observed as:
-
-```
-backend_xid = 55486  (running, idle in transaction)
-pg_current_snapshot() = 55486:55486:      -- xmin = xmax, in-progress list EMPTY
-```
-
-Under a workload of 8 concurrent 50 ms outbox transactions, 98% of polls saw an apparently empty
-in-progress list. Quantified against the corrected rule of §5.3, the `xmax` test reports a p99
-watermark lag of **12.6 ms where the true figure is 64.1 ms** — it would advance the watermark roughly
-five times too early, over transactions that had already allocated a lower `seq` and had not yet
-committed. That is the §4.3 message-loss shape, arrived at from a different direction.
-
-### 4.7 Watermark lag under the engine's own workload
-
-The gate for §5.3. 8 producers running the outbox shape — `BEGIN; INSERT` (allocating `seq` via
-`nextval`); business work; `COMMIT` — with a sampler running the §5.3 algorithm in its own short
-transaction per poll, 5 ms apart, ~1 000–1 700 polls per arm. Lag is how far `safeCursor` trails the
-newest committed `seq`, in wall-clock time and in rows. A poll with no qualifying earlier poll is
-**stalled**, and is censored at time-since-arm-start rather than dropped.
-
-| arm | producer tps | stalled polls | lag p50 | lag p99 | lag max | rows p50 / p99 |
-|---|---|---|---|---|---|---|
-| A — 5 ms transactions | 1 185 | 0.1% | 11.0 ms | 12.7 ms | 13 ms | 14 / 16 |
-| B — 50 ms transactions | 148 | 0.3% | 38.9 ms | 64.1 ms | 72 ms | 8 / 14 |
-| C — 5 ms + an unrelated 13 s **read-only** transaction | 1 194 | 0.1% | 12.2 ms | 13.5 ms | 14 ms | 16 / 20 |
-| D — 5 ms + an unrelated 13 s **writing** transaction | 1 172 | **98.1%** | 6 105 ms | 12 619 ms | 12 750 ms | — |
-
-**The watermark trails by roughly one write-transaction duration plus one poll interval**, and the
-re-read window is 8 to 20 rows. Open question 2 of the previous revision — re-read window size — is
-answered and it is negligible.
-
-**Arm D is the positive control and it stalls as it must**, for 12.75 s of a 14 s writer, at 98% of
-polls. Without it, arms A–C would be an uncalibrated negative result.
-
-**Arm C corrects a claim the previous revision made.** It asserted that "a long-running transaction
-anywhere, including an unrelated analytics query or a `pg_dump`, holds the horizon back". That is false
-for read-only transactions: a 13 s `REPEATABLE READ` reader is indistinguishable from arm A. Only a
-long-running **writing** transaction stalls the watermark, because only a writing transaction is
-assigned an xid. The risk is real but much narrower than stated — and note that in this engine the most
-likely long writer is an Outbox producer, whose messages are the ones being waited for anyway. The
-wall-clock cap of §5.3 still earns its place against an unrelated batch writer in the same database.
-
-## 5. The design this suggests — reasoning, not results
-
-### 5.1 Routing
-
-`unit = mix(hash(key)) mod 64`, fixed for the life of the schema and **not configurable**. The knob
-that generated this whole problem disappears rather than being made adjustable.
-
-64 rather than 1024 because §4.2 prices an owned unit at three buffers per poll and nothing amortises
-it, and because 64 exceeds anything the throughput measurements suggest is useful: the shard-count
-sweep found the knee at 4, with 8 buying 95% of what 16 does. 64 caps instances per lane at 64 and
-costs 0.074 ms per idle poll — about 4% of a core across 300 queues. 128 is defensible at twice that.
-1024 is not.
-
-The routing space and the ownable-unit space are the **same** space. Under §5.2 there is no per-unit
-sequence, so a finer routing space than the ownership space buys only rebalance granularity, and §4.2
-says read cost is paid per ownable unit — so splitting them adds a concept and buys nothing.
-
-`mix()` matters and is new: `Math.floorMod(key.hashCode(), 64)` takes the low six bits, and
-`String.hashCode` clusters in low bits for structured keys (`ORDER-1000`, `ORDER-1016`, …). At
-`shardCount` 8 that was invisible. Apply an integer finalizer before the modulus. It is one line, and
-once the routing space is frozen it can never be changed.
-
-### 5.2 Sequences
-
-**One sequence per `(queue, lane)`**, `CACHE 1`. Not per unit, and no counter table. The enqueue path
-keeps `nextval` and acquires no locks — it stays the write-free path the engine is built around.
-
-`CACHE 1` stops being a nicety and becomes a correctness invariant, because §5.3's argument depends on
-allocation order being wall-clock order, which per-backend caching breaks. It is already `CACHE 1`,
-already commented as deliberate, and should acquire a test.
-
-A pleasant side effect: `seq` becomes unique within `(queue, lane)`, which retires the gotcha that
-"seq 1 exists in every shard" and the deduplication bugs it caused. `MessageId` keeps the triple
-`(lane, unit, seq)` because the unit is what makes a by-id lookup an index descent.
-
-### 5.3 The cursor is a safe watermark, not a high-water mark
-
-This replaces hole detection entirely.
-
-**The argument.** Sequence values are handed out in increasing order over time (one sequence object,
-`CACHE 1`), and a transaction that allocates a value is assigned its xid no later than the allocation.
-So at any instant, let
-
-- `A` = the highest `seq` allocated so far — `pg_sequence_last_value(...)`, which reports allocation,
-  not commit; and
-- `R` = the highest xid currently running — `max(backend_xid)` over `pg_stat_activity`.
+- **`A`** = the highest `seq` allocated so far — `pg_sequence_last_value`, which reports allocation,
+  not commit;
+- **`R`** = the highest transaction id currently running — `max(backend_xid)` over `pg_stat_activity`.
 
 Every `seq ≤ A` was allocated by a transaction that already held an xid at that moment, so any such
 transaction still running is at or below `R`. A transaction assigned an xid above `R` had not yet
 allocated, so everything it allocates will be above `A`. Therefore:
 
-> **once `pg_snapshot_xmin(pg_current_snapshot()) > R`, every `seq ≤ A` is resolved** — committed and
+> once `pg_snapshot_xmin(pg_current_snapshot()) > R`, every `seq ≤ A` is resolved — committed and
 > visible, or aborted and never coming.
 
-`A` is the watermark that becomes safe, and it is strictly better than the highest `seq` the owner
-happened to *see*, because it includes values allocated but not yet visible.
+**Read `A` before `R`, never the reverse.** If `R` is sampled first, a transaction can allocate a
+`seq ≤ A` afterwards with an xid above `R`, and the watermark advances over a live writer.
 
-**Read `A` before `R`, and never the reverse.** This is the one ordering the argument depends on. If
-`R` is sampled first, a transaction can allocate a `seq ≤ A` afterwards with an xid above `R`, and the
-watermark then advances over a live writer. Two statements in that order, not one — evaluation order
-within a single statement is not guaranteed.
+**`pg_snapshot_xmax` does not bound running xids** and must not be used here. It is
+`latestCompletedXid + 1`, so a transaction holding an assigned xid sits at or above it and appears in
+neither the in-progress list nor below `xmax` — one running writer reads as `55486:55486:`, an
+apparently empty snapshot. Under eight concurrent 50 ms transactions, 98% of samples look idle.
 
-The rejected formulation — `xmin >= pg_snapshot_xmax(X)` — is measured and unsafe; see §4.6. Do not
-reintroduce it because it is cheaper.
+### The cap
 
-**The mechanism.** Per owner, a small queue of `(A, R)` pairs instead of a hole map:
+The horizon is database-global, so a long-running **writing** transaction anywhere holds it back.
+Read-only transactions do not, however long they run — only a writer is assigned an xid. Rather than
+stall behind an unrelated batch writer, a candidate older than `watermarkCap` is taken anyway and
+counted as `watermarkCapped`, which is the number to watch.
 
-- each poll records `(A_k, R_k)`;
-- `safeCursor` advances to `A_k` for the newest `k` whose `R_k` the current `xmin` has passed;
-- each poll scans from `safeCursor` and deduplicates against the in-flight and delivered sets the owner
-  already keeps.
+`watermarkCap` is deliberately **not** `holeExpiry`, and defaults far higher (60 s). `holeExpiry` was
+held low by the cost of a map entry and a chase query per unresolved value; a watermark costs one
+deque entry and no query, so nothing pushes the bound down. Setting them equal throws away the
+exactness and reproduces the mechanism this replaced.
 
-The re-read window is bounded by the horizon lag rather than by the backlog — measured at 8 to 20 rows
-in §4.7 — so there is no equivalent of shape A's livelock. Note that `maxSeen` does not appear: the
-owner no longer needs to track the highest `seq` it has seen.
+### What this is and is not
 
-**What this deletes**, rather than reworks: `pendingHoles`, `chaseHoles`, `readOrderedSpecific` as a
-chase path, `holeExpiry`, `maxHolesPerChase`, `chaseDelay`, and the hole half of the ack floor — which
-is the §4.3/§4.4 bug family, historically the most expensive area of this engine.
+It removes hole chasing, `holeExpiry` on this lane, and the `pendingHoles` bookkeeping. It does **not**
+make the lane strict about `key_order`: the watermark governs the cursor, not dispatch, so a row read
+from above a gap is still handed to its key, and a message committing late under a lower `key_order`
+still counts an `orderViolation`. Preventing that would mean gating dispatch on the watermark, at a
+cost of about one write-transaction duration per message.
 
-**What it does NOT fix, contrary to an earlier revision of this document.** That revision claimed the
-watermark eliminates the ordering violation `OrderedShardOwner` documents — a message committing late,
-after a higher `key_order` for the same key has already shipped. It does not, and the implementation
-measures `orderViolations = 1` in exactly that scenario. The watermark governs the **cursor**, not
-dispatch: rows read from above the gap are still accepted and still handed to their key. Eliminating
-the violation would mean withholding dispatch until the watermark passes each row, which costs every
-message one write-transaction duration of latency — about 11 ms against a pipeline whose p50 is
-0.44 ms. That is a *strict-ordering mode* worth offering as an option, not a default, and it is not
-part of this design.
+Delayed messages are unaffected — a future `visible_at` row is skipped, and the head sweep delivers it.
 
-What does improve is the cliff. Today an unresolved value is chased until `holeExpiry` and then written
-off, after which only the head sweep finds it — and the sweep backs off to `maxSweepInterval` on a
-quiet shard. The watermark has no equivalent state to write off: the value is simply read again on the
-next pass. Delayed messages get the same treatment for free — a future `visible_at` row manufactures a
-hole today that is chased, not found, and expired; under a watermark it is skipped, and the head sweep
-delivers it exactly as it does now.
+---
 
-**What it risks, and the bound.** The horizon is **database-global**, so a long-running *writing*
-transaction anywhere in the database holds it back and with it the watermark — measured in §4.7 arm D,
-a 13 s writer stalls the watermark for 12.75 s. Read-only transactions do not, however long they run
-(arm C), which is the narrower and more benign version of the risk than the previous revision claimed.
-Today's `holeExpiry` degrades latency instead, and is bounded. So the watermark also advances on a
-wall-clock cap, which is `holeExpiry` under a better name and reproduces today's behaviour as the
-fallback. Normal operation gets an exact answer for 0.086 ms; the pathological case is no worse than
-today.
+## 4. Ownership and liveness
 
-### 5.4 Ownership
+An owner holds a **set** of units, each with its own lease row carrying an `owner` and a `fence`.
+Acquisition, shedding and fair share work as on the unordered lane: `fairShare = ceil(units /
+liveInstances)`, computed per lane, because the two lanes have different unit counts.
 
-An owner holds a **set** of units, not a contiguous range. Lease rows stay per unit, keyed as today,
-and `beginShedding()` / acquire stay exactly as they are.
+**An instance-owned lease carries no expiry.** `lease_until` is NULL and the owner's liveness is its
+row in `shard_queue_instance`, which the heartbeat refreshes **once per queue**. Storing an expiry per
+unit meant writing one row per unit held on every heartbeat — a write cadence that scales with units
+held, which is exactly what this design must not have.
 
-The earlier draft proposed contiguous ranges with split and merge, which is what made its open question
-2 hard — fair-share over ranges is a different calculation, and an instance departing mid-shed is a new
-edge case. Sets need none of that: `fairShare = ceil(64 / liveInstances)` is today's arithmetic against
-a constant, and today's acquire loop is unchanged. §4.1's read takes an array of units and an array of
-cursors, so it does not care whether they are contiguous.
+**Correctness rests on the fence, not on the expiry.** An owner whose unit is taken finds its fence
+bumped and its writes refused, whether the takeover followed a lapsed lease or a stale instance row.
+The heartbeat's remaining job — noticing a unit was taken away, so an owner stops before acknowledging
+work its successor is also dispatching — is a question, answered by one `SELECT` per lane.
 
-The hard half already exists and this design does not touch it: `beginShedding()` stops new dispatch,
-waits out the in-flight keys, flushes acknowledgements under its still-valid fence, then releases.
-Moving a unit between owners without reordering is exactly what it does today for a shard. What breaks
-ordering now is not the handover — it is that routing moves at the same time. Fix the routing and the
-existing machinery covers the rest.
+Two consequences that are easy to get wrong:
 
-### 5.5 Polling
+- **An instance must register itself before acquiring anything.** Registering on the first heartbeat
+  would leave it looking dead for that interval, and instances would steal each other's units at
+  start-up.
+- **A pull session is not an instance** and heartbeats nothing, so it keeps a real expiry and renews it
+  (`acquireSessionLease`). Which rule applies is decided by whether `lease_until` is NULL.
 
-One `ShardWakeup`, one park, one backstop poll and one query **per owner**, not per unit. This is the
-change that makes the read in §4.1 worth having, and it is not free work: today each shard has its own
-`ShardWakeup` cascading to its pump's, and the notification payload is `queueId:lane:shard`. The
-payload becomes `queueId:lane:unit` and the owner maps the unit to its held set.
+The ordered lane sheds by draining, never by releasing: `beginShedding()` stops new dispatch, waits out
+the in-flight keys, flushes acknowledgements under its still-valid fence, then releases. Dropping a
+lease mid-key would hand the successor a key the outgoing owner is still running.
 
-At the same units held this is strictly better than today — one round trip instead of eight for the
-same 24 buffers — and it preserves the property the per-shard wake-up was introduced to get
-(14.5 cursor reads per message before it, 2.0 after), because the owner still only reads when one of
-its own units is signalled.
+---
 
-### 5.6 What this costs
+## 5. Reading: batched per queue
 
-- A `unit` column on `shard_queue_ordered` replacing `shard`, and the discovery index re-keyed to
-  `(queue_id, unit, seq)`. Not backward compatible — the engine is unpublished, which is when to do
-  this.
-- One sequence per `(queue, lane)` instead of one per `(queue, shard, lane)`: **fewer** relations than
-  today, not more.
-- The owner's read becomes one `LATERAL` query over arrays; the cursor becomes an array plus a
-  watermark.
-- Wake-up, park and backstop move from per shard to per owner.
-- `growShardCount`, `refreshShardCount`, `setAutoRegisterShardCount`, `shard_count` in the registry,
-  the sizing sections of three documents and `ShardOwnedShardCountSweepIT` are **deleted**, not
-  rewritten.
-- `pendingHoles`, `chaseHoles`, `holeExpiry`, `maxHolesPerChase`, `chaseDelay` are deleted (§5.3).
+An owner with work would issue three statements of its own — cursor read, head sweep, and when its next
+delayed row becomes visible. The pump issues those three **once per queue per pass**, covering every
+attentive owner of that queue.
 
-The net is a smaller engine than the one that exists today, with one fewer configurable number and one
-fewer subsystem.
+**The shape is `LATERAL` with a per-unit inner `LIMIT`.** The obvious alternative — a list of per-unit
+cursors joined ordinarily — is plan-unstable: the planner merge-joins it, pushes the cursor down to a
+join filter, and scans the whole discovery index.
 
-## 5.7 Build order, and why it is not the obvious one
+| read shape | backlog | near-idle | sparse wake-up |
+|---|---|---|---|
+| single composite row-value cursor | 0.62 ms | **10.16 ms** | — |
+| per-unit cursor list, plain join | **68.1 ms** | 0.61 ms | **234.4 ms** |
+| **per-unit cursor list via `LATERAL` + inner `LIMIT`** | **0.94 ms** | **0.74 ms** | **0.19 ms** |
 
-The obvious order is routing first — it is the defect this document exists for. That order is wrong,
-and §4.2 is what says so.
+A per-row `LIMIT` cannot be satisfied by a merge join, so the nested loop stops being a preference and
+becomes the only legal plan. **Each unit gets a full batch, never a share of one** — splitting it makes
+the batched read return less than the per-unit read it replaces, so an owner would see a different
+amount of its own backlog depending on how many siblings happened to be attentive.
 
-1. **The watermark (§5.3), on today's per-shard schema.** Today's sequences are dense, so a watermark
-   is strictly more conservative than hole detection: it is a drop-in that needs no schema change and
-   no routing change, and the existing suite validates it. It is worth having on its own, and it
-   removes the only reason per-unit sequences existed. **Done.**
-2. **The read and the polling (§4.1, §5.5).** One `LATERAL` query, one wake-up, one park per *owner*
-   instead of per unit.
-3. **The routing space (§5.1).** Only now.
+**A pump is process-wide.** It serves every queue, and `ShardRuntime` hands it a storage handle bound to
+queue id 0 for opening connections, plus its own metrics object. A batched statement must therefore be
+grouped by queue and bound to the owners' queue id, and counted on the owners' metrics — binding the
+pump's own is silent, returns nothing, and looks exactly like an empty queue.
 
-Doing 3 before 2 regresses the thing this engine is most careful about. §4.2 measures the idle poll at
-three buffers per unit held, linear and unamortised, and today each unit is its own owner with its own
-wake-up, park and query. Going from eight units to sixty-four without step 2 is therefore sixty-four
-queries and sixty-four parks per poll cycle rather than eight — about 6.4 queries/s per queue idle
-against 0.8, or **1 920/s across 300 queues against 240**. That is the budget `ShardOwnedMultiQueueCostIT`
-exists to hold.
+**Batching is an idle-cost mechanism, not a throughput one.** `needsAttention` consumes a per-unit
+wake-up, so a pump reads only the unit that was signalled; under load that usually leaves one attentive
+owner per pass and nothing to batch. Its win is the case where many sweeps fall due together — a quiet
+queue — which is what decides what a routing space costs.
 
-Step 2 does not depend on step 3: at today's eight units it is already one round trip instead of eight
-for the same twenty-four buffers. It is what makes a large routing space affordable, so it goes first.
+---
 
-**Step 2 is done.** All three of an owner's reads — cursor, head sweep, next-visible — are issued once
-per queue per pump pass rather than once per shard.
+## 6. Prerequisites the engine refuses to run without
 
-Getting there took two failed attempts, and both failed for the same reason, which is worth recording
-because neither symptom pointed at it. `ShardRuntime` gives every pump a storage handle bound to
-**queue id 0**, on the stated grounds that "the pumps only use it to open connections", and builds the
-pumps their **own** metrics object. Issuing a batched statement on that handle queries a queue that
-does not exist. It returns no rows and no error.
+`verifyWatermarkPrerequisites` runs as the first statement of `startOrdered`, once per `DataSource`.
 
-That one mistake produced both symptoms that were chased for two sessions:
+If `pg_stat_activity.backend_xid` is not readable the query does not fail — it returns a **subset** of
+the running transactions, and a subset is not a degraded answer but a wrong one: the watermark advances
+over a live writer. So the probe **constructs the condition** rather than inspecting the column, which
+is legitimately null for a backend that has not written: it opens a second connection, forces it to
+take a real xid, and asserts the first can see it. On a database that hides it, `startConsumingOrdered`
+throws and names the grant (`pg_read_all_stats`).
 
-- At 64 units the cursor read returned nothing, so every message arrived via the per-shard head sweep
-  — `sweepRecoveries` 500 of 500, `horizonProbes` 0, the watermark never advancing.
-- With sweeps batched at 8 units the sweep returned nothing, but the owner still recorded that it had
-  swept. That suppressed the real sweep *and* doubled the backoff on every empty pass, which is why it
-  read as starvation — few passes, short parks, the interval at its 30-second ceiling — rather than as
-  an empty result.
+Verified: an ordinary `LOGIN` role can read it on PostgreSQL 17.5 with no grant.
 
-The differential test passed throughout, correctly: it used a storage handle bound to the real queue.
-Comparing the statements could never have found this, because the statements were right.
+---
 
-What the batching is worth, measured rather than argued (`ShardOwnedOrderedIdleCostIT`): a quiet queue
-holding all 64 units, sweeping every 200 ms with the backoff pinned off, issues **84 statements over
-three seconds against 2 880 if every unit read for itself**, while serving 1 219 owner-passes. Idle
-cost is now a function of how many queues a pump serves, which is what makes the routing space of §5.1
-affordable. Under the normal backoff to `maxSweepInterval` it falls by two more orders of magnitude.
+## 7. Measurements
 
-Two things stay true from the failed attempts. The per-shard limit must be a full batch each, never a
-share of one, or the batched read stops being interchangeable with the read it replaces. And batching
-does nothing under load, by design elsewhere: `needsAttention` consumes a per-shard wake-up, so a busy
-queue usually has one attentive owner per pass and nothing to batch. It is an idle-cost mechanism, and
-it is gated as one.
+PostgreSQL 17.5. The routing-space sweep is benchmark-gated (`-Dbenchmark.run=true`); the rest run in
+the normal build.
 
-## 6. Open questions, in the order they should be answered
+**Watermark lag** — 8 producers running the outbox shape, sampler running the real algorithm:
 
-Six are now closed: counter-table contention by §4.4, range splitting by §5.4 choosing sets over
-ranges, horizon lag and re-read window size by §4.7, the read shape by §4.1, and the idle cost of the
-routing space by `ShardOwnedOrderedIdleCostIT` — 84 statements over three seconds at 64 units against
-2 880 unbatched.
+| workload | stalled samples | p50 | p99 | re-read window |
+|---|---|---|---|---|
+| 5 ms transactions | 0.1% | 11.0 ms | 12.7 ms | 14–16 rows |
+| 50 ms transactions | 0.3% | 38.9 ms | 64.1 ms | 8–14 rows |
+| + unrelated 13 s **read-only** transaction | 0.1% | 12.2 ms | 13.5 ms | 16–20 rows |
+| + unrelated 13 s **writing** transaction | **98.1%** | 6 105 ms | 12 619 ms | — |
 
-1. **CLOSED — `backend_xid` visibility across environments.** The worry was that a managed provider
-   or a later major redacts it, in which case the algorithm does not fail loudly: it computes too low
-   a bound and advances the watermark over live writers. `ShardOwnedSchema.verifyWatermarkPrerequisites`
-   now settles it at start-up, once per `DataSource`, by **constructing the condition** — a second
-   connection is forced to take a real xid and the first must be able to see it. Inspecting the column
-   would prove nothing, since it is legitimately null for a backend that has not written. On a
-   database that hides it, `startConsumingOrdered` throws and names the grant.
-   `ShardOwnedWatermarkPrerequisiteIT` pins both halves: an ordinary `LOGIN` role on 17.5 can see it,
-   and revoking the view makes the lane refuse.
+The watermark trails by about one write-transaction duration. The last row is the positive control:
+without it, the first three are an uncalibrated negative.
 
-2. **Whether 64 is right — and, more to the point, whether being frozen is acceptable.** The fair
-   criticism of this design is that it removed a number the *user* had to guess and replaced it with a
-   number the *framework* guesses. Both are absolute; the second is worse in one way, since it is
-   baked into stored data and so cannot be changed even by a new version without care.
+**Idle cost against routing space** — one queue, idle:
 
-   Two of the three things that made that dangerous are now closed. The **too small** direction is
-   measured rather than feared: 65 instances against 64 units converge to 64 holders of one unit and
-   one idle instance, with nothing lost, duplicated or reordered — the ceiling degrades, it does not
-   break. And a **changed** constant is refused: `ordered_units` is recorded per queue at registration
-   and a build that disagrees throws, so raising it in a later major gives existing deployments a
-   clear error and a drain-and-recreate path rather than silently reordering their keys.
+| units | acquire (one-off) | idle queries/s | lease writes/s |
+|---|---|---|---|
+| 64 | 144 ms | 1.33 | 0.00 |
+| 256 | 142 ms | 1.27 | 0.00 |
+| 1024 | 221 ms | 1.20 | 0.00 |
 
-   What remains is that raising it still requires draining. The way out is the doubling split already
-   sketched in `durable-queue-shard-owned.md`: with `N -> 2N`, `mix(hash(K)) mod 2N` is either `S` or
-   `S+N` and nothing else, so each unit splits in exactly two and an owner holding both halves during
-   the transition sees every message for every affected key. That was dismissed when it needed a
-   transition mode fighting per-unit sequences and density-based hole detection; both objections are
-   gone — the ordered lane has one sequence per queue and a watermark. It is now the cheapest it will
-   ever be, and it is what would make the routing space genuinely not-absolute.
+Flat. Acquisition is the only per-unit cost left, and it is paid once at start-up.
 
-3. **Whether the unordered lane should change too.** Unchanged from the earlier draft: it has no
-   routing problem, and its ack path is a *range delete* bounded by the ack floor, which depends on
-   density differently from the ordered lane's per-value acks. Leaving it alone is the conservative
-   answer and keeps the change to the lane that needs it. Note that §5.3 would let the unordered lane
-   drop hole handling too; that is a second change, not part of this one.
+**Idle cost across queues** — 5 queues, 170 units held: total **7.4 queries/s**, of which lease writes
+**0.0**; 0.044 per owned unit. Before the per-unit lease renewal was removed the same configuration
+cost 23.8 queries/s, 17.0 of it lease writes.
 
-## 7. Until this is built
+**Primitives:** `pg_snapshot_xmin(pg_current_snapshot())` 0.098 µs; `max(backend_xid)` over
+`pg_stat_activity` 0.086 ms, once per poll and skipped entirely when the watermark is caught up;
+`nextval` on a `CACHE 1` sequence 0.18 µs.
 
-The ordered lane's shard count is a one-time, effectively irreversible decision. Size it for the
-highest instance count and throughput the queue will ever need — idle shards cost about 0.1 queries/s
-each, so over-provisioning is close to free and under-provisioning has no cheap remedy.
+**Rejected on measurement:** per-unit sequence allocation from a counter table. Uncontended it is a
+0.062 ms primary-key update, but the row lock is held to the *caller's* commit, and this engine's
+headline case is an Outbox enqueue inside a business transaction. A producer waits out another
+producer's whole transaction (211 ms behind a 200 ms one), and because ordered enqueue routes per key,
+a large batch takes a lock on every unit it touches and blocks everyone. `nextval` acquires nothing.
 
-Unordered queues have none of this: start low, grow with a single call, no restart. `Inbox`, `Outbox`
-and `DurableLocalCommandBus` sending plain `Message` are unordered end to end, so the constraint does
-not reach them.
+---
+
+## 8. Deliberately not built
+
+**Growth of an existing queue's routing space.** A queue's space is fixed at creation. Raising it for a
+queue that already holds data would need the doubling split — `mix(hash(K)) mod 2N` is either `S` or
+`S+N`, so each unit splits in exactly two and an owner holding both halves sees every message for every
+affected key, with no drain. The mechanism is sound and cheaper than when it was first considered,
+since the objections it had to fight — per-unit sequences and density-based hole detection — are both
+gone. It is not built because the space is a per-queue choice with a generous default and graceful
+degradation past it, so the case for needing it is narrow.
+
+**Changing the unordered lane.** It has no routing problem — placement is round-robin — and its
+acknowledgement is a range delete bounded by a floor that depends on density differently from the
+ordered lane's per-value acks. Leaving it alone keeps the change to the lane that needed it. §3 would
+let it drop hole handling too; that is a separate change.
+
+**Strict `key_order`.** See §3.

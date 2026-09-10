@@ -62,7 +62,7 @@ public final class ShardOwnedSchema {
      * what sixteen does, so sixty-four is already far past the point of return. Larger is not free —
      * idle poll cost is linear in units held and does not amortise — and smaller would cap horizontal
      * scale at a number someone could actually reach. See
-     * {@code docs/durable-queue-ordered-routing-design.md} §5.1.
+     * {@code docs/durable-queue-ordered-routing-design.md} §1.
      * <p>
      * The UNORDERED lane keeps a configurable shard count. It has no routing problem — placement is
      * round-robin, so nothing depends on the count — and it can therefore still grow with a single

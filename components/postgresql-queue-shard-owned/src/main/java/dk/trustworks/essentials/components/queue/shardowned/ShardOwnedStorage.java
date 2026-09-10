@@ -954,7 +954,7 @@ public final class ShardOwnedStorage {
      * transaction holding an assigned xid sits at or above it and appears in neither the in-progress
      * list nor below {@code xmax} — a single running writer reads as {@code 55486:55486:}, an
      * apparently empty snapshot. Deciding safety from {@code pg_current_snapshot()} alone therefore
-     * steps over live writers. See {@code docs/durable-queue-ordered-routing-design.md} §4.6.
+     * steps over live writers. See {@code docs/durable-queue-ordered-routing-design.md} §3.
      * <p>
      * Read <em>after</em> the value it protects, never before: a transaction that allocates a
      * sequence value after this returns is not in the set, and must not be treated as retired.

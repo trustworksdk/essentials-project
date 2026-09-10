@@ -120,14 +120,26 @@ Idle polling is eliminated: 907 transactions to move 20 000 messages, essentiall
 
 ### 3.3 Sequence-gap behaviour
 
-The design's load-bearing assumption is that a reader can follow a per-shard sequence with a cursor, write nothing when it consumes, and never lose a message. Measured across 18 runs:
+The design's load-bearing assumption is that a reader can follow a sequence with a cursor, write
+nothing when it consumes, and never lose a message. The two lanes now answer the "is this gap an
+uncommitted transaction?" question differently, so their numbers are not comparable.
+
+**Unordered lane — gaps are chased.** A value the cursor stepped over is re-queried until it appears
+or `holeExpiry` writes it off. Measured across 18 runs:
 
 | Arm | Hole rate | Hole resolution p99 | Messages lost |
 |---|---|---|---|
 | Autocommit enqueue | 2.4–5.1 per 1 000 (~0.3%) | 4.8–5.2 ms | **0** |
 | Enqueue holding a 5 ms transaction | 8.8–22.2 per 1 000 (~1.5%) | 5.4–5.7 ms | **0** |
 
-**Hole resolution latency is a tunable, not a property of the database** — it tracked the configured chase delay almost exactly in both arms, meaning holes resolve as fast as the reader looks for them.
+**Hole resolution latency is a tunable, not a property of the database** — it tracked the configured
+chase delay almost exactly in both arms, meaning holes resolve as fast as the reader looks for them.
+
+**Ordered lane — gaps are not chased, because the cursor does not step over them.** It advances only
+past values no running transaction could still commit, so there is no hole rate to report and no
+expiry to tune. The equivalent figure is how far the cursor trails, in §3.9. This is why the two lanes
+also differ in sequence scoping: the unordered lane needs one sequence per `(queue, shard)` for
+density, and the ordered lane needs one per queue.
 
 ---
 
@@ -212,10 +224,14 @@ doubling the baseline's consumers really does cost connections — rather than j
 
 ---
 
-## 3.7 What shardCount buys
+## 3.7 What shardCount buys, and what the ordered lane does instead
 
-`ShardOwnedShardCountSweepIT` (perf lab, `-Dbenchmark.run=true`), ordered lane, 500 keys, 2 ms
-handler, `keyConcurrency` 8, three interleaved repetitions per arm:
+`shardCount` applies to the **unordered lane only**. The ordered lane routes on a fixed per-queue
+space and has no such knob — see `durable-queue-ordered-routing-design.md`.
+
+The sweep below was run on the ordered lane before that change, when both lanes shared the number. It
+is kept because the *shape* is what informs the default routing space, and it is the only sweep of its
+kind: 500 keys, 2 ms handler, `keyConcurrency` 8, three interleaved repetitions per arm.
 
 | shards | msg/s | IQR | % of peak | msg/s per shard | ceiling (`shards x keyConcurrency`) |
 |---|---|---|---|---|---|
@@ -225,26 +241,76 @@ handler, `keyConcurrency` 8, three interleaved repetitions per arm:
 | **8** | 2 281 | 2.9% | **95%** | 285 | 64 |
 | 16 | 2 408 | 2.7% | 100% | 151 | 128 |
 
-**Absolute msg/s is not a result** — this lab moves by an order of magnitude between sessions, and
-the arms are interleaved precisely so the *shape* survives that. What the shape says: the knee is at
-4, 8 buys 95% of what 16 does, and return per shard collapses from 1 155 to 151. Past the point where
-`shardCount x keyConcurrency` exceeds the work available, more shards buy idle cost — measured
-elsewhere at ~0.1 queries/s per owned shard per lane — and nothing else.
+**Absolute msg/s is not a result** — this lab moves by an order of magnitude between sessions, and the
+arms are interleaved precisely so the shape survives that. What the shape says: the knee is at 4, 8
+buys 95% of what 16 does, and return per shard collapses from 1 155 to 151. Past the point where
+`shards x keyConcurrency` exceeds the work available, more units buy nothing.
 
-**One shard is also the least predictable arm**, at 74% spread against 3% at eight, because
-everything serialises through a single owner. If ordered throughput matters at all, one shard is the
-wrong answer before its median is even considered.
+**One shard is the least predictable arm**, at 74% spread against 3% at eight, because everything
+serialises through a single owner. If ordered throughput matters at all, one is the wrong answer
+before its median is considered.
 
 **The knee moves with the workload.** A handler that waits 200 ms, or a queue with ten keys rather
-than five hundred, has a different answer; the sweep is provided to be re-run rather than quoted.
+than five hundred, has a different answer.
 
-This is the number that was missing. The engine shipped saying shards are "the unit of parallelism
-and of ordering" and that a quiet queue should have fewer than a busy one — both true, neither a
-number — and the worked examples' "8 for busy, 1–2 for quiet" rested on nothing measured. That is the
-same shape as the process-wide handler ceiling removed in §4.5, and it matters more here, because on
-the ordered lane the decision cannot be revisited without draining the lane and redeploying.
+This is what makes 64 a defensible default for the ordered routing space: far past the point of
+return, so a fixed space costs nothing in throughput, while being high enough that the instance
+ceiling it implies is not one a deployment reaches. Where it *would* be reached, the space is set per
+queue at creation.
 
----
+### 3.8 What a routing space costs when idle
+
+The concern with a large space is that per-unit cost multiplies. It does not, because reads are
+batched per queue and an instance-owned unit carries no lease to renew. One queue, idle:
+
+| units | acquire (one-off) | idle queries/s | lease writes/s |
+|---|---|---|---|
+| 64 | 144 ms | 1.33 | 0.00 |
+| 256 | 142 ms | 1.27 | 0.00 |
+| 1024 | 221 ms | 1.20 | 0.00 |
+
+Flat. Acquisition is the only remaining per-unit cost and is paid once at start-up. What still grows
+is per-unit *state* — a lease row and an owner object each — which is why the default stays modest for
+processes running many queues.
+
+Across queues, 5 queues holding 170 units, idle: **7.4 queries/s total, 0.0 of them lease writes**,
+0.044 per owned unit. The same configuration cost 23.8 queries/s before the per-unit lease renewal was
+removed, 17.0 of it lease writes — 71% of an idle engine spent renewing rows to say nothing had
+changed.
+
+### 3.9 Ordered-lane discovery: watermark lag
+
+The ordered lane advances its cursor only past values no running transaction could still commit, so
+its discovery latency is bounded by the transaction horizon rather than by a timeout. Eight producers
+running the outbox shape, sampler running the real algorithm:
+
+| workload | stalled samples | p50 | p99 | re-read window |
+|---|---|---|---|---|
+| 5 ms transactions | 0.1% | 11.0 ms | 12.7 ms | 14–16 rows |
+| 50 ms transactions | 0.3% | 38.9 ms | 64.1 ms | 8–14 rows |
+| + unrelated 13 s **read-only** transaction | 0.1% | 12.2 ms | 13.5 ms | 16–20 rows |
+| + unrelated 13 s **writing** transaction | **98.1%** | 6 105 ms | 12 619 ms | — |
+
+The cursor trails by about one write-transaction duration. Only *writing* transactions hold it back —
+a long read-only transaction is indistinguishable from none, because only a writer is assigned an xid.
+The last row is the positive control; without it the first three are an uncalibrated negative.
+
+### 3.10 Read plan shapes for the batched cursor read
+
+Reading many units in one statement is only cheap in one of the three obvious shapes:
+
+| read shape | backlog | near-idle | sparse wake-up |
+|---|---|---|---|
+| single composite row-value cursor | 0.62 ms | **10.16 ms** | — |
+| per-unit cursor list, plain join | **68.1 ms** | 0.61 ms | **234.4 ms** |
+| **per-unit cursor list via `LATERAL` + inner `LIMIT`** | **0.94 ms** | **0.74 ms** | **0.19 ms** |
+
+The middle row is plan-unstable rather than slow: the planner merge-joins it and scans the whole
+discovery index. A per-row `LIMIT` inside a `LATERAL` cannot be satisfied by a merge join, which makes
+the nested loop the only legal plan instead of a preference.
+
+Measure the **near-idle** state, not only backlog. The first shape looks excellent with work to do and
+is sixteen times worse with none — which is the state a queue spends almost all its time in.
 
 ## 4. Environment
 
@@ -314,6 +380,8 @@ Stated so that absence is not mistaken for a passing result.
 - **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
 - **Failure injection beyond handler exceptions.** Database restarts, connection loss mid-batch, and disk pressure are untested.
 - **Throughput on hardware that can measure it.** See above.
+- **Idle cost of a large routing space across many queues.** §3.8 varies the space on one queue and the queue count at one space; the product of the two — hundreds of queues at 1 024 units each — is not measured, and per-unit state (a lease row and an owner object each) is what would grow.
+- **Growing an existing queue's routing space.** Not built; see `durable-queue-ordered-routing-design.md` §8.
 
 ## 6. Where the code lives
 
@@ -334,6 +402,14 @@ taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
 # Current-implementation baseline profiles and capacity sweep
 taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
   -Dit.test='DurableQueueBaselineProfilesIT' -Dbenchmark.run=true -Dlab.pg.cpuset=4-7
+
+# Ordered routing space: idle cost per unit count (§3.8)
+./mvnw verify -pl components/postgresql-queue-shard-owned \
+  -Dit.test='ShardOwnedRoutingSpaceCostIT' -Dbenchmark.run=true
+
+# Idle cost across queues, incl. lease writes (§3.8), and the ordered-lane gates (§3.9, §3.10)
+./mvnw verify -pl components/postgresql-queue-shard-owned \
+  -Dit.test='ShardOwnedMultiQueueCostIT,ShardOwnedOrderedIdleCostIT,ShardOwnedBatchedReadIT'
 ```
 
 Each run writes machine-readable results under `examples/essentials-performance-lab/target/perf-lab-baseline/`, including the full environment, so a later run can be diffed against an earlier one. Those files are build output and are not committed; copy them somewhere durable if a result matters.
