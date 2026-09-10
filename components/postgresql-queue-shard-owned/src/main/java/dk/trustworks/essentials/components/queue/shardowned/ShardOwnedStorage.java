@@ -81,6 +81,11 @@ public final class ShardOwnedStorage {
         T call() throws SQLException;
     }
 
+    /** The queue every statement on this handle binds. */
+    public short queueId() {
+        return queueId;
+    }
+
     public Connection connection() throws SQLException {
         return dataSource.getConnection();
     }
@@ -864,12 +869,21 @@ public final class ShardOwnedStorage {
      * {@code LATERAL} cannot be satisfied by a merge join, so the nested loop stops being a preference
      * and becomes the only legal plan.
      *
+     * <b>The queue id is a PARAMETER, not this handle's.</b> These three are the only statements
+     * issued by a {@link ShardPump} rather than by an owner, and a pump is shared by every queue in
+     * the process — {@code ShardRuntime} hands it a storage handle bound to queue id 0 purely to open
+     * connections. Binding {@code this.queueId} here therefore queried queue 0 and matched nothing,
+     * silently: the cursor read returned no rows and every message arrived via the per-shard head
+     * sweep instead, and the batched sweep returned no rows while the owner recorded that it had
+     * swept. Group by queue and pass the owner's own id.
+     *
      * @param perShardLimit rows per shard. NOT a share of one batch: each shard must be able to return
      *                      as much as it would have on its own, or this returns a different result
      *                      from the per-shard reads it replaces.
      * @return rows by shard; a shard with nothing to return is absent rather than empty
      */
     public Map<Integer, List<OrderedRow>> readOrderedFromCursors(Connection connection,
+                                                                 short forQueueId,
                                                                  int[] shards,
                                                                  long[] cursors,
                                                                  int perShardLimit) throws SQLException {
@@ -886,13 +900,14 @@ public final class ShardOwnedStorage {
         try (var statement = connection.prepareStatement(sql)) {
             statement.setArray(1, connection.createArrayOf("int", boxed(shards)));
             statement.setArray(2, connection.createArrayOf("bigint", boxed(cursors)));
-            statement.setShort(3, queueId);
+            statement.setShort(3, forQueueId);
             return readOrderedRowsByShard(statement);
         }
     }
 
     /** The head sweep for MANY shards in one statement. Same shape and reason as {@link #readOrderedFromCursors}. */
-    public Map<Integer, List<OrderedRow>> sweepOrderedFromHeads(Connection connection, int[] shards,
+    public Map<Integer, List<OrderedRow>> sweepOrderedFromHeads(Connection connection, short forQueueId,
+                                                                int[] shards,
                                                                 int perShardLimit) throws SQLException {
         if (shards.length == 0) {
             return Map.of();
@@ -905,7 +920,7 @@ public final class ShardOwnedStorage {
                   + "          ORDER BY o.seq LIMIT " + perShardLimit + ") x";
         try (var statement = connection.prepareStatement(sql)) {
             statement.setArray(1, connection.createArrayOf("int", boxed(shards)));
-            statement.setShort(2, queueId);
+            statement.setShort(2, forQueueId);
             return readOrderedRowsByShard(statement);
         }
     }
@@ -917,15 +932,15 @@ public final class ShardOwnedStorage {
      *
      * @return milliseconds until the next visible row, by shard; a shard with nothing delayed is absent
      */
-    public Map<Integer, Long> millisUntilNextVisibleByShard(Connection connection, String table,
-                                                            int[] shards) throws SQLException {
+    public Map<Integer, Long> millisUntilNextVisibleByShard(Connection connection, short forQueueId,
+                                                            String table, int[] shards) throws SQLException {
         if (shards.length == 0) {
             return Map.of();
         }
         try (var statement = connection.prepareStatement(
                 "SELECT shard, EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000 FROM " + table
                 + " WHERE queue_id = ? AND shard = ANY(?) AND visible_at > now() GROUP BY shard")) {
-            statement.setShort(1, queueId);
+            statement.setShort(1, forQueueId);
             statement.setArray(2, connection.createArrayOf("int", boxed(shards)));
             try (var resultSet = statement.executeQuery()) {
                 var byShard = new HashMap<Integer, Long>();

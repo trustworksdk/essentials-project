@@ -103,7 +103,7 @@ class ShardOwnedBatchedReadIT {
         }
 
         try (var connection = dataSource.getConnection()) {
-            var batched = storage.readOrderedFromCursors(connection, shards, cursors, BATCH_SIZE);
+            var batched = storage.readOrderedFromCursors(connection, QUEUE_ID, shards, cursors, BATCH_SIZE);
 
             for (var index = 0; index < shards.length; index++) {
                 var shard    = shards[index];
@@ -133,14 +133,14 @@ class ShardOwnedBatchedReadIT {
     void a_shard_returns_a_full_batch_regardless_of_how_many_shards_are_read_with_it() throws Exception {
         var busiest = busiestShard();
         try (var connection = dataSource.getConnection()) {
-            var alone = storage.readOrderedFromCursors(connection, new int[]{busiest}, new long[]{0L}, BATCH_SIZE);
+            var alone = storage.readOrderedFromCursors(connection, QUEUE_ID, new int[]{busiest}, new long[]{0L}, BATCH_SIZE);
 
             var shards  = new int[SHARD_COUNT];
             var cursors = new long[SHARD_COUNT];
             for (var shard = 0; shard < SHARD_COUNT; shard++) {
                 shards[shard] = shard;
             }
-            var together = storage.readOrderedFromCursors(connection, shards, cursors, BATCH_SIZE);
+            var together = storage.readOrderedFromCursors(connection, QUEUE_ID, shards, cursors, BATCH_SIZE);
 
             assertThat(seqsOf(together.getOrDefault(busiest, List.of())))
                     .as("shard %d must return the same rows whether read alone or with seven others",
@@ -156,7 +156,7 @@ class ShardOwnedBatchedReadIT {
             shards[shard] = shard;
         }
         try (var connection = dataSource.getConnection()) {
-            var batched = storage.sweepOrderedFromHeads(connection, shards, BATCH_SIZE);
+            var batched = storage.sweepOrderedFromHeads(connection, QUEUE_ID, shards, BATCH_SIZE);
             for (var shard : shards) {
                 var expected = storage.sweepOrderedFromHead(connection, shard, BATCH_SIZE);
                 assertThat(seqsOf(batched.getOrDefault(shard, List.of())))
@@ -179,7 +179,7 @@ class ShardOwnedBatchedReadIT {
             for (var shard = 0; shard < SHARD_COUNT; shard++) {
                 shards[shard] = shard;
             }
-            var batched = storage.millisUntilNextVisibleByShard(connection, ShardOwnedSchema.ORDERED_TABLE, shards);
+            var batched = storage.millisUntilNextVisibleByShard(connection, QUEUE_ID, ShardOwnedSchema.ORDERED_TABLE, shards);
 
             for (var shard : shards) {
                 var expected = storage.millisUntilNextVisible(connection, ShardOwnedSchema.ORDERED_TABLE, shard);

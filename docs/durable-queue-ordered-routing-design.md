@@ -1,7 +1,19 @@
 # Making the Ordered Lane's Shard Count Adjustable
 
-**Status: design, not implemented.** §4 records measurements that were taken; §5 and §6 are reasoning
-that has not been built or tested. Nothing in this document is in the engine yet.
+**Status: BUILT.** The ordered lane no longer has a shard count. §4 records the measurements that
+shaped the design; §5 is the design as implemented, with §5.7 tracking what landed in what order.
+§6 is what remains open.
+
+What shipped, against what this document originally proposed:
+
+| §5 | Built as | |
+|---|---|---|
+| Fixed routing space | `ShardOwnedSchema.ORDERED_UNITS` = 64, frozen | ✅ |
+| Ownership by unit *set*, today's lease protocol | unchanged acquire/shed, `fairShare` per lane | ✅ |
+| One sequence per `(queue, lane)` | ordered lane only; unordered keeps per-shard | ✅ |
+| Safe watermark instead of hole detection | `OrderedShardOwner.advanceWatermark` | ✅ |
+| One read per owner, not per unit | batched per queue per pump pass | ✅ |
+| Hash mixed before the modulus | MurmurHash3 finalizer | ✅ |
 
 Revision note, in the order the measurements landed:
 
@@ -10,14 +22,13 @@ Revision note, in the order the measurements landed:
   Its read shape was rejected too (§4.1), and §4.2 put a ceiling on how many units an owner can hold.
 - The **second draft** replaced density with a snapshot-horizon watermark. Its safety test was
   **unsafe** — `pg_snapshot_xmax` does not bound running xids, and the rig reproduced the trap before
-  the design would have (§4.6). §5.3 now states the corrected test, which needs a different and more
+  the design would have (§4.6). §5.3 states the corrected test, which needs a different and more
   expensive primitive (§4.5) and a specific sampling order.
-- The watermark itself **passes its gate** (§4.7): it trails by about one write-transaction duration,
-  the re-read window is 8 to 20 rows, and only long-running *writing* transactions stall it — the
-  second draft overstated that risk.
-
-What survives is §5. The highest-risk unknown is no longer the mechanism but whether `backend_xid`
-stays readable everywhere the engine runs (§6).
+- The watermark **passes its gate** (§4.7): it trails by about one write-transaction duration, the
+  re-read window is 8 to 20 rows, and only long-running *writing* transactions stall it — the second
+  draft overstated that risk.
+- The batched read took **three attempts** (§5.7). The first two failed on the same mistake, which
+  neither symptom pointed at: a pump is process-wide and its storage handle is bound to queue id 0.
 
 ## 1. The problem, stated without euphemism
 
@@ -481,85 +492,55 @@ exists to hold.
 Step 2 does not depend on step 3: at today's eight units it is already one round trip instead of eight
 for the same twenty-four buffers. It is what makes a large routing space affordable, so it goes first.
 
-**Step 2 is half done, and the halves came apart in a useful way.** An owner with work issues three
-statements — cursor read, head sweep, next-visible. Batching all three slowed delivery badly: 380, then
-280, of 1 000 within a minute, against 1 000 in under three seconds unbatched, with no statement
-failure and no fallback taken. Bisecting split it cleanly:
+**Step 2 is done.** All three of an owner's reads — cursor, head sweep, next-visible — are issued once
+per queue per pump pass rather than once per shard.
 
-- **The batched cursor read is correct and is now in place.** `ShardOwnedBatchedReadIT` compares it
-  against the per-shard read it replaces — same sequence values, same order, same keys, at cursors at
-  the head, mid-shard and past the end — and the same for the batched sweep and next-visible. Batched
-  cursor read with per-shard sweeps passes the full suite.
-- **The batched sweep is not, and the cause is in how swept rows are APPLIED rather than in the
-  statement**, since the statements are proven equivalent. Neutralising the batched next-visible does
-  not fix it, so it is the swept rows themselves. Left per-shard until understood.
+Getting there took two failed attempts, and both failed for the same reason, which is worth recording
+because neither symptom pointed at it. `ShardRuntime` gives every pump a storage handle bound to
+**queue id 0**, on the stated grounds that "the pumps only use it to open connections", and builds the
+pumps their **own** metrics object. Issuing a batched statement on that handle queries a queue that
+does not exist. It returns no rows and no error.
 
-Instrumenting the failing configuration says it is **starvation, not slow work**. With batched sweeps,
-600 of 1 000 messages arrive in sixty seconds and the counters read:
+That one mistake produced both symptoms that were chased for two sessions:
 
-| counter | batched sweep | meaning |
-|---|---|---|
-| `cursorReads` | 193 over 60 s, 8 shards | ~24 passes per shard per minute — the pump is barely running |
-| `headSweeps` | 59 | sweeps are rare, not frequent |
-| `horizonProbes` | 10 | `advanceWatermark` returned early almost every pass |
-| `maxWatermarkLagSeq` | 1 000 | the watermark never advanced off the start |
+- At 64 units the cursor read returned nothing, so every message arrived via the per-shard head sweep
+  — `sweepRecoveries` 500 of 500, `horizonProbes` 0, the watermark never advancing.
+- With sweeps batched at 8 units the sweep returned nothing, but the owner still recorded that it had
+  swept. That suppressed the real sweep *and* doubled the backoff on every empty pass, which is why it
+  read as starvation — few passes, short parks, the interval at its 30-second ceiling — rather than as
+  an empty result.
 
-So the owners are not being pumped, rather than being pumped and doing too much.
+The differential test passed throughout, correctly: it used a storage handle bound to the real queue.
+Comparing the statements could never have found this, because the statements were right.
 
-A second round of probes tested the obvious explanation — that the sweep backoff runs away and parks
-the pump — and **disproved it as the cause**, while turning up something stranger:
+What the batching is worth, measured rather than argued (`ShardOwnedOrderedIdleCostIT`): a quiet queue
+holding all 64 units, sweeping every 200 ms with the backoff pinned off, issues **84 statements over
+three seconds against 2 880 if every unit read for itself**, while serving 1 219 owner-passes. Idle
+cost is now a function of how many queues a pump serves, which is what makes the routing space of §5.1
+affordable. Under the normal backoff to `maxSweepInterval` it falls by two more orders of magnitude.
 
-- **The backoff does run away.** Every one of the eight shards walks the full ladder to the
-  thirty-second ceiling: 1 000 → 2 000 → 4 000 → 8 000 → 16 000 → 30 000 ms.
-- **But the pump is not parking on it.** Park waits are almost all short — 1 ms fourteen times,
-  ~500 ms ten times, ~1 s four times, and a single 7.5 s. Perhaps fifteen seconds of parking in sixty.
-- **And the batched statements are fast and empty.** 250 µs to 2 ms per call, returning zero rows,
-  because the shards that still hold work are not the ones in the batch.
-- **The batch forms in only 18 of ~123 passes**, since 95 of them have a single attentive owner.
-
-That leaves a gap that none of the three explanations covers: the pump makes about 123 passes in sixty
-seconds while neither parking nor querying for most of that time, and the difference from the green
-configuration is confined to eighteen passes in which swept rows were supplied. Time is going somewhere
-inside `pumpOnce` other than the batched reads — the remaining candidates being `flushAcks`,
-`dispatchReadyKeys` under `stateLock` contending with the handler threads, or the interaction of
-`applySweptRows` with `seen` while handlers hold the lock. The backoff to thirty seconds is then a
-consequence of the slowness rather than its cause, and chasing it further would be chasing a symptom.
-
-Two things follow for whoever finishes it.
-
-**Most of the win is still in the sweep.** Two of the three statements are the sweep pair, so batching
-only the cursor read saves at most one in three, and only when two or more ordered owners are attentive
-in the same pass.
-
-**Which is rarer than it looks, and that reframes the whole step.** `needsAttention` consumes a
-per-shard wake-up — the mechanism that took cursor reads per message from 14.5 to 2.0 — so on a busy
-queue typically ONE shard is attentive per pass and the batch has a single member. Measured on the
-4-shard watermark test before the split: statements issued equalled owners served, meaning the batch
-never formed at all. Batching is therefore **an idle-cost mechanism, not a throughput one**: its win is
-the case where many shards' sweeps fall due together, which is precisely the case that decides how
-large a routing space costs. It has to be gated on a quiet queue's queries-per-second, not on a
-workload where the per-shard wake-up has already made it a no-op.
-
-Two pieces of step 3 do not depend on step 2 and have landed early, because both are cheap and both
-get harder to change later: the hash mixer of §5.1, and collapsing the ordered lane to one sequence
-per `(queue, lane)` — safe as soon as step 1 removed the density requirement, and it retires the
-"sixty-four sequence objects per queue" objection before it can be raised. The unordered lane keeps
-its per-shard sequences, because it still detects holes by density.
+Two things stay true from the failed attempts. The per-shard limit must be a full batch each, never a
+share of one, or the batched read stops being interchangeable with the read it replaces. And batching
+does nothing under load, by design elsewhere: `needsAttention` consumes a per-shard wake-up, so a busy
+queue usually has one attentive owner per pass and nothing to batch. It is an idle-cost mechanism, and
+it is gated as one.
 
 ## 6. Open questions, in the order they should be answered
 
-Four questions are now closed: counter-table contention by §4.4, range splitting by §5.4 choosing sets
-over ranges, horizon lag by §4.7, and re-read window size by §4.7 (8 to 20 rows).
+Six are now closed: counter-table contention by §4.4, range splitting by §5.4 choosing sets over
+ranges, horizon lag and re-read window size by §4.7, the read shape by §4.1, and the idle cost of the
+routing space by `ShardOwnedOrderedIdleCostIT` — 84 statements over three seconds at 64 units against
+2 880 unbatched.
 
 1. **`backend_xid` visibility across environments.** §4.5 verified an ordinary role can read it on
    PostgreSQL 17.5 with no grant. If a managed provider or a later major redacts it, the algorithm does
    not fail loudly — it computes too low a bound and advances the watermark over live writers. This
    needs an explicit start-up probe that refuses to run rather than a comment, and it is now the
    highest-risk unknown in the design.
-2. **Whether 64 is right.** §4.2 gives the cost curve and §5.1 argues from the shard-count knee at 4.
-   128 doubles idle cost for headroom nobody has asked for. The argument for a number larger than the
-   largest useful instance count is rebalance granularity alone, and it should be made explicitly or
-   not at all.
+2. **Whether 64 is right.** Less pressing than it was: idle cost is now per queue rather than per
+   unit, so the curve in §4.2 no longer sets the ceiling and 128 would cost little. §5.1 argues from
+   the shard-count knee at 4, which makes 64 already far past useful. The number is frozen once there
+   is data behind it, so revisit before publishing the engine, not after.
 3. **Whether the unordered lane should change too.** Unchanged from the earlier draft: it has no
    routing problem, and its ack path is a *range delete* bounded by the ack floor, which depends on
    density differently from the ordered lane's per-value acks. Leaving it alone is the conservative

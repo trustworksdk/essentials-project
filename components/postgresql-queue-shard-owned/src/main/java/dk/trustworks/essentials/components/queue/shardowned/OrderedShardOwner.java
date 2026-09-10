@@ -49,7 +49,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * it cannot happen. Whether that count is zero under realistic producers is a measurement, not an
  * assumption.
  */
-final class OrderedShardOwner implements LeasedOwner {
+final class OrderedShardOwner implements BatchReadableOwner {
     private static final Logger log = LoggerFactory.getLogger(OrderedShardOwner.class);
 
     private final ShardOwnedStorage             storage;
@@ -84,6 +84,14 @@ final class OrderedShardOwner implements LeasedOwner {
      */
     private final ArrayDeque<WatermarkCandidate> watermarkCandidates = new ArrayDeque<>();
     private record WatermarkCandidate(long maxSeen, Set<Long> runningXids, long observedAtNanos) {
+    }
+
+    /** Rows the pump read on this owner's behalf, consumed by the next pass. Pump thread only. */
+    private BatchRead pendingBatch;
+
+    private record BatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
+                             List<ShardOwnedStorage.OrderedRow> sweptRows,
+                             OptionalLong nextVisibleMillis) {
     }
 
     /** Everything known but not yet delivered, grouped by key and ordered within it. */
@@ -249,15 +257,52 @@ final class OrderedShardOwner implements LeasedOwner {
 
 
     @Override
+    public short queueId() {
+        return storage.queueId();
+    }
+
+    @Override
+    public ShardOwnerMetrics ownerMetrics() {
+        return metrics;
+    }
+
+    @Override
+    public long batchReadCursor() {
+        return safeCursor;
+    }
+
+    @Override
+    public boolean batchSweepDue() {
+        return System.nanoTime() - lastSweepNanos >= sweepIntervalNanos;
+    }
+
+    @Override
+    public void applyBatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
+                               List<ShardOwnedStorage.OrderedRow> sweptRows,
+                               OptionalLong nextVisibleMillis) {
+        pendingBatch = new BatchRead(cursorRows, sweptRows, nextVisibleMillis);
+    }
+
+    @Override
     public int pumpOnce(Connection connection) throws SQLException {
         if (shedComplete.get()) {
             return 0;
         }
+        // Taken once, so a batch cannot be applied twice if a pass repeats for any reason.
+        var batch = pendingBatch;
+        pendingBatch = null;
         // Read from the WATERMARK, not from the highest value seen, so a value whose transaction had
         // not committed when an earlier pass went by is read again rather than chased. The window
         // between the two is bounded by the horizon, not by the backlog, and `seen` deduplicates it.
-        var rows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
-        metrics.orderedReadStatements.increment();
+        List<ShardOwnedStorage.OrderedRow> rows;
+        if (batch != null) {
+            rows = batch.cursorRows();
+        } else {
+            rows = storage.readOrderedFromCursor(connection, shard, safeCursor, settings.readBatchSize());
+            metrics.orderedReadStatements.increment();
+        }
+        // Counts owners SERVED, not statements issued — the two stopped being the same when the pump
+        // began batching. orderedReadStatements is the one to compare against.
         metrics.cursorReads.increment();
         for (var row : rows) {
             maxSeen = Math.max(maxSeen, row.seq());
@@ -269,7 +314,17 @@ final class OrderedShardOwner implements LeasedOwner {
 
         var now = System.nanoTime();
         var sweptThisPass = false;
-        if (now - lastSweepNanos >= sweepIntervalNanos) {
+        if (batch != null) {
+            // The pump decided, via batchSweepDue, before issuing the statement. A null list means it
+            // did not ask; an empty one means it asked and there was nothing. Recording a sweep that
+            // did not happen suppresses the real one AND doubles the backoff — that pairing is what
+            // made a mis-bound batched sweep look like starvation rather than an empty result.
+            if (batch.sweptRows() != null) {
+                applySweptRows(batch.sweptRows(), batch.nextVisibleMillis());
+                lastSweepNanos = now;
+                sweptThisPass = true;
+            }
+        } else if (now - lastSweepNanos >= sweepIntervalNanos) {
             sweep(connection);
             lastSweepNanos = now;
             sweptThisPass = true;

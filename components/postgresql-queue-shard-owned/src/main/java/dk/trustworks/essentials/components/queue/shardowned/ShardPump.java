@@ -121,6 +121,8 @@ final class ShardPump implements Runnable {
                         attentive.add(owner);
                     }
 
+                    batchRead(connection, attentive);
+
                     for (var owner : attentive) {
                         try {
                             delivered += owner.pumpOnce(connection);
@@ -188,6 +190,82 @@ final class ShardPump implements Runnable {
                     return;
                 }
             }
+        }
+    }
+
+    /**
+     * Issue this pass's ordered-lane reads once per QUEUE, rather than once per shard. Three
+     * statements per queue per pass instead of three per shard — see {@link BatchReadableOwner} for
+     * why that decides the affordable routing space, and for why it is an idle-cost mechanism.
+     * <p>
+     * <b>Grouped by queue id, not issued on this pump's storage handle.</b> A pump serves every queue
+     * in the process and its handle is bound to queue 0 for opening connections; binding that in a
+     * batched statement queries a queue that does not exist and returns nothing, silently.
+     * <p>
+     * <b>Failure is not failure of the pass.</b> Owners are left without a batch and read for
+     * themselves, exactly as before this existed.
+     */
+    private void batchRead(Connection connection, List<LeasedOwner> attentive) {
+        var byQueue = new HashMap<Short, List<BatchReadableOwner>>();
+        for (var owner : attentive) {
+            if (owner instanceof BatchReadableOwner readable) {
+                byQueue.computeIfAbsent(readable.queueId(), ignored -> new ArrayList<>()).add(readable);
+            }
+        }
+        for (var entry : byQueue.entrySet()) {
+            if (entry.getValue().size() < 2) {
+                // One shard is not worth a wider statement, and zero is not worth one at all.
+                continue;
+            }
+            try {
+                batchReadQueue(connection, entry.getKey(), entry.getValue());
+            } catch (SQLException | RuntimeException e) {
+                log.warn("{}: batched read for queue {} failed; those shards read for themselves this "
+                         + "pass", name, entry.getKey(), e);
+            }
+        }
+    }
+
+    private void batchReadQueue(Connection connection, short queueId, List<BatchReadableOwner> batchable)
+            throws SQLException {
+        var shards   = new int[batchable.size()];
+        var cursors  = new long[batchable.size()];
+        var sweeping = new ArrayList<BatchReadableOwner>();
+        for (var index = 0; index < batchable.size(); index++) {
+            var owner = batchable.get(index);
+            shards[index] = owner.shard();
+            cursors[index] = owner.batchReadCursor();
+            if (owner.batchSweepDue()) {
+                sweeping.add(owner);
+            }
+        }
+        // A FULL batch per shard, never a share of one: the batched read must return exactly what the
+        // per-shard read it replaces would have.
+        var cursorRows = storage.readOrderedFromCursors(connection, queueId, shards, cursors,
+                                                        settings.readBatchSize());
+        var sweptShards = new int[sweeping.size()];
+        for (var index = 0; index < sweeping.size(); index++) {
+            sweptShards[index] = sweeping.get(index).shard();
+        }
+        var sweptRows   = storage.sweepOrderedFromHeads(connection, queueId, sweptShards,
+                                                        settings.readBatchSize());
+        var nextVisible = storage.millisUntilNextVisibleByShard(connection, queueId,
+                                                                ShardOwnedSchema.ORDERED_TABLE, sweptShards);
+        // On the OWNERS' metrics, not this pump's: the runtime builds its own counters, so counting
+        // here would be invisible to whoever calls queue.metrics(). Every owner in this batch shares
+        // one queue and therefore one metrics object.
+        batchable.get(0).ownerMetrics().orderedReadStatements.add(sweptShards.length > 0 ? 3 : 1);
+
+        var isSweeping = Collections.newSetFromMap(new IdentityHashMap<BatchReadableOwner, Boolean>());
+        isSweeping.addAll(sweeping);
+        for (var owner : batchable) {
+            var swept = isSweeping.contains(owner)
+                        ? sweptRows.getOrDefault(owner.shard(), List.of())
+                        : null;
+            var until = nextVisible.containsKey(owner.shard())
+                        ? OptionalLong.of(nextVisible.get(owner.shard()))
+                        : OptionalLong.empty();
+            owner.applyBatchRead(cursorRows.getOrDefault(owner.shard(), List.of()), swept, until);
         }
     }
 
