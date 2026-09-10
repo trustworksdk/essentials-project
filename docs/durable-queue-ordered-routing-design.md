@@ -542,10 +542,26 @@ routing space by `ShardOwnedOrderedIdleCostIT` — 84 statements over three seco
    `ShardOwnedWatermarkPrerequisiteIT` pins both halves: an ordinary `LOGIN` role on 17.5 can see it,
    and revoking the view makes the lane refuse.
 
-2. **Whether 64 is right.** Less pressing than it was: idle cost is now per queue rather than per
-   unit, so the curve in §4.2 no longer sets the ceiling and 128 would cost little. §5.1 argues from
-   the shard-count knee at 4, which makes 64 already far past useful. The number is frozen once there
-   is data behind it, so revisit before publishing the engine, not after.
+2. **Whether 64 is right — and, more to the point, whether being frozen is acceptable.** The fair
+   criticism of this design is that it removed a number the *user* had to guess and replaced it with a
+   number the *framework* guesses. Both are absolute; the second is worse in one way, since it is
+   baked into stored data and so cannot be changed even by a new version without care.
+
+   Two of the three things that made that dangerous are now closed. The **too small** direction is
+   measured rather than feared: 65 instances against 64 units converge to 64 holders of one unit and
+   one idle instance, with nothing lost, duplicated or reordered — the ceiling degrades, it does not
+   break. And a **changed** constant is refused: `ordered_units` is recorded per queue at registration
+   and a build that disagrees throws, so raising it in a later major gives existing deployments a
+   clear error and a drain-and-recreate path rather than silently reordering their keys.
+
+   What remains is that raising it still requires draining. The way out is the doubling split already
+   sketched in `durable-queue-shard-owned.md`: with `N -> 2N`, `mix(hash(K)) mod 2N` is either `S` or
+   `S+N` and nothing else, so each unit splits in exactly two and an owner holding both halves during
+   the transition sees every message for every affected key. That was dismissed when it needed a
+   transition mode fighting per-unit sequences and density-based hole detection; both objections are
+   gone — the ordered lane has one sequence per queue and a watermark. It is now the cheapest it will
+   ever be, and it is what would make the routing space genuinely not-absolute.
+
 3. **Whether the unordered lane should change too.** Unchanged from the earlier draft: it has no
    routing problem, and its ack path is a *range delete* bounded by the ack floor, which depends on
    density differently from the ordered lane's per-value acks. Leaving it alone is the conservative

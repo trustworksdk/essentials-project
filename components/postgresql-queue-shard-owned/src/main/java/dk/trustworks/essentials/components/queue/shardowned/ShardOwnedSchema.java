@@ -282,6 +282,11 @@ public final class ShardOwnedSchema {
                                   queue_id    smallint    NOT NULL PRIMARY KEY,
                                   queue_name  text        NOT NULL UNIQUE,
                                   shard_count int         NOT NULL,
+                                  -- The ordered lane's routing space AS IT WAS WHEN THIS QUEUE WAS
+                                  -- CREATED. Recorded, not assumed: it is baked into where every
+                                  -- ordered key lives, so a build whose ORDERED_UNITS differs must be
+                                  -- refused rather than allowed to re-route a live queue silently.
+                                  ordered_units int        NOT NULL DEFAULT 64,
                                   created_at  timestamptz NOT NULL DEFAULT now()
                               )
                               """.formatted(REGISTRY_TABLE));
@@ -383,7 +388,12 @@ public final class ShardOwnedSchema {
     /**
      * A queue as the registry knows it: its interned id and the shard count fixed with it.
      */
-    public record RegisteredQueue(QueueName name, short queueId, int shardCount) {
+    /**
+     * @param orderedUnits the ordered routing space this queue's data was written under. Normally
+     *                     {@link #ORDERED_UNITS}; different only on a queue created by another build,
+     *                     which is the case {@link #registerQueue(DataSource, QueueName, int)} refuses.
+     */
+    public record RegisteredQueue(QueueName name, short queueId, int shardCount, int orderedUnits) {
     }
 
     /**
@@ -406,11 +416,13 @@ public final class ShardOwnedSchema {
         if (existing.isEmpty()) {
             try (var connection = dataSource.getConnection();
                  var statement = connection.prepareStatement(
-                         "INSERT INTO " + REGISTRY_TABLE + " (queue_id, queue_name, shard_count)"
-                         + " VALUES (nextval('" + QUEUE_ID_SEQUENCE + "'), ?, ?)"
+                         "INSERT INTO " + REGISTRY_TABLE
+                         + " (queue_id, queue_name, shard_count, ordered_units)"
+                         + " VALUES (nextval('" + QUEUE_ID_SEQUENCE + "'), ?, ?, ?)"
                          + " ON CONFLICT (queue_name) DO NOTHING")) {
                 statement.setString(1, name.value());
                 statement.setInt(2, shardCount);
+                statement.setInt(3, ORDERED_UNITS);
                 statement.executeUpdate();
             }
             // Read back rather than trusting the insert: on conflict it wrote nothing, because
@@ -426,6 +438,19 @@ public final class ShardOwnedSchema {
                     + " shards and cannot be re-registered with " + shardCount
                     + ". Shards are the unit of ordering: a key's shard is hash(key) mod shardCount, "
                     + "so changing the count re-routes every key and leaves shards nobody owns");
+        }
+        if (registered.orderedUnits() != ORDERED_UNITS) {
+            // The one thing a changed ORDERED_UNITS must never do is happen quietly. A key's unit is
+            // mix(hash(key)) mod ORDERED_UNITS, so a build with a different value sends a key's next
+            // message somewhere its history is not — two owners for one key, which is reordering, and
+            // it would look exactly like normal operation.
+            throw new IllegalStateException(
+                    "Queue '" + name + "' was created with an ordered routing space of "
+                    + registered.orderedUnits() + " and this build uses " + ORDERED_UNITS
+                    + ". A key's unit is mix(hash(key)) mod that number, so running both against the "
+                    + "same queue would route a key's next message away from its history and reorder "
+                    + "it. Run the build that matches, or drain this queue's ordered lane and "
+                    + "re-create it under the new space.");
         }
         registerQueue(dataSource, registered.queueId(), shardCount);
         return registered;
@@ -490,7 +515,7 @@ public final class ShardOwnedSchema {
             statement.setShort(2, current.queueId());
             statement.executeUpdate();
         }
-        return new RegisteredQueue(name, current.queueId(), newShardCount);
+        return new RegisteredQueue(name, current.queueId(), newShardCount, current.orderedUnits());
     }
 
     /**
@@ -600,11 +625,13 @@ public final class ShardOwnedSchema {
         requireNonNull(name, "No queue name provided");
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
-                     "SELECT queue_id, shard_count FROM " + REGISTRY_TABLE + " WHERE queue_name = ?")) {
+                     "SELECT queue_id, shard_count, ordered_units FROM " + REGISTRY_TABLE
+                     + " WHERE queue_name = ?")) {
             statement.setString(1, name.value());
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next()
-                       ? Optional.of(new RegisteredQueue(name, resultSet.getShort(1), resultSet.getInt(2)))
+                       ? Optional.of(new RegisteredQueue(name, resultSet.getShort(1), resultSet.getInt(2),
+                                                         resultSet.getInt(3)))
                        : Optional.empty();
             }
         }
