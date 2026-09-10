@@ -493,6 +493,85 @@ public final class ShardOwnedSchema {
         return new RegisteredQueue(name, current.queueId(), newShardCount);
     }
 
+    /**
+     * Datasources already proven able to see another backend's assigned transaction id. Identity, not
+     * equality: a {@code DataSource} is a resource, and framework proxies define equality as they
+     * like — the same reasoning as {@code ShardRuntime.SHARED}.
+     */
+    private static final Set<DataSource> WATERMARK_VERIFIED =
+            Collections.newSetFromMap(new IdentityHashMap<>());
+
+    /**
+     * Refuse to run the ordered lane where its safety mechanism cannot work.
+     * <p>
+     * The ordered lane's cursor is a safe watermark: it passes a sequence value only once
+     * {@code max(backend_xid)} over {@code pg_stat_activity} proves no running write transaction could
+     * still commit a lower one. If that column is redacted — a managed provider, a hardened role, a
+     * later major changing the rules — the query does not fail. It returns a SUBSET of the running
+     * transactions, or none, and a subset is not a degraded answer but a wrong one: the watermark
+     * advances over a live writer and its message is stepped over.
+     * <p>
+     * A comment cannot defend against that, and neither can reading the column and finding it
+     * non-null, because it is legitimately null for backends that have not written. So this
+     * <b>constructs the condition</b>: it opens a second connection, forces it to take a real xid, and
+     * asserts the first can see it. Anything else — invisible, or the view unreadable — throws here,
+     * at start-up, rather than losing a message later.
+     * <p>
+     * Verified once per {@code DataSource}: it costs two connections and one aborted transaction.
+     */
+    public static void verifyWatermarkPrerequisites(DataSource dataSource) throws SQLException {
+        requireNonNull(dataSource, "No dataSource provided");
+        synchronized (WATERMARK_VERIFIED) {
+            if (WATERMARK_VERIFIED.contains(dataSource)) {
+                return;
+            }
+        }
+        try (var writer = dataSource.getConnection()) {
+            writer.setAutoCommit(false);
+            try {
+                int writerPid;
+                try (var statement = writer.prepareStatement(
+                        // pg_current_xact_id assigns a REAL xid, which is the thing being looked for.
+                        // A read-only transaction never gets one, so probing with one would prove
+                        // nothing and pass everywhere.
+                        "SELECT pg_backend_pid(), pg_current_xact_id()");
+                     var resultSet = statement.executeQuery()) {
+                    resultSet.next();
+                    writerPid = resultSet.getInt(1);
+                }
+                try (var observer = dataSource.getConnection();
+                     var statement = observer.prepareStatement(
+                             "SELECT backend_xid IS NOT NULL FROM pg_stat_activity WHERE pid = ?")) {
+                    statement.setInt(1, writerPid);
+                    try (var resultSet = statement.executeQuery()) {
+                        var visible = resultSet.next() && resultSet.getBoolean(1);
+                        if (!visible) {
+                            throw new IllegalStateException(
+                                    "This database does not show one connection the transaction id of "
+                                    + "another (pg_stat_activity.backend_xid was not visible for a "
+                                    + "backend that certainly held one). The ordered lane's cursor "
+                                    + "depends on that to decide when a sequence value can never "
+                                    + "arrive; without it the cursor would step over messages whose "
+                                    + "transaction is still running, losing them. Grant the queue's "
+                                    + "role pg_read_all_stats, or use the unordered lane.");
+                        }
+                    }
+                }
+            } finally {
+                // Nothing was written, and the xid is burned either way.
+                writer.rollback();
+            }
+        } catch (SQLException e) {
+            throw new SQLException(
+                    "Could not verify that pg_stat_activity.backend_xid is readable, which the ordered "
+                    + "lane's cursor depends on for correctness. Grant the queue's role "
+                    + "pg_read_all_stats, or use the unordered lane.", e);
+        }
+        synchronized (WATERMARK_VERIFIED) {
+            WATERMARK_VERIFIED.add(dataSource);
+        }
+    }
+
     private static void seedLane(java.sql.PreparedStatement statement, short queueId, String lane, int units)
             throws SQLException {
         for (var shard = 0; shard < units; shard++) {

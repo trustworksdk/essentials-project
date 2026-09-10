@@ -282,6 +282,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         maxShardsHeld = ShardOwnedSchema.ORDERED_UNITS;
         var maxShards = maxShardsHeld;
 
+        // Before anything is leased: the ordered lane's cursor cannot be safe on a database that
+        // hides one backend's transaction id from another, and finding that out at start-up is the
+        // difference between refusing to run and quietly stepping over messages.
+        ShardOwnedSchema.verifyWatermarkPrerequisites(dataSource);
+
         // BEFORE the acquire loop, and from leaseTtl rather than from holeExpiry. This lane still
         // derived its first lease as holeExpiry x 3 — the derivation that was removed when leaseTtl
         // became its own setting, fixed on the unordered path and missed here. The two are bounded by

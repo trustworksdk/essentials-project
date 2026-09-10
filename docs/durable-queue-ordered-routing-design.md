@@ -532,11 +532,16 @@ ranges, horizon lag and re-read window size by §4.7, the read shape by §4.1, a
 routing space by `ShardOwnedOrderedIdleCostIT` — 84 statements over three seconds at 64 units against
 2 880 unbatched.
 
-1. **`backend_xid` visibility across environments.** §4.5 verified an ordinary role can read it on
-   PostgreSQL 17.5 with no grant. If a managed provider or a later major redacts it, the algorithm does
-   not fail loudly — it computes too low a bound and advances the watermark over live writers. This
-   needs an explicit start-up probe that refuses to run rather than a comment, and it is now the
-   highest-risk unknown in the design.
+1. **CLOSED — `backend_xid` visibility across environments.** The worry was that a managed provider
+   or a later major redacts it, in which case the algorithm does not fail loudly: it computes too low
+   a bound and advances the watermark over live writers. `ShardOwnedSchema.verifyWatermarkPrerequisites`
+   now settles it at start-up, once per `DataSource`, by **constructing the condition** — a second
+   connection is forced to take a real xid and the first must be able to see it. Inspecting the column
+   would prove nothing, since it is legitimately null for a backend that has not written. On a
+   database that hides it, `startConsumingOrdered` throws and names the grant.
+   `ShardOwnedWatermarkPrerequisiteIT` pins both halves: an ordinary `LOGIN` role on 17.5 can see it,
+   and revoking the view makes the lane refuse.
+
 2. **Whether 64 is right.** Less pressing than it was: idle cost is now per queue rather than per
    unit, so the curve in §4.2 no longer sets the ceiling and 128 would cost little. §5.1 argues from
    the shard-count knee at 4, which makes 64 already far past useful. The number is frozen once there
