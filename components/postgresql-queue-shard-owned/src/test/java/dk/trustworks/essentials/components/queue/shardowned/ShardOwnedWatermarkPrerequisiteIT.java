@@ -93,8 +93,12 @@ class ShardOwnedWatermarkPrerequisiteIT {
                     .hasMessageContaining("pg_read_all_stats");
 
             // And the refusal must reach anyone starting an ordered consumer, not just the probe.
+            // Grant AFTER recreate: recreate drops and re-makes the tables, so grants issued when the
+            // role was created no longer apply to them, and the consumer would fail on a permission
+            // error before ever reaching the probe.
             ShardOwnedSchema.recreate(superuser);
             ShardOwnedSchema.registerQueue(superuser, (short) 1, 4);
+            grantTables("queue_app_blind");
             try (var queue = new ShardOwnedQueue(appRole, (short) 1, 4, "blind-1")) {
                 // start() wraps whatever went wrong, so the actionable text is in the cause chain
                 // rather than the top-level message — which is where a reader of the log will find
@@ -104,6 +108,14 @@ class ShardOwnedWatermarkPrerequisiteIT {
                         .as("startConsumingOrdered must fail loudly on such a database")
                         .hasStackTraceContaining("pg_read_all_stats");
             }
+        }
+    }
+
+    private void grantTables(String role) throws Exception {
+        try (var connection = superuser.getConnection();
+             var statement = connection.createStatement()) {
+            statement.execute("GRANT ALL ON ALL TABLES IN SCHEMA public TO " + role);
+            statement.execute("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO " + role);
         }
     }
 

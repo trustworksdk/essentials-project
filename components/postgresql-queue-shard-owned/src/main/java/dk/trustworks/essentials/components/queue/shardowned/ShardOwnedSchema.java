@@ -439,19 +439,11 @@ public final class ShardOwnedSchema {
                     + ". Shards are the unit of ordering: a key's shard is hash(key) mod shardCount, "
                     + "so changing the count re-routes every key and leaves shards nobody owns");
         }
-        if (registered.orderedUnits() != ORDERED_UNITS) {
-            // The one thing a changed ORDERED_UNITS must never do is happen quietly. A key's unit is
-            // mix(hash(key)) mod ORDERED_UNITS, so a build with a different value sends a key's next
-            // message somewhere its history is not — two owners for one key, which is reordering, and
-            // it would look exactly like normal operation.
-            throw new IllegalStateException(
-                    "Queue '" + name + "' was created with an ordered routing space of "
-                    + registered.orderedUnits() + " and this build uses " + ORDERED_UNITS
-                    + ". A key's unit is mix(hash(key)) mod that number, so running both against the "
-                    + "same queue would route a key's next message away from its history and reorder "
-                    + "it. Run the build that matches, or drain this queue's ordered lane and "
-                    + "re-create it under the new space.");
-        }
+        // NO guard on a differing ORDERED_UNITS, deliberately. An earlier revision refused here, which
+        // turned a version upgrade into "drain this queue and re-create it" — the manual, outage-shaped
+        // step this engine exists to avoid, and the same non-procedure §1 of the design rejects for
+        // shardCount. Routing reads the queue's own recorded space instead, so a build with a
+        // different default simply uses it for queues it creates and leaves existing ones alone.
         registerQueue(dataSource, registered.queueId(), shardCount);
         return registered;
     }
@@ -729,9 +721,18 @@ public final class ShardOwnedSchema {
      * not a correctness problem — but the routing space is chosen once and then frozen, and the cost
      * of avoiding it is one multiply and two shifts on the enqueue path.
      */
-    /** The ordered lane's routing function: fixed space, no count to get wrong. */
-    public static int unitForKey(String key) {
-        return shardForKey(key, ORDERED_UNITS);
+    /**
+     * The ordered lane's routing function.
+     * <p>
+     * Takes the space rather than reading {@link #ORDERED_UNITS}, because the constant is the default
+     * for a queue being CREATED, not the truth for one that already holds data. A queue keeps the
+     * space it was created with — see {@code ShardOwnedStorage.orderedUnits()} — so upgrading the
+     * default cannot re-route anyone's live keys, and no version change asks an operator to drain
+     * anything.
+     */
+    public static int unitForKey(String key, int orderedUnits) {
+        requireTrue(orderedUnits > 0, "orderedUnits must be positive");
+        return shardForKey(key, orderedUnits);
     }
 
     public static int shardForKey(String key, int shardCount) {

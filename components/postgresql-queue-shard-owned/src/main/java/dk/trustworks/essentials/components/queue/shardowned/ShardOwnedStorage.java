@@ -687,6 +687,31 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * The ordered routing space THIS QUEUE's data was written under.
+     * <p>
+     * Read from the registry rather than taken from {@link ShardOwnedSchema#ORDERED_UNITS}, and that
+     * distinction is the whole point: the constant is only the default for a queue being created. A
+     * key's unit is {@code mix(hash(key)) mod} this number, so a queue that already holds data must
+     * keep routing by the number it was created with, whatever the running build would choose today.
+     * Otherwise upgrading the default silently re-routes live keys — or, if guarded, refuses to start
+     * and needs a human to drain and re-create the queue, which is the manual step this engine is
+     * supposed not to have.
+     * <p>
+     * Falls back to the constant only when the queue is not registered, which is a caller error every
+     * other path already reports.
+     */
+    public int orderedUnits() throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT ordered_units FROM " + REGISTRY_TABLE + " WHERE queue_id = ?")) {
+            statement.setShort(1, queueId);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getInt(1) : ShardOwnedSchema.ORDERED_UNITS;
+            }
+        }
+    }
+
+    /**
      * How many shards of each lane have a live owner, in one query against the lease table.
      * <p>
      * The lease table is small — one row per shard per lane — so this is cheap enough to poll, which

@@ -54,6 +54,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * prevent, reintroduced by fixing half of it.
      */
     private volatile int         shardCount;
+    /** This queue's ordered routing space, from the registry. 0 until resolved; never changes after. */
+    private volatile int         orderedUnits;
     private volatile long        shardCountCheckedAtNanos;
     private final String         instanceId;
 
@@ -330,6 +332,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * this engine's whole argument is about what a message costs. Growth is picked up within the
      * refresh interval, which is the same window the consumer side takes.
      */
+    /** The routing space this queue's ordered keys live in — the registry's, not the constant's. */
+    private int orderedUnits() throws SQLException {
+        var units = orderedUnits;
+        if (units == 0) {
+            units = storage.orderedUnits();
+            orderedUnits = units;
+        }
+        return units;
+    }
+
     private void refreshShardCountIfDue() {
         var now = System.nanoTime();
         if (now - shardCountCheckedAtNanos < SHARD_COUNT_REFRESH_NANOS && shardCountCheckedAtNanos != 0L) {
@@ -352,14 +364,17 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     /** Decide the lane and shard of every message, keeping each one's position in the input. */
-    private Routed route(List<Message> messages) {
+    private Routed route(List<Message> messages) throws SQLException {
         refreshShardCountIfDue();
+        // Resolved once per queue, outside the loop: it is a property of the queue's stored data, not
+        // of the batch, and it never changes while the queue exists.
+        var units = orderedUnits();
         var unorderedByShard = new LinkedHashMap<Integer, List<Integer>>();
         var orderedByShard   = new LinkedHashMap<Integer, List<Integer>>();
         for (var position = 0; position < messages.size(); position++) {
             var message = messages.get(position);
             var shard = message.isOrdered()
-                        ? ShardOwnedSchema.unitForKey(message.key())
+                        ? ShardOwnedSchema.unitForKey(message.key(), units)
                         : Math.floorMod(enqueueShardCursor.getAndIncrement(), shardCount);
             (message.isOrdered() ? orderedByShard : unorderedByShard)
                     .computeIfAbsent(shard, ignored -> new ArrayList<>())
@@ -599,7 +614,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
         // Counted against the ordered lane's own, fixed space rather than the unordered shard count.
         var ordered = 0L;
-        for (var unit = 0; unit < ShardOwnedSchema.ORDERED_UNITS; unit++) {
+        for (var unit = 0; unit < orderedUnits(); unit++) {
             ordered += storage.countOrderedRemaining(unit);
         }
         return new QueueDepth(unordered, ordered, storage.countDeadLetters());
@@ -613,7 +628,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // countInstances, not countLiveInstances: the latter is floored at one so fairShare can
         // divide by it, which would report a queue nobody is consuming as having one instance —
         // exactly the state this method exists to make visible.
-        return new QueueHealth(shardCount, ShardOwnedSchema.ORDERED_UNITS, owned[0], owned[1],
+        return new QueueHealth(shardCount, orderedUnits(), owned[0], owned[1],
                                storage.countInstances(Math.max(1_000L, settings.leaseTtlMillis())));
     }
 

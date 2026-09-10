@@ -54,6 +54,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * {@link #refreshShardCount()}.
      */
     private volatile int         shardCount;
+    /**
+     * The ordered routing space THIS queue was created with, 0 until first resolved from the
+     * registry. Not {@code ShardOwnedSchema.ORDERED_UNITS}: that constant is the default for a queue
+     * being created, and a queue that already holds data keeps the space its keys were routed under.
+     * Resolved once, because nothing changes it while the queue exists.
+     */
+    private volatile int         orderedUnits;
     private final String         instanceId;
 
     private final AtomicBoolean       running = new AtomicBoolean();
@@ -179,6 +186,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
     }
 
+    /** The routing space this queue's ordered keys live in. Resolved once from the registry. */
+    private int orderedUnits() throws SQLException {
+        var units = orderedUnits;
+        if (units == 0) {
+            units = storage.orderedUnits();
+            orderedUnits = units;
+        }
+        return units;
+    }
+
     /**
      * Enqueue ordered messages, routing each to the shard its key hashes to.
      * <p>
@@ -187,9 +204,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      */
     public void enqueueOrdered(List<ShardOwnedStorage.OrderedPayload> messages) throws SQLException {
         requireNonNull(messages, "No messages provided");
+        var units   = orderedUnits();
         var byShard = new HashMap<Integer, List<ShardOwnedStorage.OrderedPayload>>();
         for (var message : messages) {
-            byShard.computeIfAbsent(ShardOwnedSchema.unitForKey(message.key()), s -> new ArrayList<>())
+            byShard.computeIfAbsent(ShardOwnedSchema.unitForKey(message.key(), units), s -> new ArrayList<>())
                    .add(message);
         }
         try (var connection = dataSource.getConnection()) {
@@ -267,6 +285,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     private void startOrdered() throws SQLException {
+        // FIRST, before any other database access. The ordered lane's cursor cannot be safe on a
+        // database that hides one backend's transaction id from another, and a reader of the failure
+        // should see that rather than whatever unrelated statement happened to run first.
+        ShardOwnedSchema.verifyWatermarkPrerequisites(dataSource);
+
         var handler = activeOrderedHandler;
         var settings = activeSettings;
         var redeliveryPolicy = activePolicy;
@@ -279,13 +302,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // leave fifty-six owned by nobody — every key hashing to one of them silently undelivered.
         // How the units are split across instances is what fairShare decides; how many one instance
         // may hold is not a thing a caller can usefully know.
-        maxShardsHeld = ShardOwnedSchema.ORDERED_UNITS;
+        maxShardsHeld = orderedUnits();
         var maxShards = maxShardsHeld;
-
-        // Before anything is leased: the ordered lane's cursor cannot be safe on a database that
-        // hides one backend's transaction id from another, and finding that out at start-up is the
-        // difference between refusing to run and quietly stepping over messages.
-        ShardOwnedSchema.verifyWatermarkPrerequisites(dataSource);
 
         // BEFORE the acquire loop, and from leaseTtl rather than from holeExpiry. This lane still
         // derived its first lease as holeExpiry x 3 — the derivation that was removed when leaseTtl
@@ -298,7 +316,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
 
         var leased = new ArrayList<int[]>();
-        for (var shard = 0; shard < ShardOwnedSchema.ORDERED_UNITS && leased.size() < maxShards; shard++) {
+        for (var shard = 0; shard < orderedUnits() && leased.size() < maxShards; shard++) {
             var fence = storage.acquireLease("ordered", shard, instanceId, leaseTtlMillis);
             if (fence.isPresent()) {
                 leased.add(new int[]{shard, fence.get().intValue()});
@@ -325,7 +343,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
     public long orderedRemaining() throws SQLException {
         var remaining = 0L;
-        for (var shard = 0; shard < ShardOwnedSchema.ORDERED_UNITS; shard++) {
+        for (var shard = 0; shard < orderedUnits(); shard++) {
             remaining += storage.countOrderedRemaining(shard);
         }
         return remaining;
@@ -529,7 +547,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Per lane: the ordered lane's unit space is fixed and the unordered lane's is configurable,
         // so one fair share for both would hand this instance a quota computed against the wrong
         // number and leave units permanently unowned.
-        var units = "ordered".equals(activeLane) ? ShardOwnedSchema.ORDERED_UNITS : shardCount;
+        var units = "ordered".equals(activeLane) ? orderedUnits() : shardCount;
         var fairShare = Math.min(maxShardsHeld, (units + liveInstances - 1) / liveInstances);
 
         // Drop owners that have lost their lease — through fencing, or through a renewal refused
@@ -635,7 +653,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private void acquireFreeOrderedShards(int fairShare) throws SQLException {
         var limit = Math.min(fairShare, maxShardsHeld);
         var heldShards = owners.stream().filter(LeasedOwner::leaseHeld).map(LeasedOwner::shard).collect(java.util.stream.Collectors.toSet());
-        for (var shard = 0; shard < ShardOwnedSchema.ORDERED_UNITS && heldShards.size() < limit; shard++) {
+        for (var shard = 0; shard < orderedUnits() && heldShards.size() < limit; shard++) {
             if (heldShards.contains(shard)) {
                 continue;
             }

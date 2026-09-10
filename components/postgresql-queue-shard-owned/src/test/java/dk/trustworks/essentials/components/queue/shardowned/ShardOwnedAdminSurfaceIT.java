@@ -255,13 +255,13 @@ class ShardOwnedAdminSurfaceIT {
             queue.enqueue(List.of(Message.ordered("k1".getBytes(StandardCharsets.UTF_8), 1, key, 0L)));
         }
 
-        var unitBefore = ShardOwnedSchema.unitForKey(key);
+        var unitBefore = ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS);
         var grown = ShardOwnedSchema.growShardCount(dataSource, name, 4);
 
         assertThat(grown.shardCount())
                 .as("the unordered lane's shard count grows with ordered messages still in flight")
                 .isEqualTo(4);
-        assertThat(ShardOwnedSchema.unitForKey(key))
+        assertThat(ShardOwnedSchema.unitForKey(key, ShardOwnedSchema.ORDERED_UNITS))
                 .as("and the ordered key has not moved, because it never depended on that number")
                 .isEqualTo(unitBefore);
     }
