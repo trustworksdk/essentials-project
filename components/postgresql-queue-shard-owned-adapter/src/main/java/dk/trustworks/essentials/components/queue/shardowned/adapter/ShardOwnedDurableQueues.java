@@ -98,9 +98,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 
  *     <tr><td>{@code queryForMessagesSoonReadyForDelivery}</td>
  *         <td>Same reason.</td></tr>
- *     <tr><td>{@code hasOrderedMessageQueuedForKey}</td>
- *         <td>The key's shard is computable, but the engine's SPI exposes no per-key lookup, and
- *             adding one to serve a query means putting it on the delivery path's table.</td></tr>
+
  * </table>
  *
  * <h2>Queues must exist before they are used</h2>
@@ -402,11 +400,27 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         return getTotalMessagesQueuedFor(new GetTotalMessagesQueuedFor(queueName)) > 0;
     }
 
+    /**
+     * Served now, and refusing it was costlier than it looked.
+     * <p>
+     * {@code ViewEventProcessor} asks this before forwarding an event: if the key already has
+     * something queued it queues behind it, otherwise it handles the event inline. Throwing here did
+     * not disable that decision — {@code UnsupportedOperationException} is an {@code Exception}, so
+     * the processor's surrounding {@code catch} swallowed it and took the "direct handling failed,
+     * enqueuing for retry" branch <em>for every event</em>. Ordering survived, since everything then
+     * went through the queue in subscription order, but the inline fast path was unreachable and the
+     * log said a failure had occurred each time.
+     * <p>
+     * The stated objection was also wrong. This is a prefix seek on the ordered table's primary key
+     * {@code (queue_id, shard, msg_key, key_order)}, and it runs on the producing thread once per
+     * event — not on the delivery path.
+     */
     @Override
     public boolean hasOrderedMessageQueuedForKey(QueueName queueName, String key) {
-        throw new UnsupportedOperationException(
-                "The engine's SPI exposes no per-key lookup. A key's shard is computable, but answering this needs a "
-                + "query against the ordered lane's table, which is on the delivery path.");
+        requireNonNull(queueName, "No queueName provided");
+        requireNonNull(key, "No key provided");
+        return onQueue(queueName, "check for queued messages on key '" + key + "'",
+                       () -> resolve(queueName).hasOrderedMessagesForKey(key));
     }
 
     @Override

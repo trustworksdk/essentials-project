@@ -156,6 +156,19 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      * {@link QueueStatistics#NONE}; that is "served elsewhere", not "stalled", and {@link #health()}
      * is what tells those apart because it reads the database.
      */
+    /**
+     * Whether the ordered lane already holds a message for this key.
+     * <p>
+     * For a producer deciding between handling an event inline and queueing it behind what is already
+     * waiting — the question {@code ViewEventProcessor} asks before it forwards. A prefix seek on the
+     * ordered table's primary key, called once per event on the producing thread, not on delivery.
+     * <p>
+     * Racy by nature and safe to be: a message may be delivered and removed the instant after this
+     * returns true, and one may arrive the instant after it returns false. The caller's fallback for
+     * the second case is the queue itself, which orders what it holds.
+     */
+    boolean hasOrderedMessagesForKey(String key) throws SQLException;
+
     QueueStatistics statistics();
 
     QueueDepth depth() throws SQLException;

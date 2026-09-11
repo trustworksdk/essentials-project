@@ -681,6 +681,12 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * noticed; every other counter was doubled too and merely looked large.
      */
     @Override
+    public boolean hasOrderedMessagesForKey(String key) throws SQLException {
+        requireNonNull(key, "No key provided");
+        return storage.hasOrderedMessagesForKey(ShardOwnedSchema.unitForKey(key, orderedUnits()), key);
+    }
+
+    @Override
     public QueueStatistics statistics() {
         synchronized (consumers) {
             var counted = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<ShardOwnerMetrics, Boolean>());

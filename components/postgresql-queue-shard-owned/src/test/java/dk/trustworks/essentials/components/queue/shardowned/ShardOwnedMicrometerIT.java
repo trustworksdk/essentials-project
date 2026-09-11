@@ -256,6 +256,11 @@ class ShardOwnedMicrometerIT {
         }
 
         @Override
+        public boolean hasOrderedMessagesForKey(String key) throws java.sql.SQLException {
+            return delegate.hasOrderedMessagesForKey(key);
+        }
+
+        @Override
         public boolean resurrect(MessageId messageId) throws java.sql.SQLException {
             return delegate.resurrect(messageId);
         }

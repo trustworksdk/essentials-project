@@ -22,7 +22,7 @@ import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappe
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
-import dk.trustworks.essentials.components.foundation.messaging.queue.operations.GetQueuedMessages;
+import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 import org.awaitility.Awaitility;
@@ -331,6 +331,53 @@ class InboxOutboxOnShardOwnedIT {
         } finally {
             strict.stop();
         }
+    }
+
+    /**
+     * A key's messages are delivered in the producer's order, which is the guarantee anything
+     * event-sourced depends on.
+     * <p>
+     * The engine can only deliver a key in {@code key_order} if numbering and committing agree: it
+     * delivers the lowest order it can <em>see</em>, so a producer that commits order 5 before order
+     * 3 gets 5 first, and the engine counts that as an {@code orderViolation} rather than hiding it.
+     * An event-sourced producer cannot do that — {@code EventOrder} is assigned inside the same
+     * transaction that appends the event — which is what this reproduces: allocate and enqueue
+     * together, then assert the handler saw them in order.
+     */
+    @Test
+    void a_keys_messages_are_delivered_in_the_producers_order() {
+        var perKey = new ConcurrentHashMap<String, List<Long>>();
+        var latch  = new CountDownLatch(300);
+
+        durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
+                                                       .setQueueName(OUTBOX_QUEUE)
+                                                       .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(50), 3))
+                                                       .setParallelConsumers(8)
+                                                       .setQueueMessageHandler(message -> {
+                                                           var ordered = (OrderedMessage) message.getMessage();
+                                                           perKey.computeIfAbsent(ordered.getKey(),
+                                                                                  k -> Collections.synchronizedList(new ArrayList<>()))
+                                                                 .add(ordered.getOrder());
+                                                           latch.countDown();
+                                                       })
+                                                       .build());
+
+        // Allocation and enqueue in one critical section per key, as an aggregate's append is.
+        for (var order = 0L; order < 100; order++) {
+            for (var key : List.of("agg-1", "agg-2", "agg-3")) {
+                var thisOrder = order;
+                unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(
+                        OUTBOX_QUEUE, OrderedMessage.of("e-" + key + "-" + thisOrder, key, thisOrder)));
+            }
+        }
+
+        Awaitility.await().atMost(Duration.ofSeconds(60))
+                  .untilAsserted(() -> assertThat(latch.getCount()).isZero());
+
+        assertThat(perKey).hasSize(3);
+        perKey.forEach((key, orders) -> assertThat(orders)
+                .as("key '%s' must be delivered in the order its producer assigned", key)
+                .isSorted());
     }
 
     private static dk.trustworks.essentials.components.queue.shardowned.spi.QueueName engineName(QueueName queueName) {

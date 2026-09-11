@@ -1153,6 +1153,28 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * Whether this key already has anything waiting on the ordered lane.
+     * <p>
+     * A prefix seek on the ordered table's primary key {@code (queue_id, shard, msg_key, key_order)},
+     * so it costs an index lookup rather than a scan. Not on the delivery path: the caller is a
+     * producer deciding whether it may handle an event inline or must queue it behind what is already
+     * there, which happens once per event on the producing thread.
+     */
+    public boolean hasOrderedMessagesForKey(int shard, String key) throws SQLException {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT 1 FROM " + ORDERED_TABLE
+                     + " WHERE queue_id = ? AND shard = ? AND msg_key = ? LIMIT 1")) {
+            statement.setShort(1, queueId);
+            statement.setShort(2, (short) shard);
+            statement.setString(3, key);
+            try (var resultSet = statement.executeQuery()) {
+                return resultSet.next();
+            }
+        }
+    }
+
     public long countOrderedRemaining(int shard) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
