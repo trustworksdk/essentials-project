@@ -1318,6 +1318,64 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * A page of the live messages in this queue, across <b>both</b> lanes, for an operator browsing
+     * it. Not a delivery path — delivery reads per shard from a cursor and never sorts.
+     * <p>
+     * <b>Ordered by {@code (lane, shard, seq)} — which is the message id — ascending or descending.</b>
+     * That is not arrival order and does not claim to be.
+     * There is no global arrival order to report: each shard has its own sequence, messages commit
+     * independently, and the engine's whole design is that no reader needs a total order. What this
+     * ordering is instead is <em>stable</em>, which is the property paging actually requires — the
+     * same row is never returned on two pages and never skipped between them. Sorting by
+     * {@code enqueued_at} would read as arrival order while being neither stable nor true, since the
+     * timestamp is the server's at insert and two rows can share it.
+     * <p>
+     * <b>Cost is an operator's, not a message's.</b> A deep offset sorts both lane tables for this
+     * queue. That is the same trade the by-id operations make and the reason they were allowed: this
+     * is paid once per administrator looking at a page, not once per delivered message.
+     */
+    public List<ListedMessage> listMessages(int offset, int limit, boolean ascending) throws SQLException {
+        var sql = "SELECT lane, shard, seq, msg_key, payload, payload_type, attempts, enqueued_at, visible_at FROM ("
+                  + "   SELECT 'unordered' AS lane, shard, seq, NULL::text AS msg_key, payload, payload_type,"
+                  + "          attempts, enqueued_at, visible_at"
+                  + "     FROM " + UNORDERED_TABLE + " WHERE queue_id = ?"
+                  + "   UNION ALL"
+                  + "   SELECT 'ordered', shard, seq, msg_key, payload, payload_type,"
+                  + "          attempts, enqueued_at, visible_at"
+                  + "     FROM " + ORDERED_TABLE + " WHERE queue_id = ?"
+                  + " ) lanes ORDER BY lane " + (ascending ? "ASC" : "DESC")
+                  + ", shard " + (ascending ? "ASC" : "DESC")
+                  + ", seq " + (ascending ? "ASC" : "DESC")
+                  + " LIMIT ? OFFSET ?";
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(sql)) {
+            statement.setShort(1, queueId);
+            statement.setShort(2, queueId);
+            statement.setInt(3, limit);
+            statement.setInt(4, offset);
+            try (var resultSet = statement.executeQuery()) {
+                var messages = new ArrayList<ListedMessage>();
+                while (resultSet.next()) {
+                    messages.add(new ListedMessage(resultSet.getString(1),
+                                                   resultSet.getInt(2),
+                                                   resultSet.getLong(3),
+                                                   new StoredMessage(resultSet.getString(4),
+                                                                     resultSet.getBytes(5),
+                                                                     resultSet.getInt(6),
+                                                                     resultSet.getInt(7),
+                                                                     resultSet.getTimestamp(8).toInstant(),
+                                                                     resultSet.getTimestamp(9).toInstant())));
+                }
+                return messages;
+            }
+        }
+    }
+
+    /** A row from {@link #listMessages(int, int)} — its identity, and the message itself. */
+    public record ListedMessage(String lane, int shard, long seq, StoredMessage message) {
+    }
+
     public record StoredMessage(String key, byte[] payload, int payloadType, int attempts,
                                 java.time.Instant enqueuedAt, java.time.Instant visibleAt) {
     }

@@ -714,6 +714,24 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     @Override
+    public List<QueuedMessage> messages(int offset, int limit, boolean ascending) throws SQLException {
+        requireTrue(offset >= 0, "offset must not be negative");
+        requireTrue(limit > 0, "limit must be positive");
+        return storage.listMessages(offset, limit, ascending).stream()
+                      .map(listed -> new QueuedMessage(new MessageId("ordered".equals(listed.lane())
+                                                                     ? MessageId.Lane.ORDERED
+                                                                     : MessageId.Lane.UNORDERED,
+                                                                     listed.shard(), listed.seq()),
+                                                       listed.message().key(),
+                                                       listed.message().payload(),
+                                                       listed.message().payloadType(),
+                                                       listed.message().attempts(),
+                                                       listed.message().enqueuedAt(),
+                                                       listed.message().visibleAt()))
+                      .toList();
+    }
+
+    @Override
     public List<DeadLetter> deadLetters(int offset, int limit) throws SQLException {
         return storage.deadLetters(offset, limit).stream()
                       .map(row -> new DeadLetter(new MessageId("ordered".equals(row.lane())

@@ -245,6 +245,12 @@ class ShardOwnedMicrometerIT {
         }
 
         @Override
+        public List<dk.trustworks.essentials.components.queue.shardowned.spi.QueuedMessage> messages(
+                int offset, int limit, boolean ascending) throws java.sql.SQLException {
+            return delegate.messages(offset, limit, ascending);
+        }
+
+        @Override
         public boolean resurrect(MessageId messageId) throws java.sql.SQLException {
             return delegate.resurrect(messageId);
         }

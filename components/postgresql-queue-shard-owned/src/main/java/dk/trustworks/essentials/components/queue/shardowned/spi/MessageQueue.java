@@ -201,6 +201,24 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
      */
     boolean markAsDeadLetter(MessageId messageId, String reason) throws SQLException;
 
+    /**
+     * A page of the messages currently in this queue, across both lanes, for an operator browsing it.
+     * <p>
+     * <b>Ordered by {@code (lane, shard, sequence)}, which is stable rather than chronological.</b>
+     * There is no global arrival order to report — each shard carries its own sequence and the design
+     * is that no reader needs a total order — so this reports the one property paging requires: a row
+     * is never returned twice and never skipped. Do not present it to an operator as "oldest first".
+     * <p>
+     * An administrative operation, priced per administrator. A deep offset sorts this queue's rows;
+     * delivery never does, and nothing here is on the delivery path.
+     *
+     * @param offset    rows to skip
+     * @param limit     maximum rows to return
+     * @param ascending direction over that ordering. Since the ordering <em>is</em> the message id,
+     *                  this is exactly "sort by id", which is what {@code DurableQueues} asks for
+     */
+    List<QueuedMessage> messages(int offset, int limit, boolean ascending) throws SQLException;
+
     List<DeadLetter> deadLetters(int offset, int limit) throws SQLException;
 
     /**

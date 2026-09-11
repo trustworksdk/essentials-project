@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappe
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.operations.GetQueuedMessages;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.*;
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 import org.awaitility.Awaitility;
@@ -211,6 +212,72 @@ class InboxOutboxOnShardOwnedIT {
     // ------------------------------------------------------------- test data
 
     record OrderPlaced(String id, int amount) {
+    }
+
+    /**
+     * The admin console's message browser is built on {@code getQueuedMessages}, and this used to
+     * throw — so every application running its {@code DurableQueues} on this engine served HTTP 500
+     * from that page while every other operation on it worked.
+     * <p>
+     * The property under test is <b>paging</b>, not order. The listing is ordered by
+     * {@code (lane, shard, sequence)} and makes no chronological claim; what it must guarantee is
+     * that walking it in pages yields each message exactly once. A boundary that double-counts or
+     * skips is the failure that matters here, and it is invisible in any single page.
+     */
+    @Test
+    void queued_messages_can_be_paged_and_every_message_appears_exactly_once() {
+        var payloads = new ArrayList<String>();
+        for (var i = 0; i < 25; i++) {
+            payloads.add("browse-" + i);
+        }
+        unitOfWorkFactory.usingUnitOfWork(() -> payloads.forEach(
+                payload -> durableQueues.queueMessage(OUTBOX_QUEUE, Message.of(payload))));
+
+        // Both lanes, so the listing has to span them: ordered messages carry a key, unordered do not.
+        unitOfWorkFactory.usingUnitOfWork(() -> {
+            for (var i = 0; i < 5; i++) {
+                durableQueues.queueMessage(OUTBOX_QUEUE,
+                                           OrderedMessage.of("ordered-" + i, "key-" + i, i));
+            }
+        });
+
+        var everything = durableQueues.getQueuedMessages(
+                new GetQueuedMessages(OUTBOX_QUEUE, DurableQueues.QueueingSortOrder.ASC, 0, 1000));
+        assertThat(everything)
+                .as("both lanes are listed")
+                .hasSize(30);
+
+        // Walk it in pages of 7, which does not divide 30 — a boundary bug hides behind a clean divisor.
+        var paged = new ArrayList<String>();
+        for (var offset = 0; offset < 30; offset += 7) {
+            var page = durableQueues.getQueuedMessages(
+                    new GetQueuedMessages(OUTBOX_QUEUE, DurableQueues.QueueingSortOrder.ASC, offset, 7));
+            page.forEach(message -> paged.add((String) message.getMessage().getPayload()));
+        }
+
+        var expected = new ArrayList<>(payloads);
+        for (var i = 0; i < 5; i++) {
+            expected.add("ordered-" + i);
+        }
+        assertThat(paged)
+                .as("paging must yield every message exactly once — no duplicate across a boundary, none skipped")
+                .containsExactlyInAnyOrderElementsOf(expected);
+
+        // The requested direction must actually be applied. An implementation that ignores it returns
+        // a plausible page and is wrong only in an order nobody checks.
+        var descending = durableQueues.getQueuedMessages(
+                new GetQueuedMessages(OUTBOX_QUEUE, DurableQueues.QueueingSortOrder.DESC, 0, 1000));
+        assertThat(descending.stream().map(m -> m.getMessage().getPayload()).toList())
+                .as("DESC is the reverse of ASC over the same ordering")
+                .containsExactlyElementsOf(everything.stream()
+                                                     .map(m -> m.getMessage().getPayload())
+                                                     .collect(java.util.stream.Collectors.collectingAndThen(
+                                                             java.util.stream.Collectors.toList(),
+                                                             list -> {
+                                                                 var reversed = new ArrayList<>(list);
+                                                                 java.util.Collections.reverse(reversed);
+                                                                 return reversed;
+                                                             })));
     }
 
     private static dk.trustworks.essentials.components.queue.shardowned.spi.QueueName engineName(QueueName queueName) {

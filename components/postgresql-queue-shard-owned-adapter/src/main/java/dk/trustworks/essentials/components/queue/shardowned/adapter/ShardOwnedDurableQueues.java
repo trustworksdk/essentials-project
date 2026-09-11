@@ -73,6 +73,18 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * See {@link QueueEntryIdCodec}. Ids minted here look like {@code orders:u-3-1042}, and an id from a
  * different {@code DurableQueues} implementation is rejected rather than half-understood.
  *
+ * <h2>Browsing a queue reports a stable order, not a chronological one</h2>
+ * {@code getQueuedMessages} pages this queue's rows ordered by {@code (lane, shard, sequence)}. There
+ * is no global arrival order to report — each shard carries its own sequence — so what it guarantees
+ * is the property paging needs: a row is never returned on two pages and never skipped between them.
+ * {@code PostgresqlDurableQueues} answers the same call in id order, which is equally not arrival
+ * order, so neither engine's listing should be shown to an operator as "oldest first".
+ * <p>
+ * This used to throw, on the grounds that serving it meant scans and a merge in an order nobody asked
+ * for. The scans are real and the order caveat is real; refusing was still the wrong answer, because
+ * the admin console's message browser is built on this call and returned HTTP 500 against any
+ * application running its {@code DurableQueues} on this engine.
+ *
  * <h2>What this adapter does not serve</h2>
  * Every one of these throws {@link UnsupportedOperationException} with its reason. None is a
  * placeholder for later work — each is a structural difference between the two engines:
@@ -83,10 +95,7 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  *         <td>The engine has its own chain ({@code MessageQueueInterceptor}). Accepting a
  *             {@code DurableQueuesInterceptor} and never running it would make an added tracing
  *             interceptor produce silence instead of spans.</td></tr>
- *     <tr><td>{@code getQueuedMessages}</td>
- *         <td>Paging a queue in a global sort order. Reads here are per shard from a cursor; serving
- *             this means {@code shardCount} scans and a merge, in an order that is not the one asked
- *             for.</td></tr>
+
  *     <tr><td>{@code queryForMessagesSoonReadyForDelivery}</td>
  *         <td>Same reason.</td></tr>
  *     <tr><td>{@code hasOrderedMessageQueuedForKey}</td>
@@ -419,10 +428,17 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
     @Override
     public List<QueuedMessage> getQueuedMessages(GetQueuedMessages operation) {
-        throw new UnsupportedOperationException(
-                "Paging a queue in a global sort order. Reads here are per shard from a cursor, so serving this means "
-                + "shardCount scans and a merge, in an order that is not the one asked for. Use the queue's own "
-                + "shard_queue_unordered / shard_queue_ordered views to inspect a backlog.");
+        requireNonNull(operation, "No operation provided");
+        var queueName = operation.getQueueName();
+        var offset    = (int) Math.min(Integer.MAX_VALUE, operation.getStartIndex());
+        var pageSize  = (int) Math.min(Integer.MAX_VALUE, operation.getPageSize());
+        return onQueue(queueName, "read the queued messages of '" + queueName + "'",
+                       () -> resolve(queueName).messages(offset, pageSize,
+                                                         operation.getQueueingSortOrder() != QueueingSortOrder.DESC)
+                                               .stream()
+                                               .map(message -> toQueuedMessage(queueName, message))
+                                               .<QueuedMessage>map(message -> message)
+                                               .toList());
     }
 
     @Override
