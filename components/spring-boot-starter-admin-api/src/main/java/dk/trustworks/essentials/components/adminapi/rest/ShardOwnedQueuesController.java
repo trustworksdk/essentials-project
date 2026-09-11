@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest;
+package dk.trustworks.essentials.components.adminapi.rest;
 
-import dk.trustworks.essentials.components.adminapi.rest.*;
 import dk.trustworks.essentials.components.adminapi.rest.dto.DeleteResult;
-import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest.ShardOwnedQueueRequests.*;
+import dk.trustworks.essentials.components.adminapi.rest.ShardOwnedQueueRequests.*;
 import dk.trustworks.essentials.components.queue.shardowned.api.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.springframework.web.bind.annotation.*;

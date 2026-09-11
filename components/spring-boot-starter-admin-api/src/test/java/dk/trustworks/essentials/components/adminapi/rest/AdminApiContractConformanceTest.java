@@ -48,7 +48,8 @@ class AdminApiContractConformanceTest {
             AggregateLifecycleController.class,
             AggregateLifecycleStatisticsController.class,
             AggregateArchiveController.class,
-            AggregateArchiveStatisticsController.class);
+            AggregateArchiveStatisticsController.class,
+            ShardOwnedQueuesController.class);
 
     private static final String CONTRACT_RESOURCE = "/openapi/essentials-admin-api.yaml";
 
@@ -69,8 +70,9 @@ class AdminApiContractConformanceTest {
     /** Keeps the comparisons below from passing vacuously if either side fails to be discovered. */
     @Test
     void both_sides_of_the_comparison_are_actually_discovered() {
-        assertThat(contractOperations()).hasSize(40);
-        assertThat(implementedOperations()).hasSize(40);
+        // 40 before the shard-owned queue engine was published; its nine operations bring it to 49.
+        assertThat(contractOperations()).hasSize(49);
+        assertThat(implementedOperations()).hasSize(49);
     }
 
     @Test

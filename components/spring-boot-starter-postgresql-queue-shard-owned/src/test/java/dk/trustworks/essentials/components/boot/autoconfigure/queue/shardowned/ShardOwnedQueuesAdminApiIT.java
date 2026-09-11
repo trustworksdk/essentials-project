@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
-import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest.ShardOwnedQueuesController;
 import dk.trustworks.essentials.components.queue.shardowned.*;
 import dk.trustworks.essentials.components.queue.shardowned.api.*;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
@@ -84,13 +83,18 @@ class ShardOwnedQueuesAdminApiIT {
 
     // ------------------------------------------------------------ the wiring
 
+    /**
+     * This starter contributes the API bean; the controller over it lives in
+     * {@code spring-boot-starter-admin-api} with every other admin controller and is registered there
+     * {@code @ConditionalOnBean(ShardOwnedQueuesApi.class)}. So what this module owns, and therefore
+     * tests, is that the bean the controller is conditional on appears.
+     */
     @Test
-    void the_endpoints_appear_when_the_admin_api_is_present() {
+    void the_api_bean_appears_when_the_admin_api_is_present() {
         runner().withUserConfiguration(AdminApiStubConfiguration.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasSingleBean(ShardOwnedQueuesApi.class);
-                    assertThat(context).hasSingleBean(ShardOwnedQueuesController.class);
                 });
     }
 
@@ -105,7 +109,6 @@ class ShardOwnedQueuesAdminApiIT {
         runner().run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).doesNotHaveBean(ShardOwnedQueuesApi.class);
-            assertThat(context).doesNotHaveBean(ShardOwnedQueuesController.class);
             assertThat(context).hasSingleBean(ShardOwnedQueueFactory.class);
         });
     }

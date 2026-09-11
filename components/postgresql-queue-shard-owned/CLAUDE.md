@@ -157,16 +157,21 @@ Every message is assigned to a shard at enqueue. Each shard has exactly one owni
 
 `LLM/LLM-postgresql-queue-shard-owned.md` — configuration reference, sizing formulas, and the two "how not to kill the database / the application" sections. Keep the formulas there in step with `ShardOwnedMultiQueueCostIT`; they are measured, not asserted.
 
-## Auto-configuration ordering — two classes, and it has to be two
+## Auto-configuration ordering — two classes, and the slot between them
 
-- **`ShardOwnedQueueAutoConfiguration` is ordered BEFORE `EssentialsComponentsConfiguration`** so its `DurableQueues` bean can displace that starter's `@ConditionalOnMissingBean` default. That is the whole mechanism behind `durable-queues-enabled`.
-- **`ShardOwnedQueuesAdminApiAutoConfiguration` is ordered AFTER `EssentialsAdminApiAutoConfiguration`**, because its beans are `@ConditionalOnBean` and that condition is evaluated in auto-configuration order — look for a bean before it is defined and the whole thing silently backs off.
-- **They cannot be one class.** `EssentialsAdminApiAutoConfiguration` is itself `after` `EssentialsComponentsConfiguration`, so "before components" and "after admin-api" is a cycle. Merging them is what broke the admin endpoints once: adding the `beforeName` moved the nested admin config earlier, its `@ConditionalOnBean` found nothing, and every `/shard-owned-queues` path 404'd with nothing logged. A `@ConditionalOnBean` that backs off is invisible — there is no failure, only absence.
+Three beans, three different ordering needs, and every failure here is silent: a `@ConditionalOnBean` that backs off logs nothing and leaves the endpoints 404ing.
+
+| Class | Ordered | Because |
+|---|---|---|
+| `ShardOwnedQueueAutoConfiguration` | **before** `EssentialsComponentsConfiguration` | its `DurableQueues` bean must displace that starter's `@ConditionalOnMissingBean` default — the whole mechanism behind `durable-queues-enabled` |
+| `ShardOwnedQueuesAdminApiAutoConfiguration` | **after** `EssentialsComponentsConfiguration`, **before** `EssentialsAdminApiAutoConfiguration` | it is `@ConditionalOnBean(EssentialsSecurityProvider)`, declared by the former; and the latter registers the controller `@ConditionalOnBean(ShardOwnedQueuesApi)`, declared by it |
+
+- **They cannot be one class.** `EssentialsAdminApiAutoConfiguration` is itself after `EssentialsComponentsConfiguration`, so "before components" and "after admin-api" is a cycle. Merging them broke the admin endpoints once: adding the `beforeName` moved the nested admin config earlier, its `@ConditionalOnBean` found nothing, and every `/shard-owned-queues` path 404'd. Splitting them the wrong way broke it a second time, in the opposite direction.
 - **A test using `ApplicationContextRunner` must list BOTH.** `AutoConfigurations.of(...)` is explicit; the imports file is not consulted.
-- **The admin API's `@RestControllerAdvice` does not reach this starter's controller.** It is `basePackageClasses = AdminApiPaths.class`, so it covers the admin API starter's own `rest` package only — a 404 arrived as a 500 and an authorization failure would have too. `ShardOwnedAdminApiExceptionHandler` **extends** it with this package's scope, so there is one definition of the mapping and it cannot drift.
 
 ## Admin API gotchas
 
+- **`ShardOwnedQueuesController` lives in `spring-boot-starter-admin-api`, with every other admin controller.** That is the convention's third place, and publishing the engine is what made it legal. It matters beyond tidiness: `AdminApiExceptionHandler` is `@RestControllerAdvice(basePackageClasses = AdminApiPaths.class)`, so while the controller sat in the engine's own starter *no* error mapping reached it — a 404 arrived as a 500, and an authorization failure would have been a 500 rather than a 403. Registered `@ConditionalOnBean(ShardOwnedQueuesApi.class)`, the same shape CDC and the event store use, so an application that does not wire the engine never gets it. `AdminApiContractConformanceTest` covers these nine operations now; its count is 49.
 - **`MessageQueue` is the engine; `ShardOwnedQueuesApi` is the operator surface.** Same layering as `DurableQueuesApi` over `DurableQueues`. The API authorises, resolves the name, delegates and converts — it must contain no queue logic, or there are two implementations to keep correct and the divergence surfaces first on the path nobody exercises.
 - **`MessageId` had no text form**, which is why by-id operations were reachable only from Java. `toString()`/`parse` render `<lane>-<shard>-<seq>` (`u-3-1042`) — one character for the lane so it fits a URL path segment unescaped, and the same triple the tables use so it can be pasted into psql. By-id *lookup* was never missing; naming a message outside Java was.
 - **A malformed id must be an `IllegalArgumentException`.** An unguarded `split` throws `ArrayIndexOutOfBoundsException`, which the admin API's exception handler maps to 500 — reporting a caller's typo as a server fault.

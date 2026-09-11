@@ -37,30 +37,42 @@ import org.springframework.web.bind.annotation.RestController;
  * of the classes it needs. An application that already serves the admin API gets these endpoints
  * by adding no configuration at all.
  *
- * <h2>Why the controller is here and not in the admin API starter</h2>
- * It was here because the engine was unpublished, and a controller in a published artifact cannot
- * depend on one that reaches no repository. That reason is gone — the engine is published and its
- * operations are declared in {@code EssentialsAdminApiSpec}, so these endpoints do appear in the
- * generated OpenAPI document. What keeps the controller in this starter now is narrower: an
- * application that does not use this engine should not carry its controller, and the conditions
- * below are what express that. Moving it across would make the admin API starter depend on the
- * engine unconditionally.
- *
- * <h2>Why this is a separate auto-configuration</h2>
- * Its beans are declared {@code @ConditionalOnBean}, and that condition is evaluated in
- * auto-configuration order: the beans it looks for must already be defined or it silently backs off
- * and the endpoints 404 with nothing logged. It therefore has to be ordered <em>after</em>
- * {@code EssentialsAdminApiAutoConfiguration}.
+ * <h2>What stayed here and what moved</h2>
+ * The {@code ShardOwnedQueuesApi} and the Jackson module are engine-side and stay. The controller
+ * moved to {@code spring-boot-starter-admin-api}, where every other admin controller lives and where
+ * the convention says it belongs — publishing the engine is what made that legal. It is registered
+ * there {@code @ConditionalOnBean(ShardOwnedQueuesApi.class)}, so it appears only where this class
+ * has declared that bean, which is the same shape CDC and the event store already use.
  * <p>
- * {@link ShardOwnedQueueAutoConfiguration} cannot carry it, because that one is ordered
- * <em>before</em> {@code EssentialsComponentsConfiguration} so its {@code DurableQueues} bean can
- * displace the default — and the admin API auto-configuration is itself after
- * {@code EssentialsComponentsConfiguration}, so one class cannot satisfy both. Merging them is what
- * broke these endpoints once already.
+ * That also fixed an error-mapping fault: {@code AdminApiExceptionHandler} is package-scoped to the
+ * admin API starter's own {@code rest} package, so while the controller sat outside it a 404 reached
+ * the client as a 500. A subclass re-scoping the advice was the stopgap; moving the controller
+ * removes the need for one.
+ *
+ * <h2>Why this is a separate auto-configuration, and where it sits</h2>
+ * Its beans are {@code @ConditionalOnBean}, and that condition is evaluated in auto-configuration
+ * order: look for a bean before it is defined and the whole class silently backs off. So this one
+ * must run <em>after</em> {@code EssentialsComponentsConfiguration}, which declares the
+ * {@code EssentialsSecurityProvider}, and <em>before</em> {@code EssentialsAdminApiAutoConfiguration},
+ * which registers the controller {@code @ConditionalOnBean} of the API bean declared here.
+ * <p>
+ * {@link ShardOwnedQueueAutoConfiguration} cannot carry it, because that one is ordered <em>before</em>
+ * {@code EssentialsComponentsConfiguration} so its {@code DurableQueues} bean can displace the
+ * default. One class cannot be both before and after the same configuration.
+ * <p>
+ * Both halves of this have already failed once in production-shaped ways, and neither failed loudly:
+ * a {@code @ConditionalOnBean} that backs off logs nothing and simply leaves the endpoints returning
+ * 404.
  */
-@AutoConfiguration(afterName = {
-        "dk.trustworks.essentials.components.boot.autoconfigure.admin.api.EssentialsAdminApiAutoConfiguration",
-        "dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.ShardOwnedQueueAutoConfiguration"})
+@AutoConfiguration(
+        afterName = {
+                // EssentialsSecurityProvider, which the Api bean below is @ConditionalOnBean of.
+                "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration",
+                "dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.ShardOwnedQueueAutoConfiguration"},
+        beforeName =
+                // The admin API registers ShardOwnedQueuesController @ConditionalOnBean of the Api
+                // bean declared here, so it has to exist by the time that class is evaluated.
+                "dk.trustworks.essentials.components.boot.autoconfigure.admin.api.EssentialsAdminApiAutoConfiguration")
 @ConditionalOnClass({ShardOwnedQueue.class, RestController.class, AdminApiPrincipalResolver.class})
 @ConditionalOnProperty(prefix = "essentials.shard-owned-queue", name = "enabled",
                        havingValue = "true", matchIfMissing = true)
@@ -74,27 +86,6 @@ public class ShardOwnedQueuesAdminApiAutoConfiguration {
     public ShardOwnedQueuesApi shardOwnedQueuesApi(EssentialsSecurityProvider securityProvider,
                                                    ShardOwnedQueueFactory factory) {
         return new DefaultShardOwnedQueuesApi(securityProvider, factory);
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnBean({ShardOwnedQueuesApi.class, AdminApiPrincipalResolver.class})
-    public ShardOwnedQueuesController shardOwnedQueuesController(ShardOwnedQueuesApi shardOwnedQueuesApi,
-                                                                 AdminApiPrincipalResolver principalResolver) {
-        log.info("Shard-owned queue admin endpoints are served under the Essentials admin API base path");
-        return new ShardOwnedQueuesController(shardOwnedQueuesApi, principalResolver);
-    }
-
-    /**
-     * Without this the admin API's error mapping does not reach this starter's controller, because
-     * that advice is package-scoped to the admin API starter. A 404 then arrives as a 500, which the
-     * console reads as a failure rather than as "already delivered".
-     */
-    @Bean
-    @ConditionalOnMissingBean
-    @ConditionalOnBean(AdminApiPrincipalResolver.class)
-    public ShardOwnedAdminApiExceptionHandler shardOwnedAdminApiExceptionHandler() {
-        return new ShardOwnedAdminApiExceptionHandler();
     }
 
     /**

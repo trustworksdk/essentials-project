@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest;
+package dk.trustworks.essentials.components.adminapi.rest;
 
 import java.time.Duration;
 
