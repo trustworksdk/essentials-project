@@ -340,6 +340,17 @@ public final class OpenApiSpecGenerator {
                     .description("Number of messages removed by a purge.")
                     .addProperty("purgedCount", new IntegerSchema().format("int32"))
                     .addRequiredItem("purgedCount"));
+            schemas.put("MessageOperationResult", new ObjectSchema()
+                    .description("Whether a shard-owned queue message operation took effect. False is a "
+                                 + "normal answer, not an error: the message may already have been "
+                                 + "delivered, deleted or moved by its owner.")
+                    .addProperty("applied", new BooleanSchema())
+                    .addRequiredItem("applied"));
+            schemas.put("ShardOwnedPurgeResult", new ObjectSchema()
+                    .description("Rows removed by a shard-owned queue purge, across both lanes and the "
+                                 + "dead-letter table. Distinct from PurgeResult, which is int32.")
+                    .addProperty("purgedCount", new IntegerSchema().format("int64"))
+                    .addRequiredItem("purgedCount"));
             schemas.put("QueueNameResult", new ObjectSchema()
                     .description("A resolved queue name.")
                     .addProperty("queueName", new StringSchema())
@@ -505,6 +516,14 @@ public final class OpenApiSpecGenerator {
             ok(owner.ref("PurgeResult"), "Number of messages purged.");
         }
 
+        void responseMessageOperation() {
+            ok(owner.ref("MessageOperationResult"), "Whether the operation took effect.");
+        }
+
+        void responseShardOwnedPurge() {
+            ok(owner.ref("ShardOwnedPurgeResult"), "Number of messages removed.");
+        }
+
         void responseQueueNameOptional() {
             okOrNotFound(owner.ref("QueueNameResult"), "The resolved queue name.");
         }
@@ -551,9 +570,24 @@ public final class OpenApiSpecGenerator {
 
         private ApiResponses builtResponses;
 
+        /**
+         * Overrides the operationId, which defaults to the SPI method name.
+         * <p>
+         * OpenAPI requires operationIds to be unique across the whole document, and two SPIs may
+         * legitimately name a method the same thing — {@code getQueueNames} and {@code deleteMessage}
+         * exist on both the durable-queues and the shard-owned-queues contracts. The default stays
+         * the method name so existing ids never move; a colliding operation names itself instead.
+         */
+        OperationSpec operationId(String operationId) {
+            this.operationId = operationId;
+            return this;
+        }
+
+        private String operationId;
+
         private Operation toOperation() {
             var operation = new Operation()
-                    .operationId(methodName)
+                    .operationId(operationId != null ? operationId : methodName)
                     .summary(summary)
                     .addTagsItem(tag)
                     .responses(builtResponses);

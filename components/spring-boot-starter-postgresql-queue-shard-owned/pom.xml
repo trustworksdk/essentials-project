@@ -37,7 +37,7 @@
 
     <properties>
         <!-- Follows the engine it configures: the engine is unpublished, so a starter for it must be. -->
-        <maven.deploy.skip>true</maven.deploy.skip>
+        <!-- PUBLISHED, following the engine it configures. -->
     </properties>
 
     <dependencies>

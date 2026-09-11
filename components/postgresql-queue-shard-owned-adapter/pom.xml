@@ -44,7 +44,19 @@
           a partial implementation of a stable interface would be a worse promise than publishing a
           moving one.
         -->
-        <maven.deploy.skip>true</maven.deploy.skip>
+        <!--
+             PUBLISHED, and the objection this flag used to carry is worth restating rather than
+             deleting: a partial implementation of a stable interface is a worse promise than a
+             moving one. It is published anyway for a concrete reason — the shard-owned starter
+             depends on it to serve essentials.shard-owned-queue.durable-queues-enabled, and making
+             that dependency optional turns the flag into a silent no-op for anyone who sets it
+             without adding the jar.
+
+             The partiality is therefore made loud instead of avoided. Every unsupported operation
+             throws with its reason rather than returning an approximation, ShardOwnedDurableQueues'
+             javadoc tables them, and the property that selects this implementation defaults to off.
+             getQueuedMessages, the one an admin console actually needs, is now served.
+        -->
     </properties>
 
     <dependencies>
