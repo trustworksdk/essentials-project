@@ -486,16 +486,37 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                              .build();
         orderedConsumer.configureOrdered((key, payload, payloadType) -> invoke(handler, key, payload, payloadType),
                                          settings, options.maxShards(), policy);
+        // Registration, the started flag and the two start() calls are ONE critical section, and the
+        // same lock start() and stop() take. Guarding only the list left two holes.
+        //
+        // A stop() interleaving after the add and before the starts stopped the new consumers while
+        // they were still unstarted — a no-op — and stopped every PREVIOUSLY registered one for real,
+        // after which this method set started back to true and started only its own pair. The queue
+        // then reported started with an earlier subscription silently dead, and start() could not
+        // recover it: its compareAndSet sees true and returns.
+        //
+        // And a start() that throws must leave nothing registered. That is not hypothetical on the
+        // ordered lane — startOrdered begins with verifyWatermarkPrerequisites, so a database that
+        // hides backend_xid fails here by design. Registering first meant the failure left a RUNNING
+        // unordered consumer nobody had a handle to, and a caller retrying consume() took the next
+        // subscription index, so the process registered as two instances and fairShare stranded half
+        // of both lanes — the exact failure the per-subscription identity below exists to avoid.
+        //
+        // Calling consume() starts the queue if it was not already started, which is what every
+        // caller of this contract expects and what the tests rely on.
         synchronized (consumers) {
+            try {
+                unorderedConsumer.start();
+                orderedConsumer.start();
+            } catch (RuntimeException e) {
+                unorderedConsumer.stop();
+                orderedConsumer.stop();
+                throw e;
+            }
             consumers.add(unorderedConsumer);
             consumers.add(orderedConsumer);
+            started.set(true);
         }
-        // Configure first, then start, so a failure to lease leaves nothing half-registered. Calling
-        // consume() starts the queue if it was not already started, which is what every caller of
-        // this contract expects and what the tests rely on.
-        started.set(true);
-        unorderedConsumer.start();
-        orderedConsumer.start();
 
         return new Subscription() {
             @Override
@@ -699,10 +720,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     @Override
     public void start() {
-        if (!started.compareAndSet(false, true)) {
-            return;
-        }
+        // The flag flips INSIDE the lock, with consume() and stop(). Flipping it first left a window
+        // in which stop() had already declared the queue stopped but had not stopped anything, so a
+        // concurrent consume() could observe the flag, set it back, and leave the two states
+        // disagreeing about which consumers were running.
         synchronized (consumers) {
+            if (!started.compareAndSet(false, true)) {
+                return;
+            }
             consumers.forEach(ShardOwnedQueue::start);
         }
     }
@@ -717,10 +742,10 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      */
     @Override
     public void stop() {
-        if (!started.compareAndSet(true, false)) {
-            return;
-        }
         synchronized (consumers) {
+            if (!started.compareAndSet(true, false)) {
+                return;
+            }
             consumers.forEach(ShardOwnedQueue::stop);
         }
     }

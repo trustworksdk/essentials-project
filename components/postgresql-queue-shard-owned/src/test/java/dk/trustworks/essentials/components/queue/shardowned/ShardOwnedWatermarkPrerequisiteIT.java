@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.queue.shardowned;
 
 import com.zaxxer.hikari.*;
+import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
@@ -137,6 +138,76 @@ class ShardOwnedWatermarkPrerequisiteIT {
             statement.execute("GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO " + role);
         }
         return pool(role, "probe");
+    }
+
+    /**
+     * A {@code consume()} that fails part-way must leave nothing registered and nothing running.
+     * <p>
+     * {@code consume()} builds two consumers, one per lane, and starts them in order. The ordered one
+     * starts with {@code verifyWatermarkPrerequisites}, so on a database that hides {@code backend_xid}
+     * the second start throws after the first has already leased shards — which makes this the natural
+     * place to pin the failure path.
+     * <p>
+     * It used to register both consumers before starting either. The throw then escaped with the
+     * unordered consumer <em>running</em>, holding leases, and reachable by nobody: {@code consume()}
+     * returns the only handle and it never returned. A caller retrying — the obvious response to a
+     * start-up failure — took the next subscription index, so one process registered as two instances,
+     * and {@code fairShare} then held each of them to half the shards of a cluster that did not exist.
+     */
+    @Test
+    void a_failed_consume_leaves_nothing_running() throws Exception {
+        try (var appRole = ordinaryRole("queue_app_halfstart")) {
+            ShardOwnedSchema.recreate(superuser);
+            ShardOwnedSchema.registerQueue(superuser, (short) 1, 4);
+            grantTables("queue_app_halfstart");
+            revokeStatActivity();
+
+            var queue = PostgresqlMessageQueue.builder()
+                                              .setDataSource(appRole)
+                                              .setQueueId((short) 1)
+                                              .setShardCount(4)
+                                              .setInstanceId("halfstart-1")
+                                              .build();
+
+            assertThatThrownBy(() -> queue.consume((key, payload, payloadType) -> {
+            }, ConsumerOptions.defaults()))
+                    .as("the ordered lane's probe must fail the whole subscription")
+                    .hasStackTraceContaining("pg_read_all_stats");
+
+            assertThat(queue.isStarted())
+                    .as("a subscription that threw must not leave the queue reporting started")
+                    .isFalse();
+            assertThat(ownedLeases())
+                    .as("the unordered consumer started before the ordered one threw; it must not "
+                        + "still be holding leases that no handle can release")
+                    .isZero();
+
+            // The retry a caller actually makes. Without the rollback this registered a SECOND
+            // instance id, which is what turned a start-up failure into stranded shards.
+            assertThatThrownBy(() -> queue.consume((key, payload, payloadType) -> {
+            }, ConsumerOptions.defaults()))
+                    .hasStackTraceContaining("pg_read_all_stats");
+            assertThat(liveInstances())
+                    .as("retrying a failed consume must not accumulate instances")
+                    .isLessThanOrEqualTo(1);
+        }
+    }
+
+    private int ownedLeases() throws Exception {
+        return countOf("SELECT count(*) FROM shard_queue_lease WHERE owner IS NOT NULL");
+    }
+
+    private int liveInstances() throws Exception {
+        return countOf("SELECT count(*) FROM shard_queue_instance");
+    }
+
+    private int countOf(String sql) throws Exception {
+        try (var connection = superuser.getConnection();
+             var statement = connection.createStatement();
+             var resultSet = statement.executeQuery(sql)) {
+            resultSet.next();
+            return resultSet.getInt(1);
+        }
     }
 
     private HikariDataSource pool(String user, String password) {
