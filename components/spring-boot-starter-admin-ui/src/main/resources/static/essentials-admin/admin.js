@@ -773,6 +773,35 @@ function closeDialog() {
 }
 
 const actions = {
+    shardRetry: (id) => ({
+        title: 'Retry now?', danger: false, confirmLabel: 'Retry',
+        body: `<p>Makes <code class="mono">${esc(id)}</code> visible again immediately, ahead of whatever backoff it
+           is waiting out. The attempt still counts against the redelivery policy's budget.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}/retry`, { method: 'POST' })
+    }),
+    shardDlq: (id) => ({
+        title: 'Mark as dead letter?', danger: false, confirmLabel: 'Mark as dead letter',
+        body: `<p>Stops delivery attempts for <code class="mono">${esc(id)}</code> and parks it. Reversible.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}/mark-as-dead-letter`, { method: 'POST' })
+    }),
+    shardResurrect: (id) => ({
+        title: 'Resurrect dead-letter message', danger: false, confirmLabel: 'Resurrect',
+        body: `<p>Returns <code class="mono">${esc(id)}</code> to its lane. It re-enters at a fresh sequence, so
+           <strong>its id changes</strong> — the old one no longer addresses it.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}/resurrect`, { method: 'POST' })
+    }),
+    shardDelete: (id) => ({
+        title: 'Delete message?', danger: true, confirmLabel: 'Delete message',
+        body: `<p>Permanently removes <code class="mono">${esc(id)}</code>. The payload is not recoverable
+           afterwards — copy it from the detail drawer first if it may be needed.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    }),
+    shardPurge: (name) => ({
+        title: 'Purge queue?', danger: true, confirmLabel: 'Purge queue',
+        body: `<p>Deletes every message in <code class="mono">${esc(name)}</code> — both lanes and the dead-letter
+           table. Not recoverable.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(name)}/messages`, { method: 'DELETE' })
+    }),
     release: (name) => ({
         title: 'Release fenced lock?', danger: true, confirmLabel: 'Release lock',
         body: `<p>Releases <code class="mono">${esc(name)}</code>. Whichever instance holds it loses it, and another may
@@ -1162,10 +1191,177 @@ views.aggregateLookup = async () => {
     ${archivedDetailCard}`;
 };
 
+
+/* ── Shard-owned queues ──────────────────────────────────────────────────────────────────────
+   A different engine with a different contract, so a separate view rather than a tab on the
+   durable-queues one. Two things it shows that the other cannot, and one it cannot show:
+
+   OWNERSHIP is the headline, not depth. Every shard has exactly one owning consumer, and the
+   failure this engine actually has is a shard nobody owns — messages routed there are never
+   delivered while depth looks merely busy. unownedShards is therefore the tile that turns red;
+   a deep queue with every shard owned is a working queue under load.
+
+   The two LANES are reported apart because they are separate owners with separate unit spaces:
+   the unordered lane spans shardCount, the ordered lane its own fixed routing space, so a single
+   combined figure would hide which half is unserved.
+
+   There is no "browse queued messages" list. The engine reads per shard from a cursor and offers
+   no listing of live messages, only dead letters and lookup by id — so the view offers exactly
+   that rather than a page that would have to invent an order. */
+let shardOwnedState = { queue: null };
+
+const laneBar = (owned, total) => {
+    const pct = total > 0 ? Math.round((owned / total) * 100) : 0;
+    const tone = owned === total ? 'good' : owned === 0 ? 'critical' : 'warning';
+    return `<span class="chip">${owned}/${total}</span> ${badge(tone, `${pct}%`)}`;
+};
+
+views.shardOwnedQueues = async () => {
+    let names;
+    try {
+        names = await api('/shard-owned-queues');
+    } catch (e) {
+        return card('Shard-owned queues', errorState(e, 'essentials_queue_reader'), 'GET /shard-owned-queues', true);
+    }
+    if (!names.length) {
+        return card('Shard-owned queues',
+            `<div class="empty">No shard-owned queues are registered. A queue is registered by name with a
+             shard count before it can be consumed — this engine will not invent one.</div>`,
+            'GET /shard-owned-queues', true);
+    }
+
+    if (!shardOwnedState.queue || !names.includes(shardOwnedState.queue)) shardOwnedState.queue = names[0];
+    const q = shardOwnedState.queue;
+
+    const settled = await Promise.allSettled([
+        api(`/shard-owned-queues/${encodeURIComponent(q)}/status`),
+        api(`/shard-owned-queues/${encodeURIComponent(q)}/dead-letter-messages?offset=0&limit=100`)
+    ]);
+    const [status, deadLetters] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+
+    const dlqRow = (m) => `<tr data-shard-msg="${esc(m.id)}">
+      <td><button class="link" data-shard-msg="${esc(m.id)}">${esc(m.id)}</button></td>
+      <td>${m.lane === 'ordered' ? badge('neutral', 'ordered') : badge('neutral', 'unordered')}</td>
+      <td class="mono">${m.key ? esc(m.key) : nil()}</td>
+      <td class="truncate mono">${m.payload == null
+            ? `<span class="nil" title="Requires essentials_queue_payload_reader">redacted</span>`
+            : `<button class="link" data-shard-msg="${esc(m.id)}" title="View full payload">${esc(m.payload)}</button>`}</td>
+      <td>${ts(m.enqueuedAt)}</td>
+      <td class="num">${m.attempts}</td>
+      <td class="truncate">${m.lastError ? badge('serious', m.lastError) : nil()}</td>
+      <td class="actions">
+        <button class="btn btn-sm" data-act="shardResurrect" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Resurrect</button>
+        <button class="btn btn-sm btn-danger" data-act="shardDelete" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Delete</button>
+      </td>
+    </tr>`;
+
+    const cols = [
+        { label: 'Message id' }, { label: 'Lane' }, { label: 'Key' }, { label: 'Payload' },
+        { label: 'Enqueued' }, { label: 'Attempts', num: true }, { label: 'Last error' },
+        { label: '', width: '170px', sticky: true }
+    ];
+
+    const ownership = status ? `
+      <table class="table">
+        <thead><tr><th>Lane</th><th>Owned</th><th>Depth</th></tr></thead>
+        <tbody>
+          <tr><td>Unordered</td><td>${laneBar(status.unorderedShardsOwned, status.shardCount)}</td>
+              <td class="num">${num(status.unorderedDepth)}</td></tr>
+          <tr><td>Ordered</td><td>${laneBar(status.orderedShardsOwned, status.orderedUnits)}</td>
+              <td class="num">${num(status.orderedDepth)}</td></tr>
+        </tbody>
+      </table>`
+        : errorState(settled[0].reason, 'essentials_queue_reader');
+
+    return `
+    <div class="toolbar">
+      <label>Queue
+        <select id="shardQueueSelect">${names.map((n) => `<option ${n === q ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
+      </label>
+      <label><input type="text" id="shardMessageLookup" placeholder="Find by message id (u-3-1042)" size="28"></label>
+      <div class="spacer"></div>
+      <button class="btn btn-sm btn-danger" data-act="shardPurge" data-name="${esc(q)}" ${CAN.writeQueues ? '' : 'disabled'}>Purge queue</button>
+    </div>
+
+    <div class="kpi-row">
+      ${tile('Unowned units', status ? num(status.unownedShards) : nil(),
+             'Messages routed here are never delivered', status ? status.unownedShards > 0 : false)}
+      ${tile('Unordered depth', status ? num(status.unorderedDepth) : nil())}
+      ${tile('Ordered depth', status ? num(status.orderedDepth) : nil())}
+      ${tile('Dead letters', status ? num(status.deadLetteredDepth) : nil(), null,
+             status ? status.deadLetteredDepth > 0 : false)}
+      ${tile('Instances', status ? `${num(status.liveInstances)}` : nil(),
+             status ? `of at most ${status.maxInstances}` : null)}
+    </div>
+
+    ${card('Ownership', ownership, 'GET /shard-owned-queues/{queueName}/status', true)}
+
+    ${card('Dead-letter messages',
+        deadLetters ? table(cols, deadLetters.map(dlqRow), { empty: 'No dead-letter messages' })
+                    : errorState(settled[1].reason, 'essentials_queue_reader'),
+        'GET /shard-owned-queues/{queueName}/dead-letter-messages', true)}`;
+};
+
+
+/* The shard-owned engine addresses a message by (queueName, messageId): a MessageId is
+   (lane, shard, sequence) and sequences are per shard, so "u-0-1" exists in every queue. There is
+   deliberately no resolve-queue-from-id endpoint to fall back on — the queue is part of the address,
+   not a convenience — so this drawer always takes both. */
+async function openShardOwnedDrawer(queueName, id) {
+    const drawer = document.getElementById('drawer');
+    drawer.innerHTML = `<div class="drawer-head"><div class="drawer-title" id="drawerTitle">Message detail</div>
+      <button class="btn btn-sm" id="drawerClose">Close</button></div>
+      <div class="drawer-body">${loadingRows(4, ['60%', '90%', '40%', '70%'])}</div>`;
+    drawer.classList.add('is-open');
+    document.getElementById('scrim').classList.add('is-open');
+    document.querySelectorAll('tbody tr[data-shard-msg]').forEach((tr) => tr.classList.toggle('is-selected', tr.dataset.shardMsg === id));
+
+    let m;
+    try {
+        m = await api(`/shard-owned-queues/${encodeURIComponent(queueName)}/messages/${encodeURIComponent(id)}`);
+    } catch (e) {
+        drawer.querySelector('.drawer-body').innerHTML = errorState(e, 'essentials_queue_reader');
+        return;
+    }
+    drawerPayload = m.payload;
+
+    const kvItem = (k, v) => `<div class="kv-item"><span class="kv-key">${esc(k)}</span><span class="kv-val">${v}</span></div>`;
+    drawer.innerHTML = `<div class="drawer-head"><div class="drawer-title">Message detail</div>
+        <button class="btn btn-sm" id="drawerClose">Close</button></div>
+      <div class="drawer-body">
+        <div class="kv">
+          ${kvItem('Id', `<span class="mono">${esc(m.id)}</span>`)}
+          ${kvItem('Queue', esc(String(m.queueName)))}
+          ${kvItem('Lane', badge('neutral', esc(m.lane)))}
+          ${kvItem('Shard', String(m.shard))}
+          ${kvItem('Sequence', String(m.sequence))}
+          ${kvItem('Key', m.key ? `<span class="mono">${esc(m.key)}</span>` : nil())}
+          ${kvItem('Attempts', String(m.attempts))}
+          ${kvItem('Enqueued', ts(m.enqueuedAt))}
+          ${kvItem('Visible at', ts(m.visibleAt))}
+          ${kvItem('State', m.isDeadLetter ? badge('critical', 'Dead letter') : badge('neutral', 'Queued'))}
+          ${kvItem('Last error', m.lastError ? badge('serious', esc(m.lastError)) : nil())}
+        </div>
+        ${card('Payload', m.payload == null
+            ? `<div class="empty">Withheld — requires essentials_queue_payload_reader</div>`
+            : `<pre class="payload mono">${esc(m.payload)}</pre>
+               <button class="btn btn-sm" data-copy="1">Copy</button>`,
+            'GET /shard-owned-queues/{queueName}/messages/{messageId}', true)}
+        <div class="drawer-actions">
+          <button class="btn btn-sm" data-act="shardRetry" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Retry now</button>
+          ${m.isDeadLetter
+            ? `<button class="btn btn-sm" data-act="shardResurrect" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Resurrect</button>`
+            : `<button class="btn btn-sm" data-act="shardDlq" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Dead-letter</button>`}
+          <button class="btn btn-sm btn-danger" data-act="shardDelete" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Delete</button>
+        </div>
+      </div>`;
+}
+
 const titles = {
     overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
     locks: ['Fenced locks', 'Distributed locks held across service instances'],
     queues: ['Durable queues', 'Queued and dead-letter messages, delivery statistics'],
+    shardOwnedQueues: ['Shard-owned queues', 'Per-lane depth, shard ownership and dead letters'],
     scheduler: ['Scheduler', 'pg_cron jobs, run history and executor jobs'],
     subscriptions: ['Subscriptions', 'Event-store subscription resume points'],
     cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],
@@ -1325,6 +1521,7 @@ document.addEventListener('change', (e) => {
         return render('aggregateLookup');
     }
     if (e.target.id === 'queueSelect') { queueState.queue = e.target.value; render('queues'); }
+    if (e.target.id === 'shardQueueSelect') { shardOwnedState.queue = e.target.value; render('shardOwnedQueues'); }
     if (e.target.id === 'sortSelect') { queueState.sortOrder = e.target.value; render('queues'); }
 });
 
@@ -1339,6 +1536,13 @@ document.addEventListener('keydown', (e) => {
     aggregateState.generation = null;
     aggregateState.archivedGeneration = null;
     render('aggregateLookup');
+});
+
+document.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' || e.target.id !== 'shardMessageLookup') return;
+    const wanted = e.target.value.trim();
+    if (!wanted) return;
+    await openShardOwnedDrawer(shardOwnedState.queue, wanted);
 });
 
 document.addEventListener('keydown', async (e) => {
@@ -1371,6 +1575,11 @@ document.addEventListener('keydown', async (e) => {
 });
 
 document.addEventListener('click', (e) => {
+    const shardMsg = e.target.closest('[data-shard-msg]');
+    if (shardMsg && !e.target.closest('[data-act]')) {
+        openShardOwnedDrawer(shardOwnedState.queue, shardMsg.dataset.shardMsg);
+        return;
+    }
     const tab = e.target.closest('[data-qtab]');
     if (tab) { queueState.tab = tab.dataset.qtab; render('queues'); }
 });

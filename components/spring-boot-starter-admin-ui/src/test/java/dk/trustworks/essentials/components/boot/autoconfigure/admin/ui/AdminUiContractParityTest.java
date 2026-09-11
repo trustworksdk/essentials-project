@@ -66,7 +66,10 @@ class AdminUiContractParityTest {
     /** Keeps the comparisons below from passing vacuously. */
     @Test
     void both_sides_are_discovered() {
-        assertThat(contractPaths).hasSize(38);
+        // 38 before the shard-owned queue engine was published; its eight paths bring it to 46.
+        // A literal rather than a computed figure on purpose: it is a tripwire for the contract
+        // silently losing paths, which the two parity assertions below cannot see.
+        assertThat(contractPaths).hasSize(46);
         assertThat(calledPaths()).isNotEmpty();
     }
 

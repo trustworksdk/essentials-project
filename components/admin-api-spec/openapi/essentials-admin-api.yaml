@@ -3188,6 +3188,7 @@ components:
       - maxInstances
       - orderedDepth
       - orderedShardsOwned
+      - orderedUnits
       - shardCount
       - unorderedDepth
       - unorderedShardsOwned
@@ -3197,6 +3198,9 @@ components:
         queueName:
           $ref: "#/components/schemas/QueueName"
         shardCount:
+          type: integer
+          format: int32
+        orderedUnits:
           type: integer
           format: int32
         unorderedDepth:

@@ -1,6 +1,6 @@
 # postgresql-queue-shard-owned
 
-Shard-owned PostgreSQL durable queue engine. **Experimental — builds and tests with the reactor but is NOT published** (`maven.deploy.skip=true`), because the SPI is still moving.
+Shard-owned PostgreSQL durable queue engine. **Published** as of the release that added its admin console page — the `maven.deploy.skip` gate was the "No admin UI" gap, now closed. `MessageQueue` is therefore frozen contract: additive in minor, breaking only in a major. Widening it is no longer free; adding `messages(int, int, boolean)` already broke an implementor inside this repo.
 
 How it works: `docs/durable-queue-shard-owned.md`. Measurements: `docs/durable-queue-measurements.md`. Historical design proposal + defect log (what `§4.3`-style refs in source comments point at): `docs/archive/durable-queue-design-history.md`.
 
@@ -156,6 +156,14 @@ Every message is assigned to a shard at enqueue. Each shard has exactly one owni
 ## Consumer docs
 
 `LLM/LLM-postgresql-queue-shard-owned.md` — configuration reference, sizing formulas, and the two "how not to kill the database / the application" sections. Keep the formulas there in step with `ShardOwnedMultiQueueCostIT`; they are measured, not asserted.
+
+## Auto-configuration ordering — two classes, and it has to be two
+
+- **`ShardOwnedQueueAutoConfiguration` is ordered BEFORE `EssentialsComponentsConfiguration`** so its `DurableQueues` bean can displace that starter's `@ConditionalOnMissingBean` default. That is the whole mechanism behind `durable-queues-enabled`.
+- **`ShardOwnedQueuesAdminApiAutoConfiguration` is ordered AFTER `EssentialsAdminApiAutoConfiguration`**, because its beans are `@ConditionalOnBean` and that condition is evaluated in auto-configuration order — look for a bean before it is defined and the whole thing silently backs off.
+- **They cannot be one class.** `EssentialsAdminApiAutoConfiguration` is itself `after` `EssentialsComponentsConfiguration`, so "before components" and "after admin-api" is a cycle. Merging them is what broke the admin endpoints once: adding the `beforeName` moved the nested admin config earlier, its `@ConditionalOnBean` found nothing, and every `/shard-owned-queues` path 404'd with nothing logged. A `@ConditionalOnBean` that backs off is invisible — there is no failure, only absence.
+- **A test using `ApplicationContextRunner` must list BOTH.** `AutoConfigurations.of(...)` is explicit; the imports file is not consulted.
+- **The admin API's `@RestControllerAdvice` does not reach this starter's controller.** It is `basePackageClasses = AdminApiPaths.class`, so it covers the admin API starter's own `rest` package only — a 404 arrived as a 500 and an authorization failure would have too. `ShardOwnedAdminApiExceptionHandler` **extends** it with this package's scope, so there is one definition of the mapping and it cannot drift.
 
 ## Admin API gotchas
 

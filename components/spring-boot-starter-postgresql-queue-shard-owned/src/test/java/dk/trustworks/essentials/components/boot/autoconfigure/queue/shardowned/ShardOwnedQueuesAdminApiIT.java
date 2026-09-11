@@ -69,8 +69,13 @@ class ShardOwnedQueuesAdminApiIT {
 
     private ApplicationContextRunner runner() {
         return new ApplicationContextRunner()
+                // Both, because the admin beans live in their own auto-configuration: they are
+                // @ConditionalOnBean, so they have to be ordered after the admin API's, and the engine's
+                // own auto-configuration is ordered BEFORE EssentialsComponentsConfiguration so its
+                // DurableQueues bean can displace the default. One class cannot be both.
                 .withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class,
-                                                         ShardOwnedQueueAutoConfiguration.class))
+                                                         ShardOwnedQueueAutoConfiguration.class,
+                                                         ShardOwnedQueuesAdminApiAutoConfiguration.class))
                 .withPropertyValues("spring.datasource.url=" + postgres.getJdbcUrl(),
                                     "spring.datasource.username=" + postgres.getUsername(),
                                     "spring.datasource.password=" + postgres.getPassword(),
@@ -223,7 +228,7 @@ class ShardOwnedQueuesAdminApiIT {
         assertThat(mapper.writeValueAsString(List.of(QueueName.of("orders"), QueueName.of("shipments"))))
                 .isEqualTo("[\"orders\",\"shipments\"]");
         assertThat(mapper.writeValueAsString(new ApiShardOwnedQueueStatus(QueueName.of("orders"),
-                                                                          4, 1, 0, 0, 0, 0, 8, false, 0, 4)))
+                                                                          4, 64, 1, 0, 0, 0, 0, 68, false, 0, 64)))
                 .describedAs("nested in a DTO too, which is where it actually reaches a client")
                 .contains("\"queueName\":\"orders\"");
     }

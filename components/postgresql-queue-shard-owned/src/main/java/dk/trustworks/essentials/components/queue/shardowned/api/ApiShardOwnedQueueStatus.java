@@ -42,6 +42,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 public record ApiShardOwnedQueueStatus(QueueName queueName,
                                        int shardCount,
+                                       int orderedUnits,
                                        long unorderedDepth,
                                        long orderedDepth,
                                        long deadLetteredDepth,
@@ -58,6 +59,7 @@ public record ApiShardOwnedQueueStatus(QueueName queueName,
         requireNonNull(health, "No health provided");
         return new ApiShardOwnedQueueStatus(queueName,
                                             health.shardCount(),
+                                            health.orderedUnits(),
                                             depth.unordered(),
                                             depth.ordered(),
                                             depth.deadLettered(),
