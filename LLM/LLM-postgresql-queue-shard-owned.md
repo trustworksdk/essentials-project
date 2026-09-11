@@ -14,6 +14,7 @@
 ## TOC
 - [The one idea](#the-one-idea)
 - [Getting started](#getting-started)
+- [Prerequisites](#prerequisites)
 - [Configuration reference](#configuration-reference)
 - [Sizing and scaling](#sizing-and-scaling)
 - [How to not kill the database](#how-to-not-kill-the-database)
@@ -92,6 +93,18 @@ try (var connection = dataSource.getConnection()) {
 
 **If you construct a `ShardOwnedQueue` without a runtime it borrows the one shared per `DataSource`**, reference counted, closed by its last user. That is the safe default; pass your own only when you deliberately want a separate set of threads and connections.
 
+## Prerequisites
+
+Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../docs/durable-queue-shard-owned.md) §17.
+
+- **PostgreSQL 13+** if you use the **ordered** lane; **9.5+** for the unordered lane alone. The floor comes from the ordered lane's start-up probe (`pg_current_xact_id()`), not from its delivery path.
+- **`pg_stat_activity.backend_xid` must be readable.** The ordered lane's cursor decides that a sequence value can never arrive from the set of running write transactions. A *partial* answer is a wrong answer, not a degraded one — the cursor would step over a live writer and lose its messages silently. Verified on PostgreSQL 17.10: an ordinary `LOGIN` role with no grants reads it, for its own backends and for other roles'. `pg_read_all_stats` made no difference in any case tested; it is the fallback the error message names if a managed platform ever redacts the view.
+- **The engine probes for it at start-up** (`verifyWatermarkPrerequisites`, first statement of `startOrdered`, once per `DataSource`) and refuses to start the lane rather than risk silent loss. Do not suppress it. It constructs the condition rather than inspecting the column, because `backend_xid` is legitimately null for a backend that has not written.
+- **No superuser, no replication slot, no `wal_level=logical`, no extensions.**
+- **`pumpThreads + 1` connections are held permanently** (default 3) and never returned to the pool. Everything else is per operation. A pool smaller than that floor does not fail cleanly — the engine starts and the remaining pumps block forever.
+- **`LISTEN`/`NOTIFY` on one channel.** Blocked notifications (some poolers in transaction mode) cost latency, not correctness: delivery falls back to the sweep cadence, worst case `maxSweepInterval`.
+- **Intra-service only.** Multiple instances of one service against one database — like the rest of Essentials' queues, locks and inbox/outbox.
+
 ## Configuration reference
 
 ### `ShardOwnerSettings` — per engine, usually one instance for the process
@@ -105,9 +118,19 @@ try (var connection = dataSource.getConnection()) {
 | `keyConcurrency` | 8 | Concurrent keys per **ordered** shard | Raise for many independent keys per shard |
 | `readBatchSize` | 500 | Rows per cursor read | Rarely |
 | `ackBatchSize` / `ackFlushInterval` | 200 / 1 ms | Acknowledgement batching | Rarely |
-| `holeExpiry` | 10 s | How long an uncommitted sequence value is chased | Must exceed your longest enqueue transaction |
+| `holeExpiry` | 10 s | **UNORDERED lane only.** How long an uncommitted sequence value is chased | Must exceed your longest enqueue transaction |
+| `chaseDelay` | 2 ms | **UNORDERED lane only** as hole-resolution latency. On the ordered lane it only throttles the watermark probe | Rarely |
+| `maxHolesPerChase` | 1 000 | **UNORDERED lane only.** Holes resolved per chase query | Rarely |
+| `watermarkCap` | 60 s | **ORDERED lane only.** How long one long-running *write* transaction may pin the lane before the cursor is forced past it — which can skip that transaction's messages | Leave it. It is an escape hatch, not a tuning knob; if it fires, fix the long transaction |
 | `leaseTtl` | 30 s | How long a shard stays unserved if its owner dies without releasing. Heartbeat renews at a third of it | Lower for faster failover, but not below your worst stop-the-world pause |
 | `shedGrace` | 5 s | How long an ordered shard waits to drain before abandoning a hand-over | Raise if handlers are slow and rebalancing stalls |
+
+`watermarkCap` and `holeExpiry` answer the same question for different lanes and are deliberately
+separate settings with an order of magnitude between them. The ordered lane resolves a gap *exactly*
+(it waits for the writing transactions to finish), so waiting is free and the cap can be generous.
+The unordered lane *chases* each unresolved value with a query, so `holeExpiry` is held low by cost.
+`leaseTtl` was once derived as `holeExpiry × 3`; it is now its own setting, because a short
+`holeExpiry` was leasing shards for less time than the heartbeat needed to renew them.
 
 ### `ConsumerOptions` — per consumer
 
@@ -241,7 +264,7 @@ Measured, one shared runtime, idle:
 1. **Share one `ShardRuntime`.** This is the single most important line on the page. A runtime per queue costs five connections each — 100 queues once exhausted a 500-connection pool. The default does the right thing; only an explicitly-passed runtime can get this wrong.
 2. **Size `max_connections` for the engine plus your handlers plus everything else.** The engine's own need is small and fixed (`pumpThreads + 1`), but a `parallelConsumers` of 8 across 25 consumers is up to 200 handlers each potentially wanting a pool connection. **The handlers, not the engine, are what will exhaust your pool.**
 3. **Count your shards, not your queues.** Idle cost follows owned shards: ~0.1 queries/s each. 300 queues × 8 shards × 2 lanes = 4 800 owners = ~481 queries/s doing nothing. Acceptable; 10 000 queues at 16 shards would not be. Lower `shardCount` for quiet queues, or raise `maxSweepInterval`.
-4. **`holeExpiry` must exceed your longest enqueue transaction.** A gap in the sequence means an uncommitted transaction. Abandoning it too early means a message only the head sweep will find.
+4. **`holeExpiry` must exceed your longest enqueue transaction — on the UNORDERED lane.** A gap in the sequence means an uncommitted transaction. Abandoning it too early means a message only the head sweep will find. The ordered lane has no equivalent requirement: it waits for the actual transactions rather than guessing on a timer, so a long enqueue delays that lane's cursor but cannot make it skip anything until `watermarkCap` (60 s) is exceeded.
 
 ## How to not kill the application
 

@@ -900,23 +900,31 @@ which the admin API's exception handler already maps. A database failure surface
 
 Full reference with sizing formulas and worked examples: [`LLM/LLM-postgresql-queue-shard-owned.md`](../LLM/LLM-postgresql-queue-shard-owned.md). Summarised here only to show which knob governs which mechanism.
 
-| `ShardOwnerSettings` — per process | Default | Governs |
-|---|---|---|
-| `pumpThreads` | 2 | §3 — held connections are `pumpThreads + 1` |
-| `readBatchSize` | 500 | §5.2 — rows per cursor read |
-| `ackBatchSize` / `ackFlushInterval` | 200 / 1 ms | §5.4 |
-| `chaseDelay` | 2 ms | §5.3 — sets hole resolution latency directly |
-| `holeExpiry` | 10 s | §5.3 — must exceed the longest enqueue transaction. **Also currently derives the lease TTL** (§8.2) |
-| `sweepInterval` / `maxSweepInterval` | 500 ms / 30 s | §5.1 — backstop cadence and the idle back-off |
-| `pollBackstop` | 500 ms | §3.1 — the park ceiling, not a floor |
-| `keyConcurrency` | 8 | §7 — concurrent keys per ordered shard |
-| `shedGrace` | 5 s | §8.4 |
-| `leaseTtl` | 30 s | §8.2 — lease lifetime; the heartbeat renews at a third of it |
-| `idleParkMicros` | 200 | **unused** — kept so the record shape does not change again for a removal |
+The **Lane** column matters: the two lanes resolve "has everything before this arrived yet" by
+different mechanisms, so several settings govern one lane and are inert for the other.
+
+| `ShardOwnerSettings` — per process | Default | Lane | Governs |
+|---|---|---|---|
+| `pumpThreads` | 2 | both | §3 — held connections are `pumpThreads + 1` |
+| `readBatchSize` | 500 | both | §5.2 — rows per cursor read |
+| `ackBatchSize` / `ackFlushInterval` | 200 / 1 ms | both | §5.4 |
+| `sweepInterval` / `maxSweepInterval` | 500 ms / 30 s | both | §5.1 — backstop cadence and the idle back-off |
+| `pollBackstop` | 500 ms | both | §3.1 — the park ceiling, not a floor |
+| `leaseTtl` | 30 s | both | §8.2 — lease lifetime; the heartbeat renews at a third of it |
+| `shedGrace` | 5 s | both | §8.4 |
+| `chaseDelay` | 2 ms | unordered | §5.3 — sets hole resolution latency directly. On the ordered lane it only throttles the watermark probe, so it cannot spin |
+| `holeExpiry` | 10 s | unordered | §5.3 — must exceed the longest enqueue transaction |
+| `maxHolesPerChase` | 1 000 | unordered | §5.3 — ceiling on holes resolved in one chase query |
+| `watermarkCap` | 60 s | ordered | The ordered lane's counterpart to `holeExpiry`, and deliberately **not** the same setting. A gap is never chased or written off on a timer — it is resolved exactly (§7). The cap only bounds how long one pathological transaction may pin the lane before the cursor is forced past it. It can be generous because it costs nothing to wait; `holeExpiry` is held low by the per-hole map entry and chase query |
+| `keyConcurrency` | 8 | ordered | §7 — concurrent keys per ordered shard |
+
+`leaseTtl` is its own setting and no longer derived. It was once `holeExpiry × 3`, which coupled two
+unrelated questions: an ordered lane configured with a short `holeExpiry` leased its shards for less
+time than the heartbeat took to renew them.
 
 | `ConsumerOptions` — per consumer | Default | Governs |
 |---|---|---|
-| `parallelConsumers` | 8 | handlers in flight for this consumer; drawn from the process-wide ceiling |
+| `parallelConsumers` | 8 | handlers in flight for this consumer, and the **only** bound on handler concurrency. There is no process-wide ceiling — one was removed as unmeasured and too high to bind (see `HandlerDispatch`), so the sum across consumers is what your pool must absorb |
 | `maxShards` | unbounded | cap on shards this consumer holds |
 | `maxAttempts` / `retryDelay` / `retryMultiplier` / `maxRetryDelay` | 3 / 100 ms / 2.0 / 30 s | §9 |
 
@@ -1000,7 +1008,7 @@ size it generously up front: the correction is cheap, but not free, and it is ea
 | `ShardPump` | One platform thread, one connection, many shards |
 | `ShardWakeup` | A flag under a monitor, cascading shard → pump. Not a semaphore |
 | `ShardWakeupListener` | The `LISTEN shard_queue_wakeup` connection and its reconnect loop |
-| `HandlerDispatch` | Two-level permits — per consumer, then process-wide — over the virtual-thread executor |
+| `HandlerDispatch` | Per-consumer permits over the virtual-thread executor. The process-wide second level was removed |
 | `ShardOwnedQueue` | One queue's leasing, heartbeat, rebalancing, and both lanes' owners |
 | `PostgresqlMessageQueue` | `MessageQueue` implemented over `ShardOwnedQueue` |
 | `ShardQueueSession` / `RowLeaseQueueSession` | `SHARD` scope, and `MESSAGE`/`BATCH` scope |
@@ -1009,3 +1017,122 @@ size it generously up front: the correction is cheap, but not free, and it is ea
 | `observability/micrometer/MicrometerQueueObserver` | Micrometer binding, `micrometer-core` `provided` |
 
 Naming follows the rest of Essentials: the implementation that a consumer names is `PostgresqlMessageQueue`, matching `PostgresqlDurableQueues` and `PostgresqlFencedLockManager`, and the engine internals take a `ShardOwned` prefix where the type would otherwise be ambiguous.
+
+---
+
+## 17. Operational requirements
+
+Everything a deployment needs from the database and its surroundings, and what happens if it is
+missing. The engine checks the one requirement it cannot survive losing, and fails loudly at
+start-up rather than silently later.
+
+### 17.1 PostgreSQL version
+
+**PostgreSQL 13 or later** if the ordered lane is used; **9.5** for the unordered lane alone. The
+floor comes from the start-up probe, not from the delivery path:
+
+| Feature | Introduced | Used by | Used for |
+|---|---|---|---|
+| `pg_current_xact_id()` | 13 | probe only | Forces a real xid, so the probe tests the actual condition (§17.2) |
+| `pg_stat_activity.backend_xid` | 9.4 | ordered lane | The set of write transactions that may still commit below the cursor (§7) |
+| `ON CONFLICT`, `FOR UPDATE SKIP LOCKED` | 9.5 | both | Registration, leasing, pull sessions |
+| `LATERAL` | 9.3 | both | The per-unit batched read (§5.2) |
+| `pg_notify`, `pg_advisory_xact_lock` | 9.0 / 9.1 | both | Wake-up, and serialising schema creation |
+
+There is no version gate in the code and nothing in the *runtime* ordered path needs 13 — the
+watermark reads `backend_xid`, which is 9.4-era. It is the probe that uses `pg_current_xact_id()`,
+and the probe is not optional, so 13 is the effective floor for that lane. Measured on 17.5 and
+17.10.
+
+Note that the watermark does **not** use `pg_sequence_last_value` or `pg_snapshot_xmin`, despite both
+appearing in earlier descriptions of the design. It compares *sets* of running xids, because
+`backend_xid` wraps at 32 bits and `pg_snapshot_xmin` does not — a numeric comparison between them is
+correct in every test and wrong once per wraparound cycle. See the design document's §3.
+
+### 17.2 The one hard requirement: `backend_xid` must be readable
+
+The ordered lane's cursor decides that a sequence value can never arrive by comparing the allocation
+bound against the set of running write transactions (§7, and the design document's §3). That set
+comes from `pg_stat_activity.backend_xid`.
+
+**A partial answer here is a wrong answer, not a degraded one.** If the query returns a subset of the
+running writers, the watermark advances over a live one and its messages are skipped — silently, with
+no error and no dead letter. That is the worst failure the engine has, so it is the one thing checked
+before the lane starts.
+
+`ShardOwnedSchema.verifyWatermarkPrerequisites` runs as the first statement of `startOrdered`, once
+per `DataSource`. It does not inspect the column, because `backend_xid` is legitimately null for a
+backend that has not written and an inspection would pass everywhere. It **constructs the
+condition**: a second connection is forced to take a real xid with `pg_current_xact_id()`, and the
+first must see it. Failing that, `startConsumingOrdered` throws with the remedy named.
+
+**In practice this is satisfied out of the box.** Measured on PostgreSQL 17.10, an ordinary `LOGIN`
+role with no grants reads `backend_xid` both for its own backends and for another role's:
+
+| Observer | Writer | `backend_xid` visible |
+|---|---|---|
+| ordinary role | same ordinary role | yes |
+| ordinary role | a *different* ordinary role | yes |
+| ordinary role + `pg_read_all_stats` | a different ordinary role | yes (no change) |
+
+So `pg_read_all_stats` is a **fallback the error message names, not the mechanism** — granting it
+changed nothing in any case tested. It is worth naming anyway: a managed service is free to restrict
+this view more than stock PostgreSQL does, and the probe is what turns that from silent message loss
+into a start-up failure. If the probe ever fires on a managed platform, the alternatives are that
+grant or the unordered lane.
+
+Note that the demo application's role is a superuser and therefore proves nothing about this; the
+table above comes from roles created for the purpose.
+
+### 17.3 Connections
+
+| Consumer | Count | Lifetime |
+|---|---|---|
+| Pump threads | `pumpThreads` (default 2) | **Held permanently** while the engine runs |
+| Wake-up listener | 1 | **Held permanently** — a dedicated `LISTEN` connection |
+| Heartbeat, leasing, rebalancing | 1 at a time, from the pool | Per operation |
+| Handlers | 1 per in-flight handler that opens a unit of work | Per handler invocation |
+
+So the floor is `pumpThreads + 1` connections that the pool can never reclaim, regardless of load.
+Size the pool as that floor plus the handler concurrency you can actually reach — which is the
+**sum of every consumer's `parallelConsumers`**. There is no process-wide ceiling behind it: one
+existed, defaulted to 512, and was removed because nothing measured or derived that number and it
+could not bind before a default pool of ten was long exhausted. Eight consumers at the default of 8
+is 64 handlers, each potentially wanting a connection.
+
+A pool smaller than the floor does not fail cleanly: the engine starts, takes what it can, and the
+remaining pumps block acquiring a connection that will never be free.
+
+### 17.4 What the engine requires of the schema
+
+- **Six tables, two sequence families and one registry row per queue**, all created by
+  `ShardOwnedSchema`. A queue must be registered before it is consumed — the engine will not invent
+  a shard count, because the count caps how many instances can consume the unordered lane and can be
+  raised but never lowered (§2.7).
+- **One ordered sequence per queue** (`orderedSequenceName(queueId)`). Sequences are not transactional,
+  which is what makes the watermark necessary and is the reason none of this is a gap-free counter.
+- **`LISTEN`/`NOTIFY` on one global channel** (`shard_queue_wakeup`). If notifications are blocked —
+  some poolers in transaction mode will do this — the engine still delivers, on the sweep cadence
+  instead of on the notification, so latency degrades to `sweepInterval` and there is no correctness
+  loss. `maxSweepInterval` then sets the worst case for an idle shard.
+
+### 17.5 What it does not require
+
+- **No superuser.** Nothing in the engine needs one; the ordinary-role result in §17.2 is the point.
+- **No replication slot, no `wal_level = logical`, no extensions.** WAL streaming was considered for
+  wake-up (Tier 3, §6) and not built, precisely so that a queue would not carry a replication slot's
+  operational weight.
+- **No advisory locks, no `SELECT … FOR UPDATE` on the delivery path.** Ownership is a lease plus a
+  fence, so there is no claim write and no lock to leak on a crash.
+- **No cross-service coordination.** Like the rest of Essentials' queues, locks and inbox/outbox, this
+  is for multiple instances of **one** service against **one** database.
+
+### 17.6 Failure modes an operator should recognise
+
+| Symptom | Cause | Resolution |
+|---|---|---|
+| `startConsumingOrdered` throws naming `pg_read_all_stats` | §17.2's probe failed | Grant it, or use the unordered lane. Do not suppress the probe |
+| A queue's depth is non-zero and steady, no errors logged | Nobody owns its shards | Check `unownedShards`, not depth — depth cannot distinguish "unserved" from "busy" (§12) |
+| Ordered lane stops advancing, `watermarkCap` in the log | A write transaction outlived the cap | Find the long transaction; the cap protects the lane, it does not fix the writer |
+| Pumps never start, no error | Pool smaller than `pumpThreads + 1` | §17.3 |
+| Delivery latency jumps to seconds when idle | Notifications not arriving | §17.4 — check the pooler's mode |

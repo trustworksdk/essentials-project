@@ -12,6 +12,35 @@ The three properties everything here serves:
 
 ---
 
+## 0. The shape of it
+
+Two independent mappings, which is what lets consumers scale without moving a key. A key's **unit**
+is fixed by the queue's routing space; a unit's **owner** is whichever instance currently leases it.
+Only the second one moves.
+
+```mermaid
+flowchart LR
+    subgraph P["enqueue"]
+        K["message with key"] --> H["mix(hash(key))<br/>mod orderedUnits"]
+        H --> U["unit — fixed for the<br/>life of the queue"]
+        U --> S["nextval(ordered sequence)<br/>one per queue"]
+        S --> R[("shard_queue_ordered<br/>PK (queue_id, shard,<br/>msg_key, key_order)")]
+    end
+    subgraph C["consume"]
+        L["shard_queue_lease<br/>one owner per unit,<br/>under a fence"] --> O["OrderedShardOwner"]
+        O --> W["safe watermark<br/>§3"]
+        W --> B["batched LATERAL read<br/>§5"]
+        B --> HD["handler,<br/>keyConcurrency keys at once"]
+    end
+    R -.->|"NOTIFY shard_queue_wakeup<br/>'queueId:ordered:unit'"| O
+    L -.->|"instance last_seen<br/>§4"| O
+```
+
+The registry row carries both numbers: `shard_count` for the unordered lane, `ordered_units` for
+this one. Adding an instance re-leases units. It never re-hashes a key.
+
+---
+
 ## 1. Routing: a fixed space, chosen per queue
 
 A key's owner is its **unit**:
@@ -87,21 +116,63 @@ transaction could still commit, so there is nothing to chase.
 
 ### The rule
 
-At any instant, let
+At the moment of a probe, let
 
-- **`A`** = the highest `seq` allocated so far — `pg_sequence_last_value`, which reports allocation,
-  not commit;
-- **`R`** = the highest transaction id currently running — `max(backend_xid)` over `pg_stat_activity`.
+- **`S`** = the highest `seq` this owner has actually **read** (`maxSeen`). Not the sequence's last
+  value: the owner only has to be safe about ground it has already covered, and asking the sequence
+  would add a query to say something it can observe for free;
+- **`X`** = the **set** of write transactions running right now — every non-null `backend_xid` in
+  `pg_stat_activity`.
 
-Every `seq ≤ A` was allocated by a transaction that already held an xid at that moment, so any such
-transaction still running is at or below `R`. A transaction assigned an xid above `R` had not yet
-allocated, so everything it allocates will be above `A`. Therefore:
+Any transaction that could still commit a `seq ≤ S` had already been assigned its xid when `S` was
+observed, so it is a member of `X`. A transaction not in `X` either had not started, and will
+therefore allocate above `S`, or has already finished. Therefore:
 
-> once `pg_snapshot_xmin(pg_current_snapshot()) > R`, every `seq ≤ A` is resolved — committed and
-> visible, or aborted and never coming.
+> once **no member of `X` is still running**, every `seq ≤ S` is resolved — committed and visible,
+> or aborted and never coming.
 
-**Read `A` before `R`, never the reverse.** If `R` is sampled first, a transaction can allocate a
-`seq ≤ A` afterwards with an xid above `R`, and the watermark advances over a live writer.
+**Read `S` before `X`, never the reverse.** If `X` is sampled first, a transaction can allocate a
+`seq ≤ S` afterwards without appearing in `X`, and the watermark advances over a live writer.
+
+**Sets, not ordering, and that is not a stylistic choice.** The obvious formulation — keep the
+highest running xid `R` and wait for `pg_snapshot_xmin` to pass it — is unsafe here.
+`backend_xid` is a 32-bit `xid` that **wraps**, while `pg_snapshot_xmin` returns a non-wrapping
+`xid8`, and there is no cast between them: the comparison is correct in every test and wrong once
+per wraparound cycle. Set disjointness needs no ordering at all, and two identical xids separated by
+a full wraparound cannot both appear inside a window measured in milliseconds. `runningWriteTransactionIds`
+returns a `Set<Long>` for this reason. Earlier revisions of this document stated the `xmin > R` rule;
+it was never implemented.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant O as OrderedShardOwner
+    participant PG as PostgreSQL
+    Note over O,PG: skipped entirely when caught up —<br/>the idle poll must not pay for this
+
+    O->>PG: read rows; S = maxSeen
+    O->>PG: X = {backend_xid} from pg_stat_activity
+    Note right of PG: ORDER MATTERS: S before X.<br/>Reversed, a writer allocates below S<br/>without ever appearing in X
+    O->>O: push candidate (S, X, now) onto the deque
+
+    loop each later probe, throttled by chaseDelay
+        O->>PG: running = {backend_xid} now
+        alt disjoint(candidate.X, running)
+            O->>O: retire — every seq ≤ S is committed-<br/>and-visible, or aborted and never coming
+            O->>O: safeCursor = max(safeCursor, S)
+        else candidate older than watermarkCap
+            O->>O: advance anyway, count watermarkCapped
+            Note right of O: a long WRITE transaction somewhere is<br/>holding the global horizon back.<br/>This one CAN skip messages — it is the<br/>escape hatch, not the mechanism
+        else
+            O->>O: leave it — nothing skipped, only delayed
+        end
+    end
+```
+
+The retirement test is set **disjointness**, not a numeric comparison, for the wraparound reason
+above. The loop is why nothing is chased: a candidate is either provably resolved or not yet, and
+waiting costs one deque entry and no query — which is exactly what lets `watermarkCap` default to a
+minute where `holeExpiry` could not.
 
 **`pg_snapshot_xmax` does not bound running xids** and must not be used here. It is
 `latestCompletedXid + 1`, so a transaction holding an assigned xid sits at or above it and appears in

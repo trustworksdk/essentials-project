@@ -576,7 +576,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
             if (capped) {
                 metrics.watermarkCapped.increment();
                 log.debug("Ordered shard {}: watermark advanced to {} on the wall-clock cap — a write "
-                          + "transaction outlived holeExpiry", shard, safeCursor);
+                          + "transaction outlived watermarkCap ({}s). Messages from that transaction "
+                          + "may have been skipped; find the long transaction rather than raising the "
+                          + "cap. Note this lane does not use holeExpiry, which an earlier version of "
+                          + "this message named.", shard, safeCursor, settings.watermarkCap().toSeconds());
             }
         }
         if (maxSeen > safeCursor) {
