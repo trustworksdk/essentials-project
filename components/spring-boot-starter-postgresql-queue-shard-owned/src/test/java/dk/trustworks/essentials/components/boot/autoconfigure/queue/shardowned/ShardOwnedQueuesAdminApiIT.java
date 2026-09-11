@@ -160,7 +160,11 @@ class ShardOwnedQueuesAdminApiIT {
                     .describedAs("no shard is owned by merely looking at the queue")
                     .isZero();
             assertThat(queue.health().orderedOwned()).isZero();
-            assertThat(queue.health().unownedShards()).isEqualTo(8);
+            // 4 unordered shards, as configured, plus the ordered lane's fixed routing space. This
+            // read 8 when both lanes sized themselves from shardCount; the ordered lane has routed
+            // over ORDERED_UNITS since, and nothing re-ran this suite to notice.
+            assertThat(queue.health().unownedShards())
+                    .isEqualTo(4 + ShardOwnedSchema.ORDERED_UNITS);
         });
     }
 
