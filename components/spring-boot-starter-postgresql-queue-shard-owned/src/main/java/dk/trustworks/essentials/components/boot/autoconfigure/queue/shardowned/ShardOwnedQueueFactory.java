@@ -103,6 +103,40 @@ public class ShardOwnedQueueFactory implements MessageQueues, AutoCloseable {
         });
     }
 
+    /**
+     * Register a queue and return it, for a component that owns its own queue.
+     * <p>
+     * The alternative is listing the name under {@code essentials.shard-owned-queue.queues}, which
+     * puts it in two places — the YAML and the code that consumes it — that have to agree, and whose
+     * disagreement is a start-up failure. A component that knows its queue name can say so once,
+     * here.
+     * <p>
+     * Idempotent, and safe to call from every instance at start-up: whichever gets there first
+     * interns the name and the rest resolve it. Re-registering with a <em>different</em> shard count
+     * is refused rather than accepted, because two processes disagreeing about it write to shards
+     * nobody leases.
+     * <p>
+     * This does not make the engine auto-registering. An unknown name still fails in
+     * {@link #queue(QueueName)}: the count caps how many instances can consume the unordered lane, and
+     * an SPI caller writes the name in its own source, so a typo quietly becoming a queue is worse
+     * than an error. The {@code DurableQueues} adapter is the opposite case and registers by default,
+     * because the names there are the framework's and not knowable up front.
+     *
+     * @param shardCount the UNORDERED lane's shard count. The ordered lane routes over the space
+     *                   recorded on the registry row; use
+     *                   {@link #register(QueueName, int, int)} to choose it.
+     */
+    public MessageQueue register(QueueName queueName, int shardCount) throws SQLException {
+        return register(queueName, shardCount, ShardOwnedSchema.ORDERED_UNITS);
+    }
+
+    /** {@link #register(QueueName, int)}, choosing the ordered lane's routing space as well. */
+    public MessageQueue register(QueueName queueName, int shardCount, int orderedUnits) throws SQLException {
+        requireNonNull(queueName, "No queueName provided");
+        ShardOwnedSchema.registerQueue(dataSource, queueName, shardCount, orderedUnits);
+        return queue(queueName);
+    }
+
     public MessageQueue queue(String queueName) {
         return queue(QueueName.of(queueName));
     }

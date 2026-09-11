@@ -42,11 +42,11 @@ essentials:
     enabled: true
     initialize-schema: true
     pump-threads: 2
-    # name: UNORDERED shard count. The ordered lane is not configured here — it routes over the
-    # engine's fixed space (64 units), which `ordered-units.<name>` can override per queue for the
-    # rare queue expecting more than that many instances on its ordered lane.
-    queues:
-      trading-events: 4
+    # No `queues:` list. Nothing here needs one: the DurableQueues adapter registers the queues the
+    # framework invents, and QueueLoadGenerator registers its own through
+    # ShardOwnedQueueFactory.register, so its name lives in that class rather than in two places that
+    # have to agree. Listing a queue here is for one an application wants to exist before anything
+    # touches it — `name: <unordered shard count>`, with `ordered-units.<name>` to size the other lane.
     # Run the application's DurableQueues on this engine, so Inbox, Outbox and every
     # EventProcessor's projections are delivered by it. Set to false to run the same demo on
     # PostgresqlDurableQueues instead — both implement the interface, so it is an A/B.

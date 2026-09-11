@@ -104,7 +104,10 @@ public class QueueLoadGenerator {
             return;
         }
         try {
-            queue = queues.queue(properties.getQueueName());
+            // Registered here rather than listed under essentials.shard-owned-queue.queues, so the
+            // name lives in one place instead of having to agree across YAML and this class.
+            // Idempotent: every instance may call it, and the first to arrive interns the name.
+            queue = queues.register(QueueName.of(properties.getQueueName()), properties.getShardCount());
 
             // ONE subscription, and that is the contract rather than a simplification.
             //

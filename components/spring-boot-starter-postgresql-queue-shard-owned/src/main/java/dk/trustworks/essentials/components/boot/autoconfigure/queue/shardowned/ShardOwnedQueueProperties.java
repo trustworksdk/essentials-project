@@ -87,20 +87,28 @@ public class ShardOwnedQueueProperties {
     private String instanceId;
 
     /**
-     * Queues to register at start-up, as {@code name: shardCount}.
+     * <b>Optional, and not the normal way to declare a queue.</b> Queues to pre-create at start-up,
+     * as {@code name: shardCount}.
      * <p>
-     * <b>The count is the UNORDERED lane's alone.</b> It caps how many instances can consume that
-     * lane and is the unit of its parallelism; the ordered lane routes over its own space, set by
-     * {@link #getOrderedUnits()} and defaulting to {@code ShardOwnedSchema.ORDERED_UNITS}. This
-     * javadoc used to call it "the unit of ordering", which was true only while both lanes sized
-     * themselves from it.
+     * Queue names belong in code, as they do everywhere else in Essentials — an {@code InboxName}, an
+     * {@code OutboxName}, a {@code QueueName} constant next to the component that uses it. Two paths
+     * put them there and neither needs this map:
+     * <ul>
+     *   <li>Through {@code DurableQueues} (the adapter), the framework derives the names and registers
+     *       them on first use. Nothing to declare at all.</li>
+     *   <li>Through the {@code MessageQueue} SPI, a component that owns a queue registers it where it
+     *       uses it: {@code queues.register(QueueName.of("trading-events"), 4)}. Idempotent, so every
+     *       instance may call it.</li>
+     * </ul>
+     * Listing a name here instead puts it in two places that have to agree — this file and the code
+     * that consumes it — and a disagreement is a start-up failure. Use it for a queue that must exist
+     * before anything touches it, such as one an external producer writes to before this application
+     * has consumed from it; not as the default way to introduce a queue.
      * <p>
-     * Registration is idempotent and shared: whichever instance gets there first interns the name,
-     * and the rest resolve it. Re-declaring a queue with a different shard count fails the context
-     * rather than being accepted — two processes disagreeing about it write to shards nobody leases.
-     * <p>
-     * It may be grown later with {@code growShardCount}, which running consumers pick up on their
-     * next heartbeat; it may never shrink.
+     * The count is the <b>unordered</b> lane's: it caps how many instances can consume that lane, may
+     * be grown online with {@code growShardCount}, and may never shrink. The ordered lane routes over
+     * its own space, set by {@link #getOrderedUnits()}. Re-declaring a name with a different shard
+     * count fails the context rather than being accepted.
      */
     private Map<String, Integer> queues = new LinkedHashMap<>();
 

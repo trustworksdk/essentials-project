@@ -40,8 +40,10 @@ Consequences, all measured:
 // 1. Schema, once per database
 ShardOwnedSchema.create(dataSource, shardCount);
 
-// 2. Once per queue, by NAME. Idempotent, so every process can call it at start-up.
-//    The shard count is recorded WITH the name and refused if it ever disagrees.
+// 2. Once per queue, by NAME, IN CODE — next to the component that owns the queue, not in a
+//    config file. Idempotent, so every instance may call it at start-up; the shard count is
+//    recorded with the name and refused if it ever disagrees.
+//    In Spring: queues.register(QueueName.of("orders"), 8) on the ShardOwnedQueueFactory.
 var orders = ShardOwnedSchema.registerQueue(dataSource, QueueName.of("orders"), 8);
 
 // 3. ONE runtime for the whole process, shared by every queue
@@ -59,6 +61,18 @@ try (var queue = PostgresqlMessageQueue.builder()
                                      ConsumerOptions.defaults());
 }
 ```
+
+**Queue names live in code, as everywhere else in Essentials.** There is a
+`essentials.shard-owned-queue.queues` map, and it is not the normal way to declare a queue — it puts
+the name in two places that have to agree. Register where you use:
+`queues.register(QueueName.of("orders"), 4)`. Through `DurableQueues` you declare nothing at all: the
+framework derives the names (`Inbox:<processorName>`, `<processorName>:queue`, `Outbox:<name>`,
+`DefaultCommandQueue`) and the adapter registers them on first use.
+
+**Turning that off means registering by hand.** `setAutoRegisterShardCount(0)` — or
+`essentials.shard-owned-queue.auto-register-shard-count: 0` — restores the refusal, and then every
+queue an Inbox, Outbox or command bus invents has to be registered before it is used, under exactly
+the name the framework derives. Worth it only if you would rather a typo fail than become a queue.
 
 **The lane is chosen by the message, not by the consumer.** `Message.of` is unordered,
 `Message.ordered` carries a key, and one `consume` serves both. A *second* `consume` on the same
