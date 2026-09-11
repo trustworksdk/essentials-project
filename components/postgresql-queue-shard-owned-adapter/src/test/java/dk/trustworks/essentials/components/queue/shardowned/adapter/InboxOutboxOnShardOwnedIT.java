@@ -89,6 +89,10 @@ class InboxOutboxOnShardOwnedIT {
                                                .setQueues(queues)
                                                .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
                                                .setUnitOfWorkFactory(unitOfWorkFactory)
+                                               // Required now that auto-registration is the default:
+                                               // registering an invented queue writes through it. Omitting
+                                               // it fails at build() rather than at the first unknown name.
+                                               .setDataSource(dataSource)
                                                .build();
         durableQueues.start();
 
@@ -278,6 +282,55 @@ class InboxOutboxOnShardOwnedIT {
                                                                  java.util.Collections.reverse(reversed);
                                                                  return reversed;
                                                              })));
+    }
+
+    /**
+     * A queue nobody declared registers itself, which is what makes this adapter usable at all.
+     * <p>
+     * Under {@code DurableQueues} almost every queue an application has is invented by the framework
+     * and named by it — {@code Inbox:<processorName>} for an {@code EventProcessor},
+     * {@code <processorName>:queue} for a {@code ViewEventProcessor}, {@code DefaultCommandQueue} for
+     * the command bus. None of those can be declared ahead of time without hard-coding conventions
+     * that differ between the two processors, so refusing an unknown name — which this used to do by
+     * default — meant an inbox that silently never consumed.
+     */
+    @Test
+    void a_queue_nobody_declared_registers_itself_on_first_use() {
+        var invented = QueueName.of("Inbox:invented-by-a-processor");
+
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(invented, Message.of("first")));
+
+        assertThat(durableQueues.getTotalMessagesQueuedFor(invented))
+                .as("the message is queued, so the queue was registered rather than refused")
+                .isEqualTo(1);
+        assertThat(durableQueues.getQueueNames())
+                .as("and it is a real queue afterwards, not a one-off")
+                .contains(invented);
+    }
+
+    /**
+     * Zero restores the refusal, for an application that names all its own queues and would rather a
+     * typo fail than quietly become a queue nobody meant to create.
+     */
+    @Test
+    void auto_registration_can_be_turned_off() {
+        var strict = ShardOwnedDurableQueues.builder()
+                                            .setQueues(queues)
+                                            .setJsonSerializer(EssentialsObjectMappers.createJSONSerializer())
+                                            .setUnitOfWorkFactory(unitOfWorkFactory)
+                                            .setDataSource(dataSource)
+                                            .setAutoRegisterShardCount(0)
+                                            .build();
+        strict.start();
+        try {
+            var typo = QueueName.of("Inbox:tpyo");
+            assertThatThrownBy(() -> unitOfWorkFactory.usingUnitOfWork(
+                    () -> strict.queueMessage(typo, Message.of("nope"))))
+                    .as("an unknown name must fail rather than become a queue")
+                    .hasStackTraceContaining("tpyo");
+        } finally {
+            strict.stop();
+        }
     }
 
     private static dk.trustworks.essentials.components.queue.shardowned.spi.QueueName engineName(QueueName queueName) {

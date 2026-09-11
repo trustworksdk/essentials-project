@@ -117,6 +117,13 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private final JSONSerializer                             jsonSerializer;
     private final UnitOfWorkFactory<? extends UnitOfWork>    unitOfWorkFactory;
     private final DataSource                                 dataSource;
+    /**
+     * The unordered shard count an invented queue is registered with when the caller does not choose
+     * one. Four is the measured throughput knee; see the builder's setter for why this defaults to
+     * registering rather than refusing.
+     */
+    public static final int DEFAULT_AUTO_REGISTER_SHARD_COUNT = 4;
+
     private final int                                        autoRegisterShardCount;
 
     private final Map<QueueName, ShardOwnedDurableQueueConsumer> consumers = new ConcurrentHashMap<>();

@@ -223,17 +223,6 @@ public class ShardOwnedQueueAutoConfiguration {
                                                  UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
                                                  DataSource dataSource,
                                                  ShardOwnedQueueProperties properties) {
-        if (properties.getAutoRegisterShardCount() <= 0) {
-            throw new IllegalStateException(
-                    "essentials.shard-owned-queue.durable-queues-enabled is on, but "
-                    + "auto-register-shard-count is " + properties.getAutoRegisterShardCount() + ". "
-                    + "DurableQueues invents queues on first use — an Inbox is named by the processor "
-                    + "that owns it — and this engine will not invent a shard count for them, because "
-                    + "the count caps how many instances can consume a queue's unordered lane and can "
-                    + "be raised but never lowered. Set it to the number of instances you will ever "
-                    + "run against one queue (the measured knee is 4, and 8 buys 95% of what 16 does), "
-                    + "or turn durable-queues-enabled off.");
-        }
         log.info("Durable queues are running on the SHARD-OWNED engine — Inbox, Outbox and every "
                  + "EventProcessor's projections are delivered by it. Queues invented at runtime get "
                  + "{} unordered shards.", properties.getAutoRegisterShardCount());

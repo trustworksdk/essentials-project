@@ -17,6 +17,7 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.queue.shardowned.ShardOwnerSettings;
+import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedDurableQueues;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -66,19 +67,22 @@ public class ShardOwnedQueueProperties {
     private boolean durableQueuesEnabled = false;
 
     /**
-     * Unordered shard count for a queue the adapter is asked for but nobody registered. Zero — the
-     * default — fails instead.
+     * Unordered shard count for a queue the adapter is asked for but nobody registered. Defaults to
+     * {@code ShardOwnedDurableQueues.DEFAULT_AUTO_REGISTER_SHARD_COUNT}; <b>zero refuses</b>.
      * <p>
-     * Required in practice when {@link #isDurableQueuesEnabled()} is on, and the reason is structural:
-     * {@code DurableQueues} invents a queue on first use, and an {@code Inbox} is named by the
-     * processor that owns it, so the queues an application actually needs cannot all be listed in
-     * {@link #getQueues()} ahead of time. This engine will not invent a shard count, because the count
-     * caps how many instances can consume the unordered lane and can be raised but never lowered.
+     * Registering by default is what makes {@link #isDurableQueuesEnabled()} usable on its own.
+     * {@code DurableQueues} invents a queue on first use and the names are the framework's, not
+     * yours: an {@code EventProcessor}'s inbox is {@code Inbox:<processorName>}, a
+     * {@code ViewEventProcessor} uses {@code <processorName>:queue}, an {@code Outbox} is
+     * {@code Outbox:<name>}, the command bus is {@code DefaultCommandQueue}. Listing those under
+     * {@link #getQueues()} means hard-coding three conventions and keeping up with them.
      * <p>
-     * Applies to the unordered lane only — the ordered lane routes over a fixed space recorded on the
-     * queue's registry row, so an auto-registered queue's ordered lane is already correct.
+     * Set it higher for a queue consumed by more instances than the default allows — though
+     * {@link #getQueues()} is the better place to say that, since it names the queue. Set it to zero
+     * to refuse instead, which suits an application that declares all its own queues and would rather
+     * a typo fail than quietly become a queue.
      */
-    private int autoRegisterShardCount = 0;
+    private int autoRegisterShardCount = ShardOwnedDurableQueues.DEFAULT_AUTO_REGISTER_SHARD_COUNT;
 
     private String instanceId;
 

@@ -50,11 +50,11 @@ essentials:
     # Run the application's DurableQueues on this engine, so Inbox, Outbox and every
     # EventProcessor's projections are delivered by it. Set to false to run the same demo on
     # PostgresqlDurableQueues instead — both implement the interface, so it is an A/B.
+    #
+    # This is the only line needed. The queues the framework invents — Inbox:<processor>,
+    # <processor>:queue, DefaultCommandQueue — register themselves on first use with
+    # auto-register-shard-count unordered shards, which defaults to 4.
     durable-queues-enabled: true
-    # Required with the flag above: an Inbox is named by the processor that owns it, so those
-    # queues cannot be listed under `queues` and are registered on first use with this many
-    # unordered shards.
-    auto-register-shard-count: 4
 
   fenced-lock-manager:
     fenced-locks-table-name: fenced_locks
