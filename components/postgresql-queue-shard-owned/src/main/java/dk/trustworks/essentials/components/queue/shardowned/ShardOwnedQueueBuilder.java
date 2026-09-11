@@ -52,7 +52,22 @@ public final class ShardOwnedQueueBuilder {
         return this;
     }
 
-    /** Fixed for the life of the queue: changing it re-routes keys and breaks ordering. */
+    /**
+     * The <b>unordered</b> lane's shard count, which must match the queue's registry row.
+     * <p>
+     * It may be grown later with {@code growShardCount} — running consumers pick it up on their next
+     * heartbeat, with no restart — and it may never shrink, because the messages in a dropped shard
+     * would be addressed by nobody. Growing re-routes no existing key: the unordered lane is
+     * round-robin, so nothing depends on which shard a message landed in, and the ordered lane does
+     * not read this number at all.
+     * <p>
+     * An earlier revision of this javadoc said it was fixed for the life of the queue because
+     * changing it re-routes keys and breaks ordering. That described the design before the ordered
+     * lane moved to its own fixed routing space.
+     * <p>
+     * Required, and inert for a queue that will be configured for the ordered lane alone — the
+     * builder cannot know, since {@code configureOrdered} comes after {@code build()}.
+     */
     public ShardOwnedQueueBuilder setShardCount(int shardCount) {
         this.shardCount = shardCount;
         return this;

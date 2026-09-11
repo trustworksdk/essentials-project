@@ -311,13 +311,13 @@ class ShardOwnedAdminSurfaceIT {
                     (key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                     ConsumerOptions.defaults());
             Awaitility.await().atMost(Duration.ofSeconds(20))
-                      .untilAsserted(() -> assertThat(subscription.shardsHeld()).isEqualTo(2));
+                      .untilAsserted(() -> assertThat(subscription.unorderedShardsHeld()).isEqualTo(2));
 
             // Grow it underneath the running consumer. No restart, no redeploy.
             ShardOwnedSchema.growShardCount(dataSource, name, 8);
 
             Awaitility.await().atMost(Duration.ofSeconds(30))
-                      .untilAsserted(() -> assertThat(subscription.shardsHeld())
+                      .untilAsserted(() -> assertThat(subscription.unorderedShardsHeld())
                               .describedAs("the running consumer takes the new shards on a heartbeat")
                               .isEqualTo(8));
 
@@ -347,7 +347,7 @@ class ShardOwnedAdminSurfaceIT {
             var subscription = queue.consume((key, payload, payloadType) -> {
             }, ConsumerOptions.defaults());
             Awaitility.await().atMost(Duration.ofSeconds(20))
-                      .untilAsserted(() -> assertThat(subscription.shardsHeld()).isEqualTo(4));
+                      .untilAsserted(() -> assertThat(subscription.unorderedShardsHeld()).isEqualTo(4));
 
             // growShardCount refuses to shrink, so write it directly — this asserts the engine's own
             // guard rather than the schema helper's.
@@ -359,7 +359,7 @@ class ShardOwnedAdminSurfaceIT {
             }
 
             Thread.sleep(4_000);
-            assertThat(subscription.shardsHeld())
+            assertThat(subscription.unorderedShardsHeld())
                     .describedAs("dropping shards at runtime would strand whatever is in them")
                     .isEqualTo(4);
         }

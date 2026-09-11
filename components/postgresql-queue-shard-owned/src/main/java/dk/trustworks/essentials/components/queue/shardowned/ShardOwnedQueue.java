@@ -543,12 +543,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * acquire loop in {@link #rebalance()} then takes the new shards on its own because it has always
      * iterated to {@code shardCount}.
      * <p>
-     * <b>What this does not remove is the two-moduli window.</b> Instances pick the new count up
-     * independently, so for up to one heartbeat interval some are routing keys by the old modulus and
-     * some by the new. For the unordered lane that is harmless — routing is round-robin, every shard
-     * has an owner either way. For the ordered lane it is the same hazard that makes growth require
-     * an empty lane in the first place, so the operator must still not be producing ordered messages
-     * across the window. The window is now seconds rather than a deployment.
+     * <b>There is no two-moduli window left.</b> Instances pick the new count up independently, so for
+     * up to one heartbeat interval some route by the old modulus and some by the new — and neither
+     * lane cares. Unordered routing is round-robin, so every shard has an owner either way; the
+     * ordered lane does not read this number at all, routing instead over the fixed space recorded on
+     * the queue's registry row. An earlier revision of this javadoc said an operator must stop
+     * producing ordered messages across the window. That was true when ordered routing read
+     * {@code shardCount}; growth now moves no key, and there is nothing to avoid.
      * <p>
      * Only ever upward. A registry that reported a smaller count would strand the messages in the
      * shards this instance stopped looking at, so it is refused and logged rather than obeyed.
@@ -819,12 +820,25 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
-     * Messages still in the table across every shard — zero once everything has been acknowledged.
+     * Messages still in this queue's configured lane, across every unit it routes over — zero once
+     * everything has been acknowledged.
+     * <p>
+     * <b>Per lane, because a queue is configured for one.</b> This used to iterate {@code shardCount}
+     * and count the unordered table whichever lane was configured, so on an ordered queue it returned
+     * zero unconditionally: wrong bound and wrong table. A drain assertion written against it would
+     * have passed before anything was delivered. No test did, but only because the ordered tests
+     * happened to assert on metrics instead.
      */
     public long remaining() throws SQLException {
         var remaining = 0L;
-        for (var shard = 0; shard < shardCount; shard++) {
-            remaining += storage.countRemaining(shard);
+        if ("ordered".equals(activeLane)) {
+            for (var unit = 0; unit < orderedUnits(); unit++) {
+                remaining += storage.countOrderedRemaining(unit);
+            }
+        } else {
+            for (var shard = 0; shard < shardCount; shard++) {
+                remaining += storage.countRemaining(shard);
+            }
         }
         return remaining;
     }

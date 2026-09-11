@@ -108,8 +108,10 @@ class ShardOwnedPullSessionIT {
             try (var other = queue("consumer")) {
                 var subscription = other.consume((key, payload, payloadType) -> {
                 }, ConsumerOptions.defaults());
-                assertThat(subscription.shardsHeld())
-                        .as("a consumer must not take shards a live session holds")
+                assertThat(subscription.unorderedShardsHeld())
+                        .as("a consumer must not take UNORDERED shards a live SHARD-scope session holds; "
+                            + "the ordered lane is unaffected by such a session, which is why this asks "
+                            + "the lane rather than the total")
                         .isZero();
                 subscription.close();
             }

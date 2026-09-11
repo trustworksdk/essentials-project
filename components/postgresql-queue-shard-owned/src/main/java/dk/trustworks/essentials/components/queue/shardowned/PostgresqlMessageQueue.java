@@ -476,6 +476,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                .build();
         unorderedConsumer.configureUnordered((payload, payloadType) -> invoke(handler, null, payload, payloadType),
                                              settings, options.maxShards(), policy);
+        // setShardCount is INERT on this consumer and is passed only because the builder requires a
+        // positive value — it cannot know the lane, since configureOrdered comes after build(). Every
+        // ordered path resolves its unit count from the registry instead: startOrdered pins
+        // maxShardsHeld to orderedUnits(), the acquire loop and the shed iterate it, and rebalance
+        // computes the lane's fair share from it. Passing the queue's real unordered count keeps the
+        // value truthful rather than arbitrary, which matters for the two methods on ShardOwnedQueue
+        // that still read the field directly — enqueue's round-robin and remaining() — neither of
+        // which is called on this instance.
         var orderedConsumer = ShardOwnedQueue.builder()
                                              .setDataSource(dataSource)
                                              .setQueueId(queueId)
@@ -519,9 +527,27 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
 
         return new Subscription() {
+            /**
+             * Units held across <b>both</b> lanes.
+             * <p>
+             * It used to return the unordered consumer's count alone, so a subscription holding 4
+             * unordered shards and 64 ordered units reported 4 — and the ordered lane, which has the
+             * larger space and the ownership failures that are invisible in queue depth, contributed
+             * nothing to the one number a caller has for "am I actually serving this queue".
+             */
             @Override
             public int shardsHeld() {
+                return unorderedConsumer.shardsHeld() + orderedConsumer.shardsHeld();
+            }
+
+            @Override
+            public int unorderedShardsHeld() {
                 return unorderedConsumer.shardsHeld();
+            }
+
+            @Override
+            public int orderedUnitsHeld() {
+                return orderedConsumer.shardsHeld();
             }
 
             @Override

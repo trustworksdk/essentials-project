@@ -24,8 +24,23 @@ import dk.trustworks.essentials.shared.Lifecycle;
  */
 public interface Subscription extends Lifecycle, AutoCloseable {
 
-    /** Shards currently held. Moves as instances join and leave. */
+    /**
+     * Units currently held across <b>both</b> lanes. Moves as instances join and leave.
+     * <p>
+     * This is the number for "am I actually serving this queue". It used to report the unordered
+     * lane alone, so a sole consumer of a 4-shard queue answered 4 while holding 68 — and the lane it
+     * left out is the one whose ownership failures cannot be seen in queue depth. Use
+     * {@link #unorderedShardsHeld()} or {@link #orderedUnitsHeld()} when the question is about one
+     * lane, as it is whenever {@code shardCount} is involved: that number is the unordered lane's
+     * alone.
+     */
     int shardsHeld();
+
+    /** Unordered-lane shards held, out of the queue's {@code shardCount}. */
+    int unorderedShardsHeld();
+
+    /** Ordered-lane units held, out of the queue's fixed routing space. */
+    int orderedUnitsHeld();
 
     /** Equivalent to {@link #stop()}. */
     @Override

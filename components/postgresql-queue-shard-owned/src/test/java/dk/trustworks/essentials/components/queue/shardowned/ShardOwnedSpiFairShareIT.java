@@ -83,8 +83,9 @@ class ShardOwnedSpiFairShareIT {
                     .describedAs("one process consuming through the contract is ONE instance, not one per lane")
                     .isEqualTo(1);
             assertThat(subscription.shardsHeld())
-                    .describedAs("unordered shards still held after several rebalances")
-                    .isEqualTo(SHARD_COUNT);
+                    .describedAs("units of BOTH lanes still held after several rebalances — this used to "
+                                 + "read SHARD_COUNT because shardsHeld() counted the unordered lane alone")
+                    .isEqualTo(SHARD_COUNT + ShardOwnedSchema.ORDERED_UNITS);
             assertThat(countUnownedShards("unordered") + countUnownedShards("ordered"))
                     .describedAs("shards with no live owner")
                     .isZero();
