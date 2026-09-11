@@ -185,30 +185,62 @@ Engine instances as separate operating-system processes against one PostgreSQL, 
 
 Ordering was verified in SQL with a window function over the observation table, so the comparison uses PostgreSQL's own insert ordering rather than anything the test reconstructs.
 
-### 3.5 Sustained load — 6 minutes, both engines, sampled every 30 seconds
+### 3.5 Sustained load — 30 minutes, both engines, sampled every 30 seconds
 
-⚠️ **Not re-measured since the pump rework.** This ran against the engine when each shard had its own thread and connection. The structural findings below (index size, dead-tuple ratio) are properties of the schema and hold; the latency columns should be read against §3.2's current figures, not as today's numbers.
+Re-measured **2026-09-11**: 30 minutes per arm at 300 messages a second, 60 windows each, 540 000
+messages per arm. The rate is deliberately well below either engine's capacity so latency stays a
+property of the design rather than of queue depth. Both engines handled exactly 9 000 messages in
+every 30-second window — neither fell behind at any point, in any window.
 
-300 messages a second, well below either engine's capacity so latency stays a property of the design rather than of queue depth. Both engines handled exactly 9 000 messages in every 30-second window — neither fell behind at any point.
+**Read the quarters, not the endpoints.** First-to-last is what the previous six-minute run reported,
+and on this longer run it is actively misleading: the baseline's first window is its fastest, so
+endpoint arithmetic turns a cold cache into "+14% drift".
 
-| | Baseline: first → last window | Shard-owned: first → last window |
+| p50, median per quarter | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| Baseline | 13 703 µs | 14 159 µs | 13 439 µs | 13 455 µs |
+| Shard-owned | 1 137 µs | 1 017 µs | 1 015 µs | 1 029 µs |
+
+| p99, median per quarter | Q1 | Q2 | Q3 | Q4 |
+|---|---|---|---|---|
+| Baseline | 28 095 µs | 27 999 µs | 25 711 µs | 26 559 µs |
+| Shard-owned | 2 841 µs | 3 283 µs | 3 515 µs | 3 469 µs |
+
+| | Baseline: first → last | Shard-owned: first → last |
 |---|---|---|
-| p50 | 12 183 → 13 271 µs (**+9%**) | 978 → 1 016 µs (**+4%**) |
-| p99 | 24 607 → 24 847 µs (**+1%**) | 2 681 → 2 811 µs (**+5%**) |
-| Table size | 5 328 → 13 136 KB | 2 240 → 7 896 KB |
-| **Index size** | 664 → **6 832 KB** | 32 → **1 296 KB** |
-| Dead tuples outstanding | oscillating 6 100 – 24 300 | oscillating 3 000 – 12 200 |
-| Autovacuum runs | 6 | 6 |
+| Table size | 4 168 → 13 840 KB | 2 584 → 8 032 KB |
+| **Index size** | 680 → **6 440 KB** | 320 → **1 384 KB** |
+| Dead tuples outstanding | sawtooth 5 600 – 24 400 | sawtooth 2 700 – 11 900 |
+| Autovacuum runs | 30 | 30 |
 
-**The headline is a negative result, and it is mine.** The design document argued that the current implementation's two dead tuples per message would show up as p99 drift under sustained load — that a design fast for the length of a benchmark would degrade once autovacuum had work to do. Over six minutes at this rate, **it does not**. The baseline's p99 moved 1%, its p50 9%, both inside the run-to-run variation this lab exhibits. Autovacuum ran six times on each engine and kept up with both.
+**The baseline does not drift, and thirty minutes says so more firmly than six did.** Its p50 is flat
+across the quarters and its p99 *falls* 5%. The design document's argument — that two dead tuples per
+message would surface as p99 degradation once autovacuum had work to do — is now unconfirmed at five
+times the previous scale, 1.1 million dead tuples, and thirty autovacuum cycles. It should be quoted
+as a structural cost difference, which is measured, and not as a predicted degradation, which has now
+twice failed to appear.
 
-What the soak *does* confirm is structural rather than temporal:
+**The shard-owned engine's p99 settles about 20% above its cold value, and this is new.** It rises
+2 841 → 3 283 → 3 515 µs across the first three quarters and then stops, flat into Q4. Six minutes
+reported +5% because six minutes is inside the settling period, not past it. Two things say it is a
+settle rather than accumulation: it plateaus while the run continues, and the storage it would be
+blamed on plateaus with it — the table reaches 7 360 KB by the third window and ends at 8 032. In
+absolute terms it is 0.7 ms on a 2.7 ms figure, against a baseline p99 of 26 ms.
 
-- **Indexes are 5.3× smaller** — 1 296 KB against 6 832 KB. That is the lane split and the narrower index set, and it is a durable property rather than a measurement artefact.
-- **Dead tuples outstanding run at roughly half**, tracking the 1.00-against-1.98 per-message figure exactly as predicted.
-- **Neither engine drifts**, which is worth knowing on its own: it means the latency advantage measured in §3.2 is not a cold-start effect that erodes.
+- **Indexes are 4.7× smaller** — 1 384 KB against 6 440 KB. That is the lane split and the narrower
+  index set, and it is a durable property rather than a measurement artefact.
+- **Dead tuples outstanding run at roughly half**, tracking the 1.00-against-1.98 per-message figure.
+  Both arms show a clean two-window sawtooth, which is autovacuum cycling, not growth.
+- **Neither engine falls behind**, so the latency advantage in §3.2 is not a cold-start effect.
 
-⚠️ **Six minutes at 300 a second is 108 000 messages, and that is a small soak.** Bloat and vacuum debt are effects of hours and of higher rates. "No drift observed here" is not "no drift exists" — it means the hypothesis was not confirmed at this scale, and a genuine pre-release soak still has to run for hours. The design's dead-tuple argument should be quoted as a structural cost difference, which is measured, rather than as a predicted degradation, which is not.
+⚠️ **Thirty minutes at 300 a second is 540 000 messages, and that is still not a pre-release soak.**
+Bloat and vacuum debt are effects of hours and of higher rates. What changed against the six-minute
+run is that the baseline's negative result got stronger and the shard-owned engine's p99 settle became
+visible; what did not change is that neither run reaches the timescale where vacuum debt compounds.
+Both arms recorded one isolated ~42 ms window (baseline window 40 at 41 951 µs, shard-owned window 19
+at 42 623 µs) — single windows, not a trend, and consistent with container noise on a shared machine.
+Only the shard-owned one exceeds twice its arm's median, because the baseline's median p99 is already
+28 ms.
 
 ## 3.6 Throughput, threads and connections, side by side
 
@@ -405,7 +437,7 @@ Stated so that absence is not mistaken for a passing result.
 
 - **Network partitions and clock skew.** `ShardOwnedMultiProcessIT` runs engine instances as separate operating-system processes and kills one with `SIGKILL`, so real process death is covered. A node that is *alive but partitioned* — the case the fencing design exists for — is not: simulating it needs network control the current harness does not have.
 - **Containers as separate hosts.** The node processes share a machine and a kernel clock. Genuinely separate hosts, with independent clocks and a real network between them, are untested.
-- **Sustained soak beyond minutes.** The longest run is the six minutes in §3.5 — 108 000 messages. Vacuum behaviour, index bloat and p99 drift over *hours* are unmeasured, and the shard-owned engine's dead-tuple advantage is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and did not find it, which is not the same as it not being there.
+- **Sustained soak beyond half an hour.** The longest run is the thirty minutes in §3.5 — 540 000 messages per arm, thirty autovacuum cycles. Vacuum behaviour, index bloat and p99 drift over *hours* remain unmeasured, and the baseline's dead-tuple cost is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and again at thirty and did not find it, which is not the same as it not being there. Nor has any soak run at a rate near either engine's capacity: 300/s keeps the latency signal clean and accumulates debt slowly, and the opposite trade has not been measured.
 - **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
 - **Failure injection beyond handler exceptions.** Database restarts, connection loss mid-batch, and disk pressure are untested.
 - **Throughput on hardware that can measure it.** See above.
@@ -439,6 +471,12 @@ taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
 # Idle cost across queues, incl. lease writes (§3.8), and the ordered-lane gates (§3.9, §3.10)
 ./mvnw verify -pl components/postgresql-queue-shard-owned \
   -Dit.test='ShardOwnedMultiQueueCostIT,ShardOwnedOrderedIdleCostIT,ShardOwnedBatchedReadIT'
+
+# Sustained-load soak (§3.5). Both arms run the full duration, so wall clock is roughly
+# 2 x soak.minutes plus container start-up: 30 here means about 65 minutes.
+taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
+  -Dit.test='ShardOwnedSoakIT' -Dbenchmark.run=true \
+  -Dsoak.minutes=30 -Dsoak.rate=300 -Dlab.pg.cpuset=4-7
 ```
 
 Run these without `-am`. With it, failsafe also runs on the aggregator and fails the build with "No tests matching pattern" before any arm executes; install the engine modules separately if the working tree has changes the lab must see.

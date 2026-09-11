@@ -58,8 +58,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Both arms run at the same offered rate, well below either engine's capacity, so latency stays a
  * property of the design rather than of queue depth, and both do identical work per unit time.
  * <p>
- * Duration is {@code -Dsoak.minutes}, default 6. Long enough for several autovacuum cycles at the
- * default 60-second naptime; a genuine pre-release soak should run for hours.
+ * Duration is {@code -Dsoak.minutes}, default 6, and rate is {@code -Dsoak.rate}, default 300/s.
+ * Six minutes is long enough for several autovacuum cycles at the default 60-second naptime; a
+ * genuine pre-release soak should run for hours. Both arms run for the full duration, so wall clock
+ * is roughly twice {@code soak.minutes} plus container start-up.
  */
 @Testcontainers(disabledWithoutDocker = true)
 @EnabledIfSystemProperty(named = "benchmark.run", matches = "true")
@@ -68,7 +70,16 @@ class ShardOwnedSoakIT {
 
     private static final short  QUEUE_ID       = 1;
     private static final int    SHARD_COUNT    = 8;
-    private static final double RATE_PER_SECOND = 300.0d;
+    /**
+     * Offered rate, {@code -Dsoak.rate}, default 300/s.
+     * <p>
+     * <b>Deliberately well below either engine's capacity</b>, and raising it is a trade rather than
+     * an improvement. The soak asks whether latency drifts; at or above capacity Little's Law fixes
+     * latency at {@code queueDepth / throughput} and the answer stops being a property of the design.
+     * A higher rate accumulates dead tuples and bloat faster, which is the other thing a soak is for
+     * — so vary it deliberately, and read the latency columns knowing what was traded for it.
+     */
+    private static final double RATE_PER_SECOND = Double.parseDouble(System.getProperty("soak.rate", "300"));
     private static final int    PAYLOAD_BYTES  = 200;
     private static final String BASELINE_TABLE = "perflab_soak_baseline";
 
