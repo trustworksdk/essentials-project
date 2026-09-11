@@ -4,12 +4,13 @@
 
 ## Quick Facts
 - **Package**: `dk.trustworks.essentials.components.queue.shardowned`
-- **Implementation**: `PostgresqlMessageQueue` implements `MessageQueue` — a **new SPI**, not `DurableQueues`
+- **Implementation**: `PostgresqlMessageQueue` implements `MessageQueue` — a **new SPI**, not `DurableQueues`. One `consume()` covers both lanes; it builds a `ShardOwnedQueue` per lane underneath, since one of those serves one lane
+- **As `DurableQueues`**: `postgresql-queue-shard-owned-adapter`, selected by `essentials.shard-owned-queue.durable-queues-enabled` (default false)
 - **Storage**: three lanes (`shard_queue_unordered`, `shard_queue_ordered`, `shard_queue_dead_letter`) plus `shard_queue_lease`, `shard_queue_instance` and `shard_queue_registry`; `bytea` payloads
 - **Locking**: none on the delivery path — a shard lease establishes ownership, so there is no claim write
 - **Notifications**: LISTEN/NOTIFY on one global channel, payload `queueId:lane:shard`
 - **Dependencies**: PostgreSQL driver, Micrometer (both `provided`), `shared`
-- **Status**: EXPERIMENTAL — builds and tests with the reactor, **not published** (`maven.deploy.skip=true`). No production use.
+- **Status**: **Published**, and new. No production use yet. `MessageQueue` is now frozen contract — additive in minor, breaking only in a major — so widening it is no longer free.
 
 ## TOC
 - [The one idea](#the-one-idea)
@@ -46,24 +47,7 @@ var orders = ShardOwnedSchema.registerQueue(dataSource, QueueName.of("orders"), 
 // 3. ONE runtime for the whole process, shared by every queue
 var runtime = new ShardRuntime(dataSource, ShardOwnerSettings.defaults());
 
-// 4. A queue
-var queue = ShardOwnedQueue.builder()
-                           .setDataSource(dataSource)
-                           .setQueueId(queueId)
-                           .setShardCount(shardCount)
-                           .setInstanceId(instanceId)
-                           .setRuntime(runtime)
-                           .build();
-queue.configureUnordered(payload -> handle(payload),
-                         ShardOwnerSettings.defaults(),
-                         shardCount,
-                         RedeliveryPolicy.fixed(Duration.ofMillis(100), 5));
-queue.start();                       // Lifecycle: start()/stop()/isStarted()
-```
-
-Or through the SPI, which manages both lanes for you:
-
-```java
+// 4. A queue. PostgresqlMessageQueue is the entry point: one consume() covers BOTH lanes.
 try (var queue = PostgresqlMessageQueue.builder()
                                        .setDataSource(dataSource)
                                        .setQueueId(queueId)
@@ -75,6 +59,39 @@ try (var queue = PostgresqlMessageQueue.builder()
                                      ConsumerOptions.defaults());
 }
 ```
+
+**The lane is chosen by the message, not by the consumer.** `Message.of` is unordered,
+`Message.ordered` carries a key, and one `consume` serves both. A *second* `consume` on the same
+queue is therefore a separate competing consumer with its own instance identity — not "the other
+lane". Registering one per lane is a mistake the demo made: it delivered unordered messages to the
+ordered handler and reported two live instances for one process.
+
+### The low-level path serves ONE lane
+
+`ShardOwnedQueue` is the engine underneath, and a single instance consumes a single lane —
+`configureUnordered` and `configureOrdered` are mutually exclusive and the second call is refused.
+Reach for it when you want exactly one lane and direct control of it; for both lanes use
+`PostgresqlMessageQueue` above, which builds the pair for you and shares one instance id between them
+so the cluster counts them as one member.
+
+```java
+var queue = ShardOwnedQueue.builder()
+                           .setDataSource(dataSource)
+                           .setQueueId(queueId)
+                           .setShardCount(shardCount)   // the UNORDERED lane's count; inert for ordered
+                           .setInstanceId(instanceId)
+                           .setRuntime(runtime)
+                           .build();
+queue.configureUnordered(payload -> handle(payload),    // ... OR configureOrdered, never both
+                         ShardOwnerSettings.defaults(),
+                         shardCount,
+                         RedeliveryPolicy.fixed(Duration.ofMillis(100), 5));
+queue.start();                       // Lifecycle: start()/stop()/isStarted()
+```
+
+`remaining()` and `shardsHeld()` on this object cover the configured lane only. Across both lanes,
+`Subscription.shardsHeld()` sums the pair, and the admin API's queue status reports each lane's depth
+and ownership separately.
 
 **Delayed delivery** — `Message.delayed(payload, type, Duration.ofMinutes(5))`, and
 `Message.delayedOrdered(...)` for the ordered lane. The delay is applied by the server, so it does
