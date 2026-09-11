@@ -380,6 +380,29 @@ class InboxOutboxOnShardOwnedIT {
                 .isSorted());
     }
 
+    /**
+     * The question {@code ViewEventProcessor} asks before forwarding an event, and the answer has to
+     * be right in both directions: true sends the event behind what is already queued, false lets the
+     * processor handle it inline. Answering false when something IS queued would run a later event
+     * ahead of an earlier one.
+     */
+    @Test
+    void a_key_with_something_queued_is_reported_as_such() {
+        assertThat(durableQueues.hasOrderedMessageQueuedForKey(OUTBOX_QUEUE, "quiet-key"))
+                .as("nothing has been queued for this key")
+                .isFalse();
+
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(
+                OUTBOX_QUEUE, OrderedMessage.of("payload", "busy-key", 0L)));
+
+        assertThat(durableQueues.hasOrderedMessageQueuedForKey(OUTBOX_QUEUE, "busy-key"))
+                .as("this one has")
+                .isTrue();
+        assertThat(durableQueues.hasOrderedMessageQueuedForKey(OUTBOX_QUEUE, "quiet-key"))
+                .as("and a key is not confused with its neighbours in the same unit")
+                .isFalse();
+    }
+
     private static dk.trustworks.essentials.components.queue.shardowned.spi.QueueName engineName(QueueName queueName) {
         return dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of(queueName.toString());
     }
