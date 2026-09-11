@@ -180,9 +180,14 @@ public class ShardOwnedQueueAutoConfiguration {
                 }
                 for (var entry : properties.getQueues().entrySet()) {
                     var name = QueueName.of(entry.getKey());
-                    var registered = ShardOwnedSchema.registerQueue(dataSource, name, entry.getValue());
-                    log.info("Registered queue '{}' as id {} with {} shards",
-                             name, registered.queueId(), registered.shardCount());
+                    // Absent means the engine's default routing space, which is the answer for
+                    // almost every queue. Naming one here is for the queue that needs more than 64
+                    // instances on its ordered lane.
+                    var orderedUnits = properties.getOrderedUnits()
+                                                 .getOrDefault(entry.getKey(), ShardOwnedSchema.ORDERED_UNITS);
+                    var registered = ShardOwnedSchema.registerQueue(dataSource, name, entry.getValue(), orderedUnits);
+                    log.info("Registered queue '{}' as id {} with {} unordered shards and {} ordered units",
+                             name, registered.queueId(), registered.shardCount(), orderedUnits);
                 }
             } catch (SQLException e) {
                 throw new IllegalStateException("Failed to initialise the shard-owned queue schema", e);

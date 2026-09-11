@@ -42,6 +42,9 @@ essentials:
     enabled: true
     initialize-schema: true
     pump-threads: 2
+    # name: UNORDERED shard count. The ordered lane is not configured here — it routes over the
+    # engine's fixed space (64 units), which `ordered-units.<name>` can override per queue for the
+    # rare queue expecting more than that many instances on its ordered lane.
     queues:
       trading-events: 4
     # Run the application's DurableQueues on this engine, so Inbox, Outbox and every

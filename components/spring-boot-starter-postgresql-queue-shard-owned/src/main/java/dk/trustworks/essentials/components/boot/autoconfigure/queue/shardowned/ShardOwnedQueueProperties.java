@@ -85,12 +85,37 @@ public class ShardOwnedQueueProperties {
     /**
      * Queues to register at start-up, as {@code name: shardCount}.
      * <p>
+     * <b>The count is the UNORDERED lane's alone.</b> It caps how many instances can consume that
+     * lane and is the unit of its parallelism; the ordered lane routes over its own space, set by
+     * {@link #getOrderedUnits()} and defaulting to {@code ShardOwnedSchema.ORDERED_UNITS}. This
+     * javadoc used to call it "the unit of ordering", which was true only while both lanes sized
+     * themselves from it.
+     * <p>
      * Registration is idempotent and shared: whichever instance gets there first interns the name,
      * and the rest resolve it. Re-declaring a queue with a different shard count fails the context
-     * rather than being accepted — the count is the unit of ordering and two processes disagreeing
-     * about it strands messages.
+     * rather than being accepted — two processes disagreeing about it write to shards nobody leases.
+     * <p>
+     * It may be grown later with {@code growShardCount}, which running consumers pick up on their
+     * next heartbeat; it may never shrink.
      */
     private Map<String, Integer> queues = new LinkedHashMap<>();
+
+    /**
+     * Per-queue ordered routing space, as {@code name: units}, for queues that need more than the
+     * default {@code ShardOwnedSchema.ORDERED_UNITS}. A name absent here gets the default.
+     * <p>
+     * Separate from {@link #getQueues()} rather than folded into it, because the common case is one
+     * number and relaxed binding cannot map {@code orders: 4} onto an object. Raise it for the one
+     * queue that needs more than 64 instances consuming its ordered lane — not across a process
+     * running hundreds of queues, where the per-unit state (a lease row and an owner object each) is
+     * what grows.
+     * <p>
+     * <b>Fixed at registration and never changed afterwards.</b> Routing reads the value recorded on
+     * the queue's registry row, so raising it here affects queues created afterwards and leaves
+     * existing ones routing exactly as before — which is what stops a version upgrade from moving
+     * every key.
+     */
+    private Map<String, Integer> orderedUnits = new LinkedHashMap<>();
 
     /** Threads, and therefore held connections, this process uses to talk to the database. */
     private int pumpThreads = 2;
@@ -272,5 +297,13 @@ public class ShardOwnedQueueProperties {
 
     public void setAutoRegisterShardCount(int autoRegisterShardCount) {
         this.autoRegisterShardCount = autoRegisterShardCount;
+    }
+
+    public Map<String, Integer> getOrderedUnits() {
+        return orderedUnits;
+    }
+
+    public void setOrderedUnits(Map<String, Integer> orderedUnits) {
+        this.orderedUnits = orderedUnits;
     }
 }

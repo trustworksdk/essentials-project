@@ -280,4 +280,57 @@ class ShardOwnedQueueAutoConfigurationIT {
                 .run(context -> assertThat(context.getBean(ShardOwnedQueueFactory.class).instanceId())
                         .isEqualTo("pod-7-consumer-a"));
     }
+
+    /**
+     * The ordered routing space is a per-queue, registration-time choice the engine has always
+     * supported and the starter did not expose — it called the three-argument registerQueue, so every
+     * configured queue took the default whatever the deployment needed. A queue expecting more than
+     * ORDERED_UNITS instances on its ordered lane had no way to say so from configuration.
+     */
+    @Test
+    void a_queue_can_be_given_a_larger_ordered_routing_space() {
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.wide=2",
+                                    "essentials.shard-owned-queue.ordered-units.wide=128")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(orderedUnitsOf("wide"))
+                            .as("the configured space is recorded on the registry row")
+                            .isEqualTo(128);
+                    assertThat(shardCountOf("wide"))
+                            .as("and the shard count remains the unordered lane's own number")
+                            .isEqualTo(2);
+                });
+    }
+
+    /** A queue not named there takes the engine's default, which is the case for almost all of them. */
+    @Test
+    void a_queue_without_an_explicit_space_takes_the_default() {
+        runner().withPropertyValues("essentials.shard-owned-queue.queues.plain=2")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(orderedUnitsOf("plain")).isEqualTo(ShardOwnedSchema.ORDERED_UNITS);
+                });
+    }
+
+    private int orderedUnitsOf(String queueName) throws Exception {
+        return registryColumn(queueName, "ordered_units");
+    }
+
+    private int shardCountOf(String queueName) throws Exception {
+        return registryColumn(queueName, "shard_count");
+    }
+
+    private int registryColumn(String queueName, String column) throws Exception {
+        try (var connection = java.sql.DriverManager.getConnection(postgres.getJdbcUrl(),
+                                                                   postgres.getUsername(),
+                                                                   postgres.getPassword());
+             var statement = connection.prepareStatement(
+                     "SELECT " + column + " FROM shard_queue_registry WHERE queue_name = ?")) {
+            statement.setString(1, queueName);
+            try (var resultSet = statement.executeQuery()) {
+                assertThat(resultSet.next()).as("queue '%s' must be registered", queueName).isTrue();
+                return resultSet.getInt(1);
+            }
+        }
+    }
 }
