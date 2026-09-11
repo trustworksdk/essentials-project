@@ -670,6 +670,30 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         };
     }
 
+    /**
+     * Summed across this process's subscriptions to the queue. Zero when this instance consumes none
+     * of it.
+     * <p>
+     * <b>Per distinct metrics object, not per consumer.</b> {@link #consume} gives a subscription's
+     * two lane consumers <em>one</em> {@code ShardOwnerMetrics} between them — deliberately, since a
+     * subscription is one thing to the caller — so summing per consumer double-counts everything.
+     * That reported 136 units acquired for an instance holding 68, which is the only reason it was
+     * noticed; every other counter was doubled too and merely looked large.
+     */
+    @Override
+    public QueueStatistics statistics() {
+        synchronized (consumers) {
+            var counted = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<ShardOwnerMetrics, Boolean>());
+            var total = QueueStatistics.NONE;
+            for (var consumer : consumers) {
+                if (counted.add(consumer.metrics())) {
+                    total = total.plus(consumer.metrics().statistics());
+                }
+            }
+            return total;
+        }
+    }
+
     @Override
     public QueueDepth depth() throws SQLException {
         var unordered = 0L;

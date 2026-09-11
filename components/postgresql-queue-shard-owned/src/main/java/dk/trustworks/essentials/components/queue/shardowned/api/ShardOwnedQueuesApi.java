@@ -83,6 +83,19 @@ public interface ShardOwnedQueuesApi {
     Optional<ApiShardOwnedQueueStatus> getQueueStatus(Object principal, QueueName queueName);
 
     /**
+     * What the queue's consumers have done in the instance answering this call.
+     * <p>
+     * Separate from {@link #getQueueStatus} because the two answer different questions from different
+     * sources: status reads the database and is cluster-wide, these are this JVM's in-memory counters
+     * and reset on restart. An instance consuming none of the queue answers with
+     * {@code runningInThisInstance = false} and zeros, which is why that flag is carried rather than
+     * left for a reader to infer.
+     *
+     * @return empty if no queue is registered under that name
+     */
+    Optional<ApiShardOwnedQueueStatistics> getQueueStatistics(Object principal, QueueName queueName);
+
+    /**
      * A single message by its id.
      *
      * @param messageId as rendered by {@link MessageId#toString()}, e.g. {@code u-3-1042}

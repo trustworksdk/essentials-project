@@ -77,6 +77,7 @@ final class EssentialsAdminApiSpec {
             ApiQueuedMessage.class,
             ApiShardOwnedMessage.class,
             ApiShardOwnedQueueStatus.class,
+            ApiShardOwnedQueueStatistics.class,
             ApiQueuedStatistics.class,
             ApiSubscription.class,
             ApiSubscriptionStatistics.class,
@@ -330,6 +331,14 @@ final class EssentialsAdminApiSpec {
          .roles(QUEUE_R, ADMIN)
          .pathParam("queueName", new StringSchema(), "The queue name.")
          .responseOptionalRef("ApiShardOwnedQueueStatus", "The queue's depth and ownership.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getQueueStatistics")
+         .operationId("shardOwnedGetQueueStatistics")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/statistics")
+         .summary("Delivery counters for a queue, as recorded by the instance answering the request.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseRef("ApiShardOwnedQueueStatistics", "This instance's counters for the queue.");
 
         b.operation(ShardOwnedQueuesApi.class, "getMessage")
          .operationId("shardOwnedGetMessage")

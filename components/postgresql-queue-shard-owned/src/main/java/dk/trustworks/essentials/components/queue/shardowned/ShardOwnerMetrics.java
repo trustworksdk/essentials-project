@@ -140,6 +140,12 @@ public final class ShardOwnerMetrics {
     public final LongAdder     leasesLost            = new LongAdder();
     /** Connections lost underneath an owner and reconnected. Routine in production; not fatal. */
     public final LongAdder     connectionFailures    = new LongAdder();
+    /**
+     * Units taken, <b>including the first acquisition at start-up</b>. It counted only rebalance
+     * acquisitions until the admin API began publishing it, so a single instance holding every unit
+     * of a queue reported zero — which reads as "this instance has taken nothing" rather than "this
+     * instance never had to rebalance".
+     */
     public final LongAdder     shardsAcquired        = new LongAdder();
     public final LongAdder     shardsReleased        = new LongAdder();
     /** Dispatch attempts skipped because that key already had a message in flight. */
@@ -147,6 +153,28 @@ public final class ShardOwnerMetrics {
     public final AtomicInteger maxPendingHoles      = new AtomicInteger();
     /** Peak number of distinct keys handled concurrently — the evidence for cross-key parallelism. */
     public final AtomicInteger maxConcurrentKeys    = new AtomicInteger();
+
+    /**
+     * The operator-facing subset, as a stable shape.
+     * <p>
+     * {@link #snapshot()} stays the full map for tests and debugging; this is what the admin API
+     * publishes, so the two can move independently — an internal counter renamed must not be a
+     * breaking change to a published contract.
+     */
+    public dk.trustworks.essentials.components.queue.shardowned.spi.QueueStatistics statistics() {
+        return new dk.trustworks.essentials.components.queue.shardowned.spi.QueueStatistics(
+                delivered.sum(),
+                handlerFailures.sum(),
+                retriesScheduled.sum(),
+                retriesDispatched.sum(),
+                deadLettered.sum(),
+                orderViolations.sum(),
+                sweepRecoveries.sum(),
+                shardsAcquired.sum(),
+                shardsReleased.sum(),
+                leasesLost.sum(),
+                watermarkCapped.sum());
+    }
 
     public Map<String, Object> snapshot() {
         var snapshot = new LinkedHashMap<String, Object>();

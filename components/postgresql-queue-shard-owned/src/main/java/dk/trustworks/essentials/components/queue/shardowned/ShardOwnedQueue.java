@@ -380,6 +380,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                               dispatch);
             owners.add(owner);
             runtime.register(queueId, "ordered", entry[0], owner);
+            metrics.shardsAcquired.increment();
         }
         // The ordered lane had no heartbeat at all: its leases were taken once and left to expire,
         // after which a second node could take the same shard while this one kept delivering.
@@ -447,6 +448,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             owners.add(owner);
             ownedShards.put(entry[0], owner);
             runtime.register(queueId, "unordered", entry[0], owner);
+            metrics.shardsAcquired.increment();
         }
         startHeartbeat();
         leased.forEach(entry -> metrics.observer().shardOwnershipChanged(entry[0], true));

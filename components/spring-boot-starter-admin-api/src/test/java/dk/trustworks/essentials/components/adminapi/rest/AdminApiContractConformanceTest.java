@@ -70,9 +70,9 @@ class AdminApiContractConformanceTest {
     /** Keeps the comparisons below from passing vacuously if either side fails to be discovered. */
     @Test
     void both_sides_of_the_comparison_are_actually_discovered() {
-        // 40 before the shard-owned queue engine was published; its nine operations bring it to 49.
-        assertThat(contractOperations()).hasSize(49);
-        assertThat(implementedOperations()).hasSize(49);
+        // 40 before the shard-owned queue engine was published; its ten operations bring it to 50.
+        assertThat(contractOperations()).hasSize(50);
+        assertThat(implementedOperations()).hasSize(50);
     }
 
     @Test

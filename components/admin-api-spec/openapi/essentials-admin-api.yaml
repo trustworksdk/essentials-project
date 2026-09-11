@@ -1192,6 +1192,54 @@ paths:
       x-required-roles:
       - essentials_queue_reader
       - essentials_admin
+  /shard-owned-queues/{queueName}/statistics:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: "Delivery counters for a queue, as recorded by the instance answering\
+        \ the request."
+      operationId: shardOwnedGetQueueStatistics
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — This instance's counters for the queue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiShardOwnedQueueStatistics"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
   /shard-owned-queues/{queueName}/messages/{messageId}:
     get:
       tags:
@@ -3180,6 +3228,59 @@ components:
           type: boolean
         lastError:
           type: string
+    ApiShardOwnedQueueStatistics:
+      required:
+      - deadLettered
+      - delivered
+      - handlerFailures
+      - leasesLost
+      - orderViolations
+      - retriesDispatched
+      - retriesScheduled
+      - runningInThisInstance
+      - shardsAcquired
+      - shardsReleased
+      - sweepRecoveries
+      - watermarkCapped
+      type: object
+      properties:
+        queueName:
+          $ref: "#/components/schemas/QueueName"
+        runningInThisInstance:
+          type: boolean
+        delivered:
+          type: integer
+          format: int64
+        handlerFailures:
+          type: integer
+          format: int64
+        retriesScheduled:
+          type: integer
+          format: int64
+        retriesDispatched:
+          type: integer
+          format: int64
+        deadLettered:
+          type: integer
+          format: int64
+        orderViolations:
+          type: integer
+          format: int64
+        sweepRecoveries:
+          type: integer
+          format: int64
+        shardsAcquired:
+          type: integer
+          format: int64
+        shardsReleased:
+          type: integer
+          format: int64
+        leasesLost:
+          type: integer
+          format: int64
+        watermarkCapped:
+          type: integer
+          format: int64
     ApiShardOwnedQueueStatus:
       required:
       - deadLetteredDepth

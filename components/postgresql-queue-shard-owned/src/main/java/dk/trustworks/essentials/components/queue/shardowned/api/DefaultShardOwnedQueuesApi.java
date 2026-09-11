@@ -77,6 +77,26 @@ public class DefaultShardOwnedQueuesApi implements ShardOwnedQueuesApi {
     }
 
     @Override
+    public Optional<ApiShardOwnedQueueStatistics> getQueueStatistics(Object principal, QueueName queueName) {
+        validateQueueReaderRole(principal);
+        requireNonNull(queueName, "No queueName provided");
+        return call("read the statistics of queue '" + queueName.value() + "'",
+                    () -> {
+                        var queue = queues.findQueue(queueName);
+                        if (queue.isEmpty()) {
+                            return Optional.empty();
+                        }
+                        var health = queue.get().health();
+                        // "This instance consumes some of it" is what makes the counters meaningful;
+                        // without it a console cannot tell an idle queue from one served elsewhere.
+                        var running = health.unorderedOwned() > 0 || health.orderedOwned() > 0;
+                        return Optional.of(ApiShardOwnedQueueStatistics.from(queueName,
+                                                                             queue.get().statistics(),
+                                                                             running));
+                    });
+    }
+
+    @Override
     public Optional<ApiShardOwnedMessage> getMessage(Object principal, QueueName queueName, MessageId messageId) {
         validateQueueReaderRole(principal);
         requireNonNull(queueName, "No queueName provided");

@@ -148,6 +148,16 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     /**
      * Messages enqueued and not yet acknowledged, per lane. Cheap enough to poll for monitoring.
      */
+    /**
+     * What this process's consumers of this queue have done since they started — see
+     * {@link QueueStatistics} for why the scope matters before the numbers do.
+     * <p>
+     * In-memory and free to call. An instance consuming none of this queue reports
+     * {@link QueueStatistics#NONE}; that is "served elsewhere", not "stalled", and {@link #health()}
+     * is what tells those apart because it reads the database.
+     */
+    QueueStatistics statistics();
+
     QueueDepth depth() throws SQLException;
 
     /**

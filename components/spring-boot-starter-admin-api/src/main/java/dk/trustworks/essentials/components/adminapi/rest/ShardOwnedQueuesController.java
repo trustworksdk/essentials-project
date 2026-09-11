@@ -73,6 +73,18 @@ public class ShardOwnedQueuesController {
                                   .orElseThrow(() -> noSuchQueue(queueName));
     }
 
+    /**
+     * This instance's counters for the queue. See {@code ApiShardOwnedQueueStatistics} — they are
+     * per-JVM and reset on restart, which is why the response says whether this instance consumes
+     * the queue at all.
+     */
+    @GetMapping("/shard-owned-queues/{queueName}/statistics")
+    public ApiShardOwnedQueueStatistics getQueueStatistics(@PathVariable String queueName) {
+        return shardOwnedQueuesApi.getQueueStatistics(principal(), QueueName.of(queueName))
+                                  .orElseThrow(() -> new AdminApiResourceNotFoundException(
+                                          "No shard-owned queue '" + queueName + "'."));
+    }
+
     @GetMapping("/shard-owned-queues/{queueName}/messages/{messageId}")
     public ApiShardOwnedMessage getMessage(@PathVariable String queueName,
                                            @PathVariable String messageId) {

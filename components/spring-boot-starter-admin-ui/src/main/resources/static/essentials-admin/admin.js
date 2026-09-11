@@ -1235,9 +1235,10 @@ views.shardOwnedQueues = async () => {
 
     const settled = await Promise.allSettled([
         api(`/shard-owned-queues/${encodeURIComponent(q)}/status`),
-        api(`/shard-owned-queues/${encodeURIComponent(q)}/dead-letter-messages?offset=0&limit=100`)
+        api(`/shard-owned-queues/${encodeURIComponent(q)}/dead-letter-messages?offset=0&limit=100`),
+        api(`/shard-owned-queues/${encodeURIComponent(q)}/statistics`)
     ]);
-    const [status, deadLetters] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const [status, deadLetters, stats] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
 
     const dlqRow = (m) => `<tr data-shard-msg="${esc(m.id)}">
       <td><button class="link" data-shard-msg="${esc(m.id)}">${esc(m.id)}</button></td>
@@ -1295,6 +1296,34 @@ views.shardOwnedQueues = async () => {
     </div>
 
     ${card('Ownership', ownership, 'GET /shard-owned-queues/{queueName}/status', true)}
+
+    ${card('Delivery — this instance', stats
+        ? (stats.runningInThisInstance
+            ? `<div class="kpi-row">
+                 ${tile('Delivered', num(stats.delivered))}
+                 ${tile('Handler failures', num(stats.handlerFailures), null, stats.handlerFailures > 0)}
+                 ${tile('Retries', `${num(stats.retriesDispatched)} <span class="tile-sub" style="font-size:13px">of ${num(stats.retriesScheduled)} scheduled</span>`)}
+                 ${tile('Dead-lettered', num(stats.deadLettered), null, stats.deadLettered > 0)}
+                 ${tile('Order violations', num(stats.orderViolations),
+                        'A producer numbered and committed in different orders', stats.orderViolations > 0)}
+               </div>
+               <div class="kpi-row">
+                 ${tile('Sweep recoveries', num(stats.sweepRecoveries),
+                        'Found by the backstop, not the cursor — normal under backlog')}
+                 ${tile('Units acquired', num(stats.shardsAcquired))}
+                 ${tile('Units released', num(stats.shardsReleased))}
+                 ${tile('Leases lost', num(stats.leasesLost),
+                        'Rebalancing if during one, fencing if not', stats.leasesLost > 0)}
+                 ${tile('Watermark capped', num(stats.watermarkCapped),
+                        'Ordered cursor advanced on the clock, not on proof', stats.watermarkCapped > 0)}
+               </div>
+               <p class="hint">Counted in memory by this instance since it started, and reset by a restart.
+                  Another instance serving the same queue reports different numbers, and both are right.</p>`
+            : `<div class="empty">This instance consumes none of this queue, so it has no counters for it.
+                 That is not a stalled queue — check <strong>Unowned units</strong> above, which reads the
+                 database and covers the whole cluster.</div>`)
+        : errorState(settled[2].reason, 'essentials_queue_reader'),
+        'GET /shard-owned-queues/{queueName}/statistics', true)}
 
     ${card('Dead-letter messages',
         deadLetters ? table(cols, deadLetters.map(dlqRow), { empty: 'No dead-letter messages' })
