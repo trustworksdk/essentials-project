@@ -40,6 +40,23 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * it can route anything, and a single handler signature has to serve both lanes, which is why
  * {@link MessageHandler} takes a nullable key rather than the two separate shapes the engine uses
  * internally.
+ *
+ * <h2>One queue here, two engines underneath</h2>
+ * {@link #consume} builds <b>two</b> {@link ShardOwnedQueue} instances, one per lane, because a
+ * {@code ShardOwnedQueue} serves one lane by construction — the two lanes have separate owners,
+ * separate leases and separate unit spaces. They share a {@code consumerInstanceId} so the pair
+ * counts as one member of the cluster rather than two; registering them separately is what once made
+ * a single process claim half the shards of each lane and strand the rest.
+ * <p>
+ * The lane is chosen by the <em>message</em>, never by the consumer: {@code Message.of} is unordered
+ * and {@code Message.ordered} carries a key. So one {@code consume} covers both lanes, and a second
+ * {@code consume} on the same queue is a genuinely separate competing consumer — not "the other
+ * lane".
+ * <p>
+ * {@code Subscription.shardsHeld()} therefore sums the pair, with {@code unorderedShardsHeld()} and
+ * {@code orderedUnitsHeld()} for the per-lane figures. Those are not interchangeable: anything about
+ * {@code shardCount} — growth, the shrink refusal, a shard-scope session excluding consumers — is an
+ * unordered-lane question, and the total buries it under a constant routing space.
  */
 public final class PostgresqlMessageQueue implements MessageQueue {
     private static final Logger log = LoggerFactory.getLogger(PostgresqlMessageQueue.class);

@@ -41,6 +41,32 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * A consumer here leases shards and owns them. Competing consumers are several instances leasing
  * disjoint subsets; an exclusive consumer is one instance leasing all of them. Two modes, one
  * mechanism, no special case.
+ *
+ * <h2>One instance serves ONE lane</h2>
+ * This is the thing to know before reading anything else here, because several members only make
+ * sense once it is clear. {@link #configureUnordered} and {@link #configureOrdered} are mutually
+ * exclusive: whichever is called fixes {@code activeLane} for the life of the instance, and calling
+ * the other afterwards is refused rather than silently switching.
+ * <p>
+ * A queue with traffic on both lanes therefore needs <em>two</em> of these, which is exactly what
+ * {@code PostgresqlMessageQueue.consume} builds — one unordered, one ordered, sharing an instance id
+ * so the pair counts as a single member of the cluster. The two lanes have separate owners, separate
+ * leases and separate unit spaces, so there is no single object that could serve both without
+ * becoming two internally.
+ * <p>
+ * What follows from it, and would otherwise look arbitrary:
+ * <ul>
+ *   <li>{@link #remaining()} counts the configured lane only — the unordered table over
+ *       {@code shardCount}, or the ordered table over the queue's routing space.</li>
+ *   <li>{@link #shardsHeld()} likewise. The per-subscription total across both lanes is
+ *       {@code Subscription.shardsHeld()}, which sums a pair of these.</li>
+ *   <li>{@code shardCount} is the <b>unordered</b> lane's number. On an instance configured for the
+ *       ordered lane it is inert: that lane routes over the fixed space recorded on the queue's
+ *       registry row and never reads it. The builder still requires a positive value because it
+ *       cannot know the lane — {@code configureX} comes after {@code build()}.</li>
+ *   <li>{@link #enqueue} round-robins over {@code shardCount}; ordered messages go through
+ *       {@link #enqueueOrdered}, which routes by key instead.</li>
+ * </ul>
  */
 public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedQueue.class);
@@ -234,9 +260,18 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * {@link #start()} is what lets this class honour {@link Lifecycle}: a container needs to
      * construct a resource first and start it later, and it has nowhere to pass a handler at
      * start time.
+     * <p>
+     * <b>Mutually exclusive with {@link #configureUnordered}.</b> One instance serves one lane; a
+     * queue with traffic on both needs two instances. Calling both used to flip {@code activeLane}
+     * and leave the first handler populated but never invoked — which reads like "configure both
+     * lanes" and silently consumes only the second. Re-configuring the same lane is allowed.
      */
     public ShardOwnedQueue configureOrdered(OrderedPayloadHandler handler, ShardOwnerSettings settings,
                                          int maxShards, RedeliveryPolicy redeliveryPolicy) {
+        requireTrue(activeHandler == null,
+                    "This queue is already configured for the unordered lane. One instance serves one "
+                    + "lane — build a second ShardOwnedQueue for the ordered lane, sharing this "
+                    + "instance id so the pair counts as one member of the cluster.");
         activeLane = "ordered";
         activeOrderedHandler = requireNonNull(handler, "No handler provided");
         activeSettings = requireNonNull(settings, "No settings provided");
@@ -245,8 +280,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return this;
     }
 
+    /**
+     * The unordered-lane counterpart of {@link #configureOrdered}, and mutually exclusive with it —
+     * see that method for why.
+     */
     public ShardOwnedQueue configureUnordered(PayloadHandler handler, ShardOwnerSettings settings,
                                            int maxShards, RedeliveryPolicy redeliveryPolicy) {
+        requireTrue(activeOrderedHandler == null,
+                    "This queue is already configured for the ordered lane. One instance serves one "
+                    + "lane — build a second ShardOwnedQueue for the unordered lane, sharing this "
+                    + "instance id so the pair counts as one member of the cluster.");
         activeLane = "unordered";
         activeHandler = requireNonNull(handler, "No handler provided");
         activeSettings = requireNonNull(settings, "No settings provided");
