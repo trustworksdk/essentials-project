@@ -15,7 +15,6 @@ What lives here is the machinery that makes the demo demonstrate something:
 | `DirectInstrumentPriceService` | A deliberately **non**-event-sourced latest-price table, written with raw JDBC, whose only purpose is to be benchmarked against the `market_data` aggregate path |
 | `QueueLoadGenerator` | Drives the **shard-owned queue engine** on both lanes at once — sustained trickle plus on-demand spikes — and checks per-key ordering as messages arrive |
 | `QueueLoadGeneratorController` | `/api/admin/queue-load` — status, start/stop, `POST /spike?size=N` |
-| `ShardOwnedDurableQueuesConfiguration` | Puts the app's whole `DurableQueues` — every `EventProcessor`'s Inbox included — on the shard-owned engine. Property-gated so the default engine stays an A/B |
 
 ## Why these are not slices
 
@@ -120,8 +119,10 @@ Measured after those three were fixed, one instance, 4 unordered shards and 64 o
 `QueueLoadGenerator`'s handler sleeps a millisecond. Real handlers open a unit of work and write SQL,
 and the way to exercise that without writing a fake is to put the app's own `DurableQueues` on the
 engine: an `EventProcessor` forwards what it consumes through an `Inbox`, and an `Inbox` is a queue.
-`ShardOwnedDurableQueuesConfiguration` does that, so the four projections are delivered by the engine
-and their handlers do the real work. The engine auto-registers the queues the processors invent:
+`essentials.shard-owned-queue.durable-queues-enabled` does that, so the four projections are delivered
+by the engine and their handlers do the real work. The demo used to carry its own
+`ShardOwnedDurableQueuesConfiguration` bean for this; the starter owns it now, and the demo is just
+two lines of YAML. The engine auto-registers the queues the processors invent:
 
 ```
 DefaultCommandQueue | Inbox:TradeSettlementProjection | Inbox:TradeValuationProjection

@@ -39,5 +39,5 @@ Inbox, Outbox and `DurableLocalCommandBus` touch **8** of `DurableQueues`' 30 me
 
 ## Not done
 
-- No Spring auto-configuration. Wiring a flag that selects this `DurableQueues` bean belongs in the starter that owns that bean. `examples/essentials-trading-demo`'s `ShardOwnedDurableQueuesConfiguration` is what such a bean looks like, and is the only place the adapter is exercised against real handlers.
+- ~~No Spring auto-configuration.~~ **Done**: `spring-boot-starter-postgresql-queue-shard-owned` selects this `DurableQueues` on `essentials.shard-owned-queue.durable-queues-enabled` (default false), with `auto-register-shard-count` beside it. It orders itself with `@AutoConfiguration(beforeName = "…EssentialsComponentsConfiguration")` — by name, so the starter takes no compile dependency on `spring-boot-starter-postgresql` — and wins because that class declares its `PostgresqlDurableQueues` `@ConditionalOnMissingBean`. The adapter is a **hard** dependency of that starter, not optional: optional plus `@ConditionalOnClass` would make the flag a silent no-op for anyone who set it without adding the jar.
 - `getQueueNameFor` works (it reads the id), but the admin API and UI need the listing operations that do not.

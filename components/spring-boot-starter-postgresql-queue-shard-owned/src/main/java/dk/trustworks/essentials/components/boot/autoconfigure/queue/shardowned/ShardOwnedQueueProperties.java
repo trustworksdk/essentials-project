@@ -47,6 +47,39 @@ public class ShardOwnedQueueProperties {
      * or a container platform that does not give each one its own. Two processes sharing an id look
      * like one to the fair-share rebalance, which halves the shards each of them is allowed to hold.
      */
+    /**
+     * Back the application's {@code DurableQueues} with this engine instead of
+     * {@code PostgresqlDurableQueues} — so {@code Inbox}, {@code Outbox},
+     * {@code DurableLocalCommandBus} and every {@code EventProcessor}'s projections are delivered by
+     * it. Default {@code false}: the engine is experimental, and a starter on the classpath must not
+     * silently move the delivery path of an application that only wanted the {@code MessageQueue}
+     * contract.
+     * <p>
+     * Both engines implement the same interface, so this is an A/B rather than a one-way door: turn
+     * it off and the default implementation comes back with no other change.
+     * <p>
+     * The adapter serves the subset of {@code DurableQueues} that Inbox, Outbox and the command bus
+     * actually use. Operations outside it throw with the reason rather than returning something
+     * approximate, so an application using the wider surface directly finds out at the call rather
+     * than from a wrong answer.
+     */
+    private boolean durableQueuesEnabled = false;
+
+    /**
+     * Unordered shard count for a queue the adapter is asked for but nobody registered. Zero — the
+     * default — fails instead.
+     * <p>
+     * Required in practice when {@link #isDurableQueuesEnabled()} is on, and the reason is structural:
+     * {@code DurableQueues} invents a queue on first use, and an {@code Inbox} is named by the
+     * processor that owns it, so the queues an application actually needs cannot all be listed in
+     * {@link #getQueues()} ahead of time. This engine will not invent a shard count, because the count
+     * caps how many instances can consume the unordered lane and can be raised but never lowered.
+     * <p>
+     * Applies to the unordered lane only — the ordered lane routes over a fixed space recorded on the
+     * queue's registry row, so an auto-registered queue's ordered lane is already correct.
+     */
+    private int autoRegisterShardCount = 0;
+
     private String instanceId;
 
     /**
@@ -223,5 +256,21 @@ public class ShardOwnedQueueProperties {
 
     public void setLeaseTtl(Duration leaseTtl) {
         this.leaseTtl = leaseTtl;
+    }
+
+    public boolean isDurableQueuesEnabled() {
+        return durableQueuesEnabled;
+    }
+
+    public void setDurableQueuesEnabled(boolean durableQueuesEnabled) {
+        this.durableQueuesEnabled = durableQueuesEnabled;
+    }
+
+    public int getAutoRegisterShardCount() {
+        return autoRegisterShardCount;
+    }
+
+    public void setAutoRegisterShardCount(int autoRegisterShardCount) {
+        this.autoRegisterShardCount = autoRegisterShardCount;
     }
 }

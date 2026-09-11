@@ -29,7 +29,7 @@ essentials:
     verbose-tracing: false
     # Off (which is also the default): it triggers on the `durable_queues` table, and this demo runs
     # durable queues on the shard-owned engine. Turn it back on alongside
-    # trading-demo.shard-owned-durable-queues=false.
+    # essentials.shard-owned-queue.durable-queues-enabled=false.
     enable-queue-statistics: false
     shared-queue-statistics-table-name: durable_queues_statistics
     enable-queue-statistics-ttl: true
@@ -44,6 +44,14 @@ essentials:
     pump-threads: 2
     queues:
       trading-events: 4
+    # Run the application's DurableQueues on this engine, so Inbox, Outbox and every
+    # EventProcessor's projections are delivered by it. Set to false to run the same demo on
+    # PostgresqlDurableQueues instead — both implement the interface, so it is an A/B.
+    durable-queues-enabled: true
+    # Required with the flag above: an Inbox is named by the processor that owns it, so those
+    # queues cannot be listed under `queues` and are registered on first use with this many
+    # unordered shards.
+    auto-register-shard-count: 4
 
   fenced-lock-manager:
     fenced-locks-table-name: fenced_locks

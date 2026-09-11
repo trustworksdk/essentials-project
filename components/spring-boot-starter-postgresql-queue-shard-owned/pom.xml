@@ -46,6 +46,19 @@
             <artifactId>postgresql-queue-shard-owned</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+            The DurableQueues adapter, selected by essentials.shard-owned-queue.durable-queues-enabled.
+
+            A hard dependency rather than optional, deliberately. Optional plus @ConditionalOnClass
+            would make the flag a silent no-op for anyone who set it without also adding the jar: the
+            context would start, back DurableQueues with the default engine, and report nothing. Both
+            modules are unpublished and experimental, so there is no release cost to carrying it.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue-shard-owned-adapter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>

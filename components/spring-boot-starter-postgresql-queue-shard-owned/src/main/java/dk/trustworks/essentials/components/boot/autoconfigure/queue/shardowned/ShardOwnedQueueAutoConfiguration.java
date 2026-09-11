@@ -17,6 +17,10 @@
 package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
+import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
+import dk.trustworks.essentials.components.foundation.transaction.*;
+import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedDurableQueues;
 import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest.*;
 import dk.trustworks.essentials.components.queue.shardowned.*;
 import dk.trustworks.essentials.components.queue.shardowned.api.*;
@@ -38,19 +42,26 @@ import dk.trustworks.essentials.shared.network.Network;
 /**
  * Auto-configuration for the shard-owned PostgreSQL queue engine.
  * <p>
- * <b>What this deliberately does not do.</b> It configures the engine's own {@code MessageQueue}
- * contract, not {@code DurableQueues}. The engine is not an implementation of that interface — the
- * design rejects roughly two fifths of it as artefacts of a claim-based queue — so nothing in the
- * surrounding Essentials machinery (Inboxes, Outboxes, EventProcessor, the admin API) is wired up
- * here. Whether an adapter should exist is an open decision, and a starter that quietly implied one
- * either way would be making it.
+ * <b>{@code DurableQueues} is opt-in, and off by default.</b> The engine's own contract is
+ * {@code MessageQueue}; it is not an implementation of {@code DurableQueues}, because the design
+ * rejects roughly two fifths of that interface as artefacts of a claim-based queue. An adapter over
+ * the part Inbox, Outbox and {@code DurableLocalCommandBus} actually use now exists, and
+ * {@code essentials.shard-owned-queue.durable-queues-enabled} selects it — which moves every
+ * {@code EventProcessor}'s projections onto this engine. It stays off unless asked, because a
+ * starter on the classpath must not silently relocate the delivery path of an application that
+ * wanted only the {@code MessageQueue} contract.
  * <p>
  * <b>What it does do</b> is the part that is unambiguous: one {@link ShardRuntime} for the process,
  * schema initialisation that is safe to run on every boot, the queues named in configuration
  * registered once, and a {@link ShardOwnedQueueFactory} for building queues against them. Handlers
  * stay the application's business — an auto-configuration cannot know what a message means.
  */
-@AutoConfiguration(after = DataSourceAutoConfiguration.class)
+@AutoConfiguration(after = DataSourceAutoConfiguration.class,
+                  // By NAME, not by class: this starter must not take a compile dependency on
+                  // spring-boot-starter-postgresql just to order itself. That starter declares
+                  // DurableQueues @ConditionalOnMissingBean, so the selector below only wins if
+                  // this configuration is evaluated first.
+                  beforeName = "dk.trustworks.essentials.components.boot.autoconfigure.postgresql.EssentialsComponentsConfiguration")
 @ConditionalOnClass(ShardOwnedQueue.class)
 @ConditionalOnBean(DataSource.class)
 @ConditionalOnProperty(prefix = "essentials.shard-owned-queue", name = "enabled",
@@ -232,5 +243,56 @@ public class ShardOwnedQueueAutoConfiguration {
                 throw new IllegalStateException("Failed to initialise the shard-owned queue schema", e);
             }
         }
+    }
+
+    /**
+     * Runs the application's {@link DurableQueues} on this engine — {@code Inbox}, {@code Outbox},
+     * {@code DurableLocalCommandBus}, and therefore every {@code EventProcessor}'s projections.
+     * <p>
+     * <b>Off unless asked.</b> Selected by
+     * {@code essentials.shard-owned-queue.durable-queues-enabled}, and the default is {@code false}:
+     * merely having this starter on the classpath must not relocate an application's delivery path.
+     * <p>
+     * <b>How it displaces the default.</b> {@code spring-boot-starter-postgresql} declares its
+     * {@code PostgresqlDurableQueues} {@code @ConditionalOnMissingBean}, so defining this bean first
+     * is the whole mechanism — hence the {@code beforeName} on the class. Turning the property off
+     * restores the default with no other change, which is what makes the two engines an A/B.
+     * <p>
+     * <b>Why auto-registration is not optional here.</b> {@code DurableQueues} invents a queue on
+     * first use and an {@code Inbox} is named by the processor that owns it, so those names cannot be
+     * pre-declared in {@code essentials.shard-owned-queue.queues}. The context fails at start-up
+     * rather than at the first unregistered inbox, because the alternative is an inbox that silently
+     * never consumes.
+     */
+    @Bean
+    @ConditionalOnMissingBean(DurableQueues.class)
+    @ConditionalOnProperty(prefix = "essentials.shard-owned-queue", name = "durable-queues-enabled",
+                           havingValue = "true")
+    public DurableQueues shardOwnedDurableQueues(MessageQueues queues,
+                                                 JSONSerializer jsonSerializer,
+                                                 UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
+                                                 DataSource dataSource,
+                                                 ShardOwnedQueueProperties properties) {
+        if (properties.getAutoRegisterShardCount() <= 0) {
+            throw new IllegalStateException(
+                    "essentials.shard-owned-queue.durable-queues-enabled is on, but "
+                    + "auto-register-shard-count is " + properties.getAutoRegisterShardCount() + ". "
+                    + "DurableQueues invents queues on first use — an Inbox is named by the processor "
+                    + "that owns it — and this engine will not invent a shard count for them, because "
+                    + "the count caps how many instances can consume a queue's unordered lane and can "
+                    + "be raised but never lowered. Set it to the number of instances you will ever "
+                    + "run against one queue (the measured knee is 4, and 8 buys 95% of what 16 does), "
+                    + "or turn durable-queues-enabled off.");
+        }
+        log.info("Durable queues are running on the SHARD-OWNED engine — Inbox, Outbox and every "
+                 + "EventProcessor's projections are delivered by it. Queues invented at runtime get "
+                 + "{} unordered shards.", properties.getAutoRegisterShardCount());
+        return ShardOwnedDurableQueues.builder()
+                                      .setQueues(queues)
+                                      .setJsonSerializer(jsonSerializer)
+                                      .setUnitOfWorkFactory(unitOfWorkFactory)
+                                      .setDataSource(dataSource)
+                                      .setAutoRegisterShardCount(properties.getAutoRegisterShardCount())
+                                      .build();
     }
 }
