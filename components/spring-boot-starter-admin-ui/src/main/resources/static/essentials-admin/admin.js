@@ -1286,7 +1286,7 @@ views.shardOwnedQueues = async () => {
 
     <div class="kpi-row">
       ${tile('Unowned units', status ? num(status.unownedShards) : nil(),
-             'Messages routed here are never delivered', status ? status.unownedShards > 0 : false)}
+             'Cluster-wide. Messages routed here are never delivered', status ? status.unownedShards > 0 : false)}
       ${tile('Unordered depth', status ? num(status.unorderedDepth) : nil())}
       ${tile('Ordered depth', status ? num(status.orderedDepth) : nil())}
       ${tile('Dead letters', status ? num(status.deadLetteredDepth) : nil(), null,
@@ -1295,7 +1295,13 @@ views.shardOwnedQueues = async () => {
              status ? `of at most ${status.maxInstances}` : null)}
     </div>
 
-    ${card('Ownership', ownership, 'GET /shard-owned-queues/{queueName}/status', true)}
+    ${card('Ownership — across the cluster', ownership
+        + `<p class="hint">Units with a live owner <em>anywhere</em>, not this instance's share. Read it with
+             the delivery counters below, which are this instance's alone: a queue can be fully owned here
+             and delivering nothing in the instance you are looking at, because another one holds it.
+             A queue consumed through an exclusive subscription — an <code>EventProcessor</code>'s inbox —
+             is held by one instance cluster-wide by design, so its siblings consume none of it.</p>`,
+        'GET /shard-owned-queues/{queueName}/status', true)}
 
     ${card('Delivery — this instance', stats
         ? (stats.runningInThisInstance
