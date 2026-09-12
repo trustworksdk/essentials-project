@@ -87,6 +87,11 @@ one instance exercises none of its ownership, rebalancing or fencing.
 - **The status endpoint is cluster-wide; the statistics endpoint is per-instance.** Both instances
   report `ordered 64/64` because all 64 units have an owner *somewhere*, not because each holds 64.
   The console says so on each card now.
+- **Ctrl-C is graceful, and that is worth knowing rather than assuming.** SIGINT reaches the forked
+  application JVM through the foreground process group, so the shutdown hook runs: every lease
+  released and the instance deregistered. Measured — 408 units held, 0 owned and no membership rows
+  seconds later. Maven then prints `Failed to execute goal ... Process terminated`, which is the
+  plugin reporting a child killed by a signal, not the application failing.
 - **Stop instance 1 last.** Spring Boot's Docker Compose support started PostgreSQL for it, and
   stopping it takes the database away from the others.
 
