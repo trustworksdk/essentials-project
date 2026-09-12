@@ -1318,7 +1318,12 @@ views.shardOwnedQueues = async () => {
                         'Ordered cursor advanced on the clock, not on proof', stats.watermarkCapped > 0)}
                </div>
                <p class="hint">Counted in memory by this instance since it started, and reset by a restart.
-                  Another instance serving the same queue reports different numbers, and both are right.</p>`
+                  Another instance serving the same queue reports different numbers, and both are right.</p>
+               <p class="hint"><strong>What "delivered" means depends on who feeds the queue.</strong> An
+                  <code>EventProcessor</code> forwards every event through its inbox, so there the count is
+                  the event rate. A <code>ViewEventProcessor</code> handles events inline and queues only
+                  what it could not — a retry, or work held behind one — so there a rising count is a
+                  signal, and zero is the healthy state rather than a silent projection.</p>`
             : `<div class="empty">This instance consumes none of this queue, so it has no counters for it.
                  That is not a stalled queue — check <strong>Unowned units</strong> above, which reads the
                  database and covers the whole cluster.</div>`)
