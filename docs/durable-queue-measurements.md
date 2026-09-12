@@ -435,7 +435,16 @@ adoption can be per queue: move the latency-sensitive or high-volume ones and le
 
 Stated so that absence is not mistaken for a passing result.
 
-- **Network partitions and clock skew.** `ShardOwnedMultiProcessIT` runs engine instances as separate operating-system processes and kills one with `SIGKILL`, so real process death is covered. A node that is *alive but partitioned* — the case the fencing design exists for — is not: simulating it needs network control the current harness does not have.
+- **Partition between separate hosts.** The *alive but partitioned* case is now covered —
+  `ShardOwnedNetworkPartitionIT` puts a forwarder between one instance and PostgreSQL that stops
+  passing bytes without closing anything, so that instance keeps running and learns nothing until its
+  socket timeout. Its units are taken by the survivor, the queue keeps delivering, and on healing it
+  is fenced out rather than competing. What remains untested is the same partition between genuinely
+  separate *hosts*; the mechanism being exercised is identical, so this is a fidelity gap rather than
+  an untested behaviour.
+- **Clock skew is not a gap and should stop being listed as one.** All durable time is server-side
+  `now()` — `visible_at`, `lease_until`, `last_seen` — and `ServerSideTimeTest` fails the build if a
+  client clock reaches the storage layer. Independent clocks change nothing.
 - **Containers as separate hosts.** The node processes share a machine and a kernel clock. Genuinely separate hosts, with independent clocks and a real network between them, are untested.
 - **Sustained soak beyond half an hour.** The longest run is the thirty minutes in §3.5 — 540 000 messages per arm, thirty autovacuum cycles. Vacuum behaviour, index bloat and p99 drift over *hours* remain unmeasured, and the baseline's dead-tuple cost is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and again at thirty and did not find it, which is not the same as it not being there. Nor has any soak run at a rate near either engine's capacity: 300/s keeps the latency signal clean and accumulates debt slowly, and the opposite trade has not been measured.
 - **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
