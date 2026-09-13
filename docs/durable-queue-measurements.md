@@ -143,7 +143,7 @@ present it as one:
 
 Idle polling is eliminated: 907 transactions to move 20 000 messages, essentially only the ones doing real work.
 
-**Tier 3 (WAL streaming) is not built, and should not be.** Its gate requires clearly beating Tiers 1 and 2 by enough to justify a replication slot's operational weight. Tier 2 measures 0.44 ms at the median; a WAL stream will not clear that by a margin that pays for `wal_level = logical`, replication privileges, and a slot that pins WAL on disk when a consumer dies.
+**Tier 3 (WAL streaming) is not built, and should not be.** The comparison that decides it is against **Tier 1**, not Tier 2: Tier 2 is a hand-off inside one JVM that never reaches the database, so a WAL stream cannot replace it at any latency. Tier 1 is the cross-JVM case a WAL stream would replace, and it measures 1.76 ms p50 / 2.63 ms p99 in the table above. A WAL stream will not clear that by a margin that pays for `wal_level = logical`, replication privileges, and a slot that pins WAL on disk when a consumer dies.
 
 ### 3.3 Sequence-gap behaviour
 
@@ -402,7 +402,7 @@ headline comparison suggests.
 
 | Because | Measured |
 |---|---|
-| Latency matters | 0.44 ms p50 / 0.97 ms p99, against 20.7 / 27.1 at the shipped 20 ms poll. Push, not poll — there is no interval to tune |
+| Latency matters | 0.54 ms p50 / 1.02 ms p99, against 20.7 / 27.1 at the shipped 20 ms poll. Push, not poll — there is no interval to tune |
 | Volume makes per-message cost matter | −65 to −72% WAL bytes; dead tuples 1.98 → 1.00; row updates 1.00 → **0**, because ownership removes the claim write. Index 5.2× smaller after a 6-minute soak |
 | The process holds many queues | Connections are `pumpThreads + 1` **per process** — 5 at 300 queues — rather than growing with consumers |
 | Per-key ordering must hold across processes | Verified across ~19 lease lifetimes with a third node joining mid-run. The current implementation's own docs say ordering does not hold across instances |

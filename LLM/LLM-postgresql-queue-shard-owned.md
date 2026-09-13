@@ -405,30 +405,33 @@ Endpoints live under the admin API base path (default `/api/essentials/admin/v1`
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter` |
 | `POST` | `/shard-owned-queues/{queueName}/messages/{messageId}/resurrect` |
 
-**These endpoints are NOT in the generated OpenAPI contract**, and do not appear in the admin API's
-start-up summary of served areas. The engine is unpublished, so it has no `EssentialsAdminApiSpec`
-entry — a published contract cannot describe an artifact that is in no repository. They work; they are
-just not declared.
+These endpoints **are** in the generated OpenAPI contract: `EssentialsAdminApiSpec` carries the
+`shard-owned-queues` paths and `ShardOwnedQueuesController` sits in `spring-boot-starter-admin-api`
+with every other admin controller. This section used to say the opposite, correctly at the time — a
+published contract cannot describe an artifact that is in no repository. Publishing the engine removed
+the obstacle.
 
 ## Gotchas
 
 - **`SessionScope.KEY` does not exist here** and cannot: per-key exclusivity lives in the owner's memory, and a second party could only enter it by adding a query per message to the ordered fast path. Use `SHARD`.
 - **MESSAGE / BATCH pull sessions are unordered-lane only.** A row lease cannot retract a row the owner already read, so a message can reach both a session and a push consumer — a duplicate, which at-least-once permits and ordering does not.
 - **Interceptors change things; observers watch them.** `queue.addInterceptor(...)` wraps `EnqueueMessages` (replace the batch, or refuse) and `HandleMessage` (wrap, or skip the handler). An interceptor that throws fails the operation; an observer that throws does not. Both must be attached before `consume`. In Spring, declare either as a bean and the starter attaches it to every queue.
+- **`DurableQueuesInterceptor` is a separate chain, and works too.** Running on the adapter, `durableQueues.addInterceptor(...)` is honoured — the adapter runs it around its own operations, so an interceptor written for `PostgresqlDurableQueues` behaves the same here, and Spring's `DurableQueuesInterceptor` beans are applied to it. Two things to know: `getNextMessageReadyForDelivery` is never intercepted because the adapter refuses it, and a `HandleQueuedMessage` interceptor is handed the delivery-path message, whose `getId()` and `getTotalDeliveryAttempts()` throw — the queue name, payload and metadata are all there.
 - **Not proceeding on `HandleMessage` acknowledges the message** — the handler is skipped and the message is gone. Useful as a kill switch, indistinguishable afterwards from having processed it.
 - **`payloadType` is yours, not the engine's.** An `int` you define, stored and handed back to the handler (and on `PulledMessage` / `DeadLetter`). Never compared, indexed or interpreted; there is no registry mapping it to a type name, so keeping two services' mappings in step is your job.
 - **The contract is at-least-once.** A shard moving mid-flight legitimately redelivers. Do not assert exactly-once.
 - **Ordering holds across processes**, which the current implementation's documentation says it does not — but only within a lane, per key, and only while the key's shard has one owner.
-- **`enqueue` routes unordered messages round-robin and ordered messages by `key.hashCode()`.** That is why growing `shardCount` is safe for the unordered lane and refused while the ordered lane holds messages.
+- **`enqueue` routes unordered messages round-robin and ordered messages by `mix(hash(key)) mod orderedUnits`.** The two lanes route on different numbers, which is why growing `shardCount` is safe with ordered traffic in flight: the ordered lane never reads it.
 - **By-id operations exist**: `getMessage`, `deleteMessage`, `retryMessage`, `markAsDeadLetter`, `resurrect`. `MessageId` is `(lane, shard, seq)` which IS the primary key, so these are point lookups that cost delivery nothing. Acknowledging by id is still a `QueueSession` operation — the engine cannot know an arbitrary caller did the work.
 - **A by-id write races a delivery in progress and cannot be made not to.** Whether a message is in a handler lives in the owner's memory. Deleting one the owner holds means the handler still completes; the engine tolerates the mismatched acknowledgement, but the handler did run.
 - **Read payloads in psql through the views**, not the tables: `shard_queue_unordered_readable`, `shard_queue_ordered_readable`, `shard_queue_dead_letter_readable`. Queue name as a column, payload as text where it is valid UTF-8, hex otherwise.
-- **`shardCount` can GROW**, via `ShardOwnedSchema.growShardCount(ds, name, n)`.
-  - Refused while the **ordered lane** holds anything: a key's shard is `hash(key) mod shardCount`, so changing the count sends a key's next message to a different shard from its last — one key, two owners, reordered.
+- **`shardCount` can GROW**, via `ShardOwnedSchema.growShardCount(ds, name, n)`. It is the **unordered** lane's number.
+  - **No ordered-lane precondition.** It can be called with ordered traffic in flight, because that lane routes on `orderedUnits` and never reads `shardCount`. It used to be refused while the ordered lane held anything, and that refusal could not be satisfied — nothing lets an operator quiesce producers.
   - **Shrinking is never allowed**: messages already in the removed shards would be addressed by nobody. Drain those shards and recreate the queue instead.
   - **No restart needed.** A running queue re-reads `shard_count` on each heartbeat and takes the new shards within one interval (`leaseTtl / 3`, 10s by default). A registry reporting *fewer* shards is ignored — dropping shards at runtime would strand what is in them.
-  - **A one-heartbeat window remains where instances disagree about the modulus.** Harmless for unordered (round-robin, every shard owned). For ordered, keep producers paused across it — seconds, not a deployment.
+  - **A one-heartbeat window remains where instances disagree about the count.** Harmless: routing is round-robin and every shard has an owner under either count.
+- **`orderedUnits` cannot grow, and is the number to get right at registration.** `registerQueue(ds, name, shardCount, orderedUnits)` takes it; the default is 64. It caps how many instances can hold ordered units for that queue, and exceeding it degrades rather than fails — surplus instances hold nothing on that lane, and it recovers on its own when the instance count drops. Raising it for a queue that already holds data is deliberately not built; see `docs/durable-queue-shard-owned.md` §18.3.
 - **Register by name, always.** `registerQueue(ds, QueueName.of("orders"), 8)` interns the name to a `short` and records the shard count with it. Building a queue from a name takes both from the registry, so two processes cannot disagree about the shard count — a disagreement routes the same key to different shards and strands whole shards.
 - **`shardCount` cannot change once registered.** Re-registering with a different count is refused rather than accepted.
 - **A queue name is unique; a message id is not.** `MessageId` is `(lane, shard, seq)` and sequences are per `(queue, shard)`, so `u-0-1` exists in every queue. Every admin operation therefore takes the queue name too, and there is no `getQueueNameFor(messageId)` — the question has no answer.
-- **Not published.** `maven.deploy.skip=true`. The Spring Boot starter and interceptor chain exist; the admin API's `EssentialsAdminApiSpec` entry does not, and cannot until the engine is published.
+- **Published**, along with its adapter and starter — no `maven.deploy.skip` on any of the three; only the `examples/` modules carry one. The admin API's `EssentialsAdminApiSpec` entry exists, which publishing is what made possible.

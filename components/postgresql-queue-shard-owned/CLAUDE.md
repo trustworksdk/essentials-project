@@ -191,7 +191,7 @@ Three beans, three different ordering needs, and every failure here is silent: a
 
 Consolidated with the measurement gaps and their priority in `docs/durable-queue-shard-owned.md` §18.
 
-Tier 3 WAL streaming (its gate says don't — Tier 2 measures 0.44 ms p50).
+Tier 3 WAL streaming (its gate says don't — it can only replace Tier 1, which measures 1.76 ms p50).
 
 The admin surface is complete: the `*Api` SPI here, the `EssentialsAdminApiSpec` entry, and
 `ShardOwnedQueuesController` in `spring-boot-starter-admin-api` with every other admin controller.

@@ -242,11 +242,18 @@ one shard count throughout.
 Growing an **unordered** queue also needs nothing: routing is round-robin, every shard has an owner
 either way, so `growShardCount` and carry on.
 
-Growing an **ordered** queue is not a thing: the lane routes on a fixed unit space
-(`ShardOwnedSchema.ORDERED_UNITS`) that `shardCount` does not reach, so there is nothing to grow and
+Growing an **ordered** queue's *shard count* is not a thing: the lane routes on a unit space
+(`ShardOwnedSchema.ORDERED_UNITS`, 64 by default) that `shardCount` does not reach, so
 `growShardCount` no longer has an ordered-lane precondition. It used to be the one case with a
 procedure — quiesce producers, drain, grow, resume — which was not a procedure at all, because
 nothing let an operator quiesce.
+
+**The unit space itself is still fixed for the life of a queue**, and that is a separate decision
+rather than a leftover — §18.3. It is chosen per queue at registration, `shardCount` is what a
+consumer count scales against, and exceeding the space degrades gracefully rather than failing
+(measured: 65 instances against 64 units converge to 64 holders and one idle). So the number that had
+to be guessed correctly is gone; the one that remains caps concurrency on a queue's ordered lane and
+is raised at creation, not afterwards.
 
 ### How the constraint was removed — and what this section got wrong
 
@@ -546,7 +553,7 @@ The hand-off drain runs first in `pumpOnce` and, if it delivered anything, retur
 
 **The head sweep deliberately does not skip pre-claims outright.** If a hand-off is lost — the process dies between commit and dispatch — the sweep is what still delivers the message. But a pre-claim committed moments ago is far more likely to be in flight than lost, so the sweep skips this owner's own pre-claims until they are older than a grace period.
 
-**Tier 3 — WAL streaming.** Not built. Its gate was that it must clearly beat Tier 2 by enough to justify a replication slot's operational weight, and Tier 2 measures 0.44 ms at the median.
+**Tier 3 — WAL streaming.** Not built, and the gate is worth stating against the right tier. It cannot replace Tier 2: that one never reaches the database at all, so nothing beats it and 0.54 ms p50 is not the bar. What it would replace is **Tier 1**, the cross-JVM case — measured 1.76 ms p50, 2.63 ms p99. A WAL stream would have to clear *that* by enough to pay for `wal_level = logical`, replication privileges, and a slot that pins WAL on disk when a consumer dies. It will not.
 
 ---
 
@@ -973,14 +980,15 @@ size it generously up front: the correction is cheap, but not free, and it is ea
 **What it does not**
 
 - Exactly-once delivery, cross-service messaging, or ordering across shards.
-- Ordering across a `shardCount` change **while the ordered lane holds messages**. A key's shard is `hash(key) mod shardCount`, so growing the count would send a key's next message to a different shard from its last. `ShardOwnedSchema.growShardCount` refuses in that state. Growing is supported once the ordered lane is empty, and at any time for an unordered-only queue — see §2.7. Shrinking is not supported at all: the messages in the removed shards would be addressed by nobody.
+- Growing a queue's **ordered routing space**. A key's unit is `mix(hash(key)) mod orderedUnits`, and `orderedUnits` is recorded at registration and never changes for that queue — §18.3 for why raising it afterwards is not built. `shardCount` is a different number: it is the unordered lane's, `growShardCount` raises it online with ordered traffic in flight, and the ordered lane does not read it — see §2.7.
+- **Shrinking** `shardCount`. The messages in the removed shards would be addressed by nobody.
 - `SessionScope.KEY` (§10).
 
 **Known gaps** — features described in the contract or in the module's own documentation that are not implemented:
 
 | Gap | Detail |
 |---|---|
-| No semantic type for `instanceId` | Deliberate. `QueueName` is a local record for the same reason: the `types` module carries kotlin-reflect and kotlin-stdlib at compile scope, which is a poor trade for a wrapper in a module that otherwise depends on `shared` alone. The transposition hazard — a `short`, an `int` and a `String` in a row — is closed instead by the builders, which name every argument |
+| No semantic type for `instanceId` | Deliberate, and `QueueName` is a local record for the same reason — but only the second half of that reason survives checking. The transposition hazard — a `short`, an `int` and a `String` in a row — is closed by the builders, which name every argument, and that is what the decision rests on. The cost it used to be justified by is **not** what it claimed: `types` declares kotlin-reflect and kotlin-stdlib `<optional>true</optional>`, so neither is transitive (`mvn dependency:tree -pl components/foundation -Dincludes=org.jetbrains.kotlin` returns nothing). Depending on `types` would add one jar, itself depending only on `shared`. What remains is a real but much smaller objection: a module that deliberately holds to `shared` alone would take on a core artifact for one wrapper |
 
 **Not measured** — absence of a result, not a passing one. Partitions between genuinely separate hosts (the alive-but-partitioned *behaviour* is covered by `ShardOwnedNetworkPartitionIT`; what is untested is doing it across machines rather than through a forwarder), soaks longer than the thirty minutes in the measurements' §3.5, or at a rate near either engine's capacity, payload size distributions beyond a uniform 200 bytes, and throughput on hardware that can hold a throughput number still. See [`durable-queue-measurements.md`](./durable-queue-measurements.md) §4 for what this lab can and cannot resolve.
 
@@ -1170,12 +1178,48 @@ Absence of a result, not a passing one. Detail and the environment's limits: [`d
 These are decisions, not a backlog. Each has its reasoning where it is implemented; reopening one
 means disagreeing with that reasoning rather than finding an omission.
 
-- **Growing an existing queue's ordered routing space.** See the ordered-routing design's §8.
-- **Tier 3 WAL wake-up.** Its own gate says do not: Tier 2 measures 0.54 ms p50, and a replication
-  slot is real operational weight (§6).
-- **Three `DurableQueues` operations that still throw** in the adapter — `addInterceptor`/
-  `removeInterceptor`, `queryForMessagesSoonReadyForDelivery`, `getNextMessageReadyForDelivery`.
-  Each is a structural difference rather than missing work, and the admin surface uses none of them.
-- **A semantic type for `instanceId`.** §15's gap table says why: the `types` module would put
-  kotlin-reflect and kotlin-stdlib on a module that otherwise depends on `shared` alone, and the
-  builders already close the transposition hazard.
+Each therefore carries the condition that would reopen it. A decision with no stated trigger decays
+into a gap entry — which is what §18 opens by warning about — because the next reader cannot tell
+whether it was judged or forgotten.
+
+**Growing an existing queue's ordered routing space.** `orderedUnits` is recorded at registration and
+never changes for that queue. The doubling split would do it without a drain, and is cheaper now than
+when first considered — the objections it had to fight, per-unit sequences and density-based hole
+detection, are both gone (ordered-routing design §8). It is not built because the space is a per-queue
+choice with a generous default, and exceeding it degrades rather than fails: 65 instances against 64
+units converge to 64 holders and one idle, measured.
+*Reopen when* a deployment consumes a queue with more instances than its recorded space, and the idle
+holders are load it needed. Nothing reports that today, which is the weaker half of this entry.
+
+**Tier 3 WAL wake-up.** The gate is against **Tier 1**, not Tier 2 — Tier 2 is a hand-off inside one
+JVM that never reaches the database, so nothing replaces it. Tier 1 is the cross-JVM path a WAL stream
+would replace, at 1.76 ms p50 / 2.63 ms p99, and beating that does not pay for `wal_level = logical`,
+replication privileges and a slot that pins WAL on disk when a consumer dies (§6).
+*Reopen when* a workload needs sub-millisecond delivery **across** processes — Tier 1's figure, not
+Tier 2's, is the one to measure against.
+
+**Two `DurableQueues` operations that still throw** in the adapter —
+`queryForMessagesSoonReadyForDelivery` and `getNextMessageReadyForDelivery`. Each is a structural
+difference rather than missing work: the first orders by next-delivery timestamp across every shard of
+both lanes, which no index produces and no single sequence merges on; the second needs a row-lease
+session that outlives the call, and one opened per call would leave a lease on every message it
+returned. The admin surface uses neither.
+*Reopen when* something calls one of them — and check first whether it **swallows** the
+`UnsupportedOperationException`, because that is how the previous two refusals stayed expensive and
+invisible (§13, and `hasOrderedMessageQueuedForKey` in the adapter).
+
+**A semantic type for `instanceId`.** The builders name every argument, which closes the transposition
+hazard a `short`/`int`/`String` run creates. §15's gap table has the detail — including that the cost
+this used to be justified by was wrong: `types`' Kotlin dependencies are `optional` and reach no
+consumer.
+*Reopen when* a second module needs the same identity, at which point it is a shared type rather than
+one wrapper.
+
+**Bridging `DurableQueuesInterceptor` onto the engine's chain.** Considered and rejected while building
+the adapter's interception, which runs the chain around the adapter's own methods instead. The engine's
+`MessageQueueInterceptor` carries two operations against `DurableQueues`' twenty-one, so a bridge would
+carry two and silently drop nineteen — the "silence instead of spans" failure the original refusal
+existed to prevent, reintroduced under a different name. The two chains are independent and an
+application may register on both.
+*Reopen when* the engine's chain grows the operations that are missing, which is its own decision to
+make (`MessageQueueInterceptor`'s javadoc says why it has two).
