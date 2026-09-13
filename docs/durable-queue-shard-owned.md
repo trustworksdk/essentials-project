@@ -1271,6 +1271,33 @@ consumer.
 *Reopen when* a second module needs the same identity, at which point it is a shared type rather than
 one wrapper.
 
+**A rig that throttles a real block device.** The slow-disk case is tested as the condition it
+produces — commits outrunning the lease, and an instance that can no longer confirm its own liveness
+(§8.6) — rather than by slowing a device. Doing the latter properly needs a `dm-delay` target and a
+privileged container, and it would measure the storage stack rather than the engine: what the engine
+is exposed to is the consequence, and the consequence is asserted. The volume *filling* is a different
+failure and is tested directly ([`durable-queue-measurements.md`](./durable-queue-measurements.md)
+§3.4.2).
+*Reopen when* a deployment reports disk-latency symptoms that `ShardOwnedStaleLivenessIT` does not
+reproduce — which would mean the engine is exposed to something other than the lease being outrun.
+
+**A partition between genuinely separate machines.** The cross-host measurement (§3.4.1 of the
+measurements) puts the cut-off node in its own container, on its own Docker network, partitioned by
+`docker network disconnect` — but both containers share a host kernel. Nothing in the result depends
+on that: the packets are dropped at the network either way, and what the numbers turn on is the
+client's socket configuration rather than whose kernel dropped them.
+*Reopen when* a result looks kernel-dependent, or a deployment across real hosts disagrees with the
+3.3 s / not-within-90 s figures.
+
+**`surplusInstances` and `deliveryPauses` on the admin surface.** Both are on
+`ShardOwnerMetrics.snapshot()` and neither is on `QueueStatistics`, which is the shape the admin API
+publishes. Adding one means the three-place sync an admin operation requires — the `*Api` SPI, the
+`EssentialsAdminApiSpec` mapping, and a controller — and putting a number that is still settling inside
+a contract compatibility-checked at `1.0.0`. Both are logged on transition, and both are readable by
+anything holding the `ShardOwnerMetrics`.
+*Reopen when* an operator needs them without log access, or an alert wants them per queue rather than
+per process — at which point they go through the contract properly rather than being appended to it.
+
 **Bridging `DurableQueuesInterceptor` onto the engine's chain.** Considered and rejected while building
 the adapter's interception, which runs the chain around the adapter's own methods instead. The engine's
 `MessageQueueInterceptor` carries two operations against `DurableQueues`' twenty-one, so a bridge would

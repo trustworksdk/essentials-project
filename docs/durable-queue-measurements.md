@@ -513,15 +513,16 @@ list starts costing more than it gives.
   fenced out on healing. What a forwarder cannot reproduce is timing, and that is now measured
   separately (§3.4.1): the cut-off node in its own container, the partition made with
   `docker network disconnect`, and the finding that `socketTimeout` is the whole difference between
-  finding out in three seconds and not finding out within ninety. What is still a fidelity gap, and a
-  small one, is that the containers share a host kernel — nothing in the result depends on that,
-  since the packets are dropped at the network either way.
+  finding out in three seconds and not finding out within ninety. The containers do share a host
+  kernel; that is a decision rather than an outstanding gap, and it is recorded as one in
+  [`durable-queue-shard-owned.md`](./durable-queue-shard-owned.md) §18.3 along with what would reopen
+  it.
 - **Clock skew is not a gap and should stop being listed as one.** All durable time is server-side
   `now()` — `visible_at`, `lease_until`, `last_seen` — and `ServerSideTimeTest` fails the build if a
   client clock reaches the storage layer. Independent clocks change nothing.
 - **Sustained soak beyond half an hour.** The longest run is the thirty minutes in §3.5 — 540 000 messages per arm, thirty autovacuum cycles. Vacuum behaviour, index bloat and p99 drift over *hours* remain unmeasured, and the baseline's dead-tuple cost is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and again at thirty and did not find it, which is not the same as it not being there. Nor has any soak run at a rate near either engine's capacity: 300/s keeps the latency signal clean and accumulates debt slowly, and the opposite trade has not been measured.
 - **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
-- ~~**Failure injection beyond process death, connection loss, partition and restart.**~~ **Closed.** Those four are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`, `ShardOwnedDatabaseRestartIT`), and disk pressure is now covered in both of its forms: a full volume in §3.4.2, and the slow-disk case as the condition it actually produces — commits outrunning the lease — in `ShardOwnedStaleLivenessIT`. What is *not* measured is how a genuinely slow device behaves, because throttling one needs a `dm-delay` target and a privileged container; what the engine is exposed to is the consequence, and that is what is tested.
+- ~~**Failure injection beyond process death, connection loss, partition and restart.**~~ **Closed.** Those four are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`, `ShardOwnedDatabaseRestartIT`), and disk pressure is now covered in both of its forms: a full volume in §3.4.2, and the slow-disk case as the condition it actually produces — commits outrunning the lease — in `ShardOwnedStaleLivenessIT`. How a genuinely slow *device* behaves is not measured, and that is a decision rather than an omission — `durable-queue-shard-owned.md` §18.3 records it with what would reopen it. What the engine is exposed to is the consequence, and the consequence is what is tested.
 - **Throughput on hardware that can measure it.** See above.
 - **Idle cost of a large routing space across many queues.** §3.8 varies the space on one queue and the queue count at one space; the product of the two — hundreds of queues at 1 024 units each — is not measured, and per-unit state (a lease row and an owner object each) is what would grow.
 - **Growing an existing queue's routing space.** Not built; see `durable-queue-ordered-routing-design.md` §8.
