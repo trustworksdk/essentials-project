@@ -435,6 +435,11 @@ adoption can be per queue: move the latency-sensitive or high-volume ones and le
 
 Stated so that absence is not mistaken for a passing result.
 
+**This list and [`durable-queue-shard-owned.md`](./durable-queue-shard-owned.md) §18 describe the same
+gaps from two angles — detail here, priority there. Change one and change the other.** They were
+allowed to drift apart once and three entries survived the work that closed them, which is how a gap
+list starts costing more than it gives.
+
 - **Partition between separate hosts.** The *alive but partitioned* case is now covered —
   `ShardOwnedNetworkPartitionIT` puts a forwarder between one instance and PostgreSQL that stops
   passing bytes without closing anything, so that instance keeps running and learns nothing until its

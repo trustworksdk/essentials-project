@@ -1135,3 +1135,47 @@ remaining pumps block acquiring a connection that will never be free.
 | Ordered lane stops advancing, `watermarkCap` in the log | A write transaction outlived the cap | Find the long transaction; the cap protects the lane, it does not fix the writer |
 | Pumps never start, no error | Pool smaller than `pumpThreads + 1` | §17.3 |
 | Delivery latency jumps to seconds when idle | Notifications not arriving | §17.4 — check the pooler's mode |
+
+---
+
+## 18. What remains
+
+One list, because the pieces were scattered across four documents and three of them had gone stale —
+each still describing work that had been done. A gap list that lies in that direction is worse than
+no list: it is what tells a reader the admin UI is missing after the admin UI was built.
+
+Ordered by what would change a decision, not by effort.
+
+### 18.1 Not measured
+
+Absence of a result, not a passing one. Detail and the environment's limits: [`durable-queue-measurements.md`](./durable-queue-measurements.md) §5 and §4.
+
+| | Why it matters |
+|---|---|
+| **Soak beyond thirty minutes, and at a rate near capacity** | Thirty minutes at 300/s found no drift, twice. Vacuum debt and index bloat are effects of *hours*, and 300/s was chosen to keep the latency signal clean — the opposite trade is unmeasured. This is the one to do before production |
+| **Payload distribution** | Every number in the measurements is a uniform 200 bytes. TOAST would change the WAL figures that are the design's headline claim, and is untouched |
+| **Large routing space × many queues** | §3.8 varies each axis alone. Per-unit state — a lease row and an owner object each — is what grows, so the product is where it would show |
+| **Throughput on hardware that can hold a number still** | This lab varies 861% at saturation, so every throughput figure here is comparative only. It is a property of the environment, not of the engine |
+
+### 18.2 Behaviour not covered by a test
+
+| | Note |
+|---|---|
+| **Database restart** | The server going away and returning with its disk intact. Process death, connection loss and partition are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`); this is the neighbouring failure that is not |
+| **Disk pressure** | A full or slow disk under the database |
+| **Partition across separate hosts** | A fidelity gap rather than an untested behaviour — `ShardOwnedNetworkPartitionIT` exercises the same mechanism through a forwarder rather than across machines |
+
+### 18.3 Not built, deliberately
+
+These are decisions, not a backlog. Each has its reasoning where it is implemented; reopening one
+means disagreeing with that reasoning rather than finding an omission.
+
+- **Growing an existing queue's ordered routing space.** See the ordered-routing design's §8.
+- **Tier 3 WAL wake-up.** Its own gate says do not: Tier 2 measures 0.54 ms p50, and a replication
+  slot is real operational weight (§6).
+- **Three `DurableQueues` operations that still throw** in the adapter — `addInterceptor`/
+  `removeInterceptor`, `queryForMessagesSoonReadyForDelivery`, `getNextMessageReadyForDelivery`.
+  Each is a structural difference rather than missing work, and the admin surface uses none of them.
+- **A semantic type for `instanceId`.** §15's gap table says why: the `types` module would put
+  kotlin-reflect and kotlin-stdlib on a module that otherwise depends on `shared` alone, and the
+  builders already close the transposition hazard.
