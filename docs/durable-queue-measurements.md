@@ -28,6 +28,12 @@ Conditions: 200-byte payloads, 20 000 messages per repetition, three interleaved
 
 **The row-update column is the design in one number.** The current implementation writes one row update per message — `is_being_delivered = true`. The shard-owned engine writes none, because a lease already establishes who owns the message. Not reduced: absent.
 
+**The WAL percentages belong to the 200-byte payload and do not travel.** The saving is a fixed
+~1 200–1 350 bytes per message — a narrower row and no claim write — against a payload cost both
+engines pay identically, so the *ratio* collapses as messages grow: −71% at 200 bytes, −39% at 1 800,
+−11% at 8 000, −1.6% at 64 000. §3.4.3 has the sweep. Quote the percentage with the size, or quote
+the constant.
+
 Two of these rows have moved since the first publication of this document, and one was wrong:
 
 - **Obligations-restored WAL was 615 bytes (−68%) and is now 667 (−65%).** The batched figure is unchanged, so this is the per-message-enqueue arm costing more, not the design regressing.
@@ -109,7 +115,7 @@ Baseline in the same run: 1 905 WAL bytes/msg.
 - **JSON costs almost nothing in write volume** — a 200-byte payload becomes 214 on the wire, WAL rises 3%. The `bytea`-over-`jsonb` choice is real but small.
 - **Batching is worth about 7 percentage points of the 72.** Removing it raised commits from 0.18 to 6.03 per message and made the run roughly 8× slower, but WAL rose only 20%. Batching buys throughput, not write volume.
 - **Per-message acknowledgement costs no WAL at all.** Range delete versus individual deletes changes commit count and round trips, not tuple deletions.
-- **The remaining −65% is the design**: no claim write, a narrower row, fewer indexes. `n_tup_upd` is **zero in every arm**.
+- **The remaining −65% is the design**: no claim write, a narrower row, fewer indexes. `n_tup_upd` is **zero in every arm**. As a *percentage* it is specific to this table's 200-byte payload; the saving behind it is a fixed number of bytes per message, and §3.4.3 measures it across sizes.
 
 **Commits/msg is a database-wide counter** (`pg_stat_database.xact_commit` divided by messages), so the first arm of a run carries the container's own start-up commits and reads high. Compare arms within a run, and prefer the later arms; the WAL column does not have this problem.
 
@@ -251,6 +257,41 @@ What the engine does through all of it: keeps its shards, accepts or refuses eac
 losing one, and resumes without a restart. A slow disk is the other half of disk pressure and is not
 the same failure — see the engine document's §8.6, which is what stops an instance whose commits have
 outrun the lease from delivering work its successor is already doing.
+
+### 3.4.3 Payload size, and what the headline percentage actually is
+
+Measured **2026-09-13**, `ShardOwnedVsBaselineCostIT.compare_per_message_cost_across_payload_sizes`
+(benchmark-gated). Every other figure in this document uses a uniform 200-byte payload; this varies it
+and holds the bytes per repetition constant at 16 MB, so each step is the same size on disk. Three
+repetitions per arm per size, medians. Three runs of the whole sweep agreed to within a few bytes.
+
+| payload | messages | baseline WAL B/msg | shard-owned WAL B/msg | difference | TOASTed |
+|---|---|---|---|---|---|
+| 200 B | 2 000 | 1 895 | 543 | **−71.4%** | no |
+| 1 800 B | 2 000 | 3 514 | 2 148 | −38.9% | no |
+| 8 000 B | 2 000 | 10 493 | 9 340 | −11.0% | **yes** |
+| 64 000 B | 200 | 71 984 | 70 836 | **−1.6%** | **yes** |
+
+**The advantage is a constant, not a percentage.** Subtract the columns: 1 352, 1 366, 1 153, 1 148
+bytes per message. The saving barely moves across a 320-fold change in payload, because what produces
+it — a narrower row and no claim write — is fixed per message, while the payload is a cost both
+engines pay identically. The percentage falls only because the denominator grows.
+
+So **−65 to −72% is a statement about 200-byte messages**, and §1 should be read that way. An
+application moving 8 KB messages gets 11%, and one moving 64 KB gets nothing measurable. Nothing about
+the design got worse; the figure was always a ratio, and the ratio was always against a small payload.
+
+**Crossing the TOAST threshold costs a little of the saving**, from about 1 360 bytes to about 1 150.
+Consistent with the mechanism: once the payload leaves the row for the TOAST relation, both engines'
+rows are narrow, so the row-width half of the advantage largely goes and what remains is the absent
+claim write. The threshold sits between 1 800 and 8 000 bytes, as PostgreSQL's roughly 2 KB
+`TOAST_TUPLE_THRESHOLD` predicts.
+
+**The filler has to be incompressible or this measures nothing.** PostgreSQL compresses before it
+moves a value out of line, and the comparison previously filled its payload with one repeated byte —
+harmless at 200 bytes inline, fatal at 64 KB, where it would collapse to almost nothing and never
+reach the TOAST table. Both arms now carry random bytes (Base64 of random bytes for the baseline,
+which travels as JSON text).
 
 ### 3.5 Sustained load — 30 minutes, both engines, sampled every 30 seconds
 
@@ -470,7 +511,7 @@ headline comparison suggests.
 | Because | Measured |
 |---|---|
 | Latency matters | 0.54 ms p50 / 1.02 ms p99, against 20.7 / 27.1 at the shipped 20 ms poll. Push, not poll — there is no interval to tune |
-| Volume makes per-message cost matter | −65 to −72% WAL bytes; dead tuples 1.98 → 1.00; row updates 1.00 → **0**, because ownership removes the claim write. Index 5.2× smaller after a 6-minute soak |
+| Volume makes per-message cost matter, **and the messages are small** | A fixed ~1 200–1 350 WAL bytes saved per message, which is −65 to −72% at 200 bytes and −1.6% at 64 KB (§3.4.3); dead tuples 1.98 → 1.00; row updates 1.00 → **0**, because ownership removes the claim write. Index 5.2× smaller after a 6-minute soak |
 | The process holds many queues | Connections are `pumpThreads + 1` **per process** — 5 at 300 queues — rather than growing with consumers |
 | Per-key ordering must hold across processes | Verified across ~19 lease lifetimes with a third node joining mid-run. The current implementation's own docs say ordering does not hold across instances |
 | An outbox needs atomicity *and* working retries | `enqueue(Connection, …)` joins the caller's transaction while attempt counting stays outside its rollback scope. `TransactionalMode.FullyTransactional` gives one or the other |
@@ -521,7 +562,7 @@ list starts costing more than it gives.
   `now()` — `visible_at`, `lease_until`, `last_seen` — and `ServerSideTimeTest` fails the build if a
   client clock reaches the storage layer. Independent clocks change nothing.
 - **Sustained soak beyond half an hour.** The longest run is the thirty minutes in §3.5 — 540 000 messages per arm, thirty autovacuum cycles. Vacuum behaviour, index bloat and p99 drift over *hours* remain unmeasured, and the baseline's dead-tuple cost is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and again at thirty and did not find it, which is not the same as it not being there. Nor has any soak run at a rate near either engine's capacity: 300/s keeps the latency signal clean and accumulates debt slowly, and the opposite trade has not been measured.
-- **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
+- ~~**Realistic payload distribution.**~~ **Half closed.** Payload *size* is now swept from 200 bytes to 64 KB, across the TOAST threshold, in §3.4.3 — which is what showed that the headline percentage belongs to the 200-byte payload and the saving is a constant. What remains untested is a realistic *distribution*: every run is uniform, so nothing exercises a mix of sizes in one queue, where a large message's TOAST chunks and a small one's inline row share the same pages and the same vacuum.
 - ~~**Failure injection beyond process death, connection loss, partition and restart.**~~ **Closed.** Those four are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`, `ShardOwnedDatabaseRestartIT`), and disk pressure is now covered in both of its forms: a full volume in §3.4.2, and the slow-disk case as the condition it actually produces — commits outrunning the lease — in `ShardOwnedStaleLivenessIT`. How a genuinely slow *device* behaves is not measured, and that is a decision rather than an omission — `durable-queue-shard-owned.md` §18.3 records it with what would reopen it. What the engine is exposed to is the consequence, and the consequence is what is tested.
 - **Throughput on hardware that can measure it.** See above.
 - **Idle cost of a large routing space across many queues.** §3.8 varies the space on one queue and the queue count at one space; the product of the two — hundreds of queues at 1 024 units each — is not measured, and per-unit state (a lease row and an owner object each) is what would grow.

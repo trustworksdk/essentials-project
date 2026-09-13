@@ -71,6 +71,33 @@ class ShardOwnedVsBaselineCostIT {
     private static final int    REPETITIONS    = 3;
     private static final String BASELINE_TABLE = "perflab_baseline_queues";
 
+    /**
+     * The sizes the sweep walks. 200 bytes is what every other measurement in this lab uses and sits
+     * comfortably inline; 1 800 is still under PostgreSQL's {@code TOAST_TUPLE_THRESHOLD} of roughly
+     * two kilobytes; 8 000 and 64 000 are over it, so the value is pushed out of line into the
+     * relation's TOAST table and chunked. The last one spans several chunks.
+     */
+    private static final int[]  SWEEP_PAYLOAD_BYTES = {200, 1_800, 8_000, 64_000};
+    /**
+     * Bytes of payload each repetition writes, whatever the size of one message.
+     * <p>
+     * A fixed message count cannot be used across a 320-fold range of payload: 20 000 × 64 KB is
+     * 1.3 GB per repetition, and six of those filled the volume mid-run — {@code could not extend
+     * file: No space left on device} — which is a measurement of the lab rather than of the engine.
+     * Holding the <em>bytes</em> constant instead keeps every step the same size on disk, and
+     * per-message cost is a ratio that does not care how many messages it was divided by.
+     */
+    private static final int    SWEEP_BYTES_PER_RUN = 16_000_000;
+    /** Never more than this, so the small-payload steps stay quick, nor fewer than 250. */
+    private static final int    SWEEP_MESSAGE_COUNT = 2_000;
+    private static final int    SWEEP_MIN_MESSAGES  = 250;
+    /** Three, because {@code AbRunner} refuses fewer — a median and an IQR need them. */
+    private static final int    SWEEP_REPETITIONS   = 3;
+
+    /** What the current arm is measuring. Set per sweep step; defaults to the headline comparison. */
+    private int payloadBytes = PAYLOAD_BYTES;
+    private int messageCount = MESSAGE_COUNT;
+
     @Container
     static PostgreSQLContainer<?> postgres = LabPostgres.create();
 
@@ -168,12 +195,136 @@ class ShardOwnedVsBaselineCostIT {
         });
     }
 
+    /**
+     * The same comparison across payload sizes, because every other number in this lab is a uniform
+     * 200 bytes.
+     *
+     * <h2>Why the size is the interesting variable</h2>
+     * The design's headline claim is WAL bytes per message, and the advantage was attributed to a
+     * narrower row and no claim write. Both are <b>fixed</b> costs. The payload is a cost the two
+     * engines pay identically, so as it grows it becomes the same addend on both sides and the
+     * relative advantage has to shrink towards nothing — an engine moving a 64 KB payload is mostly
+     * moving 64 KB. Past PostgreSQL's TOAST threshold there is a second effect: the value leaves the
+     * row for the relation's TOAST table, in chunks, each with its own WAL. That is a cost neither
+     * engine's design touches.
+     * <p>
+     * So this is not looking for a win. It is looking for the size at which quoting the headline
+     * percentage stops being honest.
+     */
+    @Test
+    void compare_per_message_cost_across_payload_sizes() throws Exception {
+        var environment = PgSnapshot.captureEnvironment(dataSource);
+        var rows = new ArrayList<SweepRow>();
+        var everyRun = new ArrayList<RunResult>();
+
+        for (var size : SWEEP_PAYLOAD_BYTES) {
+            payloadBytes = size;
+            // Rounded to whole batches of 100, which is how both arms enqueue.
+            messageCount = Math.max(SWEEP_MIN_MESSAGES,
+                                    Math.min(SWEEP_MESSAGE_COUNT, SWEEP_BYTES_PER_RUN / size)) / 100 * 100;
+            var messagesThisStep = messageCount;
+
+            var arms = new LinkedHashMap<String, java.util.function.IntFunction<RunResult>>();
+            arms.put("baseline", repetition -> {
+                try {
+                    return measureBaseline(repetition, environment);
+                } catch (Exception e) {
+                    throw new IllegalStateException("baseline arm failed at " + size + " bytes", e);
+                }
+            });
+            arms.put("shard-owned", repetition -> {
+                try {
+                    return measureShardOwned(repetition, environment);
+                } catch (Exception e) {
+                    throw new IllegalStateException("shard-owned arm failed at " + size + " bytes", e);
+                }
+            });
+
+            var results = new AbRunner(SWEEP_REPETITIONS).run(arms);
+            everyRun.addAll(results);
+            var summaries = AbRunner.summarize(results);
+            var baseline = summaries.stream().filter(s -> s.arm().equals("baseline")).findFirst().orElseThrow();
+            var shardOwned = summaries.stream().filter(s -> s.arm().equals("shard-owned")).findFirst().orElseThrow();
+            rows.add(new SweepRow(size,
+                                  messagesThisStep,
+                                  baseline.walBytesPerOperation().median(),
+                                  shardOwned.walBytesPerOperation().median(),
+                                  toastedRows(ShardOwnedSchema.UNORDERED_TABLE)));
+
+            results.forEach(result -> assertThat(result.opsCompleted())
+                    .as("every arm must handle the full message count at %d bytes", size)
+                    .isEqualTo(messagesThisStep));
+        }
+
+        log.info("");
+        log.info("======== PER-MESSAGE COST AGAINST PAYLOAD SIZE, {} MB per run x {} reps ========",
+                 SWEEP_BYTES_PER_RUN / 1_000_000, SWEEP_REPETITIONS);
+        log.info(String.format("%-12s %9s %14s %14s %12s %9s", "payload B", "msgs", "baseline WAL", "shard-owned", "difference", "TOASTed"));
+        for (var row : rows) {
+            log.info(String.format("%-12d %9d %14.0f %14.0f %11.1f%% %9s",
+                                   row.payloadBytes(), row.messages(), row.baselineWal(), row.shardOwnedWal(),
+                                   row.differencePercent(), row.toastedRows() > 0 ? "yes" : "no"));
+        }
+        log.info("The advantage is a fixed saving — a narrower row and no claim write — against a payload");
+        log.info("cost both engines pay. It therefore shrinks as a PERCENTAGE while staying the same");
+        log.info("number of bytes. Quote the headline figure with the payload size it was measured at.");
+        log.info("==========================================================================");
+
+        RunResult.writeAll("target/perf-lab-baseline/payload-size-sweep.json",
+                           Map.of("comparison", "per-message cost against payload size, storage layer only",
+                                  "bytesPerRun", SWEEP_BYTES_PER_RUN,
+                                  "payloadSizes", SWEEP_PAYLOAD_BYTES,
+                                  "environment", environment,
+                                  "rows", rows,
+                                  "runs", everyRun));
+
+        assertThat(rows).hasSameSizeAs(SWEEP_PAYLOAD_BYTES);
+        // The claim under test: the saving is fixed, so its share of the total falls as the payload
+        // grows. Asserted as an ordering rather than a threshold, because the magnitude is this
+        // machine's and the direction is the design's.
+        assertThat(rows.get(rows.size() - 1).differencePercent())
+                .as("the relative advantage must shrink as the payload grows - it is a fixed saving "
+                    + "against a cost both engines pay")
+                .isGreaterThan(rows.get(0).differencePercent());
+    }
+
+    /**
+     * How many chunks were ever written to a table's TOAST relation — zero until a payload is pushed
+     * out of line.
+     * <p>
+     * {@code n_tup_ins} rather than {@code n_live_tup}: this is read after the arm has drained its
+     * queue, so the chunks have been deleted again and the live count is back to zero. Asking the
+     * live count reported "yes" and "no" for the same 64 KB payload on consecutive runs, which is the
+     * column measuring statistics timing rather than TOAST.
+     */
+    private long toastedRows(String table) throws Exception {
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "SELECT coalesce(sum(t.n_tup_ins), 0) FROM pg_class c"
+                     + " JOIN pg_class toast ON toast.oid = c.reltoastrelid"
+                     + " JOIN pg_stat_all_tables t ON t.relid = toast.oid"
+                     + " WHERE c.relname = ?")) {
+            statement.setString(1, table);
+            try (var resultSet = statement.executeQuery()) {
+                resultSet.next();
+                return resultSet.getLong(1);
+            }
+        }
+    }
+
+    /** One line of the sweep: what each engine spent per message at a given payload size. */
+    public record SweepRow(int payloadBytes, int messages, double baselineWal, double shardOwnedWal, long toastedRows) {
+        /** Negative means the shard-owned engine wrote less, which is the direction being reported. */
+        double differencePercent() {
+            return 100.0d * (shardOwnedWal - baselineWal) / baselineWal;
+        }
+    }
+
     private RunResult measureShardOwned(int repetition, Map<String, String> environment) throws Exception {
         ShardOwnedSchema.recreate(dataSource);
         ShardOwnedSchema.registerQueue(dataSource, QUEUE_ID, SHARD_COUNT);
 
-        var payload = new byte[PAYLOAD_BYTES];
-        Arrays.fill(payload, (byte) 'x');
+        var payload = incompressibleBytes(payloadBytes);
         var handled = new AtomicInteger();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "bench")) {
@@ -182,7 +333,7 @@ class ShardOwnedVsBaselineCostIT {
             var before = PgSnapshot.capture(dataSource, List.of(ShardOwnedSchema.UNORDERED_TABLE));
             var startNanos = System.nanoTime();
 
-            for (var batch = 0; batch < MESSAGE_COUNT / 100; batch++) {
+            for (var batch = 0; batch < messageCount / 100; batch++) {
                 var payloads = new ArrayList<byte[]>(100);
                 for (var index = 0; index < 100; index++) {
                     payloads.add(payload);
@@ -190,7 +341,7 @@ class ShardOwnedVsBaselineCostIT {
                 queue.enqueue(payloads, 1);
             }
             Awaitility.await().atMost(Duration.ofSeconds(120))
-                      .untilAsserted(() -> assertThat(handled.get()).isEqualTo(MESSAGE_COUNT));
+                      .untilAsserted(() -> assertThat(handled.get()).isEqualTo(messageCount));
             Awaitility.await().atMost(Duration.ofSeconds(60))
                       .untilAsserted(() -> assertThat(queue.remaining()).isZero());
 
@@ -206,7 +357,7 @@ class ShardOwnedVsBaselineCostIT {
                 rowsLeft = resultSet.getLong(1);
             }
             assertThat(rowsLeft).as("the arm must have emptied its table before its costs are read").isZero();
-            settleStatistics(ShardOwnedSchema.UNORDERED_TABLE, MESSAGE_COUNT, MESSAGE_COUNT);
+            settleStatistics(ShardOwnedSchema.UNORDERED_TABLE, messageCount, messageCount);
             var after = PgSnapshot.capture(dataSource, List.of(ShardOwnedSchema.UNORDERED_TABLE));
             return buildResult("shard-owned", repetition, elapsedMillis, before, after,
                                ShardOwnedSchema.UNORDERED_TABLE, environment, queue.metrics().snapshot());
@@ -241,8 +392,8 @@ class ShardOwnedVsBaselineCostIT {
             var before = PgSnapshot.capture(dataSource, List.of(BASELINE_TABLE));
             var startNanos = System.nanoTime();
 
-            var payload = "x".repeat(PAYLOAD_BYTES);
-            for (var batch = 0; batch < MESSAGE_COUNT / 100; batch++) {
+            var payload = incompressibleText(payloadBytes);
+            for (var batch = 0; batch < messageCount / 100; batch++) {
                 var messages = new ArrayList<Message>(100);
                 for (var index = 0; index < 100; index++) {
                     messages.add(Message.of(new BenchPayload(payload)));
@@ -250,10 +401,10 @@ class ShardOwnedVsBaselineCostIT {
                 durableQueues.queueMessages(queueName, messages);
             }
             Awaitility.await().atMost(Duration.ofSeconds(600))
-                      .untilAsserted(() -> assertThat(handled.get()).isEqualTo(MESSAGE_COUNT));
+                      .untilAsserted(() -> assertThat(handled.get()).isEqualTo(messageCount));
 
             var elapsedMillis = (System.nanoTime() - startNanos) / 1_000_000L;
-            settleStatistics(BASELINE_TABLE, MESSAGE_COUNT, 0L);
+            settleStatistics(BASELINE_TABLE, messageCount, 0L);
             var after = PgSnapshot.capture(dataSource, List.of(BASELINE_TABLE));
             return buildResult("baseline", repetition, elapsedMillis, before, after,
                                BASELINE_TABLE, environment, Map.of());
@@ -329,14 +480,40 @@ class ShardOwnedVsBaselineCostIT {
         extra.put("tupleUpdates", updates);
         extra.put("tupleDeletes", deletes);
         extra.put("tupleChurn", updates + deletes);
-        extra.put("deadTuplesCreatedPerMessage", (double) (updates + deletes) / MESSAGE_COUNT);
+        extra.put("deadTuplesCreatedPerMessage", (double) (updates + deletes) / messageCount);
         extra.put("inserts", delta.getOrDefault("table." + table + ".n_tup_ins", 0L));
         extra.put("engineMetrics", engineMetrics);
         return new RunResult("nextgen-vs-baseline", arm, repetition, Instant.now(), elapsedMillis,
-                             MESSAGE_COUNT,
-                             elapsedMillis == 0 ? 0.0d : MESSAGE_COUNT * 1000.0d / elapsedMillis,
-                             Map.of("messageCount", MESSAGE_COUNT, "payloadBytes", PAYLOAD_BYTES),
+                             messageCount,
+                             elapsedMillis == 0 ? 0.0d : messageCount * 1000.0d / elapsedMillis,
+                             Map.of("messageCount", messageCount, "payloadBytes", payloadBytes),
                              List.of(), delta, Map.of(), environment, extra);
+    }
+
+    /**
+     * A payload that does not compress, which is what makes a size sweep measure size.
+     * <p>
+     * PostgreSQL tries LZ compression before it moves a value out of line, so a payload of one
+     * repeated byte — which is what this comparison used while every measurement was 200 bytes inline
+     * — collapses to almost nothing at 64 KB and never reaches the TOAST table at all. The sweep would
+     * then report that large payloads are nearly free, which is a statement about the filler rather
+     * than about the engine. Seeded, so two arms at the same size carry the same bytes.
+     */
+    private static byte[] incompressibleBytes(int size) {
+        var bytes = new byte[size];
+        new Random(size).nextBytes(bytes);
+        return bytes;
+    }
+
+    /**
+     * The same, as text the baseline can carry through JSON: Base64 of random bytes, trimmed to the
+     * requested length. Base64 is about six bits of entropy per character, so it still does not
+     * usefully compress.
+     */
+    private static String incompressibleText(int size) {
+        var raw = new byte[size];
+        new Random(size).nextBytes(raw);
+        return Base64.getEncoder().encodeToString(raw).substring(0, size);
     }
 
     public record BenchPayload(String payload) {

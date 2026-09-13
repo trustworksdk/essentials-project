@@ -1216,7 +1216,7 @@ Absence of a result, not a passing one. Detail and the environment's limits: [`d
 | | Why it matters |
 |---|---|
 | **Soak beyond thirty minutes, and at a rate near capacity** | Thirty minutes at 300/s found no drift, twice. Vacuum debt and index bloat are effects of *hours*, and 300/s was chosen to keep the latency signal clean — the opposite trade is unmeasured. This is the one to do before production |
-| **Payload distribution** | Every number in the measurements is a uniform 200 bytes. TOAST would change the WAL figures that are the design's headline claim, and is untouched |
+| **Payload *distribution*** | Payload *size* is now swept 200 B → 64 KB across the TOAST threshold (measurements §3.4.3), and it moved the headline: the WAL saving is a fixed ~1 200–1 350 bytes per message, so the percentage falls to −1.6% at 64 KB. What is still untested is a *mixture* of sizes in one queue, where a large message's TOAST chunks and a small one's inline row share pages and vacuum |
 | **Large routing space × many queues** | §3.8 varies each axis alone. Per-unit state — a lease row and an owner object each — is what grows, so the product is where it would show |
 | **Throughput on hardware that can hold a number still** | This lab varies 861% at saturation, so every throughput figure here is comparative only. It is a property of the environment, not of the engine |
 
