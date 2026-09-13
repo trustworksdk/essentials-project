@@ -445,10 +445,9 @@ Stated so that absence is not mistaken for a passing result.
 - **Clock skew is not a gap and should stop being listed as one.** All durable time is server-side
   `now()` — `visible_at`, `lease_until`, `last_seen` — and `ServerSideTimeTest` fails the build if a
   client clock reaches the storage layer. Independent clocks change nothing.
-- **Containers as separate hosts.** The node processes share a machine and a kernel clock. Genuinely separate hosts, with independent clocks and a real network between them, are untested.
 - **Sustained soak beyond half an hour.** The longest run is the thirty minutes in §3.5 — 540 000 messages per arm, thirty autovacuum cycles. Vacuum behaviour, index bloat and p99 drift over *hours* remain unmeasured, and the baseline's dead-tuple cost is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and again at thirty and did not find it, which is not the same as it not being there. Nor has any soak run at a rate near either engine's capacity: 300/s keeps the latency signal clean and accumulates debt slowly, and the opposite trade has not been measured.
 - **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
-- **Failure injection beyond handler exceptions.** Database restarts, connection loss mid-batch, and disk pressure are untested.
+- **Failure injection beyond process death, connection loss and partition.** Those three are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`). A database *restart* — where the server goes away and returns with everything still on disk — and disk pressure are untested.
 - **Throughput on hardware that can measure it.** See above.
 - **Idle cost of a large routing space across many queues.** §3.8 varies the space on one queue and the queue count at one space; the product of the two — hundreds of queues at 1 024 units each — is not measured, and per-unit state (a lease row and an owner object each) is what would grow.
 - **Growing an existing queue's routing space.** Not built; see `durable-queue-ordered-routing-design.md` §8.

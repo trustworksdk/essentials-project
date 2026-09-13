@@ -980,10 +980,9 @@ size it generously up front: the correction is cheap, but not free, and it is ea
 
 | Gap | Detail |
 |---|---|
-| No admin **UI** | The engine implements its own `MessageQueue` SPI, not `DurableQueues`, so none of the surrounding Essentials machinery consumes it. A Spring Boot starter exists (`components/spring-boot-starter-postgresql-queue-shard-owned`) and wires the engine's own contract, including interceptor and observer beans |
 | No semantic type for `instanceId` | Deliberate. `QueueName` is a local record for the same reason: the `types` module carries kotlin-reflect and kotlin-stdlib at compile scope, which is a poor trade for a wrapper in a module that otherwise depends on `shared` alone. The transposition hazard — a `short`, an `int` and a `String` in a row — is closed instead by the builders, which name every argument |
 
-**Not measured** — absence of a result, not a passing one. Partitions between genuinely separate hosts (the alive-but-partitioned *behaviour* is covered by `ShardOwnedNetworkPartitionIT`; what is untested is doing it across machines rather than through a forwarder), soaks longer than a few minutes, payload size distributions beyond a uniform 200 bytes, and throughput on hardware that can hold a throughput number still. See [`durable-queue-measurements.md`](./durable-queue-measurements.md) §4 for what this lab can and cannot resolve.
+**Not measured** — absence of a result, not a passing one. Partitions between genuinely separate hosts (the alive-but-partitioned *behaviour* is covered by `ShardOwnedNetworkPartitionIT`; what is untested is doing it across machines rather than through a forwarder), soaks longer than the thirty minutes in the measurements' §3.5, or at a rate near either engine's capacity, payload size distributions beyond a uniform 200 bytes, and throughput on hardware that can hold a throughput number still. See [`durable-queue-measurements.md`](./durable-queue-measurements.md) §4 for what this lab can and cannot resolve.
 
 ---
 
