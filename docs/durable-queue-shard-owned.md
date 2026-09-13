@@ -782,6 +782,15 @@ Two things about gauges here that were learned the hard way:
 
 The engine's own counters — `cursorReads`, `holesObserved`/`Resolved`/`Abandoned`, `sweepRecoveries`, `backstopPolls`, `wakeupsHonoured`, `localHandoffs`, `fencedOutAcks`, `orderViolations`, `shedsAbandoned`, `takeoverAttemptBumps` — are for debugging the engine, and several of them are what the cost integration tests gate on.
 
+**`surplusInstances`** is the one of those an operator, not a maintainer, is the audience for: live
+instances the lane's routing space could not give a unit to. It is not a fault — surplus instances
+hold nothing, nothing is lost or reordered, and it clears when the instance count drops — but a
+surplus instance is indistinguishable from an instance with a quiet queue, and on the ordered lane the
+space is fixed for the life of the queue. It is therefore the only evidence that a queue was created
+with a space too small for its deployment, which is the condition §18.3 names as the one that would
+justify building growth. Every instance reports the same number, and the engine logs a warning naming
+the queue, the instance count and the space when it starts.
+
 ---
 
 ## 13. Administrative API
@@ -970,7 +979,7 @@ size it generously up front: the correction is cheap, but not free, and it is ea
 - At-least-once delivery. A shard moving mid-flight legitimately redelivers; handlers must be idempotent. Tests that assert exactly-once are wrong.
 - Strict per-key FIFO on the ordered lane, across processes, for the `key_order` values that are present, while the key's shard has one owner. Violations are counted rather than assumed away.
 - Enqueue is atomic per call. A batch either lands entirely or not at all, and a caller already in a transaction keeps control of the outcome.
-- Nothing is lost to a lost notification, a lost connection, a crashed owner, a frozen owner, or a database write outage. Every one of those has a dedicated integration test that was verified to fail against the unfixed code.
+- Nothing is lost to a lost notification, a lost connection, a crashed owner, a frozen owner, a database write outage, or the database restarting. Every one of those has a dedicated integration test that was verified to fail against the unfixed code. The restart is `ShardOwnedDatabaseRestartIT`: it asserts the server actually went away — `pg_postmaster_start_time()` before and after — and holds delivery across the outage, so that the messages committed into it are genuinely still pending when it happens.
 - All durable time is server-side, so node clock skew does not affect ownership or visibility.
 
 **Delayed delivery.** `Message.delayed(...)` and `Message.delayedOrdered(...)` set `visible_at` to the *server's* `now()` plus the delay, so a delay never depends on the enqueueing node's clock. A delayed row is invisible to the cursor read, so the owner learns when it is next due by asking the server for the interval — not for a timestamp it would then subtract a local clock from — and parks until then. Without that it would wait for the head sweep, which on a quiet shard has backed off to `maxSweepInterval`.
@@ -1169,7 +1178,6 @@ Absence of a result, not a passing one. Detail and the environment's limits: [`d
 
 | | Note |
 |---|---|
-| **Database restart** | The server going away and returning with its disk intact. Process death, connection loss and partition are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`); this is the neighbouring failure that is not |
 | **Disk pressure** | A full or slow disk under the database |
 | **Partition across separate hosts** | A fidelity gap rather than an untested behaviour — `ShardOwnedNetworkPartitionIT` exercises the same mechanism through a forwarder rather than across machines |
 
@@ -1189,7 +1197,10 @@ detection, are both gone (ordered-routing design §8). It is not built because t
 choice with a generous default, and exceeding it degrades rather than fails: 65 instances against 64
 units converge to 64 holders and one idle, measured.
 *Reopen when* a deployment consumes a queue with more instances than its recorded space, and the idle
-holders are load it needed. Nothing reports that today, which is the weaker half of this entry.
+holders are load it needed. That is now observable rather than inferred: every instance records
+`ShardOwnerMetrics.surplusInstances` — live instances the lane could not give a unit to — and logs a
+warning naming the queue, the count and the space when the condition starts. It clears on its own when
+the instance count drops, so a value that persists is the evidence this entry asks for.
 
 **Tier 3 WAL wake-up.** The gate is against **Tier 1**, not Tier 2 — Tier 2 is a hand-off inside one
 JVM that never reaches the database, so nothing replaces it. Tier 1 is the cross-JVM path a WAL stream

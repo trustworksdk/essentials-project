@@ -616,6 +616,38 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         shardCount = updated;
     }
 
+    /**
+     * Records how many instances the lane's routing space cannot give a unit to, and says so once
+     * when that starts and once when it stops.
+     * <p>
+     * This is the only place both numbers are known, and the condition is otherwise invisible: a
+     * surplus instance holds nothing, delivers nothing and reports no error, which looks exactly like
+     * an instance with a quiet queue. On the ordered lane it is the one thing that would justify
+     * growing a queue's routing space — fixed for the life of the queue, and deliberately not
+     * growable — so an operator who cannot see it can only guess whether the space was sized wrongly.
+     * <p>
+     * Logged on transition rather than per tick: the heartbeat runs every {@code leaseTtl / 3}, and a
+     * deployment that is one instance over would otherwise produce a warning every few seconds for as
+     * long as it stayed that way.
+     */
+    private void reportSurplusInstances(int liveInstances, int units) {
+        var surplus = Math.max(0, liveInstances - units);
+        var previous = metrics.surplusInstances.getAndSet(surplus);
+        if (surplus == previous) {
+            return;
+        }
+        if (surplus > 0) {
+            log.warn("Queue {} has {} live instance(s) against {} {} unit(s), so {} can hold nothing on that lane. "
+                     + "Nothing is lost, duplicated or reordered and it recovers when the instance count drops — but "
+                     + "the {} lane's space is fixed for the life of the queue, so this is the deployment that would "
+                     + "need a larger one at creation",
+                     queueId, liveInstances, units, activeLane, surplus, activeLane);
+        } else {
+            log.info("Queue {} no longer has more instances than {} units; every instance can hold something again",
+                     queueId, activeLane);
+        }
+    }
+
     private void rebalance() throws SQLException {
         var liveInstances = storage.countLiveInstances(leaseTtlMillis);
         // Per lane: the ordered lane's unit space is fixed and the unordered lane's is configurable,
@@ -623,6 +655,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // number and leave units permanently unowned.
         var units = "ordered".equals(activeLane) ? orderedUnits() : shardCount;
         var fairShare = Math.min(maxShardsHeld, (units + liveInstances - 1) / liveInstances);
+        reportSurplusInstances(liveInstances, units);
 
         // Drop owners that have lost their lease — through fencing, or through a renewal refused
         // while this node was paused — BEFORE deciding what to acquire.

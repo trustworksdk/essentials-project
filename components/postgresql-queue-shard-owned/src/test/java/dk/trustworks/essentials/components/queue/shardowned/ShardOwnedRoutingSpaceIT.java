@@ -147,6 +147,76 @@ class ShardOwnedRoutingSpaceIT {
         }
     }
 
+    /**
+     * Degrading quietly is correct; degrading <em>invisibly</em> is not.
+     * <p>
+     * A surplus instance holds nothing, delivers nothing and reports no error, which is
+     * indistinguishable from an instance whose queue happens to be quiet. That matters because the
+     * ordered lane's space is fixed for the life of the queue and growing it is deliberately not
+     * built — a decision that rests on the case being narrow. An operator who cannot see the
+     * condition cannot tell whether their deployment is the narrow case, so the engine records how
+     * many instances the space could not give a unit to.
+     * <p>
+     * Two units rather than sixty-four: the arithmetic is the same and the test is seconds instead of
+     * minutes. The neighbouring test above already pays for the real numbers.
+     */
+    @Test
+    void an_instance_the_routing_space_cannot_fit_is_counted_rather_than_left_invisible() throws Exception {
+        var units = 2;
+        // By NAME, because only that form writes the registry row that records the space. The
+        // id-based overload seeds the lease rows and nothing else, so an instance would read the
+        // default 64 from a registry with no row for this queue and compute a fair share against a
+        // space that does not exist.
+        var registered = ShardOwnedSchema.registerQueue(dataSource, QueueName.of("surplus"), SHARD_COUNT, units);
+
+        var instances = new ArrayList<ShardOwnedQueue>();
+        try {
+            for (var index = 0; index < units + 1; index++) {
+                var queue = new ShardOwnedQueue(dataSource, registered.queueId(), SHARD_COUNT, "over-" + index);
+                instances.add(queue);
+                queue.startConsumingOrdered((key, payload, payloadType) -> {
+                }, fastLease(), units);
+            }
+
+            // Every instance reports it, including the two that are holding a unit each: it is a
+            // property of the deployment, not of the instance that lost the draw, and the instance
+            // holding nothing is the least likely one to be looked at.
+            Awaitility.await().atMost(Duration.ofSeconds(60))
+                      .untilAsserted(() -> assertThat(instances)
+                              .allSatisfy(queue -> assertThat(queue.metrics().surplusInstances.get())
+                                      .as("three instances against two units is one instance too many")
+                                      .isEqualTo(1)));
+
+            // Awaited, not immediate: the count is true from the first heartbeat, while the units it
+            // describes take a rebalance to spread — the instance that started first holds both until
+            // then. Asserting this without waiting reads two idle instances and fails, which is a
+            // race in the test rather than a disagreement in the engine.
+            Awaitility.await().atMost(Duration.ofSeconds(60))
+                      .untilAsserted(() -> {
+                          assertThat(instances.stream().mapToInt(ShardOwnedQueue::shardsHeld).sum())
+                                  .as("every unit must have exactly one owner")
+                                  .isEqualTo(units);
+                          assertThat(instances.stream().filter(queue -> queue.shardsHeld() == 0).count())
+                                  .as("and the count must describe what is actually happening")
+                                  .isEqualTo(1);
+                      });
+
+            // It is a live condition, not a latch: scaling back in clears it, so an operator reading
+            // it later is not told about a deployment that no longer exists.
+            var surplus = instances.get(instances.size() - 1);
+            surplus.close();
+            var stillRunning = instances.subList(0, instances.size() - 1);
+
+            Awaitility.await().atMost(Duration.ofSeconds(60))
+                      .untilAsserted(() -> assertThat(stillRunning)
+                              .allSatisfy(queue -> assertThat(queue.metrics().surplusInstances.get())
+                                      .as("two instances against two units fits")
+                                      .isZero()));
+        } finally {
+            instances.forEach(ShardOwnedQueue::close);
+        }
+    }
+
     /** Short lease and heartbeat, so rebalancing across many instances converges inside the test. */
     private static ShardOwnerSettings fastLease() {
         var defaults = ShardOwnerSettings.defaults();

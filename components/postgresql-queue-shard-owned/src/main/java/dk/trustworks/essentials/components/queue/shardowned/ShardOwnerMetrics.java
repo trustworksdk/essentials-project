@@ -153,6 +153,18 @@ public final class ShardOwnerMetrics {
     public final AtomicInteger maxPendingHoles      = new AtomicInteger();
     /** Peak number of distinct keys handled concurrently — the evidence for cross-key parallelism. */
     public final AtomicInteger maxConcurrentKeys    = new AtomicInteger();
+    /**
+     * Live instances beyond the lane's routing space, or zero — the consumers that can hold nothing
+     * because there are no units left to give them.
+     * <p>
+     * Not a fault. The space caps concurrency and exceeding it degrades rather than fails: surplus
+     * instances hold nothing, nothing is lost or reordered, and it recovers on its own when the
+     * instance count drops. It is recorded because it is the one condition under which a queue's
+     * ordered routing space is genuinely too small for its deployment, and that space is fixed for
+     * the life of the queue — so this is the number that decides whether growing it would have been
+     * worth building. Without it the question can only be guessed at.
+     */
+    public final AtomicInteger surplusInstances     = new AtomicInteger();
 
     /**
      * The operator-facing subset, as a stable shape.
@@ -207,6 +219,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("keyHeadOfLineBlocks", keyHeadOfLineBlocks.sum());
         snapshot.put("maxPendingHoles", maxPendingHoles.get());
         snapshot.put("maxConcurrentKeys", maxConcurrentKeys.get());
+        snapshot.put("surplusInstances", surplusInstances.get());
         snapshot.put("orderedReadStatements", orderedReadStatements.sum());
         snapshot.put("horizonProbes", horizonProbes.sum());
         snapshot.put("watermarkAdvances", watermarkAdvances.sum());

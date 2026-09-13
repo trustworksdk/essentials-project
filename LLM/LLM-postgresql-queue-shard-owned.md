@@ -351,6 +351,15 @@ Via Micrometer, `bindQueueHealth(queue, maxAge)` publishes:
 
 Both bindings are opt-in and cached, because a gauge is polled on every scrape and these are queries.
 
+**`ShardOwnerMetrics.surplusInstances`** answers the neighbouring question: how many instances the
+lane's routing space could not give a unit to. A surplus instance holds nothing, delivers nothing and
+reports no error, which looks exactly like an instance whose queue is quiet — so this is the only way
+to tell. The engine also logs a warning naming the queue, the instance count and the space when the
+condition starts, and another when it clears. Nothing is lost or reordered while it lasts, and it
+resolves itself when the instance count drops; a value that *persists* means the queue was created
+with a space too small for the deployment, and on the ordered lane that space cannot be changed
+afterwards.
+
 ## Administrative API
 
 `ShardOwnedQueuesApi` is the operator surface over the engine. Registry-scoped (every operation takes
