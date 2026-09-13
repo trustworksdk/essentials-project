@@ -27,6 +27,8 @@ import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.Subscription;
 import org.slf4j.*;
 
+import java.util.function.Consumer;
+
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
@@ -45,21 +47,37 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedDurableQueueConsumer.class);
 
-    private final ConsumeFromQueue operation;
-    private final MessageQueue     queue;
-    private final JSONSerializer   jsonSerializer;
-    private final Runnable         onCancel;
+    private final ConsumeFromQueue                 operation;
+    private final MessageQueue                     queue;
+    private final JSONSerializer                   jsonSerializer;
+    private final Consumer<DurableQueueConsumer>   onCancel;
+    private final DeliveryDispatch                 delivery;
 
     private volatile Subscription subscription;
 
     ShardOwnedDurableQueueConsumer(ConsumeFromQueue operation,
                                    MessageQueue queue,
                                    JSONSerializer jsonSerializer,
-                                   Runnable onCancel) {
+                                   Consumer<DurableQueueConsumer> onCancel,
+                                   DeliveryDispatch delivery) {
         this.operation = requireNonNull(operation, "No operation provided");
         this.queue = requireNonNull(queue, "No queue provided");
         this.jsonSerializer = requireNonNull(jsonSerializer, "No jsonSerializer provided");
         this.onCancel = requireNonNull(onCancel, "No onCancel provided");
+        this.delivery = requireNonNull(delivery, "No delivery provided");
+    }
+
+    /**
+     * How a delivery reaches its handler.
+     * <p>
+     * {@link ShardOwnedDurableQueues} supplies this so that the handler is invoked inside the
+     * {@code HandleQueuedMessage} interceptor chain, which is where an interceptor expects to sit on
+     * the other engine too. Kept as a parameter rather than a reference back to the adapter so that
+     * this class stays testable without one.
+     */
+    @FunctionalInterface
+    interface DeliveryDispatch {
+        void handle(QueuedMessage message, QueuedMessageHandler messageHandler);
     }
 
     @Override
@@ -109,7 +127,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     @Override
     public void cancel() {
         stop();
-        onCancel.run();
+        onCancel.accept(this);
     }
 
     /**
@@ -118,6 +136,11 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * Returning normally acknowledges the message; throwing hands it back to the engine's retry
      * schedule. There is no third outcome, which is why a handler asking for redelivery has to be
      * turned into a throw — see {@link ShardOwnedQueuedMessage#markForRedeliveryIn}.
+     * <p>
+     * The handler is reached through {@link DeliveryDispatch} rather than called here, so that a
+     * {@code HandleQueuedMessage} interceptor wraps it. An interceptor that does not proceed therefore
+     * returns normally, and the message is acknowledged as handled — the same outcome as a handler
+     * that returns without doing anything.
      */
     private void deliver(String key, byte[] payload, int payloadType) {
         if (payloadType != MessageEnvelope.FORMAT_VERSION) {
@@ -130,7 +153,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         var message       = MessageEnvelope.deserialize(jsonSerializer, payload, key, 0L);
         var queuedMessage = ShardOwnedQueuedMessage.beingDelivered(queueName(), message);
 
-        operation.getQueueMessageHandler().handle(queuedMessage);
+        delivery.handle(queuedMessage, operation.getQueueMessageHandler());
 
         if (queuedMessage.isManuallyMarkedForRedelivery()) {
             throw new ManualRedeliveryRequested(queuedMessage.getRedeliveryDelay());

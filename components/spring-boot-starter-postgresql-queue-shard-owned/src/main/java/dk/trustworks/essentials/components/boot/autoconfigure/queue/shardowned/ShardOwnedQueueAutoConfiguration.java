@@ -18,7 +18,10 @@ package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
 import dk.trustworks.essentials.components.adminapi.rest.AdminApiPrincipalResolver;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+// Single-type imports, not the package: foundation...queue and shardowned.spi both export QueueName,
+// and this class imports the spi package wholesale.
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor;
 import dk.trustworks.essentials.components.foundation.transaction.*;
 import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedDurableQueues;
 import dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.rest.*;
@@ -37,6 +40,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
+import java.util.List;
 import dk.trustworks.essentials.shared.network.Network;
 
 /**
@@ -213,6 +217,13 @@ public class ShardOwnedQueueAutoConfiguration {
      * pre-declared in {@code essentials.shard-owned-queue.queues}. The context fails at start-up
      * rather than at the first unregistered inbox, because the alternative is an inbox that silently
      * never consumes.
+     * <p>
+     * <b>The {@code DurableQueuesInterceptor} beans are applied here</b>, exactly as
+     * {@code EssentialsComponentsConfiguration} applies them to {@code PostgresqlDurableQueues}.
+     * Without that, selecting this engine would silently drop every one of them — including the
+     * framework's own {@code RecordExecutionTimeDurableQueueInterceptor}, so an application that
+     * turned on measurement would lose its queue timers by flipping an engine flag, with nothing in
+     * the log to say so.
      */
     @Bean
     @ConditionalOnMissingBean(DurableQueues.class)
@@ -222,16 +233,19 @@ public class ShardOwnedQueueAutoConfiguration {
                                                  JSONSerializer jsonSerializer,
                                                  UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory,
                                                  DataSource dataSource,
-                                                 ShardOwnedQueueProperties properties) {
+                                                 ShardOwnedQueueProperties properties,
+                                                 List<DurableQueuesInterceptor> durableQueuesInterceptors) {
         log.info("Durable queues are running on the SHARD-OWNED engine — Inbox, Outbox and every "
                  + "EventProcessor's projections are delivered by it. Queues invented at runtime get "
                  + "{} unordered shards.", properties.getAutoRegisterShardCount());
-        return ShardOwnedDurableQueues.builder()
-                                      .setQueues(queues)
-                                      .setJsonSerializer(jsonSerializer)
-                                      .setUnitOfWorkFactory(unitOfWorkFactory)
-                                      .setDataSource(dataSource)
-                                      .setAutoRegisterShardCount(properties.getAutoRegisterShardCount())
-                                      .build();
+        var durableQueues = ShardOwnedDurableQueues.builder()
+                                                   .setQueues(queues)
+                                                   .setJsonSerializer(jsonSerializer)
+                                                   .setUnitOfWorkFactory(unitOfWorkFactory)
+                                                   .setDataSource(dataSource)
+                                                   .setAutoRegisterShardCount(properties.getAutoRegisterShardCount())
+                                                   .build();
+        durableQueues.addInterceptors(durableQueuesInterceptors);
+        return durableQueues;
     }
 }

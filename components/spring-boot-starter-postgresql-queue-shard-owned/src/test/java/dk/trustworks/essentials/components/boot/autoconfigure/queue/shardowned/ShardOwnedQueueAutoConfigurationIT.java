@@ -16,7 +16,14 @@
 
 package dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned;
 
+import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
+// Single-type imports, not the package: foundation...queue and shardowned.spi both export QueueName,
+// Message and QueuedMessage, and this class imports the spi package wholesale.
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues;
+import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueuesInterceptor;
+import dk.trustworks.essentials.components.foundation.transaction.UnitOfWorkFactory;
 import dk.trustworks.essentials.components.queue.shardowned.*;
+import dk.trustworks.essentials.components.queue.shardowned.adapter.ShardOwnedDurableQueues;
 import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.*;
@@ -219,6 +226,59 @@ class ShardOwnedQueueAutoConfigurationIT {
                             .describedAs("the observer bean saw it too")
                             .isTrue();
                 });
+    }
+
+    /**
+     * The {@code DurableQueuesInterceptor} beans reach the adapter when this engine backs
+     * {@code DurableQueues}.
+     * <p>
+     * {@code EssentialsComponentsConfiguration} applies them to {@code PostgresqlDurableQueues} and
+     * this bean displaces that one, so leaving the list uninjected dropped every interceptor an
+     * application had — including the framework's own
+     * {@code RecordExecutionTimeDurableQueueInterceptor}. Nothing threw: turning on this engine simply
+     * removed the queue timers, with nothing in the log to say so.
+     * <p>
+     * The serializer and unit-of-work factory are mocks because this asserts wiring and nothing else —
+     * the bean method only hands them to the builder, and real ones would drag a Jdbi and a Jackson
+     * flavor into a test about which beans get attached.
+     */
+    @Test
+    void durable_queues_interceptor_beans_reach_the_adapter() {
+        runner().withPropertyValues("essentials.shard-owned-queue.durable-queues-enabled=true")
+                .withUserConfiguration(DurableQueuesConfiguration.class)
+                .run(context -> {
+                    var durableQueues = context.getBean(DurableQueues.class);
+                    assertThat(durableQueues).isInstanceOf(ShardOwnedDurableQueues.class);
+                    assertThat(((ShardOwnedDurableQueues) durableQueues).getInterceptors())
+                            .describedAs("the interceptor bean was attached to the adapter")
+                            .containsExactly(context.getBean(DurableQueuesInterceptor.class));
+                });
+    }
+
+    /** Without the flag the adapter is not built at all, and the default engine stays in place. */
+    @Test
+    void durable_queues_stay_off_unless_asked() {
+        runner().withUserConfiguration(DurableQueuesConfiguration.class)
+                .run(context -> assertThat(context).doesNotHaveBean(DurableQueues.class));
+    }
+
+    @org.springframework.context.annotation.Configuration
+    static class DurableQueuesConfiguration {
+        @org.springframework.context.annotation.Bean
+        JSONSerializer jsonSerializer() {
+            return org.mockito.Mockito.mock(JSONSerializer.class);
+        }
+
+        @org.springframework.context.annotation.Bean
+        UnitOfWorkFactory<?> unitOfWorkFactory() {
+            return org.mockito.Mockito.mock(UnitOfWorkFactory.class);
+        }
+
+        @org.springframework.context.annotation.Bean
+        DurableQueuesInterceptor durableQueuesInterceptor() {
+            return durableQueues -> {
+            };
+        }
     }
 
     static class Recorder {

@@ -17,7 +17,6 @@
 package dk.trustworks.essentials.components.queue.shardowned.adapter;
 
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
-import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
@@ -27,7 +26,6 @@ import dk.trustworks.essentials.components.queue.shardowned.ShardOwnedSchema;
 // Message and QueuedMessage. Those three are written out in full wherever an engine one is meant, so
 // that no reader has to work out which namespace a bare name came from.
 import dk.trustworks.essentials.components.queue.shardowned.spi.DeadLetter;
-import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueues;
 import dk.trustworks.essentials.components.queue.shardowned.spi.QueueDepth;
@@ -37,9 +35,11 @@ import javax.sql.DataSource;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
+import static dk.trustworks.essentials.shared.interceptor.DefaultInterceptorChain.sortInterceptorsByOrder;
+import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newInterceptorChainForOperation;
 
 /**
  * The shard-owned engine presented as a {@link DurableQueues}.
@@ -85,20 +85,47 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  * the admin console's message browser is built on this call and returned HTTP 500 against any
  * application running its {@code DurableQueues} on this engine.
  *
+ * <h2>Interceptors run here, not on the engine's chain</h2>
+ * A {@link DurableQueuesInterceptor} added to this adapter is run by this adapter, around its own
+ * methods — the same {@code InterceptorChain} machinery {@code PostgresqlDurableQueues} uses, so an
+ * interceptor written against either engine behaves the same way on both.
+ * <p>
+ * This does <em>not</em> bridge onto the engine's own {@code MessageQueueInterceptor} chain, and
+ * bridging was the wrong shape: that chain carries two operations, {@code EnqueueMessages} and
+ * {@code HandleMessage}, against this interface's twenty-one, so a bridge would have carried two of
+ * them and silently dropped the rest. The two chains are independent and an application may use both;
+ * an interceptor registered on the {@code MessageQueue} sees engine operations, one registered here
+ * sees {@code DurableQueues} operations.
+ * <p>
+ * Two consequences worth knowing before writing one:
+ * <ul>
+ *     <li><b>{@link GetNextMessageReadyForDelivery} is never intercepted</b>, because it throws
+ *         (below). It is the one operation of the twenty-one an interceptor cannot observe here.</li>
+ *     <li><b>A {@code HandleQueuedMessage} interceptor receives the partial message.</b> On the
+ *         delivery path the engine hands over {@code (key, payload, payloadType)} only, so
+ *         {@link ShardOwnedQueuedMessage#getId()} and {@code getTotalDeliveryAttempts()} throw rather
+ *         than report a made-up value. {@code getQueueName()}, {@code getMessage()} and the payload
+ *         are all present — which is what the framework's own
+ *         {@code RecordExecutionTimeDurableQueueInterceptor} tags with. An interceptor that reaches
+ *         for the id fails the delivery, and the stack trace will look like the framework breaking
+ *         rather than like a partial message.</li>
+ * </ul>
+ *
  * <h2>What this adapter does not serve</h2>
  * Every one of these throws {@link UnsupportedOperationException} with its reason. None is a
  * placeholder for later work — each is a structural difference between the two engines:
  * <table>
  *     <caption>Unsupported operations</caption>
  *     <tr><th>Operation</th><th>Why</th></tr>
- *     <tr><td>{@code addInterceptor} / {@code removeInterceptor}</td>
- *         <td>The engine has its own chain ({@code MessageQueueInterceptor}). Accepting a
- *             {@code DurableQueuesInterceptor} and never running it would make an added tracing
- *             interceptor produce silence instead of spans.</td></tr>
-
  *     <tr><td>{@code queryForMessagesSoonReadyForDelivery}</td>
- *         <td>Same reason.</td></tr>
-
+ *         <td>Orders a queue by next-delivery timestamp across every shard of both lanes. That is a
+ *             different question from paging by id, which {@code getQueuedMessages} answers: there is
+ *             no index that produces it and no single sequence to merge on.</td></tr>
+ *     <tr><td>{@code getNextMessageReadyForDelivery}</td>
+ *         <td>Pulling one message requires a row-lease session that outlives the call. The engine has
+ *             one — {@code MessageQueue.openSession(SessionScope.MESSAGE, leaseDuration)} — but a
+ *             session opened and abandoned per call would leave a lease on every message it
+ *             returned.</td></tr>
  * </table>
  *
  * <h2>Queues must exist before they are used</h2>
@@ -125,6 +152,8 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private final int                                        autoRegisterShardCount;
 
     private final Map<QueueName, ShardOwnedDurableQueueConsumer> consumers = new ConcurrentHashMap<>();
+
+    private final List<DurableQueuesInterceptor> interceptors = new CopyOnWriteArrayList<>();
 
     private volatile boolean started;
 
@@ -201,17 +230,40 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                         .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * The interceptor is run by this adapter around its own operations — see this class's javadoc for
+     * what that does and does not reach, in particular what a {@code HandleQueuedMessage} interceptor
+     * may read off the message it is given.
+     */
     @Override
     public DurableQueues addInterceptor(DurableQueuesInterceptor interceptor) {
-        throw new UnsupportedOperationException(
-                "The shard-owned engine has its own interceptor chain - add a MessageQueueInterceptor to the "
-                + "MessageQueue instead. A DurableQueuesInterceptor accepted here would never run, so an added "
-                + "tracing or metrics interceptor would produce silence rather than an error.");
+        requireNonNull(interceptor, "No interceptor provided");
+        log.info("Adding interceptor: {}", interceptor);
+        interceptor.setDurableQueues(this);
+        interceptors.add(interceptor);
+        sortInterceptorsByOrder(interceptors);
+        return this;
     }
 
     @Override
     public DurableQueues removeInterceptor(DurableQueuesInterceptor interceptor) {
-        throw new UnsupportedOperationException("No DurableQueuesInterceptor can have been added - see addInterceptor.");
+        requireNonNull(interceptor, "No interceptor provided");
+        log.info("Removing interceptor: {}", interceptor);
+        interceptors.remove(interceptor);
+        sortInterceptorsByOrder(interceptors);
+        return this;
+    }
+
+    /**
+     * Access to the configured {@link DurableQueuesInterceptor}'s
+     *
+     * @return read-only list of the configured {@link DurableQueuesInterceptor}'s, in the order they
+     *         run
+     */
+    public List<DurableQueuesInterceptor> getInterceptors() {
+        return Collections.unmodifiableList(interceptors);
     }
 
     // -------------------------------------------------------------- enqueue
@@ -219,18 +271,38 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public QueueEntryId queueMessage(QueueMessage operation) {
         requireNonNull(operation, "No operation provided");
-        return queueMessages(new QueueMessages(operation.getQueueName(),
-                                               List.of(operation.getMessage()),
-                                               operation.getDeliveryDelay())).get(0);
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doQueueMessages(operation.getQueueName(),
+                                                                     List.of(operation.getMessage()),
+                                                                     operation.getDeliveryDelay().orElse(null)).get(0))
+                .proceed();
     }
 
     @Override
     public List<QueueEntryId> queueMessages(QueueMessages operation) {
         requireNonNull(operation, "No operation provided");
-        var queueName = operation.getQueueName();
-        var queue     = resolve(queueName);
-        var delay     = operation.getDeliveryDelay().orElse(null);
-        var messages  = operation.getMessages().stream().map(message -> toEngineMessage(message, delay)).toList();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doQueueMessages(operation.getQueueName(),
+                                                                     operation.getMessages(),
+                                                                     operation.getDeliveryDelay().orElse(null)))
+                .proceed();
+    }
+
+    /**
+     * The enqueue itself, with no interception of its own.
+     * <p>
+     * Each public entry point runs the chain for the operation the caller actually named and then
+     * lands here. Routing {@code queueMessage} through {@code queueMessages} instead would show an
+     * interceptor two operations for one call — and a metrics interceptor would then count every
+     * enqueue twice.
+     */
+    private List<QueueEntryId> doQueueMessages(QueueName queueName, List<? extends Message> messagesToQueue, Duration delay) {
+        var queue    = resolve(queueName);
+        var messages = messagesToQueue.stream().map(message -> toEngineMessage(message, delay)).toList();
 
         var ids = onQueue(queueName, "queue " + messages.size() + " message(s) on '" + queueName + "'",
                           () -> {
@@ -252,15 +324,21 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public QueueEntryId queueMessageAsDeadLetterMessage(QueueMessageAsDeadLetterMessage operation) {
         requireNonNull(operation, "No operation provided");
-        var queueName = operation.getQueueName();
-        var queue     = resolve(queueName);
-        var entryId   = queueMessage(new QueueMessage(queueName, operation.getMessage(),
-                                                      Optional.ofNullable(operation.getCauseOfError()),
-                                                      Optional.empty()));
-        var messageId = QueueEntryIdCodec.decode(entryId).messageId();
-        runOnQueue(queueName, "dead-letter the message just queued on '" + queueName + "'",
-                   () -> queue.markAsDeadLetter(messageId, describe(operation.getCauseOfError())));
-        return entryId;
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var queueName = operation.getQueueName();
+                                                   var queue     = resolve(queueName);
+                                                   var entryId   = doQueueMessages(queueName,
+                                                                                   List.of(operation.getMessage()),
+                                                                                   null).get(0);
+                                                   var messageId = QueueEntryIdCodec.decode(entryId).messageId();
+                                                   runOnQueue(queueName, "dead-letter the message just queued on '" + queueName + "'",
+                                                              () -> queue.markAsDeadLetter(messageId, describe(operation.getCauseOfError())));
+                                                   return entryId;
+                                               })
+                .proceed();
     }
 
     // -------------------------------------------------------------- consume
@@ -268,6 +346,14 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public DurableQueueConsumer consumeFromQueue(ConsumeFromQueue operation) {
         requireNonNull(operation, "No operation provided");
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doConsumeFromQueue(operation))
+                .proceed();
+    }
+
+    private DurableQueueConsumer doConsumeFromQueue(ConsumeFromQueue operation) {
         var queueName = operation.getQueueName();
         var existing  = consumers.get(queueName);
         if (existing != null) {
@@ -276,7 +362,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                             + "allowed half its shards.");
         }
         var consumer = new ShardOwnedDurableQueueConsumer(operation, resolve(queueName), jsonSerializer,
-                                                          () -> consumers.remove(queueName));
+                                                          this::stopConsuming, this::handleWithInterceptors);
         consumers.put(queueName, consumer);
         if (started) {
             consumer.start();
@@ -284,13 +370,62 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         return consumer;
     }
 
+    /**
+     * The cancelling half of {@link #consumeFromQueue(ConsumeFromQueue)}, which is where the
+     * {@link StopConsumingFromQueue} operation exists.
+     * <p>
+     * {@code DurableQueues} has no method for it — a consumer is stopped through the consumer — so the
+     * chain runs here, on the callback the consumer invokes when it is cancelled. A failing interceptor
+     * is logged rather than propagated, matching {@code PostgresqlDurableQueues}: the consumer is
+     * already stopped by the time this runs, and throwing would leave it stopped but still registered.
+     */
+    private void stopConsuming(DurableQueueConsumer consumer) {
+        var operation = new StopConsumingFromQueue(consumer);
+        try {
+            newInterceptorChainForOperation(operation,
+                                            interceptors,
+                                            (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                            () -> (DurableQueueConsumer) consumers.remove(consumer.queueName()))
+                    .proceed();
+        } catch (Exception e) {
+            log.error("Failed to perform " + operation, e);
+        }
+    }
+
+    /**
+     * One delivery, through the interceptor chain.
+     * <p>
+     * Called by {@link ShardOwnedDurableQueueConsumer} rather than the handler being invoked directly,
+     * so that a {@link HandleQueuedMessage} interceptor sits where it does on the other engine. The
+     * message is the partial shape — see this class's javadoc for what it will and will not answer.
+     */
+    private void handleWithInterceptors(QueuedMessage message, QueuedMessageHandler messageHandler) {
+        var operation = new HandleQueuedMessage(message, messageHandler);
+        newInterceptorChainForOperation(operation,
+                                        interceptors,
+                                        (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                        () -> {
+                                            messageHandler.handle(message);
+                                            return (Void) null;
+                                        })
+                .proceed();
+    }
+
     // ---------------------------------------------------------------- by id
 
     @Override
     public Optional<QueuedMessage> getQueuedMessage(GetQueuedMessage operation) {
         requireNonNull(operation, "No operation provided");
-        var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
-        return onQueue(decoded.queueName(), "read message '" + operation.getQueueEntryId() + "'",
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doGetQueuedMessage(operation.getQueueEntryId()))
+                .proceed();
+    }
+
+    private Optional<QueuedMessage> doGetQueuedMessage(QueueEntryId queueEntryId) {
+        var decoded = QueueEntryIdCodec.decode(queueEntryId);
+        return onQueue(decoded.queueName(), "read message '" + queueEntryId + "'",
                        () -> resolve(decoded.queueName()).getMessage(decoded.messageId())
                                                          .map(message -> toQueuedMessage(decoded.queueName(), message)));
     }
@@ -298,10 +433,18 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public Optional<QueuedMessage> getDeadLetterMessage(GetDeadLetterMessage operation) {
         requireNonNull(operation, "No operation provided");
-        var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
-        return getDeadLetterMessages(new GetDeadLetterMessages(decoded.queueName(), QueueingSortOrder.ASC, 0, Long.MAX_VALUE))
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doGetDeadLetterMessage(operation.getQueueEntryId()))
+                .proceed();
+    }
+
+    private Optional<QueuedMessage> doGetDeadLetterMessage(QueueEntryId queueEntryId) {
+        var decoded = QueueEntryIdCodec.decode(queueEntryId);
+        return doGetDeadLetterMessages(decoded.queueName(), 0, Integer.MAX_VALUE)
                 .stream()
-                .filter(message -> message.getId().equals(operation.getQueueEntryId()))
+                .filter(message -> message.getId().equals(queueEntryId))
                 .findFirst();
     }
 
@@ -313,8 +456,16 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public boolean deleteMessage(DeleteMessage operation) {
         requireNonNull(operation, "No operation provided");
-        var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
-        return onQueue(decoded.queueName(), "delete message '" + operation.getQueueEntryId() + "'",
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doDeleteMessage(operation.getQueueEntryId()))
+                .proceed();
+    }
+
+    private boolean doDeleteMessage(QueueEntryId queueEntryId) {
+        var decoded = QueueEntryIdCodec.decode(queueEntryId);
+        return onQueue(decoded.queueName(), "delete message '" + queueEntryId + "'",
                        () -> resolve(decoded.queueName()).deleteMessage(decoded.messageId()));
     }
 
@@ -329,38 +480,58 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public boolean acknowledgeMessageAsHandled(AcknowledgeMessageAsHandled operation) {
         requireNonNull(operation, "No operation provided");
-        return deleteMessage(new DeleteMessage(operation.getQueueEntryId()));
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doDeleteMessage(operation.getQueueEntryId()))
+                .proceed();
     }
 
     @Override
     public Optional<QueuedMessage> retryMessage(RetryMessage operation) {
         requireNonNull(operation, "No operation provided");
-        var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
-        var applied = onQueue(decoded.queueName(), "retry message '" + operation.getQueueEntryId() + "'",
-                              () -> resolve(decoded.queueName()).retryMessage(decoded.messageId(),
-                                                                              operation.getDeliveryDelay()));
-        return applied ? getQueuedMessage(new GetQueuedMessage(operation.getQueueEntryId())) : Optional.empty();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
+                                                   var applied = onQueue(decoded.queueName(), "retry message '" + operation.getQueueEntryId() + "'",
+                                                                         () -> resolve(decoded.queueName()).retryMessage(decoded.messageId(),
+                                                                                                                         operation.getDeliveryDelay()));
+                                                   return applied ? doGetQueuedMessage(operation.getQueueEntryId()) : Optional.<QueuedMessage>empty();
+                                               })
+                .proceed();
     }
 
     @Override
     public Optional<QueuedMessage> markAsDeadLetterMessage(MarkAsDeadLetterMessage operation) {
         requireNonNull(operation, "No operation provided");
-        var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
-        var applied = onQueue(decoded.queueName(), "dead-letter message '" + operation.getQueueEntryId() + "'",
-                              () -> resolve(decoded.queueName())
-                                      .markAsDeadLetter(decoded.messageId(),
-                                                        operation.getCauseForBeingMarkedAsDeadLetter()));
-        return applied ? getDeadLetterMessage(new GetDeadLetterMessage(operation.getQueueEntryId())) : Optional.empty();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var applied = doMarkAsDeadLetter(operation.getQueueEntryId(),
+                                                                                    operation.getCauseForBeingMarkedAsDeadLetter());
+                                                   return applied ? doGetDeadLetterMessage(operation.getQueueEntryId()) : Optional.<QueuedMessage>empty();
+                                               })
+                .proceed();
     }
 
     @Override
     public boolean markAsDeadLetterMessageDirect(MarkAsDeadLetterMessageDirect operation) {
         requireNonNull(operation, "No operation provided");
-        var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
-        return onQueue(decoded.queueName(), "dead-letter message '" + operation.getQueueEntryId() + "'",
-                       () -> resolve(decoded.queueName())
-                               .markAsDeadLetter(decoded.messageId(),
-                                                 operation.getCauseForBeingMarkedAsDeadLetter()));
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doMarkAsDeadLetter(operation.getQueueEntryId(),
+                                                                        operation.getCauseForBeingMarkedAsDeadLetter()))
+                .proceed();
+    }
+
+    private boolean doMarkAsDeadLetter(QueueEntryId queueEntryId, String cause) {
+        var decoded = QueueEntryIdCodec.decode(queueEntryId);
+        return onQueue(decoded.queueName(), "dead-letter message '" + queueEntryId + "'",
+                       () -> resolve(decoded.queueName()).markAsDeadLetter(decoded.messageId(), cause));
     }
 
     /**
@@ -374,17 +545,29 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public Optional<QueuedMessage> resurrectDeadLetterMessage(ResurrectDeadLetterMessage operation) {
         requireNonNull(operation, "No operation provided");
-        var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
-        var applied = onQueue(decoded.queueName(), "resurrect message '" + operation.getQueueEntryId() + "'",
-                              () -> resolve(decoded.queueName()).resurrect(decoded.messageId()));
-        if (!applied) {
-            return Optional.empty();
-        }
-        log.debug("Resurrected '{}' - it re-enters its lane at a fresh sequence, so its QueueEntryId has changed",
-                  operation.getQueueEntryId());
-        return Optional.empty();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var decoded = QueueEntryIdCodec.decode(operation.getQueueEntryId());
+                                                   var applied = onQueue(decoded.queueName(), "resurrect message '" + operation.getQueueEntryId() + "'",
+                                                                         () -> resolve(decoded.queueName()).resurrect(decoded.messageId()));
+                                                   if (applied) {
+                                                       log.debug("Resurrected '{}' - it re-enters its lane at a fresh sequence, so its QueueEntryId has changed",
+                                                                 operation.getQueueEntryId());
+                                                   }
+                                                   return Optional.<QueuedMessage>empty();
+                                               })
+                .proceed();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Not served — see this class's javadoc. It is also the one operation a
+     * {@link DurableQueuesInterceptor} added here never observes, because there is no call to
+     * intercept.
+     */
     @Override
     public Optional<QueuedMessage> getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery operation) {
         throw new UnsupportedOperationException(
@@ -426,23 +609,39 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public long getTotalMessagesQueuedFor(GetTotalMessagesQueuedFor operation) {
         requireNonNull(operation, "No operation provided");
-        var depth = depth(operation.getQueueName());
-        return depth.unordered() + depth.ordered();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var depth = depth(operation.getQueueName());
+                                                   return depth.unordered() + depth.ordered();
+                                               })
+                .proceed();
     }
 
     @Override
     public long getTotalDeadLetterMessagesQueuedFor(GetTotalDeadLetterMessagesQueuedFor operation) {
         requireNonNull(operation, "No operation provided");
-        return depth(operation.getQueueName()).deadLettered();
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> depth(operation.getQueueName()).deadLettered())
+                .proceed();
     }
 
     @Override
     public QueuedMessageCounts getQueuedMessageCountsFor(GetQueuedMessageCountsFor operation) {
         requireNonNull(operation, "No operation provided");
-        var depth = depth(operation.getQueueName());
-        return new QueuedMessageCounts(operation.getQueueName(),
-                                       depth.unordered() + depth.ordered(),
-                                       depth.deadLettered());
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var depth = depth(operation.getQueueName());
+                                                   return new QueuedMessageCounts(operation.getQueueName(),
+                                                                                  depth.unordered() + depth.ordered(),
+                                                                                  depth.deadLettered());
+                                               })
+                .proceed();
     }
 
     // -------------------------------------------------------------- listing
@@ -450,24 +649,37 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     @Override
     public List<QueuedMessage> getQueuedMessages(GetQueuedMessages operation) {
         requireNonNull(operation, "No operation provided");
-        var queueName = operation.getQueueName();
-        var offset    = (int) Math.min(Integer.MAX_VALUE, operation.getStartIndex());
-        var pageSize  = (int) Math.min(Integer.MAX_VALUE, operation.getPageSize());
-        return onQueue(queueName, "read the queued messages of '" + queueName + "'",
-                       () -> resolve(queueName).messages(offset, pageSize,
-                                                         operation.getQueueingSortOrder() != QueueingSortOrder.DESC)
-                                               .stream()
-                                               .map(message -> toQueuedMessage(queueName, message))
-                                               .<QueuedMessage>map(message -> message)
-                                               .toList());
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var queueName = operation.getQueueName();
+                                                   var offset    = (int) Math.min(Integer.MAX_VALUE, operation.getStartIndex());
+                                                   var pageSize  = (int) Math.min(Integer.MAX_VALUE, operation.getPageSize());
+                                                   return onQueue(queueName, "read the queued messages of '" + queueName + "'",
+                                                                  () -> resolve(queueName).messages(offset, pageSize,
+                                                                                                    operation.getQueueingSortOrder() != QueueingSortOrder.DESC)
+                                                                                          .stream()
+                                                                                          .map(message -> toQueuedMessage(queueName, message))
+                                                                                          .<QueuedMessage>map(message -> message)
+                                                                                          .toList());
+                                               })
+                .proceed();
     }
 
     @Override
     public List<QueuedMessage> getDeadLetterMessages(GetDeadLetterMessages operation) {
         requireNonNull(operation, "No operation provided");
-        var queueName = operation.getQueueName();
-        var offset    = (int) Math.min(Integer.MAX_VALUE, operation.getStartIndex());
-        var pageSize  = (int) Math.min(Integer.MAX_VALUE, operation.getPageSize());
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> doGetDeadLetterMessages(operation.getQueueName(),
+                                                                             (int) Math.min(Integer.MAX_VALUE, operation.getStartIndex()),
+                                                                             (int) Math.min(Integer.MAX_VALUE, operation.getPageSize())))
+                .proceed();
+    }
+
+    private List<QueuedMessage> doGetDeadLetterMessages(QueueName queueName, int offset, int pageSize) {
         return onQueue(queueName, "read the dead letters of '" + queueName + "'",
                        () -> resolve(queueName).deadLetters(offset, pageSize).stream()
                                                .map(deadLetter -> toQueuedMessage(queueName, deadLetter))
@@ -475,20 +687,36 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                                .toList());
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Not served — see this class's javadoc. {@code getQueuedMessages} pages by id, which this engine
+     * can do because the id <em>is</em> {@code (lane, shard, seq)}; ordering by next-delivery timestamp
+     * across every shard of both lanes is a different question, with no index behind it and no single
+     * sequence to merge on.
+     */
     @Override
     public List<NextQueuedMessage> queryForMessagesSoonReadyForDelivery(QueueName queueName,
                                                                         java.time.Instant withNextDeliveryTimestampAfter,
                                                                         int maxNumberOfMessagesToReturn) {
         throw new UnsupportedOperationException(
-                "Ordering a queue by next-delivery timestamp across shards. Same reason as getQueuedMessages.");
+                "Ordering a queue by next-delivery timestamp across every shard of both lanes. There is no index that "
+                + "produces that order and no single sequence to merge on - which is a different question from "
+                + "getQueuedMessages, which pages by id and is served.");
     }
 
     @Override
     public int purgeQueue(PurgeQueue operation) {
         requireNonNull(operation, "No operation provided");
-        var purged = onQueue(operation.getQueueName(), "purge '" + operation.getQueueName() + "'",
-                             () -> resolve(operation.getQueueName()).purge());
-        return (int) Math.min(Integer.MAX_VALUE, purged);
+        return newInterceptorChainForOperation(operation,
+                                               interceptors,
+                                               (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
+                                               () -> {
+                                                   var purged = onQueue(operation.getQueueName(), "purge '" + operation.getQueueName() + "'",
+                                                                        () -> resolve(operation.getQueueName()).purge());
+                                                   return (int) Math.min(Integer.MAX_VALUE, purged);
+                                               })
+                .proceed();
     }
 
     // -------------------------------------------------------------- helpers
