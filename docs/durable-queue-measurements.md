@@ -218,6 +218,40 @@ the client's socket configuration, not the engine's.
 **Set `socketTimeout` on the engine's DataSource.** It is the difference between a node rejoining in
 seconds and one acting on beliefs it cannot check for as long as the OS keeps retransmitting.
 
+### 3.4.2 A full disk, and what it does first
+
+Measured **2026-09-13**, `ShardOwnedDiskPressureIT`. The whole data directory is a 256 MB tmpfs with a
+48 MB ballast file on it, and a filler table exhausts the rest.
+
+| What was tried | What happened |
+|---|---|
+| Filler rows of 1 MB, then 64 KB, 8 KB, 512 B | All four sizes refused: `ERROR: could not extend file "base/…": No space left on device` |
+| 20 queue enqueues, with the volume in that state | **All 20 accepted** |
+| Same fill against a 192 MB volume with no ballast | `PANIC: could not write to file "pg_wal/xlogtemp.NN"` — the cluster went down and came back through crash recovery |
+| Ballast deleted, filler truncated | Delivery resumed with no restart and nothing lost |
+
+Three things worth carrying out of that.
+
+**"The disk is full" is not one state, and the queue reaches it last.** A relation that cannot extend
+is not a queue that cannot write: the enqueues landed in pages already allocated, with WAL still
+having room. So an application sees its first disk-full error somewhere else entirely, and the queue
+keeps working for a while afterwards — which is good for the queue and misleading for anyone reading
+the alert.
+
+**Which wall you hit decides how bad it is.** Data-file exhaustion is an ordinary `ERROR` the caller
+can handle. WAL exhaustion is a `PANIC`: the backend takes the whole cluster with it, every connection
+dies at once, and it will do it again on the next write until somebody frees space. The 192 MB run hit
+the second; the 256 MB run with ballast hit the first.
+
+**A full cluster cannot free its own space** — `TRUNCATE` is a write too. That is why the recovery here
+is deleting a ballast file from outside the database, and why keeping one on the volume is the
+standard advice rather than a trick of this test.
+
+What the engine does through all of it: keeps its shards, accepts or refuses each enqueue rather than
+losing one, and resumes without a restart. A slow disk is the other half of disk pressure and is not
+the same failure — see the engine document's §8.6, which is what stops an instance whose commits have
+outrun the lease from delivering work its successor is already doing.
+
 ### 3.5 Sustained load — 30 minutes, both engines, sampled every 30 seconds
 
 Re-measured **2026-09-11**: 30 minutes per arm at 300 messages a second, 60 windows each, 540 000
@@ -487,7 +521,7 @@ list starts costing more than it gives.
   client clock reaches the storage layer. Independent clocks change nothing.
 - **Sustained soak beyond half an hour.** The longest run is the thirty minutes in §3.5 — 540 000 messages per arm, thirty autovacuum cycles. Vacuum behaviour, index bloat and p99 drift over *hours* remain unmeasured, and the baseline's dead-tuple cost is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and again at thirty and did not find it, which is not the same as it not being there. Nor has any soak run at a rate near either engine's capacity: 300/s keeps the latency signal clean and accumulates debt slowly, and the opposite trade has not been measured.
 - **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
-- **Failure injection beyond process death, connection loss, partition and restart.** Those four are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`, `ShardOwnedDatabaseRestartIT`). **Disk pressure** — a full or slow disk under the database — is untested.
+- ~~**Failure injection beyond process death, connection loss, partition and restart.**~~ **Closed.** Those four are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`, `ShardOwnedDatabaseRestartIT`), and disk pressure is now covered in both of its forms: a full volume in §3.4.2, and the slow-disk case as the condition it actually produces — commits outrunning the lease — in `ShardOwnedStaleLivenessIT`. What is *not* measured is how a genuinely slow device behaves, because throttling one needs a `dm-delay` target and a privileged container; what the engine is exposed to is the consequence, and that is what is tested.
 - **Throughput on hardware that can measure it.** See above.
 - **Idle cost of a large routing space across many queues.** §3.8 varies the space on one queue and the queue count at one space; the product of the two — hundreds of queues at 1 024 units each — is not measured, and per-unit state (a lease row and an owner object each) is what would grow.
 - **Growing an existing queue's routing space.** Not built; see `durable-queue-ordered-routing-design.md` §8.

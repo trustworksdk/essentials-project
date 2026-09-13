@@ -81,4 +81,19 @@ interface LeasedOwner {
 
     /** Called when a renewal is refused, or granted under a fence this owner does not hold. */
     void onLeaseLost();
+
+    /**
+     * May this owner dispatch work right now?
+     * <p>
+     * Distinct from {@link #leaseHeld()}, which answers whether this owner still <em>has</em> its
+     * unit. This answers whether its instance has been able to say so recently enough for that belief
+     * to be worth anything — see {@code ShardOwnedQueue.deliveryPermitted}. An owner that cannot
+     * reach the database keeps its units and its memory, and there is nothing to tell it otherwise;
+     * the database has meanwhile been free to hand those units to somebody else for the whole time.
+     * <p>
+     * Default {@code true}, so an owner with no instance behind it — a test double — is unaffected.
+     */
+    default boolean deliveryPermitted() {
+        return true;
+    }
 }

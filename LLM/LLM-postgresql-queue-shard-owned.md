@@ -352,6 +352,14 @@ Via Micrometer, `bindQueueHealth(queue, maxAge)` publishes:
 
 Both bindings are opt-in and cached, because a gauge is polled on every scrape and these are queries.
 
+**`ShardOwnerMetrics.deliveryPauses`** is the other one to watch. An instance that has not been able
+to confirm its own liveness within `leaseTtl` stops dispatching until it can — by then the rest of the
+cluster already considers its units takeable, so anything it delivered would be work a successor is
+doing too. Nothing is lost and it resumes on its own at the next successful heartbeat; a non-zero
+count says the database was unreachable or too slow for longer than the lease, which is the same
+condition a partition without `socketTimeout` produces and the one a slow disk produces on every
+instance at once.
+
 **`ShardOwnerMetrics.surplusInstances`** answers the neighbouring question: how many instances the
 lane's routing space could not give a unit to. A surplus instance holds nothing, delivers nothing and
 reports no error, which looks exactly like an instance whose queue is quiet — so this is the only way

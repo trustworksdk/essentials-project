@@ -23,6 +23,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import java.util.function.BooleanSupplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -57,6 +58,13 @@ final class ShardOwner implements LeasedOwner {
     private final RedeliveryPolicy    redeliveryPolicy;
     private final ShardWakeup         wakeup;
     private final String              instanceId;
+    /**
+     * Whether this owner's instance has confirmed its own liveness recently enough to dispatch —
+     * supplied by {@link ShardOwnedQueue} after construction rather than through a constructor
+     * already at its argument ceiling. Null for an owner built without one, which then always
+     * dispatches.
+     */
+    private volatile BooleanSupplier  deliveryGate;
     /**
      * Handlers run here, not on the pump thread.
      * <p>
@@ -144,6 +152,17 @@ final class ShardOwner implements LeasedOwner {
         this.wakeup = requireNonNull(wakeup, "No wakeup provided");
         this.instanceId = requireNonNull(instanceId, "No instanceId provided");
         this.dispatch = requireNonNull(dispatch, "No dispatch provided");
+    }
+
+    /** See {@link LeasedOwner#deliveryPermitted()}. Set once, by the queue that built this owner. */
+    void setDeliveryGate(BooleanSupplier deliveryGate) {
+        this.deliveryGate = deliveryGate;
+    }
+
+    @Override
+    public boolean deliveryPermitted() {
+        var gate = deliveryGate;
+        return gate == null || gate.getAsBoolean();
     }
 
     @Override

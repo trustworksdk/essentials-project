@@ -378,6 +378,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                               redeliveryPolicy, instanceId,
                                               runtime.wakeupFor(queueId, "ordered", entry[0]),
                                               dispatch);
+            owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             runtime.register(queueId, "ordered", entry[0], owner);
             metrics.shardsAcquired.increment();
@@ -445,6 +446,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             var owner = new ShardOwner(storage, entry[0], entry[1], settings, handler, metrics,
                                        redeliveryPolicy, runtime.wakeupFor(queueId, "unordered", entry[0]),
                                        instanceId, dispatch);
+            owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             ownedShards.put(entry[0], owner);
             runtime.register(queueId, "unordered", entry[0], owner);
@@ -502,6 +504,75 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     /**
+     * The last moment this instance successfully told the database it was alive.
+     * <p>
+     * Nanoseconds from {@link System#nanoTime()}, so it measures elapsed time and not wall-clock, and
+     * is unaffected by the clock moving.
+     */
+    private volatile long lastLivenessConfirmedNanos = System.nanoTime();
+
+    private void confirmLiveness() {
+        lastLivenessConfirmedNanos = System.nanoTime();
+        evaluateLiveness();
+    }
+
+    private final AtomicBoolean deliveryPaused = new AtomicBoolean();
+
+    /**
+     * Decide whether this instance may still dispatch, and say so once when the answer changes.
+     * <p>
+     * Called from the heartbeat as well as from the owners, and that is the important half: an
+     * instance whose queue is quiet asks nothing of {@link #deliveryPermitted()} for as long as it has
+     * no work, so a pause noticed only on the dispatch path would go unrecorded for exactly the
+     * instances an operator is trying to find. The heartbeat runs whether there is work or not.
+     */
+    private boolean evaluateLiveness() {
+        var staleForMillis = (System.nanoTime() - lastLivenessConfirmedNanos) / 1_000_000L;
+        if (staleForMillis <= leaseTtlMillis) {
+            if (deliveryPaused.compareAndSet(true, false)) {
+                log.info("Instance {} has confirmed its liveness again; delivery resumes", instanceId);
+            }
+            return true;
+        }
+        if (deliveryPaused.compareAndSet(false, true)) {
+            metrics.deliveryPauses.increment();
+            log.warn("Instance {} has not confirmed its liveness for {} ms, which is past the {} ms the rest of the "
+                     + "cluster waits before taking its units. Pausing delivery until it can: whatever it delivered "
+                     + "from here on would be work a successor is doing too",
+                     instanceId, staleForMillis, leaseTtlMillis);
+        }
+        return false;
+    }
+
+    /**
+     * Whether this instance may still dispatch work — that is, whether it has confirmed its own
+     * liveness inside the window the rest of the cluster gives it.
+     *
+     * <h2>Why an owner has to ask this at all</h2>
+     * A unit's liveness is its instance's row in {@code shard_queue_instance}, and the fair share
+     * everyone else computes treats a row older than {@code leaseTtl} as dead. So {@code leaseTtl}
+     * after this instance last managed to write that row, its units are <b>already takeable</b> and
+     * may already have been taken — while nothing has happened in this JVM to say so. It still holds
+     * the owners, still has the messages it read, and goes on delivering them.
+     * <p>
+     * Correctness survives that: the successor takes the unit under a new fence and this instance's
+     * acknowledgements are refused. What does not survive is the useful work — every message it
+     * dispatches in that window is one the successor is also dispatching, so it is manufacturing
+     * duplicates that the contract permits but nobody wants.
+     * <p>
+     * Two failures put an instance here and neither is exotic. A network partition: measured, a node
+     * without a {@code socketTimeout} had not noticed after ninety seconds. A slow disk: commits take
+     * longer than the lease, so every instance on that database crosses this line at once, which is
+     * the case a per-owner lease check cannot see because the check is itself a query that is now slow.
+     * <p>
+     * Pausing is not a fence and does not pretend to be one — the fence is what makes this safe. It
+     * stops an instance from spending the window acting on a belief it has no way to check.
+     */
+    private boolean deliveryPermitted() {
+        return evaluateLiveness();
+    }
+
+    /**
      * Renew the leases this instance holds, at a third of their lifetime.
      * <p>
      * A third rather than a half so that a single missed renewal — a GC pause, a slow query, a blip
@@ -514,6 +585,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         heartbeat = runtime.scheduleHeartbeat(() -> {
             try {
                 storage.heartbeatInstance(instanceId);
+                confirmLiveness();
                 // Garbage collection, not liveness: ten lease lifetimes is far past anything
                 // fairShare looks at, so this can never remove a row that still counts.
                 storage.pruneDepartedInstances(leaseTtlMillis * 10);
@@ -564,6 +636,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             } catch (Exception e) {
                 log.warn("Rebalance failed", e);
             }
+            // Last, and outside every catch above: whether this instance is still entitled to
+            // dispatch does not depend on which of those steps failed, only on how long it has been
+            // since one of them succeeded.
+            evaluateLiveness();
         }, interval);
     }
 
@@ -704,6 +780,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             var owner = new ShardOwner(storage, shard, fence.get(), activeSettings, activeHandler, metrics,
                                        activePolicy, runtime.wakeupFor(queueId, "unordered", shard),
                                        instanceId, dispatch);
+            owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             ownedShards.put(shard, owner);
             runtime.register(queueId, "unordered", shard, owner);
@@ -772,6 +849,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                                               metrics, activePolicy, instanceId,
                                               runtime.wakeupFor(queueId, "ordered", shard),
                                               dispatch);
+            owner.setDeliveryGate(this::deliveryPermitted);
             owners.add(owner);
             heldShards.add(shard);
             runtime.register(queueId, "ordered", shard, owner);

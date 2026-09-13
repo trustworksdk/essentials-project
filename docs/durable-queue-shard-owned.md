@@ -652,6 +652,38 @@ UPDATE shard_queue_unordered SET attempts = attempts + 1 WHERE queue_id = ? AND 
 
 One statement over the small unacked set. Poison messages therefore reach the dead-letter lane even under repeated crashes, and it is the only reason the steady-state path can get away with never writing an attempt count.
 
+### 8.6 An instance that cannot vouch for itself stops dispatching
+
+A unit's liveness is its instance's row in `shard_queue_instance`, and everybody else's fair share
+treats a row older than `leaseTtl` as dead. So one lease after an instance last managed to write that
+row, **its units are already takeable, and may already have been taken** — while nothing has happened
+inside that JVM to say so. It still holds its owners, still has whatever it read, and would go on
+delivering.
+
+Correctness was never in question here: the successor takes the unit under a new fence and the old
+owner's acknowledgements are refused (§8.3). What is in question is the work. Everything delivered in
+that window is work the successor is doing too — duplicates the contract permits and nobody wants —
+and the window is not brief. Two ordinary failures produce it:
+
+- **A partition.** Measured: a node without a `socketTimeout` had not noticed after ninety seconds
+  ([`durable-queue-measurements.md`](./durable-queue-measurements.md) §3.4.1).
+- **A slow disk.** Commits take longer than the lease. This one is worse than a partition, because it
+  puts *every* instance on that database over the line at once — and a per-owner lease check cannot
+  see it, since the check is itself a query that is now slow.
+
+So before it dispatches, an owner asks whether its instance has confirmed liveness inside the lease.
+If not, the pump skips it — before consuming the shard's wake-up, so the signal is still there when
+delivery resumes. The instance keeps its units, because releasing them needs the database it cannot
+reach; a successor takes them on the lease instead, which is the existing mechanism and not a new one.
+Resuming is unattended: the next successful heartbeat is the whole condition.
+
+**This is not a fence and does not replace one.** The fence is what makes the window safe. This stops
+an instance from spending the window acting on a belief it has no way to check.
+`ShardOwnerMetrics.deliveryPauses` counts it, and the transition is logged both ways.
+`ShardOwnedStaleLivenessIT` holds the assertion. Staleness is evaluated on the heartbeat as well as on
+the dispatch path, because an instance with a quiet queue asks nothing of the dispatch path — and a
+pause nobody records is precisely the state an operator is hunting for.
+
 ---
 
 ## 9. Failure, retry and dead letters
@@ -1165,6 +1197,7 @@ for the whole of it.
 | Pumps never start, no error | Pool smaller than `pumpThreads + 1` | §17.3 |
 | Delivery latency jumps to seconds when idle | Notifications not arriving | §17.4 — check the pooler's mode |
 | An instance goes silent — no deliveries, no errors, no heartbeat — while the rest of the cluster carries on | It is partitioned from the database and has no `socketTimeout`, so it is blocked in a read that will not return for minutes | §17.3. Its shards have already been taken; the instance recovers on its own once the read fails. Set `socketTimeout` so that it is seconds |
+| `deliveryPauses` climbing, "has not confirmed its liveness" in the log | The database was unreachable or slower than `leaseTtl` for that instance | §8.6. Nothing is lost and it resumes on its own. If every instance reports it at once, look at the disk rather than the network |
 
 ---
 
@@ -1189,9 +1222,9 @@ Absence of a result, not a passing one. Detail and the environment's limits: [`d
 
 ### 18.2 Behaviour not covered by a test
 
-| | Note |
-|---|---|
-| **Disk pressure** | A full or slow disk under the database |
+Nothing outstanding here. The last entry — disk pressure — is now covered in both directions:
+`ShardOwnedDiskPressureIT` fills the volume under a running queue, and §8.6 is what the engine does
+when it can no longer confirm it is alive, which is where a slow disk lands.
 
 ### 18.3 Not built, deliberately
 

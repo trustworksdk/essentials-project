@@ -143,6 +143,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
     /** Set once the shard has quiesced and its acknowledgements are flushed — safe to release. */
     private final AtomicBoolean    shedComplete = new AtomicBoolean();
     private volatile long          shedDeadlineNanos;
+    /**
+     * Whether this owner's instance has confirmed its own liveness recently enough to dispatch —
+     * supplied by {@link ShardOwnedQueue} after construction. Null means always, which is what an
+     * owner built without a queue behind it gets.
+     */
+    private volatile java.util.function.BooleanSupplier deliveryGate;
 
     private long lastHorizonProbeNanos;
     private long lastSweepNanos;
@@ -725,6 +731,17 @@ final class OrderedShardOwner implements BatchReadableOwner {
     @Override
     public boolean leaseHeld() {
         return leaseHeld.get();
+    }
+
+    /** See {@link LeasedOwner#deliveryPermitted()}. Set once, by the queue that built this owner. */
+    void setDeliveryGate(java.util.function.BooleanSupplier deliveryGate) {
+        this.deliveryGate = deliveryGate;
+    }
+
+    @Override
+    public boolean deliveryPermitted() {
+        var gate = deliveryGate;
+        return gate == null || gate.getAsBoolean();
     }
 
     @Override

@@ -165,6 +165,15 @@ public final class ShardOwnerMetrics {
      * worth building. Without it the question can only be guessed at.
      */
     public final AtomicInteger surplusInstances     = new AtomicInteger();
+    /**
+     * Times this instance stopped dispatching because it had not been able to confirm its own
+     * liveness within the lease — see {@code ShardOwnedQueue.deliveryPermitted}.
+     * <p>
+     * Non-zero means the database was unreachable or too slow for longer than the window the rest of
+     * the cluster waits before taking this instance's units. Nothing was lost; what it says is that
+     * this instance spent time holding units it could no longer vouch for.
+     */
+    public final LongAdder     deliveryPauses       = new LongAdder();
 
     /**
      * The operator-facing subset, as a stable shape.
@@ -220,6 +229,7 @@ public final class ShardOwnerMetrics {
         snapshot.put("maxPendingHoles", maxPendingHoles.get());
         snapshot.put("maxConcurrentKeys", maxConcurrentKeys.get());
         snapshot.put("surplusInstances", surplusInstances.get());
+        snapshot.put("deliveryPauses", deliveryPauses.sum());
         snapshot.put("orderedReadStatements", orderedReadStatements.sum());
         snapshot.put("horizonProbes", horizonProbes.sum());
         snapshot.put("watermarkAdvances", watermarkAdvances.sum());

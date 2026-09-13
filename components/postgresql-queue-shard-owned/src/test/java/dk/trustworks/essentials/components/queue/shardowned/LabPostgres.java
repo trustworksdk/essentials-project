@@ -58,7 +58,28 @@ public final class LabPostgres {
 
     public static final String IMAGE = "postgres:17.5-bookworm";
 
+    /** Where the image puts {@code PGDATA}, and therefore what a tmpfs has to replace to bound it. */
+    static final String DATA_DIRECTORY = "/var/lib/postgresql/data";
+
     private LabPostgres() {
+    }
+
+    /**
+     * A cluster whose entire data directory is a tmpfs of the given size — so that filling it is
+     * something a test can do on purpose.
+     * <p>
+     * {@code lab.pg.tmpfs-data} exists to take storage speed out of a measurement; this exists to put
+     * storage <em>limits</em> into one. Size it above what {@code initdb} needs — an empty cluster is
+     * around 40 MB — and leave room for the WAL the filling itself writes, or the server never starts
+     * and the test reads as a failure of the engine.
+     *
+     * @param size a tmpfs size as {@code mount} spells it, e.g. {@code "192m"}
+     */
+    public static PostgreSQLContainer<?> createWithSizedDataDirectory(String size, String... extraPostgresArgs) {
+        var container = create(extraPostgresArgs);
+        container.withTmpFs(Map.of(DATA_DIRECTORY, "rw,size=" + size));
+        log.info("Lab PostgreSQL: data directory is a {} tmpfs", size);
+        return container;
     }
 
     /**
@@ -92,7 +113,7 @@ public final class LabPostgres {
             // Removes storage speed and its variance from the measurement entirely. Correct when
             // comparing two designs, wrong when quoting absolute latency — so it is opt-in and
             // recorded, never a default.
-            container.withTmpFs(Map.of("/var/lib/postgresql/data", "rw,size=2g"));
+            container.withTmpFs(Map.of(DATA_DIRECTORY, "rw,size=2g"));
         }
 
         container.withCreateContainerCmdModifier(cmd -> {

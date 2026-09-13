@@ -114,6 +114,12 @@ final class ShardPump implements Runnable {
                         if (!owner.leaseHeld()) {
                             continue;
                         }
+                        // BEFORE needsAttention, which consumes the shard's wake-up flag. Skipping
+                        // after it would swallow the signal and leave the shard waiting for the
+                        // backstop once delivery is permitted again.
+                        if (!owner.deliveryPermitted()) {
+                            continue;
+                        }
                         // The wake-up was for one of this pump's shards, not all of them.
                         if (!owner.needsAttention()) {
                             continue;
