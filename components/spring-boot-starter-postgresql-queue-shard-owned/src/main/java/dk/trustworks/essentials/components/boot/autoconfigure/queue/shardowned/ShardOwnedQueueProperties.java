@@ -33,6 +33,22 @@ import java.util.*;
 public class ShardOwnedQueueProperties {
 
     /**
+     * The engine's master switch. <b>Default {@code true}</b>: a starter on the classpath is taken as
+     * a request for the thing it configures, which is how the rest of Essentials behaves.
+     * <p>
+     * Turning it off leaves nothing running — no schema initialisation, no {@code ShardRuntime}, no
+     * pumps, no listener connection, and no administrative endpoints. Use it to keep the starter on
+     * the classpath while a deployment does not want the engine, rather than removing the dependency.
+     * <p>
+     * Read by {@code @ConditionalOnProperty} on the auto-configurations rather than from this field,
+     * because a condition has to be evaluated before any bean exists to read. The field is here so
+     * the property appears in {@code spring-configuration-metadata.json} with its default — without
+     * it, the one switch that governs the whole module was the only property an IDE could not
+     * complete.
+     */
+    private boolean enabled = true;
+
+    /**
      * Create the engine's tables, sequences and indexes at start-up if they are absent.
      * <p>
      * Non-destructive: it never drops anything. Turn it off where schema changes are owned by a
@@ -317,5 +333,13 @@ public class ShardOwnedQueueProperties {
 
     public void setOrderedUnits(Map<String, Integer> orderedUnits) {
         this.orderedUnits = orderedUnits;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
     }
 }

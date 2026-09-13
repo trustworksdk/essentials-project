@@ -686,6 +686,18 @@
                         <release>${maven.compiler.release}</release>
                         <compilerArgs>
                             <arg>-parameters</arg>
+                            <!--
+                                REQUIRED since JDK 23, which stopped running annotation processors
+                                discovered on the classpath unless asked. Without it
+                                spring-boot-configuration-processor silently does not run, and every
+                                starter ships without META-INF/spring-configuration-metadata.json —
+                                no IDE completion and no documented defaults for any
+                                `essentials.*` property. Nothing fails; the file is simply absent,
+                                and an already-installed jar keeps the copy an older toolchain made,
+                                so the loss is invisible until someone builds clean and looks.
+                                Valid since JDK 21, which is this build's floor.
+                            -->
+                            <arg>-proc:full</arg>
                         </compilerArgs>
                     </configuration>
                 </plugin>
