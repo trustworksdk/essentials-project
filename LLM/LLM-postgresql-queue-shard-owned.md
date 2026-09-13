@@ -134,6 +134,7 @@ Full detail and the failure modes: [docs/durable-queue-shard-owned.md](../docs/d
 - **No superuser, no replication slot, no `wal_level=logical`, no extensions.**
 - **`pumpThreads + 1` connections are held permanently** (default 3) and never returned to the pool. Everything else is per operation. A pool smaller than that floor does not fail cleanly — the engine starts and the remaining pumps block forever.
 - **`LISTEN`/`NOTIFY` on one channel.** Blocked notifications (some poolers in transaction mode) cost latency, not correctness: delivery falls back to the sweep cadence, worst case `maxSweepInterval`.
+- **Set `socketTimeout` on the DataSource.** Not a requirement, the single most consequential thing you can get wrong. Measured across a real network partition: with `socketTimeout=3` a cut-off instance learns it has lost the database in 3.3 s; without one it had not learned within 90 s, and 90 s is where the measurement stopped, not where the socket did. Nothing else saves it — the pool's `connectionTimeout` never fires, because the heartbeat is blocked inside a read on a connection the pool still considers healthy. The survivors are unaffected either way, taking the shards over at one lease TTL; the cut-off instance is the one that keeps delivering duplicates until its read returns. See `docs/durable-queue-measurements.md` §3.4.1.
 - **Intra-service only.** Multiple instances of one service against one database — like the rest of Essentials' queues, locks and inbox/outbox.
 
 ## Configuration reference

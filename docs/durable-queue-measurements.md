@@ -185,6 +185,39 @@ Engine instances as separate operating-system processes against one PostgreSQL, 
 
 Ordering was verified in SQL with a window function over the observation table, so the comparison uses PostgreSQL's own insert ordering rather than anything the test reconstructs.
 
+### 3.4.1 Partition detection, over a real network
+
+Measured **2026-09-13**, `ShardOwnedCrossHostPartitionIT` (benchmark-gated). The cut-off node is a JVM
+in its own container reached over a Docker network; the partition is `docker network disconnect`, so
+its packets stop being routed while every socket stays open and nothing is told anything. It reaches
+the database **by address rather than by alias** on purpose — disconnecting also removes the name from
+the network's DNS, and a new connection then fails fast on an unknown host, which is not what a
+partition does to a deployment that reached its database by address. Lease TTL 3 s, 4 shards.
+
+| Client configuration | Survivor took the shards over after | Cut-off node noticed after |
+|---|---|---|
+| `socketTimeout=3` | 3 273 / 3 274 ms | 3 297 / 3 287 ms |
+| no `socketTimeout` | 3 182 / 3 237 ms | **not within 90 s** |
+
+Two runs, both figures given. Two things follow.
+
+**Takeover owes nothing to the cut-off node.** It lands at one lease TTL in every arm, because what
+releases the units is that node's membership row going stale — a fact about the database, not about
+the node. Whether the node has noticed does not enter into it, which is the property the fence exists
+to make safe and the reason the number does not move between arms.
+
+**`socketTimeout` is what decides when the cut-off node finds out, and without one it does not.** The
+90 s is a bound, not a measurement of the real figure: an untimed socket keeps retransmitting for
+minutes. Nothing else rescues it either — the pool's own `connectionTimeout` never fires, because the
+heartbeat thread is blocked inside a read on a connection the pool considers healthy and never asks
+for another. Until that read returns, the node believes it owns shards a survivor is already serving
+and keeps delivering from memory. At-least-once permits the duplicates that follow and the fence
+refuses its acknowledgements when it returns, so nothing is lost or reordered — but the window is
+the client's socket configuration, not the engine's.
+
+**Set `socketTimeout` on the engine's DataSource.** It is the difference between a node rejoining in
+seconds and one acting on beliefs it cannot check for as long as the OS keeps retransmitting.
+
 ### 3.5 Sustained load — 30 minutes, both engines, sampled every 30 seconds
 
 Re-measured **2026-09-11**: 30 minutes per arm at 300 messages a second, 60 windows each, 540 000
@@ -440,19 +473,21 @@ gaps from two angles — detail here, priority there. Change one and change the 
 allowed to drift apart once and three entries survived the work that closed them, which is how a gap
 list starts costing more than it gives.
 
-- **Partition between separate hosts.** The *alive but partitioned* case is now covered —
-  `ShardOwnedNetworkPartitionIT` puts a forwarder between one instance and PostgreSQL that stops
-  passing bytes without closing anything, so that instance keeps running and learns nothing until its
-  socket timeout. Its units are taken by the survivor, the queue keeps delivering, and on healing it
-  is fenced out rather than competing. What remains untested is the same partition between genuinely
-  separate *hosts*; the mechanism being exercised is identical, so this is a fidelity gap rather than
-  an untested behaviour.
+- ~~**Partition between separate hosts.**~~ **Closed, in both halves.** The behaviour was already
+  covered by `ShardOwnedNetworkPartitionIT` — a forwarder that stops passing bytes without closing
+  anything, after which the cut-off instance's units are taken, the queue keeps delivering, and it is
+  fenced out on healing. What a forwarder cannot reproduce is timing, and that is now measured
+  separately (§3.4.1): the cut-off node in its own container, the partition made with
+  `docker network disconnect`, and the finding that `socketTimeout` is the whole difference between
+  finding out in three seconds and not finding out within ninety. What is still a fidelity gap, and a
+  small one, is that the containers share a host kernel — nothing in the result depends on that,
+  since the packets are dropped at the network either way.
 - **Clock skew is not a gap and should stop being listed as one.** All durable time is server-side
   `now()` — `visible_at`, `lease_until`, `last_seen` — and `ServerSideTimeTest` fails the build if a
   client clock reaches the storage layer. Independent clocks change nothing.
 - **Sustained soak beyond half an hour.** The longest run is the thirty minutes in §3.5 — 540 000 messages per arm, thirty autovacuum cycles. Vacuum behaviour, index bloat and p99 drift over *hours* remain unmeasured, and the baseline's dead-tuple cost is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and again at thirty and did not find it, which is not the same as it not being there. Nor has any soak run at a rate near either engine's capacity: 300/s keeps the latency signal clean and accumulates debt slowly, and the opposite trade has not been measured.
 - **Realistic payload distribution.** Every measurement uses a uniform 200-byte payload. Large payloads, TOAST behaviour and mixed sizes are untested.
-- **Failure injection beyond process death, connection loss and partition.** Those three are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`). A database *restart* — where the server goes away and returns with everything still on disk — and disk pressure are untested.
+- **Failure injection beyond process death, connection loss, partition and restart.** Those four are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`, `ShardOwnedDatabaseRestartIT`). **Disk pressure** — a full or slow disk under the database — is untested.
 - **Throughput on hardware that can measure it.** See above.
 - **Idle cost of a large routing space across many queues.** §3.8 varies the space on one queue and the queue count at one space; the product of the two — hundreds of queues at 1 024 units each — is not measured, and per-unit state (a lease row and an owner object each) is what would grow.
 - **Growing an existing queue's routing space.** Not built; see `durable-queue-ordered-routing-design.md` §8.

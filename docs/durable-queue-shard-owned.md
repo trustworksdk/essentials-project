@@ -1119,6 +1119,18 @@ is 64 handlers, each potentially wanting a connection.
 A pool smaller than the floor does not fail cleanly: the engine starts, takes what it can, and the
 remaining pumps block acquiring a connection that will never be free.
 
+**Set `socketTimeout` on the DataSource.** It is the single setting that decides how long an instance
+keeps acting on beliefs it can no longer check. Measured across a real network partition
+([`durable-queue-measurements.md`](./durable-queue-measurements.md) §3.4.1): with `socketTimeout=3`
+the cut-off node learns it has lost the database in 3.3 s; without one it had not learned within 90 s,
+and 90 s is where the test stopped rather than where the socket did. Nothing else rescues it — the
+pool's `connectionTimeout` never fires, because the heartbeat thread is blocked inside a read on a
+connection the pool still considers healthy and never asks for another. What the survivor does is
+unaffected either way: it takes the units over at one lease TTL, because that is decided by a
+membership row going stale rather than by anyone noticing. Nothing is lost or reordered in the
+window — the fence refuses the returning node's acknowledgements — but it is delivering duplicates
+for the whole of it.
+
 ### 17.4 What the engine requires of the schema
 
 - **Six tables, two sequence families and one registry row per queue**, all created by
@@ -1152,6 +1164,7 @@ remaining pumps block acquiring a connection that will never be free.
 | Ordered lane stops advancing, `watermarkCap` in the log | A write transaction outlived the cap | Find the long transaction; the cap protects the lane, it does not fix the writer |
 | Pumps never start, no error | Pool smaller than `pumpThreads + 1` | §17.3 |
 | Delivery latency jumps to seconds when idle | Notifications not arriving | §17.4 — check the pooler's mode |
+| An instance goes silent — no deliveries, no errors, no heartbeat — while the rest of the cluster carries on | It is partitioned from the database and has no `socketTimeout`, so it is blocked in a read that will not return for minutes | §17.3. Its shards have already been taken; the instance recovers on its own once the read fails. Set `socketTimeout` so that it is seconds |
 
 ---
 
@@ -1179,7 +1192,6 @@ Absence of a result, not a passing one. Detail and the environment's limits: [`d
 | | Note |
 |---|---|
 | **Disk pressure** | A full or slow disk under the database |
-| **Partition across separate hosts** | A fidelity gap rather than an untested behaviour — `ShardOwnedNetworkPartitionIT` exercises the same mechanism through a forwarder rather than across machines |
 
 ### 18.3 Not built, deliberately
 
