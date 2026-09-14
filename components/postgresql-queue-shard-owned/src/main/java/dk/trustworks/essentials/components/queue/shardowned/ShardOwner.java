@@ -166,9 +166,12 @@ final class ShardOwner implements LeasedOwner {
     }
 
     @Override
-    public void onLeaseLost() {
+    public void onLeaseEnded(LeaseEnd reason) {
         if (leaseHeld.compareAndSet(true, false)) {
-            log.warn("Shard {}: lease lost under fence {}, owner stopping", shard, fence);
+            // Per unit, and DEBUG for both: the caller knows how many units it just moved and says so
+            // once. At a two-instance handover this fires 32 times in one heartbeat tick.
+            log.debug("Shard {}: lease {} under fence {}, owner stopping",
+                      shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence);
             wakeup.signal();
         }
     }

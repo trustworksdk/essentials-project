@@ -616,6 +616,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         shards[index] = held.get(index).shard();
                     }
                     var fences = storage.heldFences(lane, shards, instanceId);
+                    var taken  = new ArrayList<Integer>();
                     for (var owner : held) {
                         var fence = fences.get(owner.shard());
                         if (fence != null && fence == owner.fence()) {
@@ -624,8 +625,17 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                             // Absent, or back under a NEW fence — the unit was taken and handed on.
                             // Both mean this owner's fence is stale.
                             metrics.leasesLost.increment();
-                            owner.onLeaseLost();
+                            owner.onLeaseEnded(LeasedOwner.LeaseEnd.TAKEN);
+                            taken.add(owner.shard());
                         }
+                    }
+                    if (!taken.isEmpty()) {
+                        // Still a warning — the fence makes this safe, but something else believed
+                        // this instance was gone, and that is worth knowing. One line for the tick
+                        // rather than one per unit, because a handover takes them in a batch.
+                        log.warn("Instance {} lost {} {} unit(s) [{}] on queue {} to another instance; "
+                                 + "their owners are stopping and will not acknowledge under the old fence",
+                                 instanceId, taken.size(), lane, summarise(taken), queueId);
                     }
                 } catch (Exception e) {
                     log.warn("Lease check failed for {} shards on the {} lane", held.size(), lane, e);
@@ -759,7 +769,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (held.size() > fairShare) {
             var released = new ArrayList<Integer>();
             for (var owner : held.subList(fairShare, held.size())) {
-                owner.onLeaseLost();
+                owner.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
                 storage.releaseLease("unordered", owner.shard(), instanceId);
                 ownedShards.remove(owner.shard(), owner);
                 metrics.shardsReleased.increment();
@@ -821,7 +831,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var drained = new ArrayList<Integer>();
         for (var owner : List.copyOf(owners)) {
             if (owner instanceof OrderedShardOwner ordered && ordered.shedComplete()) {
-                ordered.onLeaseLost();
+                ordered.onLeaseEnded(LeasedOwner.LeaseEnd.RELEASED);
                 storage.releaseLease("ordered", ordered.shard(), instanceId);
                 owners.remove(ordered);
                 metrics.shardsReleased.increment();
@@ -837,12 +847,22 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
         var held = owners.stream().filter(LeasedOwner::leaseHeld).toList();
         if (held.size() > fairShare) {
+            var asked = new ArrayList<Integer>();
             for (var owner : held.subList(fairShare, held.size())) {
                 if (owner instanceof OrderedShardOwner ordered) {
                     // Idempotent, and re-attempted each tick: a shed abandoned because a handler
                     // outran its grace should be tried again, not given up on permanently.
-                    ordered.beginShedding();
+                    if (ordered.beginShedding()) {
+                        asked.add(ordered.shard());
+                    }
                 }
+            }
+            // Only the units that started shedding on THIS tick, or the idempotent re-attempt would
+            // report the same shed every heartbeat until it completes.
+            if (!asked.isEmpty()) {
+                log.info("Instance {} is draining {} ordered unit(s) [{}] on queue {} before releasing them "
+                         + "— fair share is {} of {}; a key in flight is finished, never handed over mid-key",
+                         instanceId, asked.size(), summarise(asked), queueId, fairShare, orderedUnits());
             }
             return;
         }

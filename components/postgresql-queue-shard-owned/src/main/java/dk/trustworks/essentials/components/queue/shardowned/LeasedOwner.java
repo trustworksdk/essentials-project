@@ -79,8 +79,30 @@ interface LeasedOwner {
 
     boolean leaseHeld();
 
-    /** Called when a renewal is refused, or granted under a fence this owner does not hold. */
-    void onLeaseLost();
+    /**
+     * Why an owner's lease ended, which decides how loudly it is reported.
+     * <p>
+     * The two look identical to the owner — it stops either way — and completely different to whoever
+     * reads the log. Before this was distinguished, both said "lease lost under fence N, owner
+     * stopping" at WARN, so an ordinary fair-share handover to a second instance produced a warning
+     * per unit for something the instance had itself decided to do.
+     */
+    enum LeaseEnd {
+        /**
+         * This instance gave the unit up: a fair-share release, or an ordered unit that finished
+         * draining. Expected, initiated here, and nothing is in doubt.
+         */
+        RELEASED,
+        /**
+         * The unit was taken: a renewal refused, or granted under a fence this owner does not hold.
+         * Worth a warning — the fence makes it safe, but it means something else believed this
+         * instance was gone.
+         */
+        TAKEN
+    }
+
+    /** Called when this owner's lease ends, for either reason. */
+    void onLeaseEnded(LeaseEnd reason);
 
     /**
      * May this owner dispatch work right now?

@@ -667,12 +667,18 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * ones in flight are allowed to finish, their acknowledgements are flushed under a fence this
      * owner still holds, and only then is the shard let go.
      */
-    public void beginShedding() {
+    /**
+     * @return true if THIS call started the shed, false if one was already under way. The caller
+     * re-attempts every heartbeat tick by design, and reports only what it actually started.
+     */
+    public boolean beginShedding() {
         if (shedding.compareAndSet(false, true)) {
             shedDeadlineNanos = System.nanoTime() + settings.shedGraceNanos();
             metrics.shedsStarted.increment();
-            log.info("Ordered shard {}: shedding — draining in-flight keys before releasing", shard);
+            log.debug("Ordered unit {}: shedding — draining in-flight keys before releasing", shard);
+            return true;
         }
+        return false;
     }
 
     /**
@@ -690,7 +696,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
             flushAcks(connection);
             shedComplete.set(true);
             metrics.shedsCompleted.increment();
-            log.info("Ordered shard {}: quiesced, ready for another instance", shard);
+            // DEBUG rather than INFO: the release this leads to is reported by the queue, one pass
+            // later and once for the whole batch. Announcing readiness per unit as well said the same
+            // thing 32 times and then said it again as a summary.
+            log.debug("Ordered unit {}: quiesced, ready for another instance", shard);
             return true;
         }
         if (System.nanoTime() >= shedDeadlineNanos) {
@@ -746,9 +755,11 @@ final class OrderedShardOwner implements BatchReadableOwner {
     }
 
     @Override
-    public void onLeaseLost() {
+    public void onLeaseEnded(LeaseEnd reason) {
         if (leaseHeld.compareAndSet(true, false)) {
-            log.warn("Ordered shard {}: lease lost under fence {}, owner stopping", shard, fence);
+            // See ShardOwner: per unit and therefore DEBUG, because the caller reports the pass.
+            log.debug("Ordered unit {}: lease {} under fence {}, owner stopping",
+                      shard, reason == LeaseEnd.TAKEN ? "taken" : "released", fence);
         }
     }
 }
