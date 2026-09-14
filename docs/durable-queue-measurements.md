@@ -574,6 +574,48 @@ The engine and its semantics tests are `components/postgresql-queue-shard-owned`
 
 ## 7. Reproducing
 
+### 7.1 On a real machine, outside the devcontainer
+
+`scripts/perf-host.sh`. One command, roughly an hour, and it exists to close the one gap this lab
+cannot close from inside itself: **throughput on hardware that can hold a number still** (§18.1).
+
+```bash
+scripts/perf-host.sh --dry-run     # what it would run, and what it thinks of the machine
+scripts/perf-host.sh               # cost, latency, concurrency, then a 10-minute soak per arm
+scripts/perf-host.sh --no-soak     # the first three only, ~25 minutes
+scripts/perf-host.sh --soak 30 --rate 1000
+```
+
+**The figure to read is not the peak — it is the interquartile range beside each median.** Every
+throughput number in this document is marked comparative-only because the devcontainer runs
+`dockerd` inside itself: the load generator and PostgreSQL share one eight-CPU cgroup, and
+throughput at saturation varied 861% between repetitions. If the IQRs come back tight on a
+workstation and wide here, the lab was the problem and those figures can start being quoted
+absolutely.
+
+**On macOS the isolation is better than it looks.** The JVM runs natively and PostgreSQL runs in the
+Docker Desktop VM, so the two are in separate scheduling domains rather than sharing a cgroup —
+which is the devcontainer's actual defect. What is lost is deliberate partitioning: there is no
+`taskset` on macOS and the JVM cannot be pinned, so the arms are not assigned disjoint cores. The
+script records that in `environment.json` rather than leaving it to be inferred.
+
+Two settings decide whether the run measures the engine or the VM, both in **Docker Desktop →
+Settings → Resources**: give it **at least 8 CPUs and 16 GB**, and leave the host a few cores rather
+than handing Docker all of them — otherwise the JVM and PostgreSQL contend for every core and the
+result reproduces the lab's problem on better hardware. The script checks both and says so.
+
+Results land in `perf-results/<timestamp>/`: a log and an extracted summary table per suite, the raw
+JSON the suites write, and `environment.json` — host, Docker allocation, JVM, `shared_buffers`,
+whether the CPUs were partitioned, and the commit with a dirty flag. That file is what makes one run
+comparable with another; a number without it cannot be diffed against anything later.
+
+Prerequisites the script checks before it starts: Docker running, and a JDK between 21 and 25 (the
+enforcer requires `[21,26)`). It builds what it measures first — `./mvnw install -pl
+examples/essentials-performance-lab -am -DskipTests` — so a fresh clone needs to populate `~/.m2`
+once, which is not counted in the hour.
+
+### 7.2 Individual suites
+
 ```bash
 # Cost comparison and decomposition (benchmark-gated, ~10 minutes)
 taskset -c 0-3 ./mvnw verify -pl examples/essentials-performance-lab \
