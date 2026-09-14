@@ -16,16 +16,24 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
+
 /**
- * Handles an unordered message: its bytes, and the {@code payloadType} it was enqueued with.
+ * Handles an unordered message: its identity, its bytes, and the {@code payloadType} it was enqueued
+ * with.
  * <p>
  * A dedicated interface rather than {@code Consumer<byte[]>}, because the type has to reach the
  * handler for the column to be worth storing. It was written on every row, carried through
  * dead-lettering and returned on the pull and dead-letter paths — but the push path, which is how
  * almost everything consumes, never saw it. A consumer therefore had to recover the type from inside
  * the payload, at which point the column bought nothing.
+ * <p>
+ * {@link MessageId} is here for the same reason and costs nothing to supply: the owner already knows
+ * its own lane and shard, and {@code seq} is already on the row the cursor read returns. See
+ * {@link dk.trustworks.essentials.components.queue.shardowned.spi.MessageHandler} for what is
+ * deliberately still absent and why.
  */
 @FunctionalInterface
 public interface PayloadHandler {
-    void handle(byte[] payload, int payloadType);
+    void handle(MessageId messageId, byte[] payload, int payloadType);
 }

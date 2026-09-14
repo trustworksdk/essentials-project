@@ -141,7 +141,7 @@ class ShardOwnedConcurrencySweepIT {
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "sweep-" + parallelConsumers)) {
             queue.setParallelConsumers(parallelConsumers);
-            queue.startConsuming((ignored, payloadType) -> {
+            queue.startConsuming((messageId, ignored, payloadType) -> {
                 try {
                     // Stands in for a handler that waits on something, which is the only case where
                     // concurrency can help.

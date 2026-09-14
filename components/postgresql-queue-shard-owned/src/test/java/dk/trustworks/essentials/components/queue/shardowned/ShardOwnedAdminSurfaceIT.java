@@ -133,7 +133,7 @@ class ShardOwnedAdminSurfaceIT {
     void deleting_by_id_under_a_live_consumer_leaves_the_queue_working() throws Exception {
         var delivered = ConcurrentHashMap.<String>newKeySet();
         try (var queue = queue("admin-3")) {
-            queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
 
             var ids = queue.enqueue(List.of(Message.of("first".getBytes(StandardCharsets.UTF_8), 1)));
@@ -220,7 +220,7 @@ class ShardOwnedAdminSurfaceIT {
                                                .setInstanceId("grow-after")
                                                .build()) {
             assertThat(queue.shardCount()).isEqualTo(8);
-            queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
             queue.enqueue(List.of(Message.of("after-growth".getBytes(StandardCharsets.UTF_8), 1)));
 
@@ -308,7 +308,7 @@ class ShardOwnedAdminSurfaceIT {
                                                .setSettings(fastHeartbeat())
                                                .build()) {
             var subscription = queue.consume(
-                    (key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                    (messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                     ConsumerOptions.defaults());
             Awaitility.await().atMost(Duration.ofSeconds(20))
                       .untilAsserted(() -> assertThat(subscription.unorderedShardsHeld()).isEqualTo(2));
@@ -344,7 +344,7 @@ class ShardOwnedAdminSurfaceIT {
                                                .setInstanceId("shrink-live-1")
                                                .setSettings(fastHeartbeat())
                                                .build()) {
-            var subscription = queue.consume((key, payload, payloadType) -> {
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> {
             }, ConsumerOptions.defaults());
             Awaitility.await().atMost(Duration.ofSeconds(20))
                       .untilAsserted(() -> assertThat(subscription.unorderedShardsHeld()).isEqualTo(4));
@@ -397,7 +397,7 @@ class ShardOwnedAdminSurfaceIT {
                                              .setQueueName(name)
                                              .setInstanceId("rollout-" + generation)
                                              .build();
-            next.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            next.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                          ConsumerOptions.defaults());
             counts.add(next.shardCount());
             next.enqueue(List.of(Message.ordered(("gen" + generation).getBytes(StandardCharsets.UTF_8),

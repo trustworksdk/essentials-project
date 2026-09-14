@@ -75,7 +75,7 @@ class ShardOwnedConnectionLossIT {
     void the_engine_recovers_when_its_connections_are_terminated_underneath_it() throws Exception {
         var received = new CopyOnWriteArrayList<String>();
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(), SHARD_COUNT);
 
             for (var index = 0; index < 50; index++) {

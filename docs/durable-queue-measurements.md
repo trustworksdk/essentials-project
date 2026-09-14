@@ -28,6 +28,18 @@ Conditions: 200-byte payloads, 20 000 messages per repetition, three interleaved
 
 **The row-update column is the design in one number.** The current implementation writes one row update per message — `is_being_delivered = true`. The shard-owned engine writes none, because a lease already establishes who owns the message. Not reduced: absent.
 
+**Not every row in this table is equally safe to repeat.** The cost rows — WAL, dead tuples, row
+updates, commits — reproduce across two hosts and the devcontainer to within 0.1%, and travel. The
+**p50** latency row reproduces in shape (0.88–0.91 ms on a workstation against 0.54 ms here) and
+travels with its conditions attached.
+
+**The p99 row is the one to be careful with**, and specifically *this* p99 — the enqueue-to-handler
+figure from the burst-latency suite in §3.2. Re-measured on a workstation, the same suite's Tier 1
+response p99 came back 6.69 ms in one run and 40.45 ms in another an hour later. That is not true of
+every tail figure in this document: the sustained-load p99s in §3.5 agreed between those same two runs
+to 0.3% (baseline) and 16% (shard-owned). §4.5 names the four figures that should not be quoted and
+puts everything else on a confidence tier.
+
 **The WAL percentages belong to the 200-byte payload and do not travel.** The saving is a fixed
 ~1 200–1 350 bytes per message — a narrower row and no claim write — against a payload cost both
 engines pay identically, so the *ratio* collapses as messages grow: −71% at 200 bytes, −39% at 1 800,
@@ -137,6 +149,14 @@ teaching `parkDeadlineMillis` to count pending acknowledgements, and it is the s
 an earlier claim that the sweep back-off cost 2 ms at p99.
 
 Response time is measured from the intended schedule slot, service time from when the producer actually sent. Both are reported because the pair is what locates a problem: during development, response time alone said Tier 2 had a 266 ms tail and service time alone said it was excellent — the truth was a warmup artefact in the harness, in neither.
+
+**⚠️ The p50s travel; the p99s do not.** Two workstation runs an hour apart on the same commit
+(`perf-results/20260914-090919`, `20260914-103550`) put Tier 2's p50 at 0.91 and 0.88 ms and Tier 1's at
+2.72 and 2.69 ms — stable, and about 1.6× the figures above, which is plausibly the Docker Desktop VM
+boundary that every enqueue commit crosses on that host. Their p99s did not behave: Tier 1's response
+p99 was 6.69 ms in one run and **40.45 ms** in the other, with service-time p99 moving 4.71 → 14.92 ms
+alongside it, so it is not the producer-stall artefact described above. Quote the p50s; treat every
+tail figure in this section as environment-specific until it reproduces.
 
 **Tier 1's effect on transaction count.** Both columns are the **shard-owned engine**, with idle
 polling and with NOTIFY — this is not a comparison against the current implementation, and §1 used to
@@ -362,11 +382,51 @@ interleaved repetitions per arm, all four arms in one run:
 | baseline, **5 ms** poll, 20 consumers | 3 915 | 0.1% | 3915..3924 | 36 | 17 |
 | shard-owned | ⚠️ 3 767 | **78.2%** | **3745..9634** | 36 | **7** |
 
-### ⚠️ The throughput column is not a result
+### The same four arms on a workstation
 
-**The shard-owned figure must not be quoted.** Three identical repetitions produced 3 745 and 9 634 —
-one run 2.6× another. That is this lab, not the engine, and it is the same instability §4 documents;
-the test prints a warning above 25% so the number cannot be lifted out of the table innocently.
+Re-measured **2026-09-14** on a macOS host outside the devcontainer, via `scripts/perf-host.sh`
+(`perf-results/20260914-103550`). The JVM runs natively and PostgreSQL runs in the Docker Desktop VM,
+so the two are in separate scheduling domains rather than sharing one cgroup — which is the
+devcontainer's actual defect and the reason this run exists.
+
+| Arm | msg/s | IQR | slowest..fastest run | threads | held conns |
+|---|---|---|---|---|---|
+| baseline, 20 ms poll, 20 consumers | 992 | 1.0% | 973..994 | 51 | 20 |
+| baseline, 20 ms poll, **40** consumers | 1 974 | 0.4% | 1963..1979 | 70 | **41** |
+| baseline, **5 ms** poll, 20 consumers | 3 724 | ⚠️ 14.7% | 2774..3868 | 36 | 21 |
+| shard-owned | ⚠️ unquotable | **76.8%** | **3968..18315** | 36 | **7** |
+
+**Threads and connections reproduced**, which is the half of this table that was ever a result. Thread
+counts are identical to the devcontainer's. Doubling the baseline's consumers cost 21 connections here
+against 13 there — a larger price, same mechanism — and the shard-owned engine held **7** in both
+environments.
+
+### ⚠️ The throughput column is not a result, and the container is not the reason
+
+**The shard-owned figure must not be quoted, from either table.** Three identical repetitions produced
+3 745 and 9 634 in the devcontainer, and 3 968 and 18 315 on the workstation.
+
+**The workstation was expected to fix this and did not.** 76.8% against 78.2% — the interquartile range
+did not shrink and the absolute range widened. So the shared eight-CPU cgroup is **not** the cause of
+this instability, or not the whole of it. That explanation stood unchallenged until there was a host
+measurement to test it against, and §4 below was written on the strength of it.
+
+Two observations from the same run narrow the search:
+
+- **It is not simply "any saturated arm".** `ShardOwnedVsBaselineCostIT`'s shard-owned arm is equally
+  saturated — 20 000 messages in about 890 ms, 22 396 msg/s — and returned a **7.5%** interquartile
+  range in the same session. The concurrency sweep's arms 1 through 64 reproduced to within 0.5%
+  against the previous host run.
+- **The baseline's 5 ms arm became *less* stable on the host**, 0.1% to 14.7%. The workstation is not
+  uniformly the better lab either.
+
+What distinguishes the unstable arm from the stable one is not established. This suite interleaves four
+arms in one JVM against a 120-connection pool where the cost suite runs two, which is the obvious
+difference and the next thing to test — run the shard-owned arm alone and see whether the spread
+collapses. That is a far cheaper experiment than hardware, and until it is done "buy a better machine"
+is not supported by anything measured.
+
+The test prints a warning above 25% so the number cannot be lifted out of either table innocently.
 
 **And the baseline's throughput is a configuration choice, not a property.** All three baseline arms
 land on `parallelConsumers × pollsPerSecond` to within 0.5% — 996 against 1 000, 1 980 against 2 000,
@@ -495,44 +555,185 @@ is sixteen times worse with none — which is the state a queue spends almost al
 
 **Reliable:** per-message cost metrics. Across 45 unordered runs spanning every operating point, WAL bytes per message varied 33% and dead tuples per message 27% — and *within* a fixed configuration, well under 2%.
 
-**Not reliable:** throughput at saturation. The same 45 runs saw throughput vary **861%**, and at the capacity knee the same configuration produced interquartile ranges of 47–239% depending on nothing at all. The cgroup grants 8 CPUs while everything sizes its pools for 14, so any run that saturates CPU is throttled. Five interventions were tried — CPU pinning of both sides, JVM processor count matched to the quota, single-run isolation, `ANALYZE` placement, and a profile-independent warmup. None made it reliable.
+**Not reliable:** throughput at saturation. The same 45 runs saw throughput vary **861%**, and at the capacity knee the same configuration produced interquartile ranges of 47–239% depending on nothing at all. Five interventions were tried — CPU pinning of both sides, JVM processor count matched to the quota, single-run isolation, `ANALYZE` placement, and a profile-independent warmup. None made it reliable.
 
-**Consequence:** every gate in the design is written against per-message cost, measured at the poll-bound operating point, with throughput reported but never gating. A throughput gate needs dedicated hardware, or at minimum a cgroup quota matching the advertised processor count with no co-tenants.
+**⚠️ The cgroup was the assumed cause and is now ruled out as a sufficient one.** This section used to
+continue "the cgroup grants 8 CPUs while everything sizes its pools for 14, so any run that saturates
+CPU is throttled", and every throughput caveat in this document descended from that sentence. It was an
+explanation, never a measurement. `EngineResourceComparisonIT` has now been run on a macOS workstation
+where the JVM and PostgreSQL sit in separate scheduling domains, and its shard-owned arm returned a
+**76.8%** interquartile range against the devcontainer's 78.2% — see §3.6. Whatever destabilises that
+arm follows the suite rather than the container.
+
+The cgroup mismatch is still real and still worth removing; it is simply not what makes this figure
+move. Note also what the same host run did *not* destabilise: per-message cost reproduced to within
+0.1%, the concurrency sweep's arms 1–64 to within 0.5%, and a differently-structured saturated arm in
+`ShardOwnedVsBaselineCostIT` held 7.5%. A cause that explains the unstable arm has to explain those too.
+
+**Consequence:** every gate in the design is written against per-message cost, measured at the poll-bound operating point, with throughput reported but never gating. That consequence is unchanged — but the route out of it is no longer "get dedicated hardware", because dedicated hardware has now been tried. It is to find what the unstable arm does that the stable ones do not.
 
 ---
 
 ## 4.5 Choosing between the two implementations
 
-Not a ranking. The two differ in what they are *good at*, and the honest split is narrower than a
-headline comparison suggests.
+**Scope: both implementations here are PostgreSQL.** The comparison is `PostgresqlDurableQueues`
+against the shard-owned engine. If you need MongoDB you want `springdata-mongo-queue`, which is a third
+thing and not in this comparison at all.
 
-**Reach for the shard-owned engine when**
+### The short answer
 
-| Because | Measured |
+**On the same PostgreSQL, the shard-owned engine is faster and costs less per message than
+`PostgresqlDurableQueues`, and the resource figures are the best-established numbers in this
+document.** Concretely, and all of it reproduced across two hosts and the devcontainer:
+
+- **−71.6% WAL bytes per message** at 200-byte payloads, which is a fixed saving of ~1 150–1 370 bytes
+  per message rather than a percentage that travels (§3.4.3).
+- **Half the dead tuples** (1.00 against 1.95–1.98), and **no claim write at all** — `n_tup_upd` is
+  absent, not reduced.
+- **7 held connections per process**, fixed, against 18–20 at 20 consumers and 31–41 at 40. **36 threads
+  against 51–70.**
+- **Indexes 4.7–9.3× smaller** after a soak.
+- **Enqueue-to-handler p50 of 0.54–0.91 ms against 20.7 ms** at the shipped 20 ms poll — 23–38×. Under
+  sustained load at 600 msg/s with both engines keeping up, **p50 0.87 ms against 13 ms and p99 1.4 ms
+  against 28 ms**.
+
+What is *not* established is a throughput multiple — see "raw throughput" below, which says precisely
+what is and is not known. That is a limitation on one number, not a hedge about the direction.
+
+The rest of this section is when that is worth acting on, and what it costs you.
+
+### First: most of what used to block adoption no longer does
+
+This section named eight blockers for a long time and **six of them have since been closed**. Anyone
+who decided against this engine on the strength of an earlier reading of §4.5 decided on facts that are
+no longer true, and should re-read the list below rather than trusting the conclusion.
+
+What closed, and what it means concretely:
+
+| Was listed as a blocker | Status |
 |---|---|
-| Latency matters | 0.54 ms p50 / 1.02 ms p99, against 20.7 / 27.1 at the shipped 20 ms poll. Push, not poll — there is no interval to tune |
-| Volume makes per-message cost matter, **and the messages are small** | A fixed ~1 200–1 350 WAL bytes saved per message, which is −65 to −72% at 200 bytes and −1.6% at 64 KB (§3.4.3); dead tuples 1.98 → 1.00; row updates 1.00 → **0**, because ownership removes the claim write. Index 5.2× smaller after a 6-minute soak |
-| The process holds many queues | Connections are `pumpThreads + 1` **per process** — 5 at 300 queues — rather than growing with consumers |
-| Per-key ordering must hold across processes | Verified across ~19 lease lifetimes with a third node joining mid-run. The current implementation's own docs say ordering does not hold across instances |
-| An outbox needs atomicity *and* working retries | `enqueue(Connection, …)` joins the caller's transaction while attempt counting stays outside its rollback scope. `TransactionalMode.FullyTransactional` gives one or the other |
+| "The engine is not published" | **Published**, with the adapter and a Spring Boot starter. The `maven.deploy.skip` gate came off when the admin console page landed |
+| "`Inbox`, `Outbox`, `EventProcessor` and `DurableLocalCommandBus` consume `DurableQueues`, which this engine does not implement" | `components/postgresql-queue-shard-owned-adapter` presents it **as** a `DurableQueues`. Those four run on it unchanged. `spring-boot-starter-postgresql-queue-shard-owned` selects it with `essentials.shard-owned-queue.durable-queues-enabled` (default `false`) |
+| "There is no admin API or UI" | There is: `ShardOwnedQueuesApi`, `ShardOwnedQueuesController` in `spring-boot-starter-admin-api`, and a Shard-owned queues page on the console. Nine operations, in the generated OpenAPI document |
+| "By-id operations assume a claim flag, the largest cost this design removes" | **This was wrong on its own terms.** `MessageId` is `(lane, shard, seq)` and the primary key is `(queue_id, shard, seq)` — addressing a row is a point lookup. The claim write is paid per *delivery*; an admin write is paid per *administrator*. The two were priced as if they had the same frequency |
+| "Payloads are `bytea`, so you cannot read them in `psql`" | The `shard_queue_*_readable` views render them, falling back to hex for non-UTF-8. Through the adapter the payload is a JSON envelope |
+| "`shardCount` is immutable, so sizing it wrong is a drain-and-switch" | `growShardCount` raises it online, picked up on the next heartbeat with **no restart**. Shrinking is still refused, because rows in removed shards would be addressed by nobody |
 
-**Stay on the current implementation when** — and this is the longer list today
+### Then: read the two remaining lists in the right order
+
+They are not symmetrical, and reading them as a pros-and-cons balance gets the decision wrong.
+
+**The "stay" list is about capability and risk** — things the engine cannot do at all, behaviours that
+differ from `DurableQueues` in ways your code may notice, and a maturity judgement. **The "reach for it"
+list is about degree** — less WAL, fewer connections, lower median latency.
+
+Those do not trade against each other. If you need `TransactionalMode.FullyTransactional`, seventy
+percent less WAL does not partially supply it, and the *size* of the advantage never enters the
+question. A capability list is a filter; a performance list is a comparison; the filter runs first.
+
+### Reach for the shard-owned engine when
+
+| Because | Measured | Reproduced? |
+|---|---|---|
+| **Latency matters** | **p50 0.54 ms** in the lab and 0.88–0.91 ms on a workstation, against **20.7 ms** at the shipped 20 ms poll — 23–38× at the median. Push, not poll: there is no interval to tune, so the figure does not depend on a configuration choice the way the baseline's does | **Yes** at p50. This suite's *tail* figures do not travel; the sustained-load row below is where a reproducible tail comparison lives |
+| **Sustained load, where latency must stay flat** | Ten minutes at 600 msg/s, both engines keeping up in every 30-second window: **p50 ~0.87 ms against ~13 ms, 15×**, and p99 ~1.4 ms against ~28 ms. Thirty minutes at 300/s in the lab agrees | **Yes** — same shape across three soaks in two environments |
+| **Volume makes per-message cost matter, *and the messages are small*** | A fixed **~1 150–1 370 WAL bytes saved per message**: −71% at 200 bytes, −39% at 1 800, −11% at 8 000, −1.6% at 64 KB (§3.4.3). Dead tuples 1.95–1.98 → **1.00**. The claim write is absent, not reduced | **Yes** — the most solid result here. Two hosts and the devcontainer agree to within 0.1% |
+| **Storage growth matters** | Indexes **4.7–9.3× smaller** across soaks, the range depending on rate and duration. That is the lane split and the narrower index set, not a vacuum artefact | **Yes** in direction and rough size; the multiple itself moves with the run |
+| **The process holds many queues, or connections are scarce** | **7 held connections** for the whole process — `pumpThreads + 1`, unchanged by shard, queue or consumer count — against 18–20 at 20 consumers and 31–41 at 40. Threads 36 against 51–70 | **Yes**, exactly, on both a workstation and in the lab |
+| **Per-key ordering must hold across processes** | Verified across ~19 lease lifetimes with a third node joining mid-run, and under `SIGKILL`, `SIGSTOP`/`SIGCONT` and a real network partition (§3.4). The current implementation's own documentation says ordering does *not* hold across instances | Behavioural, not a timing figure — it does not depend on the lab |
+| **An outbox needs atomicity *and* working retries** | `enqueue(Connection, …)` joins the caller's transaction while attempt counting stays outside its rollback scope. `TransactionalMode.FullyTransactional` gives one or the other | Behavioural |
+
+### How much to trust each row
+
+The two 2026-09-14 workstation runs were run to find out which of these figures are properties of the
+engine and which are properties of whatever machine measured them. That turned out to be the more
+useful question, and the answer splits cleanly:
+
+| Confidence | Figures | Basis |
+|---|---|---|
+| **Quote freely** | Per-message WAL bytes, dead tuples per message, row updates, the constant-saving shape across payload sizes (§3.4.3), held connections and thread counts (§3.6) | Agree across two hosts and the devcontainer — WAL to within 0.1%, connections and threads exactly |
+| **Quote with the conditions attached** | Latency **p50**, both tiers (§3.2). The soak's p50, its **p99**, and the engine-to-engine ratios built from them (§3.5). Index size ratios | Reproduce in shape and often closely — between the two host runs the soak's baseline p99 agreed to 0.3% and the shard-owned p99 to 16%. But they move with host, rate and duration, so state the conditions or state a range |
+| **Do not quote** | Four specific figures, named below | Each varied by more than 2× between repetitions or runs of the same commit |
+| **Unknown** | The soak's shard-owned p99 *across environments* | 3 469 µs in the devcontainer at 300/s for 30 min, 1 385–1 608 µs on a workstation at 600/s for 10 min. Three variables changed at once, so the difference is unattributed rather than measured |
+
+**The four "do not quote" figures, precisely.** This is a short list of named measurements, not a
+blanket ban on a statistic:
+
+1. **The shard-owned engine's throughput when it is the bottleneck** (§3.6). Three identical
+   repetitions gave 3 745 and 9 634 msg/s in the devcontainer, 3 968 and 18 315 on a workstation —
+   76.8% and 78.2% interquartile range.
+2. **The concurrency sweep's 128-consumer arm** (§3.7). 3 607 msg/s in one host run, 22 727 in the
+   next, at a 44.2% spread. Arms 1 through 64 in the same sweep reproduced to within 0.5% and are fine.
+3. **Tier 1's p90, p99 and max** (§3.2). Response p99 measured 6.69 ms and 40.45 ms an hour apart on
+   one machine, with service-time p99 moving 4.71 → 14.92 ms alongside it — so it is the engine or the
+   environment, not the producer.
+4. **Tier 2's *response* p99 and max on a host where the producer stalls** (§3.2). 17–20 ms against a
+   1.56–1.74 ms service-time p99 for the same messages. The service figure is the sound one, and it
+   *is* quotable with conditions: it reproduced to 12% between the two host runs.
+
+Everything not on that list is on one of the rows above it. In particular **the soak's p99 is not on
+this list** — at sustained load, both engines' tail latencies held between runs, and the 15×/20×
+sustained-load ratios in the table above are built from figures that reproduced.
+
+**The practical reading for anyone sizing a system:** the cost and connection advantages are real,
+measured, and will show up in your database. The latency advantage at the median is real and large, and
+under sustained load the tail advantage holds too. What you cannot take from this document is a
+*peak throughput* number, or a tail figure from the burst-latency suite — measure those on your own
+hardware with your own payloads, and see §3.6 for why we cannot hand you ours.
+
+**Stay on the current implementation when**
+
+**Hard stops — the capability is absent, and no configuration supplies it:**
 
 | Because |
 |---|
-| **It is shipped, published and in production.** The shard-owned engine has none of those |
-| You use Inbox, Outbox, `EventProcessor` or `DurableLocalCommandBus` — all consume `DurableQueues`, which this engine deliberately does not implement |
-| You use the admin API or UI to inspect, retry or resurrect messages. There is no admin surface here |
-| You need by-id operations from any caller (`getQueuedMessage`, `retryMessage`, `markAsDeadLetterMessage`). Those assume a claim flag on every message — the largest cost this design removes |
-| You want to read payloads in `psql`. This engine stores `bytea`; the current one stores JSON |
-| You need MongoDB as well as PostgreSQL |
-| You cannot accept an immutable `shardCount`. Changing it re-routes every key, so sizing it wrong is a drain-and-switch rather than a config change |
-| You rely on `DurableQueues` being a stable API. This SPI is explicitly still moving |
+| **You need `TransactionalMode.FullyTransactional`** — the handler's writes and the dequeue committing together. The adapter reports `SingleOperationTransaction` and **refuses** `FullyTransactional` rather than approximating it: acknowledgements are batched and flushed on the owner's connection under a fence, and cannot enlist in a caller's transaction. Note the half that *does* work — `enqueue(Connection, …)` joins the caller's transaction, so an Outbox enqueue rolls back with the business transaction |
+| **You call `queryForMessagesSoonReadyForDelivery` or `getNextMessageReadyForDelivery`.** These are the two operations of the `DurableQueues` surface that throw. The first needs an ordering by next-delivery timestamp across every shard of both lanes, which no index produces; the second needs a row-lease session outliving the call. The admin surface needs neither |
 
-**What is *not* a differentiator: raw throughput.** At a 5 ms poll the current implementation moved
-3 915 msg/s at 0.1% spread; the shard-owned engine's figure in the same run is unquotable. What the
-comparison actually shows is that it reached that class of throughput on **7 connections instead of
-17–31**, with no poll interval — the cost of the throughput differs far more than the throughput does.
+**Behavioural differences — it works, but not identically, and your code may notice:**
+
+| Because |
+|---|
+| **`QueuedMessage` is *partial* inside a handler** — though less so than it was. The engine's `MessageHandler` receives `(messageId, key, payload, payloadType)`, so **`getId()` is answered**; `getTotalDeliveryAttempts()` and the timestamp accessors still **throw** rather than returning a stub, because reading them would widen a cursor read that runs roughly twice per delivered message. Anything on your delivery path that touches *those* fails the delivery, and the stack trace will look like the framework breaking rather than like a partial message. The escape hatch is the id: pass it to `getQueuedMessage(queueEntryId)` and read the full row, paying per lookup instead of per message. A `DurableQueuesInterceptor` is handed the same surface and the same rule |
+| **`markForRedeliveryIn(delay)` redelivers, but not after `delay`** — it throws, and the engine schedules from its own `RedeliveryPolicy`, because there is no id to schedule against from inside a handler. The attempt still counts against the policy's budget |
+| **Retry is the engine's**, not `DefaultDurableQueueConsumer`'s. The `RedeliveryPolicy` is translated once into `ConsumerOptions` at subscription time, with an off-by-one to know about: the policy counts *re*deliveries, the engine counts attempts |
+| **`resurrectDeadLetterMessage` returns empty even when it succeeds.** The message re-enters at a fresh sequence, so its `QueueEntryId` changes and the old one no longer addresses it |
+
+**A judgement call rather than a fact:**
+
+| Because |
+|---|
+| **Maturity.** The engine is published and its `MessageQueue` contract is frozen — additive in a minor, breaking only in a major — but it is far newer than `PostgresqlDurableQueues`, which is shipped, published and in production. How much that matters is yours to weigh; it is not a missing capability |
+| **`shardCount` grows but never shrinks.** Growing is online with no restart. Sizing it too *high* is the cheaper mistake, and it must be at least the largest number of instances you will ever run, since a lane's unit count caps how many instances can hold anything for it |
+
+### Raw throughput: the direction is established, the multiple is not
+
+These are different claims and this section used to collapse them into "unquotable", which understated
+what the runs show.
+
+**What is established.** In every head-to-head repetition recorded — three suites, two hosts, the
+devcontainer — the shard-owned engine moved more messages per second than the baseline arm interleaved
+beside it. Its *slowest* observation anywhere is **3 968 msg/s** (the resources suite, which is the
+unstable one); the baseline's *fastest* in that same run is **3 868 msg/s**, and 3 915 msg/s in the
+devcontainer. In the cost suite the shard-owned floor is **7 435 msg/s**. The 76.8% spread is entirely
+in the upper bound — the floor is stable and sits above the baseline's ceiling.
+
+**What is not established: by how much.** Across repetitions the ratio ranges from about 1.03× to 4.7×,
+and no repetition of that measurement predicts the next. Do not quote a multiple.
+
+**And one honest limit on the comparison.** The baseline arms here poll at 20 ms and 5 ms. The
+baseline's own capacity sweep (§2.3) reached 9 881 msg/s at a 2 ms poll, which lands *inside* the
+shard-owned engine's measured range rather than below it — so "beats a maximally tuned baseline" is
+**not** shown. It is also not refuted, and §2.3 carries its own warning that numbers taken at the knee
+do not reproduce in this lab.
+
+**What does not depend on any of that** is the price of the throughput. The baseline's is a
+configuration choice — every arm lands within 0.5% of `parallelConsumers × pollsPerSecond` — and each
+route to more of it costs something: more consumers costs connections (18 → 41 when doubled), a faster
+poll costs query rate against a database that was never the bottleneck. The shard-owned engine pays
+neither, holding **7 connections per process** with no interval to tune. So the sound reason to move is
+not "it is N times faster"; it is that it reaches the same class of throughput for a fraction of the
+connections, threads, WAL and dead tuples — and those are the figures that reproduce.
 
 **They are not mutually exclusive.** Both can run against the same database on different tables, so
 adoption can be per queue: move the latency-sensitive or high-volume ones and leave the rest.
@@ -564,38 +765,65 @@ list starts costing more than it gives.
 - **Sustained soak beyond half an hour.** The longest run is the thirty minutes in §3.5 — 540 000 messages per arm, thirty autovacuum cycles. Vacuum behaviour, index bloat and p99 drift over *hours* remain unmeasured, and the baseline's dead-tuple cost is precisely the kind of thing that would only show as drift at that scale. §3.5 looked for it at six minutes and again at thirty and did not find it, which is not the same as it not being there. Nor has any soak run at a rate near either engine's capacity: 300/s keeps the latency signal clean and accumulates debt slowly, and the opposite trade has not been measured.
 - ~~**Realistic payload distribution.**~~ **Half closed.** Payload *size* is now swept from 200 bytes to 64 KB, across the TOAST threshold, in §3.4.3 — which is what showed that the headline percentage belongs to the 200-byte payload and the saving is a constant. What remains untested is a realistic *distribution*: every run is uniform, so nothing exercises a mix of sizes in one queue, where a large message's TOAST chunks and a small one's inline row share the same pages and the same vacuum.
 - ~~**Failure injection beyond process death, connection loss, partition and restart.**~~ **Closed.** Those four are covered (`ShardOwnedMultiProcessIT`, `ShardOwnedConnectionLossIT`, `ShardOwnedNetworkPartitionIT`, `ShardOwnedDatabaseRestartIT`), and disk pressure is now covered in both of its forms: a full volume in §3.4.2, and the slow-disk case as the condition it actually produces — commits outrunning the lease — in `ShardOwnedStaleLivenessIT`. How a genuinely slow *device* behaves is not measured, and that is a decision rather than an omission — `durable-queue-shard-owned.md` §18.3 records it with what would reopen it. What the engine is exposed to is the consequence, and the consequence is what is tested.
-- **Throughput on hardware that can measure it.** See above.
+- **Throughput at saturation, anywhere.** This used to read "throughput on hardware that can measure
+  it", which assumed such hardware existed and had merely not been used. It has now been used: the
+  workstation run of 2026-09-14 reproduced the instability at 76.8% (§3.6, §4). The gap is therefore
+  no longer "we lack a machine" but "we do not know what makes this arm move", and the first step is
+  the isolation experiment in §3.6 rather than another environment.
 - **Idle cost of a large routing space across many queues.** §3.8 varies the space on one queue and the queue count at one space; the product of the two — hundreds of queues at 1 024 units each — is not measured, and per-unit state (a lease row and an owner object each) is what would grow.
 - **Growing an existing queue's routing space.** Not built; see `durable-queue-ordered-routing-design.md` §8.
 
 ## 6. Where the code lives
 
-The engine and its semantics tests are `components/postgresql-queue-shard-owned` — a reactor module that is **not published** (`maven.deploy.skip=true`), because the project's rule is that central APIs break only on a major version and this SPI is still moving. The benchmarks comparing it against the existing implementation stay in `examples/essentials-performance-lab`, which is where the harness and the other engine are.
+Three published reactor modules, not one:
+
+| Module | What it is |
+|---|---|
+| `components/postgresql-queue-shard-owned` | The engine and its semantics tests. Exposes `MessageQueue`, a **new contract** rather than an implementation of `DurableQueues`. **Published** — the `maven.deploy.skip=true` gate came off when the admin console page closed the "no admin UI" gap, which also froze `MessageQueue` as a compatibility-checked contract |
+| `components/postgresql-queue-shard-owned-adapter` | Presents the engine **as** a `DurableQueues`, so `Inbox`, `Outbox`, `EventProcessor` and `DurableLocalCommandBus` run on it unchanged. Two of the interface's operations throw; see §4.5 |
+| `components/spring-boot-starter-postgresql-queue-shard-owned` | Selects the adapter's `DurableQueues` on `essentials.shard-owned-queue.durable-queues-enabled` (default `false`), with `auto-register-shard-count` beside it |
+
+The admin controller lives in `spring-boot-starter-admin-api` with every other admin controller, per the
+three-place rule for admin operations. The benchmarks comparing the two engines stay in
+`examples/essentials-performance-lab`, which is where the harness and the other engine are, and which
+is **not** published.
 
 ## 7. Reproducing
 
 ### 7.1 On a real machine, outside the devcontainer
 
-`scripts/perf-host.sh`. One command, roughly an hour, and it exists to close the one gap this lab
-cannot close from inside itself: **throughput on hardware that can hold a number still** (§18.1).
+`scripts/perf-host.sh`. One command, roughly an hour. It was written to close the one gap this lab
+cannot close from inside itself — **throughput on hardware that can hold a number still** (§18.1) — and
+the first two runs of it, on 2026-09-14, established that the gap is not about hardware. Keep running
+it anyway: it is the only way to tell an environment-specific figure from a real one, and it is what
+showed that per-message cost travels between environments while throughput does not.
 
 ```bash
 scripts/perf-host.sh --dry-run     # what it would run, and what it thinks of the machine
-scripts/perf-host.sh               # cost, latency, concurrency, then a 10-minute soak per arm
-scripts/perf-host.sh --no-soak     # the first three only, ~25 minutes
+scripts/perf-host.sh               # cost, latency, concurrency, resources, then a 10-minute soak per arm
+scripts/perf-host.sh --no-soak     # the first four only, ~25 minutes
 scripts/perf-host.sh --soak 30 --rate 1000
 ```
 
 **The figure to read is not the peak — it is the interquartile range beside each median.** Every
-throughput number in this document is marked comparative-only because the devcontainer runs
-`dockerd` inside itself: the load generator and PostgreSQL share one eight-CPU cgroup, and
-throughput at saturation varied 861% between repetitions. If the IQRs come back tight on a
-workstation and wide here, the lab was the problem and those figures can start being quoted
-absolutely.
+throughput number in this document is marked comparative-only because throughput at saturation varied
+861% between repetitions.
+
+**The test this section proposed has been run, and it failed.** The proposal was: if the IQRs come back
+tight on a workstation and wide in the devcontainer, the lab was the problem and those figures can
+start being quoted absolutely. They came back **76.8% on the workstation against 78.2% in the
+devcontainer** (§3.6), so the premise — that `dockerd`-in-`dockerd` and the shared eight-CPU cgroup are
+what move the number — does not survive its own test. Read the IQRs for exactly what they are, and do
+not assume a wide one here will be narrow somewhere else.
+
+What the same comparison *did* establish is which figures travel. Per-message cost agreed to within
+0.1% across two hosts and the devcontainer; the concurrency sweep's lower arms to within 0.5%; thread
+and connection counts reproduced outright. Those are the quotable ones.
 
 **On macOS the isolation is better than it looks.** The JVM runs natively and PostgreSQL runs in the
-Docker Desktop VM, so the two are in separate scheduling domains rather than sharing a cgroup —
-which is the devcontainer's actual defect. What is lost is deliberate partitioning: there is no
+Docker Desktop VM, so the two are in separate scheduling domains rather than sharing a cgroup — which
+removes the devcontainer's most obvious defect, though not, as it turns out, the instability. What is
+lost is deliberate partitioning: there is no
 `taskset` on macOS and the JVM cannot be pinned, so the arms are not assigned disjoint cores. The
 script records that in `environment.json` rather than leaving it to be inferred.
 

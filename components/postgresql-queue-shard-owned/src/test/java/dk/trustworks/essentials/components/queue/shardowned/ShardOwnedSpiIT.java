@@ -81,7 +81,7 @@ class ShardOwnedSpiIT {
         var orderedByKey = new java.util.concurrent.ConcurrentHashMap<String, List<Long>>();
 
         try (var queue = queue("spi-1")) {
-            queue.consume((key, payload, payloadType) -> {
+            queue.consume((messageId, key, payload, payloadType) -> {
                 var body = new String(payload, StandardCharsets.UTF_8);
                 if (key == null) {
                     unordered.add(body);
@@ -126,7 +126,7 @@ class ShardOwnedSpiIT {
     void depth_dead_letters_resurrect_and_purge_are_usable_through_the_contract() throws Exception {
         try (var queue = queue("spi-2")) {
             var alwaysFails = new ConsumerOptions(8, SHARD_COUNT, 2, Duration.ofMillis(10), 1.0d, Duration.ofMillis(10));
-            queue.consume((key, payload, payloadType) -> {
+            queue.consume((messageId, key, payload, payloadType) -> {
                 throw new IllegalStateException("nope");
             }, alwaysFails);
 
@@ -206,7 +206,7 @@ class ShardOwnedSpiIT {
                 }
             });
 
-            queue.consume((key, payload, payloadType) -> {
+            queue.consume((messageId, key, payload, payloadType) -> {
                 var marker = insideWrapper.get();
                 if (marker != null) {
                     marker.set(true);
@@ -250,7 +250,7 @@ class ShardOwnedSpiIT {
                     successes.incrementAndGet();
                 }
             });
-            queue.consume((key, payload, payloadType) -> {
+            queue.consume((messageId, key, payload, payloadType) -> {
                 throw new IllegalStateException("boom");
             }, new ConsumerOptions(8, SHARD_COUNT, 2, Duration.ofMillis(10), 1.0d, Duration.ofMillis(10)));
 

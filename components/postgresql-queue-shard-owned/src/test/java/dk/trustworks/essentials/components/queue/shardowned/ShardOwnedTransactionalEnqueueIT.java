@@ -78,7 +78,7 @@ class ShardOwnedTransactionalEnqueueIT {
     void a_business_write_and_its_enqueue_commit_together() throws Exception {
         var delivered = ConcurrentHashMap.<String>newKeySet();
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "outbox-1")) {
-            queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
 
             try (var connection = dataSource.getConnection()) {
@@ -98,7 +98,7 @@ class ShardOwnedTransactionalEnqueueIT {
     void a_rollback_takes_the_messages_with_it() throws Exception {
         var delivered = ConcurrentHashMap.<String>newKeySet();
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "outbox-2")) {
-            queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
 
             try (var connection = dataSource.getConnection()) {

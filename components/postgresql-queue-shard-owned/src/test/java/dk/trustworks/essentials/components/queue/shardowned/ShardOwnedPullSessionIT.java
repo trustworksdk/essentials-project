@@ -106,7 +106,7 @@ class ShardOwnedPullSessionIT {
             assertThat(((ShardQueueSession) session).shardsHeld()).isEqualTo(SHARD_COUNT);
 
             try (var other = queue("consumer")) {
-                var subscription = other.consume((key, payload, payloadType) -> {
+                var subscription = other.consume((messageId, key, payload, payloadType) -> {
                 }, ConsumerOptions.defaults());
                 assertThat(subscription.unorderedShardsHeld())
                         .as("a consumer must not take UNORDERED shards a live SHARD-scope session holds; "
@@ -119,7 +119,7 @@ class ShardOwnedPullSessionIT {
             // Closing hands them straight back rather than making the next consumer wait out a lease.
             session.close();
             try (var other = queue("consumer-2")) {
-                var subscription = other.consume((key, payload, payloadType) -> {
+                var subscription = other.consume((messageId, key, payload, payloadType) -> {
                 }, ConsumerOptions.defaults());
                 assertThat(subscription.shardsHeld())
                         .as("closing a session must release its shards immediately")

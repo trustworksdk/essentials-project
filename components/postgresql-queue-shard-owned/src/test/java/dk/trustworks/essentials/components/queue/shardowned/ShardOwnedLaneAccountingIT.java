@@ -77,7 +77,7 @@ class ShardOwnedLaneAccountingIT {
     @Test
     void shards_held_counts_both_lanes() throws Exception {
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "lane-accounting-1")) {
-            var subscription = queue.consume((key, payload, payloadType) -> {
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> {
             }, ConsumerOptions.defaults());
 
             Awaitility.await().atMost(Duration.ofSeconds(20))
@@ -103,7 +103,7 @@ class ShardOwnedLaneAccountingIT {
                                         .setShardCount(SHARD_COUNT)
                                         .setInstanceId("lane-accounting-2")
                                         .build()) {
-            queue.startConsumingOrdered((key, payload, payloadType) -> {
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                                             try {
                                                 handlerMayProceed.await();
                                             } catch (InterruptedException e) {
@@ -146,7 +146,7 @@ class ShardOwnedLaneAccountingIT {
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "lane-accounting-3")) {
             var delivered = ConcurrentHashMap.<String>newKeySet();
             queue.enqueue(List.of(Message.of("plain".getBytes(StandardCharsets.UTF_8), 0)));
-            queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
             Awaitility.await().atMost(Duration.ofSeconds(20))
                       .untilAsserted(() -> assertThat(delivered).containsExactly("plain"));

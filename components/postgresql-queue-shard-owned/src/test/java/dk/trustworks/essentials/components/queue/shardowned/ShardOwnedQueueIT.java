@@ -73,7 +73,7 @@ class ShardOwnedQueueIT {
     void every_enqueued_message_is_delivered_exactly_once_and_acknowledged() throws Exception {
         var received = new CopyOnWriteArrayList<String>();
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(),
                                  SHARD_COUNT);
 
@@ -111,7 +111,7 @@ class ShardOwnedQueueIT {
         var perProducer = 150;
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(),
                                  SHARD_COUNT);
 
@@ -177,7 +177,7 @@ class ShardOwnedQueueIT {
     void a_hole_is_observed_and_chased_when_an_earlier_sequence_value_commits_late() throws Exception {
         var received = new CopyOnWriteArrayList<String>();
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(),
                                  SHARD_COUNT);
 
@@ -239,7 +239,7 @@ class ShardOwnedQueueIT {
                                                 Duration.ofMillis(1), Duration.ofMillis(2),
                                                 Duration.ofMillis(300), Duration.ofMillis(100),
                                                 1_000, 8, Duration.ofMillis(100), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
-        first.startConsuming((payload, payloadType) -> {
+        first.startConsuming((messageId, payload, payloadType) -> {
             firstReceived.add(new String(payload, StandardCharsets.UTF_8));
             try {
                 blocker.await();
@@ -256,7 +256,7 @@ class ShardOwnedQueueIT {
 
         var secondReceived = new CopyOnWriteArrayList<String>();
         try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-2")) {
-            second.startConsuming((payload, payloadType) -> secondReceived.add(new String(payload, StandardCharsets.UTF_8)),
+            second.startConsuming((messageId, payload, payloadType) -> secondReceived.add(new String(payload, StandardCharsets.UTF_8)),
                                   ShardOwnerSettings.defaults(),
                                   SHARD_COUNT);
 
@@ -294,10 +294,10 @@ class ShardOwnedQueueIT {
         try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1");
              var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-2")) {
 
-            first.startConsuming((payload, payloadType) -> firstReceived.add(new String(payload, StandardCharsets.UTF_8)),
+            first.startConsuming((messageId, payload, payloadType) -> firstReceived.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(),
                                  SHARD_COUNT / 2);
-            second.startConsuming((payload, payloadType) -> secondReceived.add(new String(payload, StandardCharsets.UTF_8)),
+            second.startConsuming((messageId, payload, payloadType) -> secondReceived.add(new String(payload, StandardCharsets.UTF_8)),
                                   ShardOwnerSettings.defaults(),
                                   SHARD_COUNT / 2);
 

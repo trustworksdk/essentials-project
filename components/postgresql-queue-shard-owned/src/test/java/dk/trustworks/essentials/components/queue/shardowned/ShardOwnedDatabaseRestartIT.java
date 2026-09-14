@@ -107,7 +107,7 @@ class ShardOwnedDatabaseRestartIT {
         var heldUntilAfterTheRestart = new CountDownLatch(1);
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1", new ShardOwnerMetrics())) {
-            queue.startConsuming((payload, type) -> {
+            queue.startConsuming((messageId, payload, type) -> {
                                      var message = new String(payload, StandardCharsets.UTF_8);
                                      if (message.startsWith("during-")) {
                                          await(heldUntilAfterTheRestart);

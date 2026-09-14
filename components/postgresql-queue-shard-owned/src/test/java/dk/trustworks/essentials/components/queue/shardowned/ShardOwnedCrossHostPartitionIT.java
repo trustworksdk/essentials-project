@@ -186,7 +186,7 @@ class ShardOwnedCrossHostPartitionIT {
                         .withNetworkId(network.getId())
                         .exec();
 
-                survivor.startConsuming((payload, type) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+                survivor.startConsuming((messageId, payload, type) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                         shortLease(), SHARD_COUNT);
 
                 Long noticedMillis = null;

@@ -169,7 +169,7 @@ class ShardOwnedRowLeaseSessionIT {
             var delivered = ConcurrentHashMap.<String>newKeySet();
             try (var consumer = queue("row-3-consumer")) {
                 var subscription = consumer.consume(
-                        (key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                        (messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                         ConsumerOptions.defaults());
                 // Wait for the consumer to actually be owning shards before concluding it saw
                 // nothing — otherwise this asserts that a consumer which had not started yet

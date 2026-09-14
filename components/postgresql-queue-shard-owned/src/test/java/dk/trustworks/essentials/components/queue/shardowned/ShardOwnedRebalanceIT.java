@@ -79,14 +79,14 @@ class ShardOwnedRebalanceIT {
         var secondReceived = new CopyOnWriteArrayList<String>();
 
         try (var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            first.startConsuming((payload, payloadType) -> firstReceived.add(new String(payload, StandardCharsets.UTF_8)),
+            first.startConsuming((messageId, payload, payloadType) -> firstReceived.add(new String(payload, StandardCharsets.UTF_8)),
                                  FAST, SHARD_COUNT);
             // Alone, it should hold everything.
             Awaitility.await().atMost(Duration.ofSeconds(10))
                       .untilAsserted(() -> assertThat(first.shardsHeld()).isEqualTo(SHARD_COUNT));
 
             try (var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-2")) {
-                second.startConsuming((payload, payloadType) -> secondReceived.add(new String(payload, StandardCharsets.UTF_8)),
+                second.startConsuming((messageId, payload, payloadType) -> secondReceived.add(new String(payload, StandardCharsets.UTF_8)),
                                       FAST, SHARD_COUNT);
 
                 // Both compute ceil(8/2) = 4 from the same membership, so the first releases down to

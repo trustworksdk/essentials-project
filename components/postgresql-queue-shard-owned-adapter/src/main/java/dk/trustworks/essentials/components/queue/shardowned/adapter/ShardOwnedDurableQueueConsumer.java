@@ -23,6 +23,7 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.operations
 // Single-type imports, not the package: shardowned.spi and foundation...queue both export QueueName,
 // Message and QueuedMessage, and this class deals in the foundation's.
 import dk.trustworks.essentials.components.queue.shardowned.spi.ConsumerOptions;
+import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
 import dk.trustworks.essentials.components.queue.shardowned.spi.MessageQueue;
 import dk.trustworks.essentials.components.queue.shardowned.spi.Subscription;
 import org.slf4j.*;
@@ -142,7 +143,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
      * returns normally, and the message is acknowledged as handled — the same outcome as a handler
      * that returns without doing anything.
      */
-    private void deliver(String key, byte[] payload, int payloadType) {
+    private void deliver(MessageId messageId, String key, byte[] payload, int payloadType) {
         if (payloadType != MessageEnvelope.FORMAT_VERSION) {
             throw new DurableQueueException(
                     "Message was written in envelope format " + payloadType + ", and this adapter reads format "
@@ -151,7 +152,9 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
                     queueName());
         }
         var message       = MessageEnvelope.deserialize(jsonSerializer, payload, key, 0L);
-        var queuedMessage = ShardOwnedQueuedMessage.beingDelivered(queueName(), message);
+        var queuedMessage = ShardOwnedQueuedMessage.beingDelivered(queueName(),
+                                                                   QueueEntryIdCodec.encode(queueName(), messageId),
+                                                                   message);
 
         delivery.handle(queuedMessage, operation.getQueueMessageHandler());
 

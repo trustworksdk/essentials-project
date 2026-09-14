@@ -29,17 +29,27 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * Read from the database — {@code getQueuedMessage}, {@code getDeadLetterMessages}, the pull path —
  * every field is real, because the engine's row carries them.
  * <p>
- * Handed to a push consumer, it is <b>partial</b>. The engine's {@code MessageHandler} receives
- * {@code (key, payload, payloadType)} and nothing else: not the message id, not the attempt count, not
- * the timestamps. Those exist in the engine — they are on the row — they are simply not passed to the
- * handler, and putting them there means widening the handler signature and adding a column to the hot
- * cursor read. That is a real change to the delivery fast path, so it is not made here.
+ * Handed to a push consumer, it is <b>partial</b> — but less so than it was, and the line now falls
+ * where the cost is rather than where the plumbing happened to stop.
  * <p>
- * The consequence is dealt with by <b>throwing rather than inventing</b>. A stub {@code getId()} of
- * {@code "unknown"} or a {@code getTotalDeliveryAttempts()} of {@code 0} would be a plausible-looking
- * lie: retry logic keyed on the attempt count would silently never trigger, and a dashboard would show
- * every message as a first attempt. An {@link UnsupportedOperationException} naming the reason is
- * worse to hit and better to have.
+ * <b>The id is answered on both shapes.</b> The engine's {@code MessageHandler} receives the
+ * {@link dk.trustworks.essentials.components.queue.shardowned.spi.MessageId}, which costs the delivery
+ * path nothing: an owner already knows its own lane and shard, and {@code seq} is already a column of
+ * the row the cursor read returns. {@link QueueEntryIdCodec} pairs it with the queue name, and
+ * {@link #getId()} hands it over.
+ * <p>
+ * <b>The attempt count, the timestamps and the last delivery error are not</b>, and those are the ones
+ * with a real price. {@code attempts}, {@code enqueued_at}, {@code visible_at} and {@code last_error}
+ * are all on the row in the database, but none is in the {@code SELECT} the delivery path issues —
+ * adding them widens a read that runs roughly twice per delivered message, for data most handlers never
+ * touch. A handler that needs them can pay for them one at a time: {@link #getId()} is now available to
+ * pass to {@code getQueuedMessage(queueEntryId)}.
+ * <p>
+ * What is absent is dealt with by <b>throwing rather than inventing</b>. A
+ * {@code getTotalDeliveryAttempts()} of {@code 0} would be a plausible-looking lie: retry logic keyed
+ * on the attempt count would silently never trigger, and a dashboard would show every message as a
+ * first attempt. An {@link UnsupportedOperationException} naming the reason is worse to hit and better
+ * to have.
  * <p>
  * {@code Inbox}, {@code Outbox} and {@code DurableLocalCommandBus} touch only {@link #getMessage()} and
  * {@link #getMetaData()} on this path, which is why they work unchanged.
@@ -95,11 +105,17 @@ public final class ShardOwnedQueuedMessage implements QueuedMessage {
     }
 
     /**
-     * What a push consumer's handler is given: the message and its metadata, and nothing the engine
-     * does not hand to a {@code MessageHandler}.
+     * What a push consumer's handler is given: the message, its metadata and its id, and nothing the
+     * engine does not hand to a {@code MessageHandler}.
+     * <p>
+     * The id is real here — it costs the delivery path nothing, because the owner already knows its own
+     * lane and shard and {@code seq} is already a column of the row the cursor read returns. The
+     * attempt count and the timestamps are the ones that would widen that read, and they remain
+     * {@link #unavailable}.
      */
-    public static ShardOwnedQueuedMessage beingDelivered(QueueName queueName, Message message) {
-        return new ShardOwnedQueuedMessage(null, queueName, message, 0, null, null, false, null, true);
+    public static ShardOwnedQueuedMessage beingDelivered(QueueName queueName, QueueEntryId id, Message message) {
+        requireNonNull(id, "No id provided");
+        return new ShardOwnedQueuedMessage(id, queueName, message, 0, null, null, false, null, true);
     }
 
     private static OffsetDateTime atOffset(Instant instant) {
@@ -109,15 +125,21 @@ public final class ShardOwnedQueuedMessage implements QueuedMessage {
     private <T> T unavailable(String what) {
         throw new UnsupportedOperationException(
                 what + " is not available to a handler on the shard-owned engine's push delivery path. "
-                + "The engine's MessageHandler receives (key, payload, payloadType) only - the value exists on the "
-                + "row but is not passed to the handler. Use the pull path (getNextMessageReadyForDelivery) or "
-                + "getQueuedMessage(queueEntryId) if you need it, and see this module's CLAUDE.md for why it is "
-                + "not simply added.");
+                + "The engine's MessageHandler receives (messageId, key, payload, payloadType) only - the value "
+                + "exists on the row but is not in the SELECT the delivery path issues, and adding it would widen "
+                + "a read that runs roughly twice per delivered message. getId() IS available here: pass it to "
+                + "getQueuedMessage(queueEntryId) to read the full row when you need this. See this module's "
+                + "CLAUDE.md for why it is not simply added.");
     }
 
     @Override
     public QueueEntryId getId() {
-        return partial ? unavailable("The message id") : id;
+        // Answered on BOTH shapes. This used to throw on the push path along with everything else,
+        // and it was the accessor that actually hurt: framework code reaches for the id far more often
+        // than for an attempt count, and an eager log argument -- log.trace("...{}", msg.getId()) --
+        // evaluates regardless of level, so a trace statement nobody enabled dead-lettered every
+        // message it touched. Supplying it costs the delivery path nothing; see beingDelivered.
+        return id;
     }
 
     @Override

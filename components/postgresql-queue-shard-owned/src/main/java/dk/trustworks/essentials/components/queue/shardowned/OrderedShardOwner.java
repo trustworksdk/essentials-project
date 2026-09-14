@@ -439,7 +439,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     private void runHandler(String key, long keyOrder, ShardOwnedStorage.OrderedRow row) {
         try {
-            handler.handle(key, row.payload(), row.payloadType());
+            handler.handle(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
+                           key, row.payload(), row.payloadType());
             synchronized (stateLock) {
                 if (Thread.currentThread().isInterrupted()) {
                     metrics.abandonedOnInterrupt.increment();

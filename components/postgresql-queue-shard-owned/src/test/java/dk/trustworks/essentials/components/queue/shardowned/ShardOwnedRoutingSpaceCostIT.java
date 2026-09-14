@@ -93,7 +93,7 @@ class ShardOwnedRoutingSpaceCostIT {
 
         try (var queue = new ShardOwnedQueue(dataSource, queueId, SHARD_COUNT, "space-" + units)) {
             var acquireStart = System.nanoTime();
-            queue.startConsumingOrdered((key, payload, payloadType) -> {
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
             }, ShardOwnerSettings.defaults(), units);
             Awaitility.await().atMost(Duration.ofSeconds(120))
                       .until(() -> queue.shardsHeld() == units);

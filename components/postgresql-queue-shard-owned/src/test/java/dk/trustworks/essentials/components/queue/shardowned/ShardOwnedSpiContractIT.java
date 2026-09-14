@@ -153,7 +153,7 @@ class ShardOwnedSpiContractIT {
             assertThat(queue.isStarted()).describedAs("nothing is running yet").isFalse();
 
             var delivered = ConcurrentHashMap.<String>newKeySet();
-            queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
             assertThat(queue.isStarted()).describedAs("consuming started it").isTrue();
 
@@ -188,7 +188,7 @@ class ShardOwnedSpiContractIT {
                     throw new IllegalStateException("this observer is broken");
                 }
             });
-            queue.consume((key, payload, payloadType) -> handlerCalls.incrementAndGet(),
+            queue.consume((messageId, key, payload, payloadType) -> handlerCalls.incrementAndGet(),
                           new ConsumerOptions(8, Integer.MAX_VALUE, 2, Duration.ofMillis(50), 1.0d, Duration.ofMillis(50)));
 
             queue.enqueue(Message.of("m".getBytes(StandardCharsets.UTF_8), 1));
@@ -284,7 +284,7 @@ class ShardOwnedSpiContractIT {
     void a_handler_receives_the_payload_type_its_message_was_enqueued_with() throws Exception {
         var seen = new ConcurrentHashMap<String, Integer>();
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "types-2")) {
-            queue.consume((key, payload, payloadType) ->
+            queue.consume((messageId, key, payload, payloadType) ->
                                   seen.put(new String(payload, StandardCharsets.UTF_8), payloadType),
                           ConsumerOptions.defaults());
 
@@ -317,7 +317,7 @@ class ShardOwnedSpiContractIT {
     @Test
     void the_payload_type_survives_dead_lettering_and_resurrection() throws Exception {
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "types-3")) {
-            var subscription = queue.consume((key, payload, payloadType) -> {
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> {
                                                  throw new IllegalStateException("always fails");
                                              },
                                              new ConsumerOptions(8, Integer.MAX_VALUE, 1, Duration.ofMillis(20),

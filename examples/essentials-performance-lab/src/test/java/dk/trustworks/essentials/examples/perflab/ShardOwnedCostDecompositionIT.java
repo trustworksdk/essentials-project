@@ -166,7 +166,7 @@ class ShardOwnedCostDecompositionIT {
 
         var handled = new AtomicInteger();
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "bench")) {
-            queue.startConsuming((ignored, payloadType) -> handled.incrementAndGet(), settings, SHARD_COUNT);
+            queue.startConsuming((messageId, ignored, payloadType) -> handled.incrementAndGet(), settings, SHARD_COUNT);
 
             var before = PgSnapshot.capture(dataSource, List.of(ShardOwnedSchema.UNORDERED_TABLE));
             var startNanos = System.nanoTime();

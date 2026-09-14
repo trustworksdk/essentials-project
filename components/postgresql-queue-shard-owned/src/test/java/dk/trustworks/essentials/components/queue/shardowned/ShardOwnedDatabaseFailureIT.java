@@ -107,7 +107,7 @@ class ShardOwnedDatabaseFailureIT {
         var received = new CopyOnWriteArrayList<String>();
         try (var small = pool(8);
              var queue = new ShardOwnedQueue(small, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(), SHARD_COUNT);
 
             for (var index = 0; index < 20; index++) {
@@ -156,7 +156,7 @@ class ShardOwnedDatabaseFailureIT {
     void the_engine_recovers_when_the_database_is_unreachable_and_returns() throws Exception {
         var received = new CopyOnWriteArrayList<String>();
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(), SHARD_COUNT);
 
             for (var index = 0; index < 30; index++) {
@@ -209,7 +209,7 @@ class ShardOwnedDatabaseFailureIT {
     void the_wake_up_listener_reconnects_after_losing_its_connection() throws Exception {
         var received = new CopyOnWriteArrayList<String>();
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(), SHARD_COUNT);
 
             for (var index = 0; index < 20; index++) {
@@ -270,7 +270,7 @@ class ShardOwnedDatabaseFailureIT {
     void a_permanent_write_failure_does_not_lose_data_and_recovers_when_repaired() throws Exception {
         var received = new CopyOnWriteArrayList<String>();
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, payloadType) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(), SHARD_COUNT);
 
             for (var index = 0; index < 20; index++) {

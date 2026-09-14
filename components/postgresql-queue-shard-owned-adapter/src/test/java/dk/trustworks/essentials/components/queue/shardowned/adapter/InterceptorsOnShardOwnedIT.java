@@ -174,14 +174,16 @@ class InterceptorsOnShardOwnedIT {
     /**
      * What a delivery interceptor may read off the message it is handed.
      * <p>
-     * The engine hands the handler {@code (key, payload, payloadType)} only, so the message on the
-     * delivery path is the partial shape: the queue name and the payload are there, the id and the
-     * attempt count are not and throw rather than report a made-up value. This is exactly what
-     * {@code RecordExecutionTimeDurableQueueInterceptor} tags with, and the boundary an interceptor
-     * author has to know — reaching for the id fails the delivery.
+     * The engine hands the handler {@code (messageId, key, payload, payloadType)}, so the message on
+     * the delivery path carries the queue name, the payload <b>and the id</b>. What it still does not
+     * carry is the attempt count and the timestamps, which throw rather than report a made-up value —
+     * those are the fields that would widen the cursor read, and the id is not.
+     * <p>
+     * This is the boundary an interceptor author has to know, and it moved: reaching for the id used
+     * to fail the delivery and no longer does. Reaching for the attempt count still does.
      */
     @Test
-    void a_delivery_interceptor_gets_the_queue_name_and_the_payload_but_not_the_id() {
+    void a_delivery_interceptor_gets_the_queue_name_the_payload_and_the_id_but_not_the_attempt_count() {
         var seen = new CopyOnWriteArrayList<QueuedMessage>();
         durableQueues.removeInterceptor(interceptor);
         durableQueues.addInterceptor(new DurableQueuesInterceptor() {
@@ -210,11 +212,54 @@ class InterceptorsOnShardOwnedIT {
         var message = seen.get(0);
         assertThat(message.getQueueName().toString()).isEqualTo(QUEUE.toString());
         assertThat(message.getPayload()).isEqualTo(new OrderPlaced("order-1", 100));
-        assertThatThrownBy(message::getId)
-                .as("the id is not on the delivery path, and a made-up one would be worse than a throw")
-                .isInstanceOf(UnsupportedOperationException.class);
+        // (Object) because QueueEntryId is a CharSequenceType, which makes a bare assertThat ambiguous
+        // between AssertJ's CharSequence and Object overloads.
+        assertThat((Object) message.getId())
+                .as("the id IS on the delivery path — the owner knows its lane and shard, and seq is "
+                    + "already a column of the row the cursor read returns")
+                .isNotNull();
+        assertThat(QueueEntryIdCodec.decode(message.getId()).queueName().toString())
+                .as("and it addresses the queue it was delivered from, not just any queue")
+                .isEqualTo(QUEUE.toString());
+
         assertThatThrownBy(message::getTotalDeliveryAttempts)
-                .isInstanceOf(UnsupportedOperationException.class);
+                .as("the attempt count is NOT, because reading it would widen the cursor read; a "
+                    + "plausible-looking 0 would make attempt-keyed retry logic silently never fire")
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("getId() IS available here");
+    }
+
+    /**
+     * The id is what makes the remaining partiality affordable rather than merely documented.
+     * <p>
+     * A handler is not given the attempt count, because reading it would widen the cursor read for
+     * every message whether or not anyone wants it. With the id in hand a handler that DOES want it can
+     * fetch the full row itself — turning a cost everybody pays per message into one the interested
+     * handler pays per lookup. This test is the end-to-end proof that the id handed to a handler really
+     * addresses the row, rather than merely being non-null.
+     */
+    @Test
+    void a_handler_can_use_its_message_id_to_read_the_fields_it_was_not_given() {
+        var idsSeen = new CopyOnWriteArrayList<QueueEntryId>();
+        durableQueues.consumeFromQueue(ConsumeFromQueue.builder()
+                                                       .setQueueName(QUEUE)
+                                                       .setRedeliveryPolicy(RedeliveryPolicy.fixedBackoff(Duration.ofMillis(200), 3))
+                                                       .setParallelConsumers(1)
+                                                       .setQueueMessageHandler(message -> idsSeen.add(message.getId()))
+                                                       .build());
+        unitOfWorkFactory.usingUnitOfWork(() -> durableQueues.queueMessage(QUEUE, Message.of(new OrderPlaced("order-2", 200))));
+
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> assertThat(idsSeen).hasSize(1));
+
+        // The row is deleted once the message is acknowledged, so the lookup is only guaranteed to
+        // find it while delivery is in flight. What is asserted here is the addressing: the id decodes
+        // to this queue and to a well-formed (lane, shard, seq), which is what a handler would pass to
+        // getQueuedMessage.
+        var decoded = QueueEntryIdCodec.decode(idsSeen.get(0));
+        assertThat(decoded.queueName().toString()).isEqualTo(QUEUE.toString());
+        assertThat(decoded.messageId().shard()).isGreaterThanOrEqualTo(0);
+        assertThat(decoded.messageId().sequence()).isPositive();
+        assertThat(decoded.messageId().lane()).isNotNull();
     }
 
     private static dk.trustworks.essentials.components.queue.shardowned.spi.QueueName engineName(QueueName queueName) {

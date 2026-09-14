@@ -262,3 +262,61 @@ The cause was mine and it was dull: `settleStatistics()` slept a fixed 2.5 secon
 
 Exactly one delete per message and zero updates, restored. **Third time in this work that a plausible per-message figure turned out to be an unflushed statistic** — 0.10 once, then 0.00 and 0.33. A fixed sleep is not a synchronisation primitive, and asserting the denominator only half-covers it.
 
+
+---
+
+## The devcontainer was not the reason throughput would not hold still
+
+Every throughput figure in this work has been marked comparative-only since the beginning, and the
+reason given was always the same: the devcontainer runs `dockerd` inside itself, so the load generator
+and PostgreSQL share one eight-CPU cgroup while both size their pools for the 14 CPUs `nproc` reports.
+Any run that saturates CPU is throttled, the explanation went, and a machine without that defect would
+hold a number still. `scripts/perf-host.sh` exists to test exactly that.
+
+It was tested on 2026-09-14, twice, on a macOS workstation where the JVM runs natively and PostgreSQL
+runs in the Docker Desktop VM — separate scheduling domains, no shared cgroup. `EngineResourceComparisonIT`'s
+shard-owned arm returned a **76.8%** interquartile range, against **78.2%** in the devcontainer. Three
+identical repetitions produced 3 968 and 18 315 msg/s; the devcontainer's worst pair was 3 745 and
+9 634. The spread did not shrink and the absolute range widened.
+
+**The explanation was never a measurement.** It was a plausible mechanism that fitted the symptom, and
+it went unchallenged for as long as there was no host to check it against. It is now ruled out as a
+sufficient cause. The cgroup mismatch is still real and still worth removing — it simply is not what
+moves this figure.
+
+Three facts from the same session bound whatever the real cause is, and the third is the useful one:
+
+- Per-message cost reproduced across two hosts and the devcontainer to within **0.1%**, and the
+  payload-size sweep's constant saving to within about 15 bytes across a 320-fold payload range.
+- The concurrency sweep's arms 1 through 64 reproduced between the two host runs to within **0.5%**.
+- `ShardOwnedVsBaselineCostIT`'s shard-owned arm is **equally saturated** — 20 000 messages in about
+  890 ms, 22 396 msg/s — and returned a **7.5%** interquartile range in the same session.
+
+So it is not "saturation is unmeasurable here". One saturated arm is stable and another is not, in the
+same JVM on the same machine minutes apart. The structural difference between them is that the unstable
+suite interleaves four arms in one JVM against a 120-connection pool where the stable one runs two.
+That is the next experiment — run the shard-owned arm alone — and it is far cheaper than the hardware
+the old explanation kept pointing at.
+
+**Two smaller results from the same runs, both negative.**
+
+The concurrency sweep's 128-consumer arm returned 3 607 msg/s in the first host run and **22 727** in
+the second, at a 44.2% interquartile range, having "drained" 4 000 messages in 176 ms with a 2 ms
+handler. The first run's analysis had read the 3 607 plateau as the `8 shards × (1/2 ms) = 4 000/s`
+ceiling; the second exceeds that 5.7× on the same configuration, so the reading is retracted and the
+arm is not trusted at either value until it is confirmed to be measuring a real drain. That suite prints
+its interquartile range but, unlike `EngineResourceComparisonIT`, has no "do not quote" guard above a
+threshold — it should.
+
+Tier 1's latency tail did the same thing: response p99 6.69 ms in one run and 40.45 ms in the other,
+with service-time p99 moving 4.71 → 14.92 ms alongside it. That rules out the producer-stall artefact
+that explains Tier 2's response tail, since service time excludes the producer. The p50s were stable
+across both runs to within 0.03 ms. Quote the p50s.
+
+**And a harness bug, in the usual place.** The suite was added to `scripts/perf-host.sh` without
+checking that its output matched the convention the other four follow: it opened its table with a
+three-`=` banner and printed no closing one, while the script extracts each table by toggling on
+`/=====/`. The suite passed, printed its table to the log, and wrote an empty summary file. Fixed by
+bracketing the table properly, with a comment in the test naming the coupling. **Fourth time in this
+work that a result was lost or wrong because of the harness rather than the engine** — after the three
+unflushed-statistic episodes above.

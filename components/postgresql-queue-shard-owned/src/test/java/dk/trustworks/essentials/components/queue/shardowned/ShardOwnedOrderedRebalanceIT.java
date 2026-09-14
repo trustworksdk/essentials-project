@@ -96,13 +96,13 @@ class ShardOwnedOrderedRebalanceIT {
         var first  = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-a");
         var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ord-b");
         try {
-            first.startConsumingOrdered((key, payload, payloadType) -> {
+            first.startConsumingOrdered((messageId, key, payload, payloadType) -> {
             }, fast(Duration.ofSeconds(5)), SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(10))
                       .untilAsserted(() -> assertThat(first.shardsHeld())
                               .isEqualTo(ShardOwnedSchema.ORDERED_UNITS));
 
-            second.startConsumingOrdered((key, payload, payloadType) -> {
+            second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
             }, fast(Duration.ofSeconds(5)), SHARD_COUNT);
 
             Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
@@ -145,7 +145,7 @@ class ShardOwnedOrderedRebalanceIT {
         var handled          = ConcurrentHashMap.<String>newKeySet();
         var deliveries       = new java.util.concurrent.atomic.AtomicInteger();
 
-        OrderedPayloadHandler handler = (key, payload, payloadType) -> {
+        OrderedPayloadHandler handler = (messageId, key, payload, payloadType) -> {
             // A key held by two owners at once shows up here and nowhere else — the count is shared
             // across both instances precisely so a cross-instance overlap is visible.
             if (concurrentPerKey.merge(key, 1, Integer::sum) > 1) {
@@ -217,7 +217,7 @@ class ShardOwnedOrderedRebalanceIT {
         var blockHandlers = new CountDownLatch(1);
         var inHandler     = new CountDownLatch(1);
 
-        OrderedPayloadHandler stuck = (key, payload, payloadType) -> {
+        OrderedPayloadHandler stuck = (messageId, key, payload, payloadType) -> {
             inHandler.countDown();
             try {
                 // Outlasts the 500ms grace by a wide margin, and is released by the test rather than
@@ -244,7 +244,7 @@ class ShardOwnedOrderedRebalanceIT {
             enqueueOrdered(first, 512, 1);
             assertThat(inHandler.await(15, TimeUnit.SECONDS)).as("handlers must be running").isTrue();
 
-            second.startConsumingOrdered((key, payload, payloadType) -> {
+            second.startConsumingOrdered((messageId, key, payload, payloadType) -> {
             }, fast(Duration.ofMillis(500)), SHARD_COUNT);
 
             // The shed is attempted, cannot drain, and is given up on.

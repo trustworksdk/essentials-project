@@ -131,7 +131,7 @@ class ShardOwnedLatencyIT {
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "latency")) {
             queue.setLocalHandoffEnabled(localHandoff);
-            queue.startConsuming((payload, payloadType) -> {
+            queue.startConsuming((messageId, payload, payloadType) -> {
                 // Intended send time travels in the payload, so latency is measured against the
                 // schedule rather than against when the producer got round to sending.
                 var buffer = ByteBuffer.wrap(payload);

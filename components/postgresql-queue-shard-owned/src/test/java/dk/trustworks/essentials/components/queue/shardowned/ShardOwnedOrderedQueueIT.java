@@ -78,7 +78,7 @@ class ShardOwnedOrderedQueueIT {
         var receivedByKey = new ConcurrentHashMap<String, List<Long>>();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsumingOrdered((key, payload, payloadType) -> receivedByKey
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> receivedByKey
                                                 .computeIfAbsent(key, ignored -> Collections.synchronizedList(new ArrayList<>()))
                                                 .add(Long.parseLong(new String(payload, StandardCharsets.UTF_8))),
                                         ShardOwnerSettings.defaults(),
@@ -146,7 +146,7 @@ class ShardOwnedOrderedQueueIT {
         var slowReleased = new CountDownLatch(1);
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsumingOrdered((key, payload, payloadType) -> {
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 if (key.equals(slowKey)) {
                     try {
                         slowReleased.await(30, TimeUnit.SECONDS);
@@ -208,7 +208,7 @@ class ShardOwnedOrderedQueueIT {
                                                 1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsumingOrdered((key, payload, payloadType) -> received.add(Long.parseLong(
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> received.add(Long.parseLong(
                     new String(payload, StandardCharsets.UTF_8))), shortLease, SHARD_COUNT);
 
             // Idle for several lease lifetimes. Without a heartbeat the leases lapse here, and the
@@ -311,7 +311,7 @@ class ShardOwnedOrderedQueueIT {
                                               Duration.ofSeconds(60));
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsumingOrdered((key, payload, payloadType) -> received.add(Long.parseLong(
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> received.add(Long.parseLong(
                     new String(payload, StandardCharsets.UTF_8))), settings, SHARD_COUNT);
 
             // Past 3 x holeExpiry, and nowhere near either leaseTtl or the first heartbeat renewal.

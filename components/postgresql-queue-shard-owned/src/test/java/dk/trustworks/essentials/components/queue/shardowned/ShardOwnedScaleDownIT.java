@@ -93,9 +93,9 @@ class ShardOwnedScaleDownIT {
         var first = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "scale-1");
         var second = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "scale-2");
         try {
-            first.startConsuming((payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            first.startConsuming((messageId, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                                  fastLease(), SHARD_COUNT);
-            second.startConsuming((payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            second.startConsuming((messageId, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                                   fastLease(), SHARD_COUNT);
 
             // Both registered and sharing the shards four and four.
@@ -138,7 +138,7 @@ class ShardOwnedScaleDownIT {
     void departed_instances_do_not_accumulate_rows_forever() throws Exception {
         for (var generation = 0; generation < 5; generation++) {
             var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "ephemeral-" + generation);
-            queue.startConsuming((payload, payloadType) -> {
+            queue.startConsuming((messageId, payload, payloadType) -> {
             }, fastLease(), SHARD_COUNT);
             // Wait for the instance to actually REGISTER, not merely to hold shards. Leases are
             // taken synchronously by start(); the membership row is written by the first heartbeat.

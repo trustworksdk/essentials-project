@@ -126,7 +126,12 @@ class EngineResourceComparisonIT {
         var summaries = AbRunner.summarize(results);
 
         System.out.println();
-        System.out.println("=== moving " + MESSAGE_COUNT + " messages of " + PAYLOAD_BYTES + " bytes ===");
+        // The banner is five '=' and there is a matching one below, because scripts/perf-host.sh
+        // extracts each suite's table by toggling on /=====/ and copying what lies between. A
+        // three-'=' opener with no closer reads as no table at all, and the run's summary file
+        // comes out empty while the suite itself passes.
+        System.out.println("===== THROUGHPUT, THREADS AND CONNECTIONS, " + MESSAGE_COUNT
+                           + " messages of " + PAYLOAD_BYTES + " bytes =====");
         // The slowest and fastest repetition are printed beside the median on purpose. "IQR 44%" is
         // a statistic a reader can skim past; "3 runs of the same thing produced 2 900 and 5 400" is
         // not, and it is the same fact.
@@ -162,6 +167,7 @@ class EngineResourceComparisonIT {
         System.out.println("  connections, a faster poll costs query rate. The shard-owned engine is woken by");
         System.out.println("  NOTIFY and local hand-off, so it pays neither, and its connection count is");
         System.out.println("  pumpThreads + 1 per PROCESS however much it is asked to do.");
+        System.out.println("==========================================================================");
         System.out.println();
 
         // Correctness of the measurement before any claim about it: every arm must actually have
@@ -241,7 +247,7 @@ class EngineResourceComparisonIT {
                                                .setShardCount(SHARD_COUNT)
                                                .setInstanceId("cmp-shard-owned")
                                                .build()) {
-            queue.consume((key, payload, payloadType) -> handled.incrementAndGet(),
+            queue.consume((messageId, key, payload, payloadType) -> handled.incrementAndGet(),
                           dk.trustworks.essentials.components.queue.shardowned.spi.ConsumerOptions.defaults());
 
             var payload = "x".repeat(PAYLOAD_BYTES).getBytes(StandardCharsets.UTF_8);

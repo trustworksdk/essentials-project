@@ -97,7 +97,7 @@ class ShardOwnedNetworkPartitionIT {
         try (var cutOff = new ShardOwnedQueue(partitionable, QUEUE_ID, SHARD_COUNT, "cut-off", new ShardOwnerMetrics());
              var survivor = new ShardOwnedQueue(direct, QUEUE_ID, SHARD_COUNT, "survivor", new ShardOwnerMetrics())) {
 
-            cutOff.startConsuming((payload, type) -> cutOffReceived.add(new String(payload, StandardCharsets.UTF_8)),
+            cutOff.startConsuming((messageId, payload, type) -> cutOffReceived.add(new String(payload, StandardCharsets.UTF_8)),
                                   shortLease(), SHARD_COUNT);
             Awaitility.await().atMost(Duration.ofSeconds(30))
                       .untilAsserted(() -> assertThat(cutOff.shardsHeld())
@@ -113,7 +113,7 @@ class ShardOwnedNetworkPartitionIT {
             // The partition. No RST, no FIN — its heartbeat simply stops arriving, and it is not told.
             proxy.partition();
 
-            survivor.startConsuming((payload, type) -> survivorReceived.add(new String(payload, StandardCharsets.UTF_8)),
+            survivor.startConsuming((messageId, payload, type) -> survivorReceived.add(new String(payload, StandardCharsets.UTF_8)),
                                     shortLease(), SHARD_COUNT);
 
             // Liveness is the instance row, so the takeover waits out the staleness bound and no

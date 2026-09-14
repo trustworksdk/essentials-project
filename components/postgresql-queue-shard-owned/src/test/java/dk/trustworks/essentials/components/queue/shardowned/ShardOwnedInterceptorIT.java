@@ -91,7 +91,7 @@ class ShardOwnedInterceptorIT {
                     return chain.proceed();
                 }
             });
-            queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
 
             queue.enqueue(List.of(Message.of("one".getBytes(StandardCharsets.UTF_8), 1)));
@@ -136,7 +136,7 @@ class ShardOwnedInterceptorIT {
                     return chain.proceed();
                 }
             });
-            queue.consume((key, payload, payloadType) -> handled.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> handled.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
 
             queue.enqueue(List.of(Message.of("skip-me".getBytes(StandardCharsets.UTF_8), 1),
@@ -171,7 +171,7 @@ class ShardOwnedInterceptorIT {
                 }
             });
             var handled = new CountDownLatch(1);
-            queue.consume((key, payload, payloadType) -> handled.countDown(),
+            queue.consume((messageId, key, payload, payloadType) -> handled.countDown(),
                           new ConsumerOptions(8, Integer.MAX_VALUE, 5, Duration.ofMillis(50), 1.0d, Duration.ofMillis(50)));
 
             queue.enqueue(List.of(Message.of("retried".getBytes(StandardCharsets.UTF_8), 1)));
@@ -191,7 +191,7 @@ class ShardOwnedInterceptorIT {
             // "late" before "early" and the annotation would be decorative.
             queue.addInterceptor(new Late(order));
             queue.addInterceptor(new Early(order));
-            queue.consume((key, payload, payloadType) -> {
+            queue.consume((messageId, key, payload, payloadType) -> {
             }, ConsumerOptions.defaults());
 
             queue.enqueue(List.of(Message.of("ordered".getBytes(StandardCharsets.UTF_8), 1)));
@@ -210,7 +210,7 @@ class ShardOwnedInterceptorIT {
     void nothing_is_intercepted_when_no_interceptor_is_registered() throws Exception {
         var delivered = ConcurrentHashMap.<String>newKeySet();
         try (var queue = queue("icept-6")) {
-            queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                           ConsumerOptions.defaults());
             queue.enqueue(List.of(Message.of("plain".getBytes(StandardCharsets.UTF_8), 1)));
 

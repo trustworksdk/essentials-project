@@ -61,11 +61,11 @@ public final class ShardOwnedNodeMain {
 
         var queue = new ShardOwnedQueue(dataSource, (short) 1, shardCount, instanceId);
         if ("ordered".equals(lane)) {
-            queue.startConsumingOrdered((key, payload, payloadType) -> record(dataSource, instanceId, key,
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> record(dataSource, instanceId, key,
                                                                  ByteBuffer.wrap(payload).getLong()),
                                         settings, maxShards);
         } else {
-            queue.startConsuming((payload, payloadType) -> record(dataSource, instanceId, null,
+            queue.startConsuming((messageId, payload, payloadType) -> record(dataSource, instanceId, null,
                                                    ByteBuffer.wrap(payload).getLong()),
                                  settings, maxShards);
         }

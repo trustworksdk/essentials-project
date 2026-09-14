@@ -109,7 +109,7 @@ class ShardOwnedOrderedWatermarkIT {
         var storage  = new ShardOwnedStorage(dataSource, QUEUE_ID);
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsumingOrdered((k, payload, payloadType) ->
+            queue.startConsumingOrdered((messageId, k, payload, payloadType) ->
                                                 received.add(new String(payload, StandardCharsets.UTF_8)),
                                         HOSTILE,
                                         SHARD_COUNT);
@@ -195,7 +195,7 @@ class ShardOwnedOrderedWatermarkIT {
         var perKey   = 25;
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsumingOrdered((key, payload, payloadType) -> received
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> received
                                                 .computeIfAbsent(key, ignored -> Collections.synchronizedList(new ArrayList<>()))
                                                 .add(Long.parseLong(new String(payload, StandardCharsets.UTF_8))),
                                         ShardOwnerSettings.defaults(),

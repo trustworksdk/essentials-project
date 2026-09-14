@@ -480,7 +480,8 @@ final class ShardOwner implements LeasedOwner {
         var handled = false;
         try {
             try {
-                handler.handle(row.payload(), row.payloadType());
+                handler.handle(new MessageId(MessageId.Lane.UNORDERED, shard, row.seq()),
+                               row.payload(), row.payloadType());
                 // An interrupted handler has NOT necessarily finished its work. A handler that catches
                 // InterruptedException and returns normally — which is what well-behaved code does on
                 // shutdown — would otherwise be indistinguishable from success, and the message would

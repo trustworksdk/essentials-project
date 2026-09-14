@@ -2,7 +2,7 @@
 
 **Module:** `components/postgresql-queue-shard-owned`
 **Package:** `dk.trustworks.essentials.components.queue.shardowned`
-**Status:** Experimental. Builds and tests with the reactor, **not published** (`maven.deploy.skip=true`). 7 unit tests and 69 integration tests, plus 8 in the Spring Boot starter, all green. No production use.
+**Status:** **Published**, across three modules — the engine, `postgresql-queue-shard-owned-adapter` (presents it as a `DurableQueues`), and `spring-boot-starter-postgresql-queue-shard-owned`. The `maven.deploy.skip=true` gate came off when the admin console page closed the last "no admin UI" gap, which also makes `MessageQueue` a frozen contract: additive in a minor, breaking only in a major. 7 unit tests and 69 integration tests, plus 8 in the Spring Boot starter, all green. **Still no production use**, and far newer than `PostgresqlDurableQueues` — see `durable-queue-measurements.md` §4.5 for what that does and does not mean for adoption.
 
 This document describes the engine as it currently stands: its storage, its threading, how a message travels from `enqueue` to a handler, and what it does when something fails. It is a reference for the system as built, not a record of how it came to be built that way.
 
@@ -901,19 +901,23 @@ three are built:
 | Place | Status |
 |---|---|
 | `ShardOwnedQueuesApi` + `DefaultShardOwnedQueuesApi` | in `postgresql-queue-shard-owned` |
-| `ShardOwnedQueuesController` | in `spring-boot-starter-postgresql-queue-shard-owned` |
-| `EssentialsAdminApiSpec` entries | **not done — blocked on publication** |
+| `ShardOwnedQueuesController` | in `spring-boot-starter-admin-api`, with every other admin controller |
+| `EssentialsAdminApiSpec` entries | **done** — nine operations; `AdminApiContractConformanceTest` covers them, its count is 49 |
 
-Both `admin-api-spec` and `spring-boot-starter-admin-api` are published; this engine is not
-(`maven.deploy.skip=true`). A controller in the published starter would give a published artifact a
-dependency on an artifact in no repository, and a spec entry would put a moving surface inside a
-contract that is compatibility-checked at version `1.0.0`. So the controller ships with the engine's
-own starter and borrows the admin API's conventions — base path, principal resolution, exception
-handling — without extending its contract.
+**Publishing the engine is what made the last two possible**, and this section used to record the
+opposite. While the engine carried `maven.deploy.skip=true`, a controller in the published starter
+would have given a published artifact a dependency on an artifact in no repository, and a spec entry
+would have put a moving surface inside a contract compatibility-checked at `1.0.0` — so the controller
+shipped with the engine's own starter instead. That is no longer where it lives, and the move mattered
+beyond tidiness: `AdminApiExceptionHandler` is `@RestControllerAdvice(basePackageClasses = AdminApiPaths.class)`,
+so while the controller sat outside that package **no error mapping reached it** — a 404 arrived as a
+500, and an authorization failure would have been a 500 rather than a 403.
 
-The consequence, stated plainly: **these endpoints do not appear in the generated OpenAPI document,
-nor in the admin API's start-up summary of served contract areas.** Adding the spec entries and moving
-the controller across is one step, and it belongs with publishing the engine.
+The consequence of that older arrangement was that **the endpoints appeared in neither the generated
+OpenAPI document nor the admin API's start-up summary.** Both now list them, and the console has a
+Shard-owned queues page. The controller is registered `@ConditionalOnBean(ShardOwnedQueuesApi.class)` —
+the same shape CDC and the event store use — so an application that does not wire the engine never
+gets it.
 
 The dependency on `spring-boot-starter-admin-api` is `provided` — it brings the event-store starter
 with it, and an application that wants a queue and nothing else must not acquire an event store by
@@ -1031,7 +1035,7 @@ size it generously up front: the correction is cheap, but not free, and it is ea
 |---|---|
 | No semantic type for `instanceId` | Deliberate, and `QueueName` is a local record for the same reason — but only the second half of that reason survives checking. The transposition hazard — a `short`, an `int` and a `String` in a row — is closed by the builders, which name every argument, and that is what the decision rests on. The cost it used to be justified by is **not** what it claimed: `types` declares kotlin-reflect and kotlin-stdlib `<optional>true</optional>`, so neither is transitive (`mvn dependency:tree -pl components/foundation -Dincludes=org.jetbrains.kotlin` returns nothing). Depending on `types` would add one jar, itself depending only on `shared`. What remains is a real but much smaller objection: a module that deliberately holds to `shared` alone would take on a core artifact for one wrapper |
 
-**Not measured** — absence of a result, not a passing one. Partitions between genuinely separate hosts (the alive-but-partitioned *behaviour* is covered by `ShardOwnedNetworkPartitionIT`; what is untested is doing it across machines rather than through a forwarder), soaks longer than the thirty minutes in the measurements' §3.5, or at a rate near either engine's capacity, payload size distributions beyond a uniform 200 bytes, and throughput on hardware that can hold a throughput number still. See [`durable-queue-measurements.md`](./durable-queue-measurements.md) §4 for what this lab can and cannot resolve.
+**Not measured** — absence of a result, not a passing one. Partitions between genuinely separate hosts (the alive-but-partitioned *behaviour* is covered by `ShardOwnedNetworkPartitionIT`; what is untested is doing it across machines rather than through a forwarder), soaks longer than the thirty minutes in the measurements' §3.5, or at a rate near either engine's capacity, payload size distributions beyond a uniform 200 bytes, and throughput at saturation in any environment tried so far. See [`durable-queue-measurements.md`](./durable-queue-measurements.md) §4 for what this lab can and cannot resolve.
 
 ---
 
@@ -1218,7 +1222,7 @@ Absence of a result, not a passing one. Detail and the environment's limits: [`d
 | **Soak beyond thirty minutes, and at a rate near capacity** | Thirty minutes at 300/s found no drift, twice. Vacuum debt and index bloat are effects of *hours*, and 300/s was chosen to keep the latency signal clean — the opposite trade is unmeasured. This is the one to do before production |
 | **Payload *distribution*** | Payload *size* is now swept 200 B → 64 KB across the TOAST threshold (measurements §3.4.3), and it moved the headline: the WAL saving is a fixed ~1 200–1 350 bytes per message, so the percentage falls to −1.6% at 64 KB. What is still untested is a *mixture* of sizes in one queue, where a large message's TOAST chunks and a small one's inline row share pages and vacuum |
 | **Large routing space × many queues** | §3.8 varies each axis alone. Per-unit state — a lease row and an owner object each — is what grows, so the product is where it would show |
-| **Throughput on hardware that can hold a number still** | This lab varies 861% at saturation, so every throughput figure here is comparative only. It is a property of the environment, not of the engine |
+| **Throughput at saturation, anywhere** | Every throughput figure here is comparative only. This used to read "on hardware that can hold a number still", on the assumption that the devcontainer's shared cgroup was the cause; a workstation run on 2026-09-14 reproduced the instability at 76.8% against 78.2%, so that assumption is retired. It is still not a property of the engine — but where it *does* come from is now an open question rather than a settled one, and measurements §3.6 has the next experiment |
 
 ### 18.2 Behaviour not covered by a test
 

@@ -98,7 +98,7 @@ class ShardOwnedOrderedIdleCostIT {
         var received = new CopyOnWriteArrayList<String>();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "idle-1")) {
-            queue.startConsumingOrdered((key, payload, payloadType) ->
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) ->
                                                 received.add(new String(payload, StandardCharsets.UTF_8)),
                                         STEADY_SWEEP,
                                         ShardOwnedSchema.ORDERED_UNITS);

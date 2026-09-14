@@ -95,7 +95,7 @@ class ShardOwnedRoutingSpaceIT {
             for (var index = 0; index < units + 1; index++) {
                 var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "over-" + index);
                 instances.add(queue);
-                queue.startConsumingOrdered((key, payload, payloadType) -> received
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> received
                                                     .computeIfAbsent(key, ignored -> Collections.synchronizedList(new ArrayList<>()))
                                                     .add(Long.parseLong(new String(payload, StandardCharsets.UTF_8))),
                                             fastLease(),
@@ -174,7 +174,7 @@ class ShardOwnedRoutingSpaceIT {
             for (var index = 0; index < units + 1; index++) {
                 var queue = new ShardOwnedQueue(dataSource, registered.queueId(), SHARD_COUNT, "over-" + index);
                 instances.add(queue);
-                queue.startConsumingOrdered((key, payload, payloadType) -> {
+                queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 }, fastLease(), units);
             }
 

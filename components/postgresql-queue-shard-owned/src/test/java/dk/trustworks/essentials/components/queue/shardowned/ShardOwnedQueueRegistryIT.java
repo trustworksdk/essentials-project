@@ -80,7 +80,7 @@ class ShardOwnedQueueRegistryIT {
         var consumer = new ShardOwnedQueue(dataSource, queueId, 4, "believes-four");
         var producer = new ShardOwnedQueue(dataSource, queueId, 8, "believes-eight");
         try {
-            consumer.startConsuming((payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            consumer.startConsuming((messageId, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                                     ShardOwnerSettings.defaults(), 4);
             producer.setLocalHandoffEnabled(false);
             for (var i = 0; i < 80; i++) {
@@ -149,7 +149,7 @@ class ShardOwnedQueueRegistryIT {
             assertThat(consumer.queueId()).isEqualTo(registered.queueId());
             assertThat(consumer.shardCount()).isEqualTo(8);
 
-            consumer.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            consumer.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                              ConsumerOptions.defaults());
             var messages = new ArrayList<Message>();
             for (var i = 0; i < 80; i++) {

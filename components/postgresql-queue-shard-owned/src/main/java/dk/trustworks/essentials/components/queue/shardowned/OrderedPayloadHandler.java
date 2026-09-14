@@ -16,11 +16,13 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
+import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
+
 /**
- * Handles an ordered message: its key, its bytes, and the {@code payloadType} it was enqueued with.
- * See {@link PayloadHandler} for why the type is a parameter.
+ * Handles an ordered message: its identity, its key, its bytes, and the {@code payloadType} it was
+ * enqueued with. See {@link PayloadHandler} for why the type and the id are parameters.
  */
 @FunctionalInterface
 public interface OrderedPayloadHandler {
-    void handle(String key, byte[] payload, int payloadType);
+    void handle(MessageId messageId, String key, byte[] payload, int payloadType);
 }

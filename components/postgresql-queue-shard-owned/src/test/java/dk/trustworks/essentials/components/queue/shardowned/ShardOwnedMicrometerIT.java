@@ -98,7 +98,7 @@ class ShardOwnedMicrometerIT {
             assertThat(counter(MicrometerQueueObserver.DEAD_LETTER_COUNTER, "queue", "orders")).isZero();
             assertThat(counter(MicrometerQueueObserver.RETRIES_COUNTER, "queue", "orders")).isZero();
 
-            var subscription = queue.consume((key, payload, payloadType) -> {
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> {
                 var body = new String(payload, StandardCharsets.UTF_8);
                 if (body.startsWith("poison")) {
                     // Fails every attempt, so it is retried and then dead-lettered.
@@ -314,7 +314,7 @@ class ShardOwnedMicrometerIT {
             assertThat(health.fullyOwned()).isFalse();
             assertThat(health.liveInstances()).isZero();
 
-            queue.consume((key, payload, payloadType) -> {
+            queue.consume((messageId, key, payload, payloadType) -> {
             }, ConsumerOptions.defaults());
 
             Awaitility.await().atMost(Duration.ofSeconds(30))
@@ -339,7 +339,7 @@ class ShardOwnedMicrometerIT {
                     .describedAs("nothing is consuming yet")
                     .isEqualTo(SHARD_COUNT + ShardOwnedSchema.ORDERED_UNITS * 1.0d);
 
-            queue.consume((key, payload, payloadType) -> {
+            queue.consume((messageId, key, payload, payloadType) -> {
             }, ConsumerOptions.defaults());
             Awaitility.await().atMost(Duration.ofSeconds(30))
                       .untilAsserted(() -> assertThat(registry.find(MicrometerQueueObserver.SHARDS_UNOWNED_GAUGE)

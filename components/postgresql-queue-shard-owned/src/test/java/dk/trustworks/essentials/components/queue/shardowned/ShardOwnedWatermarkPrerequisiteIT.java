@@ -104,7 +104,7 @@ class ShardOwnedWatermarkPrerequisiteIT {
                 // start() wraps whatever went wrong, so the actionable text is in the cause chain
                 // rather than the top-level message — which is where a reader of the log will find
                 // it too.
-                assertThatThrownBy(() -> queue.startConsumingOrdered((key, payload, payloadType) -> {
+                assertThatThrownBy(() -> queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 }, ShardOwnerSettings.defaults(), ShardOwnedSchema.ORDERED_UNITS))
                         .as("startConsumingOrdered must fail loudly on such a database")
                         .hasStackTraceContaining("pg_read_all_stats");
@@ -169,7 +169,7 @@ class ShardOwnedWatermarkPrerequisiteIT {
                                               .setInstanceId("halfstart-1")
                                               .build();
 
-            assertThatThrownBy(() -> queue.consume((key, payload, payloadType) -> {
+            assertThatThrownBy(() -> queue.consume((messageId, key, payload, payloadType) -> {
             }, ConsumerOptions.defaults()))
                     .as("the ordered lane's probe must fail the whole subscription")
                     .hasStackTraceContaining("pg_read_all_stats");
@@ -184,7 +184,7 @@ class ShardOwnedWatermarkPrerequisiteIT {
 
             // The retry a caller actually makes. Without the rollback this registered a SECOND
             // instance id, which is what turned a start-up failure into stranded shards.
-            assertThatThrownBy(() -> queue.consume((key, payload, payloadType) -> {
+            assertThatThrownBy(() -> queue.consume((messageId, key, payload, payloadType) -> {
             }, ConsumerOptions.defaults()))
                     .hasStackTraceContaining("pg_read_all_stats");
             assertThat(liveInstances())

@@ -76,7 +76,7 @@ class ShardOwnedLifecycleIT {
         try {
             // Configured at construction time and started later, which is the shape a container needs:
             // it has nowhere to pass a handler at start().
-            queue.configureUnordered((payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.configureUnordered((messageId, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                                      ShardOwnerSettings.defaults(), SHARD_COUNT,
                                      RedeliveryPolicy.fixed(Duration.ofMillis(50), 3));
             assertThat(queue.isStarted()).isFalse();
@@ -114,7 +114,7 @@ class ShardOwnedLifecycleIT {
             assertThat(queue.isStarted()).isFalse();
 
             var subscription = queue.consume(
-                    (key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                    (messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                     ConsumerOptions.defaults());
             assertThat(subscription.isStarted()).isTrue();
             Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> subscription.shardsHeld() > 0);
@@ -159,7 +159,7 @@ class ShardOwnedLifecycleIT {
             // flipped back.
             var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(QUEUE_ID).setShardCount(SHARD_COUNT).setInstanceId("runtime-restart").setRuntime(runtime).build();
             try {
-                queue.startConsuming((payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                queue.startConsuming((messageId, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                                      ShardOwnerSettings.defaults(), SHARD_COUNT);
                 queue.enqueue(List.of("after-restart".getBytes(StandardCharsets.UTF_8)), 1);
                 Awaitility.await().atMost(Duration.ofSeconds(20))

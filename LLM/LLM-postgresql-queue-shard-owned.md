@@ -57,7 +57,7 @@ try (var queue = PostgresqlMessageQueue.builder()
                                        .setInstanceId(instanceId)
                                        .build()) {
     queue.enqueue(List.of(Message.of(payload, payloadType)));
-    var subscription = queue.consume((key, payload, payloadType) -> handle(payload, payloadType),
+    var subscription = queue.consume((messageId, key, payload, payloadType) -> handle(payload, payloadType),
                                      ConsumerOptions.defaults());
 }
 ```
@@ -96,7 +96,7 @@ var queue = ShardOwnedQueue.builder()
                            .setInstanceId(instanceId)
                            .setRuntime(runtime)
                            .build();
-queue.configureUnordered(payload -> handle(payload),    // ... OR configureOrdered, never both
+queue.configureUnordered((messageId, payload, payloadType) -> handle(payload),  // OR configureOrdered, never both
                          ShardOwnerSettings.defaults(),
                          shardCount,
                          RedeliveryPolicy.fixed(Duration.ofMillis(100), 5));
@@ -171,6 +171,28 @@ The unordered lane *chases* each unresolved value with a query, so `holeExpiry` 
 | `parallelConsumers` | 8 | Handlers in flight **for this consumer**. Same meaning as `ConsumeFromQueue.parallelConsumers` |
 | `maxShards` | unbounded | Cap on shards this instance holds |
 | `maxAttempts` / `retryDelay` / `retryMultiplier` / `maxRetryDelay` | 3 / 100 ms / 2.0 / 30 s | Redelivery policy |
+
+### What a handler is given
+
+`handle(messageId, key, payload, payloadType)`. `key` is null on the unordered lane.
+
+`messageId` is `(lane, shard, sequence)`, unique within this queue — not globally, because sequences
+are per `(queue, shard)`, so `u-0-1` exists in every queue. Carry the queue name alongside it anywhere
+it leaves the handler.
+
+**A handler is NOT given the delivery attempt count, the enqueue or next-delivery timestamps, or the
+last delivery error.** They are all on the row in the database; none is in the `SELECT` the delivery
+path issues, and adding one widens a read that runs roughly twice per delivered message for data most
+handlers never look at. The id is the exception because it costs nothing — the owner already knows its
+lane and shard, and `seq` is already read.
+
+If you need one of the others, ask for it by id: `MessageQueue.getMessage(messageId)` reads the full
+row. That is a cost paid per lookup by the handler that wants it, rather than per message by everyone.
+
+Through the `DurableQueues` adapter the same boundary appears as `QueuedMessage.getId()` working while
+`getTotalDeliveryAttempts()` and the timestamp accessors raise `UnsupportedOperationException` — a
+throw rather than a plausible-looking `0`, which would make attempt-keyed retry logic silently never
+fire.
 
 ### `shardCount` — the UNORDERED lane's parallelism, set at registration
 

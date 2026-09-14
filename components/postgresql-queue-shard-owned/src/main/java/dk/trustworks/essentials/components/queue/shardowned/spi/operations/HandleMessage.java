@@ -16,6 +16,8 @@
 
 package dk.trustworks.essentials.components.queue.shardowned.spi.operations;
 
+import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
+
 /**
  * One message about to be handed to a {@code MessageHandler}.
  * <p>
@@ -27,9 +29,10 @@ package dk.trustworks.essentials.components.queue.shardowned.spi.operations;
  * one payload type) and a real footgun, so it is stated rather than left to be discovered: silently
  * dropping a message and reporting success is indistinguishable from having processed it.
  *
+ * @param messageId   which message this is — {@code (lane, shard, sequence)}, unique within the queue
  * @param key         the ordering key for an ordered message, null otherwise
  * @param payload     the bytes as stored
  * @param payloadType the application's discriminator; opaque to the engine
  */
-public record HandleMessage(String key, byte[] payload, int payloadType) {
+public record HandleMessage(MessageId messageId, String key, byte[] payload, int payloadType) {
 }

@@ -94,7 +94,7 @@ class ShardOwnedRetryRaceIT {
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "retry-race")) {
             // Local hand-off bypasses the cursor and the sweep, which is the path this is not about.
             queue.setLocalHandoffEnabled(false);
-            queue.startConsuming((payload, payloadType) -> {
+            queue.startConsuming((messageId, payload, payloadType) -> {
                 var body = new String(payload, StandardCharsets.UTF_8);
                 if (body.startsWith("flaky") && failedOnce.putIfAbsent(body, Boolean.TRUE) == null) {
                     throw new IllegalStateException("first attempt fails");

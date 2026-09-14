@@ -71,7 +71,7 @@ class ShardOwnedSpiFairShareIT {
     void a_single_process_still_owns_every_shard_after_the_first_rebalance() throws Exception {
         var delivered = ConcurrentHashMap.<String>newKeySet();
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "spi-fair-1")) {
-            var subscription = queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                                              ConsumerOptions.defaults());
 
             // The default lease TTL is holeExpiry x 3 = 30s and the heartbeat runs at a third of it,

@@ -167,10 +167,10 @@ class ShardOwnedMultiQueueCostIT {
         try {
             for (var queueId = 1; queueId <= QUEUES; queueId++) {
                 var unordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId((short) queueId).setShardCount(SHARD_COUNT).setInstanceId("cost-u-" + queueId).setRuntime(runtime).build();
-                unordered.startConsuming((payload, payloadType) -> {
+                unordered.startConsuming((messageId, payload, payloadType) -> {
                 }, settings(), SHARD_COUNT);
                 var ordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId((short) queueId).setShardCount(SHARD_COUNT).setInstanceId("cost-o-" + queueId).setRuntime(runtime).build();
-                ordered.startConsumingOrdered((key, payload, payloadType) -> {
+                ordered.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 }, settings(), SHARD_COUNT);
                 queues.add(unordered);
                 queues.add(ordered);
@@ -291,7 +291,7 @@ class ShardOwnedMultiQueueCostIT {
                 // this test asks is never asked. The first version of this test measured zero holes
                 // for exactly that reason.
                 queue.setLocalHandoffEnabled(false);
-                queue.startConsuming((payload, payloadType) -> delivered.get(id).add(new String(payload, StandardCharsets.UTF_8)),
+                queue.startConsuming((messageId, payload, payloadType) -> delivered.get(id).add(new String(payload, StandardCharsets.UTF_8)),
                                      settings(), SHARD_COUNT);
                 queues.add(queue);
             }

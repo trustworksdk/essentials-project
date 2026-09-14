@@ -43,10 +43,10 @@ class LaneExclusivityTest {
     @Test
     void an_ordered_queue_refuses_to_be_reconfigured_as_unordered() {
         var queue = queue();
-        queue.configureOrdered((key, payload, type) -> {
+        queue.configureOrdered((messageId, key, payload, type) -> {
         }, ShardOwnerSettings.defaults(), 8, RedeliveryPolicy.fixed(Duration.ofMillis(10), 3));
 
-        assertThatThrownBy(() -> queue.configureUnordered((payload, type) -> {
+        assertThatThrownBy(() -> queue.configureUnordered((messageId, payload, type) -> {
         }, ShardOwnerSettings.defaults(), 8, RedeliveryPolicy.fixed(Duration.ofMillis(10), 3)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("already configured for the ordered lane")
@@ -56,10 +56,10 @@ class LaneExclusivityTest {
     @Test
     void an_unordered_queue_refuses_to_be_reconfigured_as_ordered() {
         var queue = queue();
-        queue.configureUnordered((payload, type) -> {
+        queue.configureUnordered((messageId, payload, type) -> {
         }, ShardOwnerSettings.defaults(), 8, RedeliveryPolicy.fixed(Duration.ofMillis(10), 3));
 
-        assertThatThrownBy(() -> queue.configureOrdered((key, payload, type) -> {
+        assertThatThrownBy(() -> queue.configureOrdered((messageId, key, payload, type) -> {
         }, ShardOwnerSettings.defaults(), 8, RedeliveryPolicy.fixed(Duration.ofMillis(10), 3)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("already configured for the unordered lane");
@@ -69,10 +69,10 @@ class LaneExclusivityTest {
     @Test
     void reconfiguring_the_same_lane_is_allowed() {
         var queue = queue();
-        queue.configureUnordered((payload, type) -> {
+        queue.configureUnordered((messageId, payload, type) -> {
         }, ShardOwnerSettings.defaults(), 8, RedeliveryPolicy.fixed(Duration.ofMillis(10), 3));
 
-        assertThatCode(() -> queue.configureUnordered((payload, type) -> {
+        assertThatCode(() -> queue.configureUnordered((messageId, payload, type) -> {
         }, ShardOwnerSettings.defaults(), 4, RedeliveryPolicy.fixed(Duration.ofMillis(10), 3)))
                 .doesNotThrowAnyException();
     }

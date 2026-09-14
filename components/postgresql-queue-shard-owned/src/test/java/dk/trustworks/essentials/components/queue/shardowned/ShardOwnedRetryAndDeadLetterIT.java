@@ -76,7 +76,7 @@ class ShardOwnedRetryAndDeadLetterIT {
         var succeeded = new CopyOnWriteArrayList<String>();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> {
+            queue.startConsuming((messageId, payload, payloadType) -> {
                 var body = new String(payload, StandardCharsets.UTF_8);
                 var attempt = attemptsSeen.computeIfAbsent(body, ignored -> new AtomicInteger()).incrementAndGet();
                 if (attempt == 1) {
@@ -111,7 +111,7 @@ class ShardOwnedRetryAndDeadLetterIT {
         var deliveries = new AtomicInteger();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsuming((payload, payloadType) -> {
+            queue.startConsuming((messageId, payload, payloadType) -> {
                 deliveries.incrementAndGet();
                 throw new IllegalStateException("always fails");
             }, ShardOwnerSettings.defaults(), SHARD_COUNT, RedeliveryPolicy.fixed(Duration.ofMillis(10), 3));
@@ -154,7 +154,7 @@ class ShardOwnedRetryAndDeadLetterIT {
         var firstAttempt = new AtomicBoolean(true);
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1")) {
-            queue.startConsumingOrdered((key, payload, payloadType) -> {
+            queue.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 var order = Long.parseLong(new String(payload, StandardCharsets.UTF_8));
                 // key_order 0 fails on its first attempt only. If ordering is broken, 1..5 arrive
                 // while 0 is waiting out its backoff.

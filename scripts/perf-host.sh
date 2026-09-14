@@ -31,7 +31,7 @@
 # Usage:
 #   scripts/perf-host.sh                 # the default ~60 minute run
 #   scripts/perf-host.sh --soak 20       # longer soak (wall clock is roughly 2x this)
-#   scripts/perf-host.sh --no-soak       # cost, latency and concurrency only, ~25 minutes
+#   scripts/perf-host.sh --no-soak       # cost, latency, concurrency and resources only, ~25 minutes
 #   scripts/perf-host.sh --rate 1000     # soak enqueue rate per second
 #   scripts/perf-host.sh --dry-run       # print the plan and the environment, run nothing
 #
@@ -166,7 +166,8 @@ cat <<PLAN
   2. cost             ShardOwnedVsBaselineCostIT      ~12 min   WAL and tuples per message
   3. latency          ShardOwnedLatencyIT             ~5 min    enqueue-to-handler
   4. concurrency      ShardOwnedConcurrencySweepIT    ~8 min    where parallelism stops paying
-$( ((RUN_SOAK)) && echo "  5. soak             ShardOwnedSoakIT                ~$(( SOAK_MINUTES * 2 + 2 )) min   drift at ${SOAK_RATE}/s, both engines" )
+  5. resources        EngineResourceComparisonIT      ~5 min    throughput, threads and connections
+$( ((RUN_SOAK)) && echo "  6. soak             ShardOwnedSoakIT                ~$(( SOAK_MINUTES * 2 + 2 )) min   drift at ${SOAK_RATE}/s, both engines" )
   cpu partitioning    $PARTITIONED
 PLAN
 
@@ -230,6 +231,11 @@ FAILED=0
 run_suite cost        -Dit.test='ShardOwnedVsBaselineCostIT' -DfailIfNoSpecifiedTests=false || FAILED=1
 run_suite latency     -Dit.test='ShardOwnedLatencyIT'        -DfailIfNoSpecifiedTests=false || FAILED=1
 run_suite concurrency -Dit.test='ShardOwnedConcurrencySweepIT' -DfailIfNoSpecifiedTests=false || FAILED=1
+# The suite this script exists for. Its throughput column is the one docs/durable-queue-measurements.md
+# §3.6 marks unquotable — three identical repetitions produced 3 745 and 9 634 msg/s in the devcontainer,
+# a 78% interquartile range. It is the arm that decides whether §4's "not reliable: throughput at
+# saturation" still stands, so a host run that omits it leaves the gap open.
+run_suite resources   -Dit.test='EngineResourceComparisonIT' -DfailIfNoSpecifiedTests=false || FAILED=1
 if (( RUN_SOAK )); then
   run_suite soak -Dit.test='ShardOwnedSoakIT' -DfailIfNoSpecifiedTests=false \
                  "-Dsoak.minutes=$SOAK_MINUTES" "-Dsoak.rate=$SOAK_RATE" || FAILED=1

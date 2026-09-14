@@ -491,7 +491,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                .setMetrics(engineMetrics)
                                                .setParallelConsumers(options.parallelConsumers())
                                                .build();
-        unorderedConsumer.configureUnordered((payload, payloadType) -> invoke(handler, null, payload, payloadType),
+        unorderedConsumer.configureUnordered((messageId, payload, payloadType) -> invoke(handler, messageId, null, payload, payloadType),
                                              settings, options.maxShards(), policy);
         // setShardCount is INERT on this consumer and is passed only because the builder requires a
         // positive value — it cannot know the lane, since configureOrdered comes after build(). Every
@@ -509,7 +509,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                              .setMetrics(engineMetrics)
                                              .setParallelConsumers(options.parallelConsumers())
                                              .build();
-        orderedConsumer.configureOrdered((key, payload, payloadType) -> invoke(handler, key, payload, payloadType),
+        orderedConsumer.configureOrdered((messageId, key, payload, payloadType) -> invoke(handler, messageId, key, payload, payloadType),
                                          settings, options.maxShards(), policy);
         // Registration, the started flag and the two start() calls are ONE critical section, and the
         // same lock start() and stop() take. Guarding only the list left two holes.
@@ -591,30 +591,30 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * checked exception means the same thing as one that throws unchecked — the message failed — and
      * the redelivery policy should not care which.
      */
-    private void invoke(MessageHandler handler, String key, byte[] payload, int payloadType) {
+    private void invoke(MessageHandler handler, MessageId messageId, String key, byte[] payload, int payloadType) {
         if (interceptors.isEmpty()) {
             // The hot path, once per delivered message. No operation object, no chain, no lambda.
-            deliver(handler, key, payload, payloadType);
+            deliver(handler, messageId, key, payload, payloadType);
             return;
         }
-        var operation = new HandleMessage(key, payload, payloadType);
+        var operation = new HandleMessage(messageId, key, payload, payloadType);
         InterceptorChain.<HandleMessage, Void, MessageQueueInterceptor>newInterceptorChainForOperation(
                 operation,
                 interceptors,
                 (interceptor, chain) -> interceptor.intercept(operation, chain),
                 () -> {
-                    deliver(handler, key, payload, payloadType);
+                    deliver(handler, messageId, key, payload, payloadType);
                     return null;
                 }).proceed();
     }
 
-    private void deliver(MessageHandler handler, String key, byte[] payload, int payloadType) {
+    private void deliver(MessageHandler handler, MessageId messageId, String key, byte[] payload, int payloadType) {
         var startNanos = System.nanoTime();
         var handlerFailure = new Throwable[1];
         var handlerSucceeded = new boolean[1];
         Runnable delivery = () -> {
             try {
-                handler.handle(key, payload, payloadType);
+                handler.handle(messageId, key, payload, payloadType);
                 handlerSucceeded[0] = true;
             } catch (RuntimeException e) {
                 handlerFailure[0] = e;

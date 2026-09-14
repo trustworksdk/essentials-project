@@ -328,7 +328,7 @@ class ShardOwnedVsBaselineCostIT {
         var handled = new AtomicInteger();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "bench")) {
-            queue.startConsuming((ignored, payloadType) -> handled.incrementAndGet(), ShardOwnerSettings.defaults(), SHARD_COUNT);
+            queue.startConsuming((messageId, ignored, payloadType) -> handled.incrementAndGet(), ShardOwnerSettings.defaults(), SHARD_COUNT);
 
             var before = PgSnapshot.capture(dataSource, List.of(ShardOwnedSchema.UNORDERED_TABLE));
             var startNanos = System.nanoTime();

@@ -124,7 +124,7 @@ class ShardOwnedQueueAutoConfigurationIT {
                 .run(context -> {
                     var queue = context.getBean(ShardOwnedQueueFactory.class).queue("orders");
                     var delivered = ConcurrentHashMap.<String>newKeySet();
-                    queue.consume((key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+                    queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
                                   ConsumerOptions.defaults());
                     queue.enqueue(List.of(Message.of("hello".getBytes(StandardCharsets.UTF_8), 1)));
 

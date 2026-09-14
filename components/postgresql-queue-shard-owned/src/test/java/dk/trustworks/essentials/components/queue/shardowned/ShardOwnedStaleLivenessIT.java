@@ -95,7 +95,7 @@ class ShardOwnedStaleLivenessIT {
         var metrics  = new ShardOwnerMetrics();
 
         try (var queue = new ShardOwnedQueue(partitionable, QUEUE_ID, SHARD_COUNT, "instance-1", metrics)) {
-            queue.startConsuming((payload, type) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, type) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  shortLease(), SHARD_COUNT);
 
             enqueue(direct, "before");

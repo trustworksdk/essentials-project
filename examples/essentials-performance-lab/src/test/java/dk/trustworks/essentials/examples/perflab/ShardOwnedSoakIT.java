@@ -213,7 +213,7 @@ class ShardOwnedSoakIT {
         var recorder = new LatencyRecorder[]{new LatencyRecorder("soak")};
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "soak")) {
-            queue.startConsuming((payload, payloadType) -> {
+            queue.startConsuming((messageId, payload, payloadType) -> {
                 recorder[0].record(ByteBuffer.wrap(payload).getLong(), ByteBuffer.wrap(payload).getLong(), System.nanoTime());
                 handled.incrementAndGet();
             }, ShardOwnerSettings.defaults(), SHARD_COUNT);

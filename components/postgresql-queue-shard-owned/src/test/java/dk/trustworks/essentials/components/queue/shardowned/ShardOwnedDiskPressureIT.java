@@ -116,7 +116,7 @@ class ShardOwnedDiskPressureIT {
         var received = new CopyOnWriteArrayList<String>();
 
         try (var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, SHARD_COUNT, "instance-1", new ShardOwnerMetrics())) {
-            queue.startConsuming((payload, type) -> received.add(new String(payload, StandardCharsets.UTF_8)),
+            queue.startConsuming((messageId, payload, type) -> received.add(new String(payload, StandardCharsets.UTF_8)),
                                  ShardOwnerSettings.defaults(), SHARD_COUNT);
 
             for (var index = 0; index < 20; index++) {

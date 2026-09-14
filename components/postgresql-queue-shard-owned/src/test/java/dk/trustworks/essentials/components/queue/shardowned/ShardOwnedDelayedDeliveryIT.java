@@ -75,7 +75,7 @@ class ShardOwnedDelayedDeliveryIT {
     void a_delayed_message_is_not_delivered_before_its_delay_and_not_long_after() throws Exception {
         var arrivals = new ConcurrentHashMap<String, Long>();
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "delay-1")) {
-            queue.consume((key, payload, payloadType) -> arrivals.putIfAbsent(new String(payload, StandardCharsets.UTF_8),
+            queue.consume((messageId, key, payload, payloadType) -> arrivals.putIfAbsent(new String(payload, StandardCharsets.UTF_8),
                                                                  System.currentTimeMillis()),
                           ConsumerOptions.defaults());
             Awaitility.await().atMost(Duration.ofSeconds(20)).until(() -> queue.isStarted());
