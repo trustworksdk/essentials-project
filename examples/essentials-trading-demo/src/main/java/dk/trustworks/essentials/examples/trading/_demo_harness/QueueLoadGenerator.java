@@ -82,6 +82,27 @@ public class QueueLoadGenerator {
     private final ConcurrentMap<String, AtomicLong> nextOrderPerKey = new ConcurrentHashMap<>();
 
     /**
+     * Every key this instance produces starts with this, and that is what makes the generator safe to
+     * run on more than one instance at a time.
+     * <p>
+     * {@code nextOrderPerKey} is in-memory and starts at zero in every JVM, so two instances
+     * generating into the same key space both number {@code ACC-77} 0, 1, 2 … — which is not a near
+     * miss, it is two producers each claiming to be the authority on what order that key's messages
+     * are in. The ordered lane's primary key is {@code (queue_id, shard, msg_key, key_order)}, so the
+     * second one to arrive at a given position is rejected outright:
+     * {@code duplicate key value violates unique constraint "shard_queue_ordered_pkey"}, once per
+     * sustained tick, plus an ordering violation for every pair that did get through interleaved.
+     * <p>
+     * That constraint is the engine being right. {@code key_order} is the PRODUCER's statement of
+     * what order means, and a statement needs one author: a real producer gets this for free because
+     * a key is an aggregate and an aggregate has one writer at a time. A load generator running in
+     * n processes has to arrange it, and the cheapest honest arrangement is to give each process a
+     * key space of its own rather than to elect one producer — every instance then exercises both
+     * the producing and the consuming side, which is the point of running two.
+     */
+    private final String keyPrefix;
+
+    /**
      * Its own scheduler, like {@code TradingLoadGeneratorManager}, rather than {@code @Scheduled}.
      * The demo has no {@code @EnableScheduling}, so the annotation is inert here — it binds, it
      * validates, and it never fires, which is the quietest way for a load generator to generate no
@@ -94,6 +115,7 @@ public class QueueLoadGenerator {
     public QueueLoadGenerator(QueueLoadGeneratorProperties properties, ShardOwnedQueueFactory queues) {
         this.properties = properties;
         this.queues = queues;
+        this.keyPrefix = "ACC-" + queues.instanceId() + "-";
         if (properties.isEnabled()) {
             start();
         }
@@ -121,7 +143,7 @@ public class QueueLoadGenerator {
             //
             // Which lane a message came from is answered by payloadType, which is what it is for.
             subscription = queue.consume(
-                    (key, payload, payloadType) -> {
+                    (messageId, key, payload, payloadType) -> {
                         simulateWork();
                         if (payloadType == ACCOUNT_ACTIVITY) {
                             recordOrdering(key, payload);
@@ -143,10 +165,10 @@ public class QueueLoadGenerator {
 
             running.set(true);
             log.info("Queue load generator started against queue '{}' — sustained {} msg per lane every {}, "
-                     + "spike {} per lane, {} keys",
+                     + "spike {} per lane, {} keys under '{}'",
                      properties.getQueueName(), properties.getSustainedBatch(),
                      properties.getSustainedInterval(), properties.getSpikeSize(),
-                     properties.getKeyCount());
+                     properties.getKeyCount(), keyPrefix);
         } catch (Exception e) {
             log.error("Could not start the queue load generator", e);
             throw new IllegalStateException("Could not start the queue load generator", e);
@@ -251,7 +273,7 @@ public class QueueLoadGenerator {
             // Ordered: activity on one account, with a key_order that only ever increases for that
             // key. The engine enforces one-at-a-time per key; the producer still has to number them,
             // because key_order is the producer's statement of what order means.
-            var key   = "ACC-" + ThreadLocalRandom.current().nextInt(properties.getKeyCount());
+            var key   = keyPrefix + ThreadLocalRandom.current().nextInt(properties.getKeyCount());
             var order = nextOrderPerKey.computeIfAbsent(key, ignored -> new AtomicLong())
                                        .getAndIncrement();
             messages.add(Message.ordered(payload(Long.toString(order)), ACCOUNT_ACTIVITY, key, order));

@@ -3,6 +3,16 @@ spring:
     compose:
       enabled: true
       file: classpath:compose.yml
+      # start-only, not the default start-and-stop, because more than one instance shares this
+      # database. Under the default, whichever instance started PostgreSQL takes it down with it on
+      # shutdown, and every surviving instance then logs connection refusals forever — the engine
+      # reconnects rather than dying (an owner that dies holds its leases), Hikari waits out its 30s
+      # connectionTimeout, and the CDC tailer backs off and retries. All correct behaviour for a
+      # transient outage, and unbounded noise for one that is permanent.
+      #
+      # The database therefore outlives the demo. Stop it with `docker compose down` (add `-v` to
+      # discard the event store) when finished.
+      lifecycle-management: start-only
   datasource:
     url: jdbc:postgresql://localhost:5432/essentials-trading-demo
     username: essentials

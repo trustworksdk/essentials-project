@@ -80,7 +80,7 @@ instead.
 
 `QueueLoadGenerator` exists because the queue engine is unpublished and experimental: this app is
 where it meets a real Spring application, a shared connection pool and a database that is also
-serving an event store. Three things it caught that the engine's own tests could not, all of them
+serving an event store. Four things it caught that the engine's own tests could not, all of them
 misuse rather than engine defects — which is the point of an integration demo.
 
 - **`@Scheduled` is inert here.** The demo has no `@EnableScheduling`, so the annotation binds,
@@ -99,6 +99,15 @@ misuse rather than engine defects — which is the point of an integration demo.
   commits it *first* — 7 390 ordering violations in one spike, the engine faithfully reporting a
   defect in the code feeding it. A real producer gets this free from one aggregate under one unit of
   work; a two-armed generator has to arrange it.
+- **A key belongs to ONE producer, and the same is true across processes.** `nextOrderPerKey` is
+  in-memory and starts at zero in every JVM, so two instances generating into one key space both
+  number `ACC-77` 0, 1, 2 …. The ordered lane's primary key is `(queue_id, shard, msg_key, key_order)`,
+  so the second arrival at a position is refused — `duplicate key value violates unique constraint
+  "shard_queue_ordered_pkey"` once per sustained tick, plus an ordering violation for every pair that
+  interleaved. That reads as broken ordered delivery and is the constraint working. Each instance now
+  produces under its own `ACC-<instanceId>-` prefix (`keyPrefix`, from
+  `ShardOwnedQueueFactory.instanceId()`), chosen over electing a single producer so both instances
+  still exercise the producing side as well as the consuming one.
 
 Measured after those three were fixed, one instance, 4 unordered shards and 64 ordered units:
 

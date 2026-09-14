@@ -72,8 +72,14 @@ lane. Do **not** convert to `Decider`s.
 ## Running more than one instance
 
 `./run-instance.sh 1` and `./run-instance.sh 2` — ports 8080/8081, instance ids `demo-1`/`demo-2`,
-load generator on the first only. This is the configuration the shard-owned engine exists for;
-one instance exercises none of its ownership, rebalancing or fencing.
+trading load generator on the first only. This is the configuration the shard-owned engine exists
+for; one instance exercises none of its ownership, rebalancing or fencing.
+
+- **Two generators, two prefixes, and the script gates only one.** `--trading-demo.load.enabled`
+  is `TradingLoadGeneratorManager`; the queue load generator is `trading-demo.queue-load.enabled`
+  and runs on **every** instance by design — it is also the queue's consumer, so disabling it on
+  instance 2 would take that instance out of the exercise entirely. It is safe to run everywhere
+  because each instance produces under its own ordered key prefix; see `_demo_harness/CLAUDE.md`.
 
 - **A distinct `instance-id` is not optional, and getting it wrong is silent.** The engine defaults
   it to the hostname — right on a container platform, wrong for two processes on one machine. They
@@ -92,8 +98,12 @@ one instance exercises none of its ownership, rebalancing or fencing.
   released and the instance deregistered. Measured — 408 units held, 0 owned and no membership rows
   seconds later. Maven then prints `Failed to execute goal ... Process terminated`, which is the
   plugin reporting a child killed by a signal, not the application failing.
-- **Stop instance 1 last.** Spring Boot's Docker Compose support started PostgreSQL for it, and
-  stopping it takes the database away from the others.
+- **Instances may be stopped in any order, and that took a setting.** Spring Boot's Docker Compose
+  support defaults to `start-and-stop`, so whichever instance started PostgreSQL took it down with
+  it — every survivor then logged connection refusals forever, because each layer is built to ride
+  out a transient outage and none can tell this one is permanent. `application-compose.yml` sets
+  `spring.docker.compose.lifecycle-management: start-only`; the database outlives the demo and
+  `docker compose down` stops it.
 
 ## Admin UI
 
