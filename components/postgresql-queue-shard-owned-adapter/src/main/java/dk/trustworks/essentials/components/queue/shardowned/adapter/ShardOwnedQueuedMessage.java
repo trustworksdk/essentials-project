@@ -226,10 +226,21 @@ public final class ShardOwnedQueuedMessage implements QueuedMessage {
         return manualRedeliveryDelay;
     }
 
+    /**
+     * The id is printed on both shapes, because it is answered on both. This used to render
+     * {@code <not available during push delivery>} when partial — true when everything on the push
+     * path threw, and left behind when {@link #getId()} started being supplied. A toString that
+     * disclaims the one field a reader is most likely to be looking for makes a partial message look
+     * more partial than it is, in exactly the logs someone reads while diagnosing one.
+     * <p>
+     * {@code partial} is reported as its own field instead, since what is missing is the attempt
+     * counts and the timestamps — and those are named by the exception each of them throws.
+     */
     @Override
     public String toString() {
         return "ShardOwnedQueuedMessage{queueName=" + queueName
-               + ", id=" + (partial ? "<not available during push delivery>" : id)
+               + ", id=" + id
+               + ", partial=" + partial
                + ", deliveryMode=" + getDeliveryMode() + "}";
     }
 }

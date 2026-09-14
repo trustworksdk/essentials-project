@@ -397,8 +397,11 @@ for that lane** — `shardCount` for unordered, 64 for ordered:
 | 16 | 12 | 12 | 0 |
 
 So the rule is **`shardCount` ≥ the most instances you will ever run** — for an autoscaled deployment,
-its *maximum* replica count, not its current one. The ordered lane needs no such rule —
-`QueueHealth` reports both ceilings, `shardCount()` and `orderedUnits()`.
+its *maximum* replica count, not its current one. The ordered lane needs no such rule.
+
+`QueueHealth` reports the two ceilings separately, as `shardCount()` and `orderedUnits()`. The admin
+API's queue status combines them into `maxInstances` — `max(shardCount, orderedUnits)` — which is the
+number to compare a replica count against.
 
 ### When does any of this affect me?
 

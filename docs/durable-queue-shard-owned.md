@@ -35,7 +35,9 @@ The cost of these properties is paid in three places, all of which the rest of t
 
 ## 2. Storage
 
-Six tables and three families of sequence. `ShardOwnedSchema.create(dataSource, shardCount)` builds them once per database; `ShardOwnedSchema.registerQueue(dataSource, queueId, shardCount)` makes one queue usable.
+Six tables and three families of sequence. `ShardOwnedSchema.initialize(dataSource)` builds them once per database — non-destructive and idempotent, so every instance may call it at start-up; `ShardOwnedSchema.recreate(dataSource)` is the destructive counterpart and is for tests. `ShardOwnedSchema.registerQueue(dataSource, QueueName.of("orders"), shardCount)` then makes one queue usable.
+
+> Use the **name**-based `registerQueue`. The `(dataSource, short queueId, shardCount)` overload writes no registry row — it creates the sequences and seeds the lease rows and stops there, so routing later falls back to the default ordered unit space and nothing rebalances.
 
 ### 2.1 The two live lanes
 

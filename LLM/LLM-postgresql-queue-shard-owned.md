@@ -37,23 +37,22 @@ Consequences, all measured:
 ## Getting started
 
 ```java
-// 1. Schema, once per database
-ShardOwnedSchema.create(dataSource, shardCount);
+// 1. Schema, once per database. Non-destructive and idempotent, so it is safe on every boot.
+//    (ShardOwnedSchema.recreate(dataSource) DROPS everything and is for tests.)
+ShardOwnedSchema.initialize(dataSource);
 
 // 2. Once per queue, by NAME, IN CODE — next to the component that owns the queue, not in a
 //    config file. Idempotent, so every instance may call it at start-up; the shard count is
 //    recorded with the name and refused if it ever disagrees.
 //    In Spring: queues.register(QueueName.of("orders"), 8) on the ShardOwnedQueueFactory.
-var orders = ShardOwnedSchema.registerQueue(dataSource, QueueName.of("orders"), 8);
+ShardOwnedSchema.registerQueue(dataSource, QueueName.of("orders"), 8);
 
-// 3. ONE runtime for the whole process, shared by every queue
-var runtime = new ShardRuntime(dataSource, ShardOwnerSettings.defaults());
-
-// 4. A queue. PostgresqlMessageQueue is the entry point: one consume() covers BOTH lanes.
+// 3. A queue. PostgresqlMessageQueue is the entry point: one consume() covers BOTH lanes.
+//    setQueueName takes the id and the shard count from the registry, so there is nowhere to
+//    supply a count that disagrees with the one the queue was created with.
 try (var queue = PostgresqlMessageQueue.builder()
                                        .setDataSource(dataSource)
-                                       .setQueueId(queueId)
-                                       .setShardCount(shardCount)
+                                       .setQueueName(QueueName.of("orders"))
                                        .setInstanceId(instanceId)
                                        .build()) {
     queue.enqueue(List.of(Message.of(payload, payloadType)));
@@ -61,6 +60,11 @@ try (var queue = PostgresqlMessageQueue.builder()
                                      ConsumerOptions.defaults());
 }
 ```
+
+**There is no runtime to construct here.** A `PostgresqlMessageQueue` borrows the `ShardRuntime`
+shared per `DataSource` — reference counted, closed by its last user — which is what keeps held
+connections at `pumpThreads + 1` for the whole process rather than per queue. Constructing one
+explicitly is only for the low-level path below, and it is the only way to get that sharing wrong.
 
 **Queue names live in code, as everywhere else in Essentials.** There is a
 `essentials.shard-owned-queue.queues` map, and it is not the normal way to declare a queue — it puts
@@ -267,7 +271,10 @@ means four pods consume nothing from that lane:
 
 So the rule is **`shardCount` >= the most instances you will ever run**, which for an autoscaled
 deployment means its maximum replica count — not its current one. The ordered lane needs no such rule.
-`QueueHealth.maxInstances` reports the larger of the two ceilings.
+The ceiling is reported as `maxInstances` on the **admin API's** queue status
+(`ApiShardOwnedQueueStatus`), which derives it as `max(shardCount, orderedUnits)`. `QueueHealth`
+itself carries the two ceilings separately — `shardCount()` and `orderedUnits()` — and no combined
+accessor.
 
 **Instance identity is the hostname** by default (`Network.hostName()`, as the fenced lock manager and scheduler use), overridable with `essentials.shard-owned-queue.instance-id`. Set it where one host runs several instances: two processes sharing an id look like one instance, so each is allowed only half the shards.
 
