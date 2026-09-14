@@ -905,19 +905,63 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // other queues; one this queue created is closed with it — and closing it is what flushes
         // the pumps' outstanding acknowledgements, so it has to happen before the leases go.
         releaseRuntime();
-        releaseHeldLeases(held);
-        // Stop counting towards everyone else's fair share. Releasing the leases without this frees
-        // the shards and simultaneously forbids any survivor from taking them, for the whole
-        // staleness window — which makes a graceful scale-in worse for the cluster than a crash.
-        try {
-            storage.deregisterInstance(instanceId);
-        } catch (SQLException e) {
-            log.warn("Instance {} could not deregister on stop; it will age out of the membership "
-                     + "table instead, and survivors will be held at a stale fair share until it does",
-                     instanceId, e);
-        }
+        withinShutdownBudget(() -> {
+            releaseHeldLeases(held);
+            // Stop counting towards everyone else's fair share. Releasing the leases without this
+            // frees the shards and simultaneously forbids any survivor from taking them, for the
+            // whole staleness window — which makes a graceful scale-in worse for the cluster than a
+            // crash.
+            try {
+                storage.deregisterInstance(instanceId);
+            } catch (SQLException e) {
+                log.warn("Instance {} could not deregister on stop; it will age out of the membership "
+                         + "table instead, and survivors will be held at a stale fair share until it does",
+                         instanceId, e);
+            }
+        });
         owners.clear();
         ownedShards.clear();
+    }
+
+    /**
+     * How long the courtesies at the end of {@link #stop()} may take before they are abandoned.
+     * <p>
+     * Everything inside the budget is best-effort by design — an unreleased lease expires and an
+     * undeleted membership row ages out, so the cluster heals either way and the only cost of giving
+     * up is the successor's TTL. What is NOT acceptable is waiting indefinitely to find that out,
+     * and that is what an unreachable database produces: the work is one or two statements, but a
+     * connection pool with nothing to connect to answers each request only when its
+     * {@code connectionTimeout} expires — 30s at Hikari's default, per queue, per lane, and an
+     * application consuming several queues therefore looked like it had hung on Ctrl-C.
+     * <p>
+     * A constant rather than a setting: it is not a tuning knob but the answer to "how long is a
+     * graceful shutdown allowed to spend on things that do not have to happen", and exposing it
+     * would widen a published contract for a number nobody should need to choose.
+     */
+    private static final Duration SHUTDOWN_BUDGET = Duration.ofSeconds(2);
+
+    /**
+     * Run the stop path's database work with a deadline, on a thread that can be abandoned.
+     * <p>
+     * Abandoning is safe precisely because the work is best-effort: whatever it had not done when the
+     * budget ran out is something the cluster already recovers from on its own. The thread is a
+     * daemon, so an attempt still blocked inside the pool cannot hold the JVM up either.
+     */
+    private void withinShutdownBudget(Runnable work) {
+        var thread = new Thread(work, "shard-queue-stop-" + queueId);
+        thread.setDaemon(true);
+        thread.start();
+        try {
+            thread.join(SHUTDOWN_BUDGET.toMillis());
+            if (thread.isAlive()) {
+                log.warn("Instance {} gave up handing back queue {} after {} — the database did not "
+                         + "answer. Leases expire and the membership row ages out on their own; the "
+                         + "successor pays its lease TTL rather than taking over at once",
+                         instanceId, queueId, SHUTDOWN_BUDGET);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -932,21 +976,28 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * release is safe to do after the pumps have flushed rather than before.
      */
     private void releaseHeldLeases(List<LeasedOwner> held) {
-        for (var owner : held) {
-            if (!owner.leaseHeld()) {
-                continue;
-            }
-            try {
-                storage.releaseLease(owner.lane(), owner.shard(), instanceId);
+        var stillHeld = held.stream().filter(LeasedOwner::leaseHeld).toList();
+        if (stillHeld.isEmpty()) {
+            return;
+        }
+        // One statement over one connection for the whole lane. Per-shard releases asked the pool for
+        // a connection 68 times to perform one logical operation, which is how a stop against an
+        // absent database turned into 68 consecutive connectionTimeouts — see
+        // ShardOwnedStorage.releaseLeases.
+        var lane   = stillHeld.getFirst().lane();
+        var shards = stillHeld.stream().map(LeasedOwner::shard).toList();
+        try {
+            storage.releaseLeases(lane, shards, instanceId);
+            for (var owner : stillHeld) {
                 metrics.shardsReleased.increment();
                 metrics.observer().shardOwnershipChanged(owner.shard(), false);
-            } catch (SQLException e) {
-                // Best effort. A lease that cannot be released still expires on its own, so this
-                // costs the successor its TTL rather than correctness — and a database that is
-                // unreachable during shutdown is not a reason to fail the shutdown.
-                log.warn("Instance {} could not release {} shard {} on stop; it will expire instead",
-                         instanceId, owner.lane(), owner.shard(), e);
             }
+        } catch (SQLException e) {
+            // Best effort. A lease that cannot be released still expires on its own, so this
+            // costs the successor its TTL rather than correctness — and a database that is
+            // unreachable during shutdown is not a reason to fail the shutdown.
+            log.warn("Instance {} could not release its {} shards on stop; they will expire instead",
+                     instanceId, lane, e);
         }
     }
 

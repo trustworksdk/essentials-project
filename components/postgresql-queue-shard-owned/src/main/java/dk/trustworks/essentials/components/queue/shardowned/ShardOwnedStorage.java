@@ -633,6 +633,39 @@ public final class ShardOwnedStorage {
     }
 
     /**
+     * Hand back every shard this owner holds on one lane, over ONE connection.
+     * <p>
+     * Same statement as {@link #releaseLease(String, int, String)} widened to a set of shards, and
+     * the reason it exists is the shutdown path rather than throughput. Releasing one lease per
+     * connection meant an instance holding the ordered lane's 64 units acquired 64 connections to
+     * perform one logical operation — merely wasteful while the database is there, and the
+     * difference between a shutdown and a hang while it is not: every acquisition then waits out the
+     * pool's full {@code connectionTimeout} (30s at Hikari's default) before failing, so handing back
+     * one lane of one queue took half an hour, and an application with several queues never finished
+     * at all. One acquisition discovers an absent database once.
+     *
+     * @param shards the shards to release; releasing is bounded by {@code owner} as well, so a unit
+     *               already taken away from this instance is left alone
+     * @return how many leases were actually given up
+     */
+    public int releaseLeases(String lane, Collection<Integer> shards, String owner) throws SQLException {
+        if (shards.isEmpty()) {
+            return 0;
+        }
+        var shardArray = shards.stream().map(Integer::shortValue).toArray(Short[]::new);
+        try (var connection = dataSource.getConnection();
+             var statement = connection.prepareStatement(
+                     "UPDATE " + LEASE_TABLE + " SET owner = NULL"
+                     + " WHERE queue_id = ? AND lane = ? AND shard = ANY(?) AND owner = ?")) {
+            statement.setShort(1, queueId);
+            statement.setString(2, lane);
+            statement.setArray(3, connection.createArrayOf("int2", shardArray));
+            statement.setString(4, owner);
+            return statement.executeUpdate();
+        }
+    }
+
+    /**
      * Take or renew the shard's lease, bumping the fence on a change of owner.
      *
      * @return the fence held, or empty if another instance holds an unexpired lease
