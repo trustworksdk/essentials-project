@@ -24,7 +24,6 @@ import org.testcontainers.junit.jupiter.*;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,9 +68,13 @@ class ShardOwnedSpiFairShareIT {
 
     @Test
     void a_single_process_still_owns_every_shard_after_the_first_rebalance() throws Exception {
-        var delivered = ConcurrentHashMap.<String>newKeySet();
+        var delivered        = ConcurrentHashMap.<String>newKeySet();
+        var deliveredShards  = ConcurrentHashMap.<Integer>newKeySet();
         try (var queue = new PostgresqlMessageQueue(dataSource, QUEUE_ID, SHARD_COUNT, "spi-fair-1")) {
-            var subscription = queue.consume((messageId, key, payload, payloadType) -> delivered.add(new String(payload, StandardCharsets.UTF_8)),
+            var subscription = queue.consume((messageId, key, payload, payloadType) -> {
+                                                 delivered.add(new String(payload, StandardCharsets.UTF_8));
+                                                 deliveredShards.add(messageId.shard());
+                                             },
                                              ConsumerOptions.defaults());
 
             // The default lease TTL is holeExpiry x 3 = 30s and the heartbeat runs at a third of it,
@@ -96,32 +99,22 @@ class ShardOwnedSpiFairShareIT {
             for (var i = 0; i < 200; i++) {
                 queue.enqueue(Message.of(("m" + i).getBytes(StandardCharsets.UTF_8), 1));
             }
-            assertThat(rowsPerShard().keySet())
-                    .describedAs("round-robin must use every shard, not just one per call")
-                    .hasSize(SHARD_COUNT);
 
             org.awaitility.Awaitility.await()
                                      .atMost(Duration.ofSeconds(30))
                                      .untilAsserted(() -> assertThat(delivered)
                                              .describedAs("everything enqueued after the rebalance is delivered")
                                              .hasSize(200));
-        }
-    }
 
-    private Map<Integer, Integer> rowsPerShard() throws Exception {
-        var perShard = new TreeMap<Integer, Integer>();
-        try (var connection = dataSource.getConnection();
-             var statement = connection.prepareStatement(
-                     "SELECT shard, count(*) FROM " + ShardOwnedSchema.UNORDERED_TABLE
-                     + " WHERE queue_id = ? GROUP BY shard ORDER BY shard")) {
-            statement.setShort(1, QUEUE_ID);
-            try (var resultSet = statement.executeQuery()) {
-                while (resultSet.next()) {
-                    perShard.put(resultSet.getInt(1), resultSet.getInt(2));
-                }
-            }
+            // Read the spread off the DELIVERIES, not off the rows. The shard is part of the message
+            // id, so this is the same fact the enqueue recorded — but counting rows per shard races
+            // the consumer that is draining them: local hand-off delivers and deletes in under a
+            // millisecond, so a shard can already be empty by the time the loop above returns. That
+            // read reported 2 shards of 4 for a round-robin that had used all four.
+            assertThat(deliveredShards)
+                    .describedAs("round-robin must use every shard, not just one per call")
+                    .hasSize(SHARD_COUNT);
         }
-        return perShard;
     }
 
     private int countUnownedShards(String lane) throws Exception {
