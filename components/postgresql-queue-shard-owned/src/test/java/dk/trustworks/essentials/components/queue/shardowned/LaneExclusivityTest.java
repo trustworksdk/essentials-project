@@ -40,6 +40,10 @@ import static org.assertj.core.api.Assertions.*;
  */
 class LaneExclusivityTest {
 
+    /** The one queue these tests use. A short constant, so no call site has to narrow an int literal. */
+    private static final short QUEUE_ID = 1;
+
+
     @Test
     void an_ordered_queue_refuses_to_be_reconfigured_as_unordered() {
         var queue = queue();
@@ -80,7 +84,7 @@ class LaneExclusivityTest {
     private ShardOwnedQueue queue() {
         return ShardOwnedQueue.builder()
                               .setDataSource(new UnusedDataSource())
-                              .setQueueId((short) 1)
+                              .setQueueId(QUEUE_ID)
                               .setShardCount(4)
                               .setInstanceId("lane-exclusivity")
                               .build();

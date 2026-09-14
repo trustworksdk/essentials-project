@@ -141,7 +141,7 @@ class ShardOwnedRoutingSpaceCostIT {
                     + " VALUES (?, 'ordered', ?, NULL, 0) ON CONFLICT DO NOTHING")) {
                 for (var shard = 0; shard < units; shard++) {
                     statement.setShort(1, queueId);
-                    statement.setShort(2, (short) shard);
+                    statement.setInt(2, shard);
                     statement.addBatch();
                 }
                 statement.executeBatch();

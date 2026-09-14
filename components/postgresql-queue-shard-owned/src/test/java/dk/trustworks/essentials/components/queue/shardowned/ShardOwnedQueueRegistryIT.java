@@ -73,7 +73,7 @@ class ShardOwnedQueueRegistryIT {
      */
     @Test
     void a_shard_count_disagreement_strands_messages_when_nothing_enforces_it() throws Exception {
-        var queueId = (short) 1;
+        short queueId = 1;
         ShardOwnedSchema.registerQueue(dataSource, queueId, 8);
 
         var delivered = ConcurrentHashMap.<String>newKeySet();
@@ -190,7 +190,7 @@ class ShardOwnedQueueRegistryIT {
                      "SELECT count(*) FROM " + ShardOwnedSchema.UNORDERED_TABLE
                      + " WHERE queue_id = ? AND shard >= ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             try (var resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getLong(1);

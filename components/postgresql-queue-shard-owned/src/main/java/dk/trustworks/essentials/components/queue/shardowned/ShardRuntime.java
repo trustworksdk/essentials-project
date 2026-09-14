@@ -70,6 +70,17 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
      */
     private static final Map<DataSource, Shared> SHARED = new IdentityHashMap<>();
 
+    /**
+     * The queue id a pump's storage handle is bound to: none. A pump is process-wide, so a statement
+     * it issues on this handle would query queue 0 and silently return nothing — see the pump's own
+     * {@code queueId()} for how per-queue work is bound instead.
+     * <p>
+     * A named constant rather than a {@code (short) 0} at the call site: a constant expression narrows
+     * implicitly in an assignment, so this is the same value with no cast for a static analyser to
+     * read as a truncation.
+     */
+    private static final short NO_QUEUE_ID = 0;
+
     private record Shared(ShardRuntime runtime, int borrowers) {
     }
 
@@ -158,7 +169,7 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
 
         // A storage handle bound to no queue in particular: the pumps only use it to open connections,
         // and every statement an owner issues carries its own queue id.
-        var connections = new ShardOwnedStorage(dataSource, (short) 0);
+        var connections = new ShardOwnedStorage(dataSource, NO_QUEUE_ID);
         for (var index = 0; index < pumpCount; index++) {
             var pump = new ShardPump(connections, settings, metrics, running, flushOnExit, "pump-" + index);
             pumps.add(pump);

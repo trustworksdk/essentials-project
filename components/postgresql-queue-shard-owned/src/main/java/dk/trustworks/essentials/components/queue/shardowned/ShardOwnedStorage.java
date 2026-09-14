@@ -32,6 +32,22 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The design's cost claim is visible in how few methods this has: an insert and a delete are the
  * only writes on the steady-state path. There is deliberately no claim or dequeue statement,
  * because ownership makes one unnecessary.
+ *
+ * <h2>{@code shard} is bound with {@code setInt}, against a {@code smallint} column</h2>
+ * A shard is an {@code int} everywhere above this class — {@code shardCount}, the loop variables,
+ * {@code MessageId.shard} — and every binding used to narrow it with a {@code (short)} cast to match
+ * the column. Thirty-six of those read to a static analyser as an unchecked truncation, and they were
+ * safe only because of an invariant it cannot see.
+ * <p>
+ * Binding the {@code int} directly is not a workaround for the warning; it is better on both counts
+ * that mattered. PostgreSQL's {@code integer_ops} btree opfamily carries the cross-type
+ * {@code int2 = int4} operators, so a comparison against a {@code smallint} column still uses the
+ * index — verified on 17: identical {@code Index Only Scan} plans either way. And on the write side an
+ * out-of-range value now raises {@code smallint out of range} instead of silently wrapping, which is
+ * what {@code (short) 32768} did.
+ * <p>
+ * {@code queueId} is a real {@code short} and is still bound with {@code setShort}; nothing is cast
+ * there.
  */
 public final class ShardOwnedStorage {
     private final DataSource dataSource;
@@ -118,7 +134,7 @@ public final class ShardOwnedStorage {
         try (var statement = connection.prepareStatement(sql, new String[]{"seq"})) {
             for (var row : rows) {
                 statement.setShort(1, queueId);
-                statement.setShort(2, (short) shard);
+                statement.setInt(2, shard);
                 statement.setString(3, ShardOwnedSchema.sequenceName(queueId, shard));
                 statement.setBytes(4, row.payload());
                 statement.setInt(5, row.payloadType());
@@ -169,7 +185,7 @@ public final class ShardOwnedStorage {
         try (var statement = connection.prepareStatement(sql, new String[]{"seq"})) {
             for (var payload : payloads) {
                 statement.setShort(1, queueId);
-                statement.setShort(2, (short) shard);
+                statement.setInt(2, shard);
                 statement.setString(3, ShardOwnedSchema.sequenceName(queueId, shard));
                 statement.setBytes(4, payload);
                 statement.setInt(5, payloadType);
@@ -207,7 +223,7 @@ public final class ShardOwnedStorage {
                   + " ORDER BY seq LIMIT " + limit;
         try (var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setLong(3, cursor);
             statement.setLong(4, ownFence);
             return readRows(statement);
@@ -240,7 +256,7 @@ public final class ShardOwnedStorage {
                 "SELECT EXTRACT(EPOCH FROM (min(visible_at) - now())) * 1000 FROM " + table
                 + " WHERE queue_id = ? AND shard = ? AND visible_at > now()")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             try (var resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
                     return OptionalLong.empty();
@@ -267,7 +283,7 @@ public final class ShardOwnedStorage {
                   + notRowLeasedClause();
         try (var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
             return readRows(statement);
         }
@@ -297,7 +313,7 @@ public final class ShardOwnedStorage {
                   + " ORDER BY seq LIMIT " + limit;
         try (var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setLong(3, ownFence);
             statement.setLong(4, handoffGraceMillis);
             return readRows(statement);
@@ -325,7 +341,7 @@ public final class ShardOwnedStorage {
                     + " AND (u.lease_until IS NULL OR u.lease_until <= now())"
                     + stillOwnedClause())) {
                 statement.setShort(1, queueId);
-                statement.setShort(2, (short) shard);
+                statement.setInt(2, shard);
                 statement.setLong(3, contiguousThrough);
                 statement.setString(4, owner);
                 statement.setLong(5, fence);
@@ -337,7 +353,7 @@ public final class ShardOwnedStorage {
                     "DELETE FROM " + UNORDERED_TABLE + " u WHERE u.queue_id = ? AND u.shard = ? AND u.seq = ANY(?)"
                     + stillOwnedClause())) {
                 statement.setShort(1, queueId);
-                statement.setShort(2, (short) shard);
+                statement.setInt(2, shard);
                 statement.setArray(3, connection.createArrayOf("bigint", stragglers.toArray(Long[]::new)));
                 statement.setString(4, owner);
                 statement.setLong(5, fence);
@@ -362,7 +378,7 @@ public final class ShardOwnedStorage {
                      + " AND owner = ? AND fence = ?")) {
             statement.setShort(1, queueId);
             statement.setString(2, lane);
-            statement.setShort(3, (short) shard);
+            statement.setInt(3, shard);
             statement.setString(4, owner);
             statement.setLong(5, fence);
             try (var resultSet = statement.executeQuery()) {
@@ -409,7 +425,7 @@ public final class ShardOwnedStorage {
             statement.setLong(1, sessionFence);
             statement.setLong(2, leaseMillis);
             statement.setShort(3, queueId);
-            statement.setShort(4, (short) shard);
+            statement.setInt(4, shard);
             statement.setInt(5, limit);
             try (var resultSet = statement.executeQuery()) {
                 var rows = new ArrayList<SessionRow>();
@@ -436,7 +452,7 @@ public final class ShardOwnedStorage {
                 "DELETE FROM " + UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ANY(?)"
                 + " AND lease = ? AND lease_until > now()")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
             statement.setLong(4, sessionFence);
             return statement.executeUpdate();
@@ -476,7 +492,7 @@ public final class ShardOwnedStorage {
                 "UPDATE " + UNORDERED_TABLE + " SET lease = NULL, lease_until = NULL"
                 + " WHERE queue_id = ? AND shard = ? AND seq = ? AND lease = ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setLong(3, seq);
             statement.setLong(4, sessionFence);
             return statement.executeUpdate();
@@ -626,7 +642,7 @@ public final class ShardOwnedStorage {
                      + " WHERE queue_id = ? AND lane = ? AND shard = ? AND owner = ?")) {
             statement.setShort(1, queueId);
             statement.setString(2, lane);
-            statement.setShort(3, (short) shard);
+            statement.setInt(3, shard);
             statement.setString(4, owner);
             statement.executeUpdate();
         }
@@ -751,7 +767,7 @@ public final class ShardOwnedStorage {
             statement.setString(3, sessionId);
             statement.setShort(4, queueId);
             statement.setString(5, lane);
-            statement.setShort(6, (short) shard);
+            statement.setInt(6, shard);
             statement.setString(7, sessionId);
             statement.setLong(8, ttlMillis);
             try (var resultSet = statement.executeQuery()) {
@@ -773,7 +789,7 @@ public final class ShardOwnedStorage {
             statement.setString(2, owner);
             statement.setShort(3, queueId);
             statement.setString(4, lane);
-            statement.setShort(5, (short) shard);
+            statement.setInt(5, shard);
             statement.setString(6, owner);
             statement.setLong(7, ttlMillis);
             try (var resultSet = statement.executeQuery()) {
@@ -793,7 +809,7 @@ public final class ShardOwnedStorage {
         try (var statement = connection.prepareStatement(
                 "UPDATE " + UNORDERED_TABLE + " SET attempts = attempts + 1 WHERE queue_id = ? AND shard = ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             return statement.executeUpdate();
         }
     }
@@ -872,7 +888,7 @@ public final class ShardOwnedStorage {
              var statement = connection.prepareStatement(
                      "SELECT count(*) FROM " + UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             try (var resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getLong(1);
@@ -885,7 +901,7 @@ public final class ShardOwnedStorage {
              var statement = connection.prepareStatement(
                      "SELECT seq FROM " + UNORDERED_TABLE + " WHERE queue_id = ? AND shard = ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             try (var resultSet = statement.executeQuery()) {
                 var seqs = new ArrayList<Long>();
                 while (resultSet.next()) {
@@ -930,7 +946,7 @@ public final class ShardOwnedStorage {
         try (var statement = connection.prepareStatement(sql, new String[]{"seq"})) {
             for (var message : messages) {
                 statement.setShort(1, queueId);
-                statement.setShort(2, (short) shard);
+                statement.setInt(2, shard);
                 statement.setString(3, message.key());
                 statement.setLong(4, message.keyOrder());
                 statement.setString(5, ShardOwnedSchema.orderedSequenceName(queueId));
@@ -966,7 +982,7 @@ public final class ShardOwnedStorage {
                   + " ORDER BY seq LIMIT " + limit;
         try (var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setLong(3, cursor);
             return readOrderedRows(statement);
         }
@@ -1142,7 +1158,7 @@ public final class ShardOwnedStorage {
                   + " WHERE queue_id = ? AND shard = ? AND visible_at <= now() ORDER BY seq LIMIT " + limit;
         try (var statement = connection.prepareStatement(sql)) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             return readOrderedRows(statement);
         }
     }
@@ -1169,7 +1185,7 @@ public final class ShardOwnedStorage {
                 + " WHERE l.queue_id = o.queue_id AND l.lane = 'ordered' AND l.shard = o.shard"
                 + " AND l.owner = ? AND l.fence = ?)")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
             statement.setString(4, owner);
             statement.setLong(5, fence);
@@ -1181,7 +1197,7 @@ public final class ShardOwnedStorage {
         try (var statement = connection.prepareStatement(
                 "UPDATE " + ORDERED_TABLE + " SET attempts = attempts + 1 WHERE queue_id = ? AND shard = ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             return statement.executeUpdate();
         }
     }
@@ -1200,7 +1216,7 @@ public final class ShardOwnedStorage {
                      "SELECT 1 FROM " + ORDERED_TABLE
                      + " WHERE queue_id = ? AND shard = ? AND msg_key = ? LIMIT 1")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setString(3, key);
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next();
@@ -1213,7 +1229,7 @@ public final class ShardOwnedStorage {
              var statement = connection.prepareStatement(
                      "SELECT count(*) FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             try (var resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getLong(1);
@@ -1253,10 +1269,10 @@ public final class ShardOwnedStorage {
         try (var statement = connection.prepareStatement(
                 "UPDATE " + table + " SET attempts = ?, visible_at = now() + make_interval(secs => ? / 1000.0)"
                 + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
-            statement.setShort(1, (short) attempts);
+            statement.setInt(1, attempts);
             statement.setLong(2, delayMillis);
             statement.setShort(3, queueId);
-            statement.setShort(4, (short) shard);
+            statement.setInt(4, shard);
             statement.setLong(5, seq);
             statement.executeUpdate();
         }
@@ -1281,14 +1297,14 @@ public final class ShardOwnedStorage {
                 insert.setString(1, lane);
                 insert.setString(2, error);
                 insert.setShort(3, queueId);
-                insert.setShort(4, (short) shard);
+                insert.setInt(4, shard);
                 insert.setLong(5, seq);
                 insert.executeUpdate();
             }
             try (var delete = connection.prepareStatement(
                     "DELETE FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
                 delete.setShort(1, queueId);
-                delete.setShort(2, (short) shard);
+                delete.setInt(2, shard);
                 delete.setLong(3, seq);
                 delete.executeUpdate();
             }
@@ -1357,7 +1373,7 @@ public final class ShardOwnedStorage {
                      "SELECT " + key + ", payload, payload_type, attempts, enqueued_at, visible_at"
                      + " FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setLong(3, seq);
             try (var resultSet = statement.executeQuery()) {
                 if (!resultSet.next()) {
@@ -1442,7 +1458,7 @@ public final class ShardOwnedStorage {
              var statement = connection.prepareStatement(
                      "DELETE FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
             statement.setShort(1, queueId);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setLong(3, seq);
             return statement.executeUpdate() > 0;
         }
@@ -1460,7 +1476,7 @@ public final class ShardOwnedStorage {
                      + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
             statement.setLong(1, delayMillis);
             statement.setShort(2, queueId);
-            statement.setShort(3, (short) shard);
+            statement.setInt(3, shard);
             statement.setLong(4, seq);
             return statement.executeUpdate() > 0;
         }
@@ -1511,7 +1527,7 @@ public final class ShardOwnedStorage {
                         "INSERT INTO " + table + " (" + columns + ") SELECT " + selected
                         + " FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
                     insert.setShort(1, queueId);
-                    insert.setShort(2, (short) shard);
+                    insert.setInt(2, shard);
                     insert.setLong(3, seq);
                     restored = insert.executeUpdate();
                 }
@@ -1522,7 +1538,7 @@ public final class ShardOwnedStorage {
                 try (var delete = connection.prepareStatement(
                         "DELETE FROM " + DLQ_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
                     delete.setShort(1, queueId);
-                    delete.setShort(2, (short) shard);
+                    delete.setInt(2, shard);
                     delete.setLong(3, seq);
                     delete.executeUpdate();
                 }

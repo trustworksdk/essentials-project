@@ -252,7 +252,7 @@ class ShardOwnedSpiContractIT {
              var statement = connection.prepareStatement(
                      "SELECT 1 FROM " + table + " WHERE queue_id = ? AND shard = ? AND seq = ?")) {
             statement.setShort(1, QUEUE_ID);
-            statement.setShort(2, (short) shard);
+            statement.setInt(2, shard);
             statement.setLong(3, seq);
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next();

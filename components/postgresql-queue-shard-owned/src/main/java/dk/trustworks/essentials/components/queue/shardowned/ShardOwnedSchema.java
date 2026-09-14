@@ -633,7 +633,7 @@ public final class ShardOwnedSchema {
         for (var shard = 0; shard < units; shard++) {
             statement.setShort(1, queueId);
             statement.setString(2, lane);
-            statement.setShort(3, (short) shard);
+            statement.setInt(3, shard);
             statement.addBatch();
         }
     }

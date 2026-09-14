@@ -39,6 +39,10 @@ import java.time.Duration;
  */
 public final class ShardOwnedNodeMain {
 
+    /** The one queue these tests use. A short constant, so no call site has to narrow an int literal. */
+    private static final short QUEUE_ID = 1;
+
+
     public static void main(String[] args) throws Exception {
         var jdbcUrl = args[0];
         var user = args[1];
@@ -59,7 +63,7 @@ public final class ShardOwnedNodeMain {
                                               Duration.ofMillis(300), Duration.ofMillis(100),
                                               1_000, 8, Duration.ofMillis(50), Duration.ofSeconds(30), 2, Duration.ofSeconds(5), Duration.ofMillis(1000), Duration.ofSeconds(60));
 
-        var queue = new ShardOwnedQueue(dataSource, (short) 1, shardCount, instanceId);
+        var queue = new ShardOwnedQueue(dataSource, QUEUE_ID, shardCount, instanceId);
         if ("ordered".equals(lane)) {
             queue.startConsumingOrdered((messageId, key, payload, payloadType) -> record(dataSource, instanceId, key,
                                                                  ByteBuffer.wrap(payload).getLong()),

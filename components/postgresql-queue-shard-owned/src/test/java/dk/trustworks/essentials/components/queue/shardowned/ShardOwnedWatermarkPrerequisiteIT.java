@@ -40,6 +40,10 @@ import static org.assertj.core.api.Assertions.*;
 @Testcontainers(disabledWithoutDocker = true)
 class ShardOwnedWatermarkPrerequisiteIT {
 
+    /** The one queue these tests use. A short constant, so no call site has to narrow an int literal. */
+    private static final short QUEUE_ID = 1;
+
+
     @Container
     static PostgreSQLContainer<?> postgres = LabPostgres.create();
 
@@ -98,9 +102,9 @@ class ShardOwnedWatermarkPrerequisiteIT {
             // role was created no longer apply to them, and the consumer would fail on a permission
             // error before ever reaching the probe.
             ShardOwnedSchema.recreate(superuser);
-            ShardOwnedSchema.registerQueue(superuser, (short) 1, 4);
+            ShardOwnedSchema.registerQueue(superuser, QUEUE_ID, 4);
             grantTables("queue_app_blind");
-            try (var queue = new ShardOwnedQueue(appRole, (short) 1, 4, "blind-1")) {
+            try (var queue = new ShardOwnedQueue(appRole, QUEUE_ID, 4, "blind-1")) {
                 // start() wraps whatever went wrong, so the actionable text is in the cause chain
                 // rather than the top-level message — which is where a reader of the log will find
                 // it too.
@@ -158,13 +162,13 @@ class ShardOwnedWatermarkPrerequisiteIT {
     void a_failed_consume_leaves_nothing_running() throws Exception {
         try (var appRole = ordinaryRole("queue_app_halfstart")) {
             ShardOwnedSchema.recreate(superuser);
-            ShardOwnedSchema.registerQueue(superuser, (short) 1, 4);
+            ShardOwnedSchema.registerQueue(superuser, QUEUE_ID, 4);
             grantTables("queue_app_halfstart");
             revokeStatActivity();
 
             var queue = PostgresqlMessageQueue.builder()
                                               .setDataSource(appRole)
-                                              .setQueueId((short) 1)
+                                              .setQueueId(QUEUE_ID)
                                               .setShardCount(4)
                                               .setInstanceId("halfstart-1")
                                               .build();

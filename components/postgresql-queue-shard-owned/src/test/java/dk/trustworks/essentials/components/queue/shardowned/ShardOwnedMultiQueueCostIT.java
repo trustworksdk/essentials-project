@@ -82,8 +82,10 @@ class ShardOwnedMultiQueueCostIT {
         config.setMaximumPoolSize(Math.max(120, QUEUES * 10));
         dataSource = new HikariDataSource(config);
         ShardOwnedSchema.recreate(dataSource);
-        for (var queueId = 1; queueId <= QUEUES; queueId++) {
-            ShardOwnedSchema.registerQueue(dataSource, (short) queueId, SHARD_COUNT);
+        // short, not int: queue ids ARE smallint, and typing the loop that way is what removes the
+        // narrowing cast at the call rather than hiding it.
+        for (short queueId = 1; queueId <= QUEUES; queueId++) {
+            ShardOwnedSchema.registerQueue(dataSource, queueId, SHARD_COUNT);
         }
     }
 
@@ -165,11 +167,11 @@ class ShardOwnedMultiQueueCostIT {
         // scoping them per queue was what made connections scale with queue count.
         var runtime = new ShardRuntime(dataSource, settings());
         try {
-            for (var queueId = 1; queueId <= QUEUES; queueId++) {
-                var unordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId((short) queueId).setShardCount(SHARD_COUNT).setInstanceId("cost-u-" + queueId).setRuntime(runtime).build();
+            for (short queueId = 1; queueId <= QUEUES; queueId++) {
+                var unordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(queueId).setShardCount(SHARD_COUNT).setInstanceId("cost-u-" + queueId).setRuntime(runtime).build();
                 unordered.startConsuming((messageId, payload, payloadType) -> {
                 }, settings(), SHARD_COUNT);
-                var ordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId((short) queueId).setShardCount(SHARD_COUNT).setInstanceId("cost-o-" + queueId).setRuntime(runtime).build();
+                var ordered = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(queueId).setShardCount(SHARD_COUNT).setInstanceId("cost-o-" + queueId).setRuntime(runtime).build();
                 ordered.startConsumingOrdered((messageId, key, payload, payloadType) -> {
                 }, settings(), SHARD_COUNT);
                 queues.add(unordered);
@@ -275,17 +277,17 @@ class ShardOwnedMultiQueueCostIT {
     @Test
     void several_queues_do_not_manufacture_holes_for_each_other() throws Exception {
         var perQueue = 40;
-        var delivered = new java.util.concurrent.ConcurrentHashMap<Integer, java.util.Set<String>>();
+        var delivered = new java.util.concurrent.ConcurrentHashMap<Short, java.util.Set<String>>();
         var queues = new ArrayList<ShardOwnedQueue>();
         // Shared, like the other test. Constructing a queue without a runtime gives it one of its own,
         // which is fine for a single queue and is exactly what must not be done for a hundred: at 100
         // queues it stood up 100 runtimes and exhausted a 500-connection pool.
         var runtime = new ShardRuntime(dataSource, settings());
         try {
-            for (var queueId = 1; queueId <= QUEUES; queueId++) {
+            for (short queueId = 1; queueId <= QUEUES; queueId++) {
                 var id = queueId;
                 delivered.put(id, java.util.concurrent.ConcurrentHashMap.newKeySet());
-                var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId((short) queueId).setShardCount(SHARD_COUNT).setInstanceId("seq-" + queueId).setRuntime(runtime).build();
+                var queue = ShardOwnedQueue.builder().setDataSource(dataSource).setQueueId(queueId).setShardCount(SHARD_COUNT).setInstanceId("seq-" + queueId).setRuntime(runtime).build();
                 // Tier 2 hands a message straight to the owner and stamps the row so the cursor read
                 // skips it — so with hand-off on, the cursor never walks the sequence and the question
                 // this test asks is never asked. The first version of this test measured zero holes
@@ -298,14 +300,14 @@ class ShardOwnedMultiQueueCostIT {
 
             // Interleaved across queues, which is what makes each queue's seq values sparse.
             for (var round = 0; round < perQueue; round++) {
-                for (var queueId = 1; queueId <= QUEUES; queueId++) {
+                for (short queueId = 1; queueId <= QUEUES; queueId++) {
                     queues.get(queueId - 1).enqueue(
                             List.of(("q" + queueId + "-" + round).getBytes(StandardCharsets.UTF_8)), 1);
                 }
             }
 
             org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> {
-                for (var queueId = 1; queueId <= QUEUES; queueId++) {
+                for (short queueId = 1; queueId <= QUEUES; queueId++) {
                     assertThat(delivered.get(queueId)).as("queue %s", queueId).hasSize(perQueue);
                 }
             });
