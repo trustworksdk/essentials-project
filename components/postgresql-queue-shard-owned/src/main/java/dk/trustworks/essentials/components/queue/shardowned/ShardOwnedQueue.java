@@ -757,18 +757,26 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
 
         var held = owners.stream().filter(LeasedOwner::leaseHeld).toList();
         if (held.size() > fairShare) {
+            var released = new ArrayList<Integer>();
             for (var owner : held.subList(fairShare, held.size())) {
                 owner.onLeaseLost();
                 storage.releaseLease("unordered", owner.shard(), instanceId);
                 ownedShards.remove(owner.shard(), owner);
                 metrics.shardsReleased.increment();
                 metrics.observer().shardOwnershipChanged(owner.shard(), false);
-                log.info("Instance {} released shard {} — fair share is {} of {} shards across {} instances",
-                         instanceId, owner.shard(), fairShare, shardCount, liveInstances);
+                released.add(owner.shard());
+                log.debug("Instance {} released unordered shard {}", instanceId, owner.shard());
+            }
+            if (!released.isEmpty()) {
+                log.info("Instance {} released {} unordered shard(s) [{}] on queue {} — fair share is {} of {} "
+                         + "across {} instance(s); now holding {}",
+                         instanceId, released.size(), summarise(released), queueId, fairShare, shardCount,
+                         liveInstances, countHeld());
             }
             return;
         }
 
+        var acquired = new ArrayList<Integer>();
         for (var shard = 0; shard < shardCount && countHeld() < fairShare; shard++) {
             if (ownedShards.containsKey(shard)) {
                 continue;
@@ -786,7 +794,12 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             runtime.register(queueId, "unordered", shard, owner);
             metrics.shardsAcquired.increment();
             metrics.observer().shardOwnershipChanged(shard, true);
-            log.info("Instance {} acquired shard {} under fence {}", instanceId, shard, fence.get());
+            acquired.add(shard);
+            log.debug("Instance {} acquired unordered shard {} under fence {}", instanceId, shard, fence.get());
+        }
+        if (!acquired.isEmpty()) {
+            log.info("Instance {} acquired {} unordered shard(s) [{}] on queue {}; now holding {} of {}",
+                     instanceId, acquired.size(), summarise(acquired), queueId, countHeld(), shardCount);
         }
     }
 
@@ -805,6 +818,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private void shedOrAcquireOrderedShards(int fairShare) throws SQLException {
         // Release the drained ones first, so a shard this instance has finished with is free before
         // it goes on to decide whether it wants more.
+        var drained = new ArrayList<Integer>();
         for (var owner : List.copyOf(owners)) {
             if (owner instanceof OrderedShardOwner ordered && ordered.shedComplete()) {
                 ordered.onLeaseLost();
@@ -812,8 +826,13 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 owners.remove(ordered);
                 metrics.shardsReleased.increment();
                 metrics.observer().shardOwnershipChanged(ordered.shard(), false);
-                log.info("Instance {} released ordered shard {} after draining", instanceId, ordered.shard());
+                drained.add(ordered.shard());
+                log.debug("Instance {} released ordered unit {} after draining", instanceId, ordered.shard());
             }
+        }
+        if (!drained.isEmpty()) {
+            log.info("Instance {} released {} ordered unit(s) [{}] on queue {} after draining; now holding {}",
+                     instanceId, drained.size(), summarise(drained), queueId, countHeld());
         }
 
         var held = owners.stream().filter(LeasedOwner::leaseHeld).toList();
@@ -837,6 +856,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private void acquireFreeOrderedShards(int fairShare) throws SQLException {
         var limit = Math.min(fairShare, maxShardsHeld);
         var heldShards = owners.stream().filter(LeasedOwner::leaseHeld).map(LeasedOwner::shard).collect(java.util.stream.Collectors.toSet());
+        var acquired = new ArrayList<Integer>();
         for (var shard = 0; shard < orderedUnits() && heldShards.size() < limit; shard++) {
             if (heldShards.contains(shard)) {
                 continue;
@@ -855,8 +875,48 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             runtime.register(queueId, "ordered", shard, owner);
             metrics.shardsAcquired.increment();
             metrics.observer().shardOwnershipChanged(shard, true);
-            log.info("Instance {} acquired ordered shard {} under fence {}", instanceId, shard, fence.get());
+            acquired.add(shard);
+            log.debug("Instance {} acquired ordered unit {} under fence {}", instanceId, shard, fence.get());
         }
+        if (!acquired.isEmpty()) {
+            log.info("Instance {} acquired {} ordered unit(s) [{}] on queue {}; now holding {} of {}",
+                     instanceId, acquired.size(), summarise(acquired), queueId, heldShards.size(), orderedUnits());
+        }
+    }
+
+    /**
+     * Ownership moves a unit at a time and is REPORTED a pass at a time.
+     * <p>
+     * Every acquisition and release used to be its own INFO line. One instance taking up an ordered
+     * lane is 64 of them, a two-instance rebalance is 32 more on each side, and an application
+     * consuming six queues multiplies all of it — several hundred lines for one event, repeated on
+     * every rebalance that moves anything. Nobody reads a unit id out of that; what an operator wants
+     * to know is that a rebalance happened, which way it went, and where this instance ended up.
+     * <p>
+     * So the loops collect and the caller logs once. The per-unit line survives at DEBUG, where it
+     * keeps the fence — the one part that is genuinely per unit and the thing to reach for when
+     * ownership is actually in question.
+     *
+     * @param shards the units the pass moved, in the order it moved them
+     */
+    static String summarise(Collection<Integer> shards) {
+        var sorted = shards.stream().sorted().toList();
+        var out    = new StringBuilder();
+        for (var index = 0; index < sorted.size(); ) {
+            var runStart = index;
+            while (index + 1 < sorted.size() && sorted.get(index + 1) == sorted.get(index) + 1) {
+                index++;
+            }
+            if (!out.isEmpty()) {
+                out.append(',');
+            }
+            out.append(sorted.get(runStart));
+            if (index > runStart) {
+                out.append('-').append(sorted.get(index));
+            }
+            index++;
+        }
+        return out.toString();
     }
 
     private long countHeld() {
