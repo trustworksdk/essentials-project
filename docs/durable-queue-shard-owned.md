@@ -1305,6 +1305,28 @@ holders are load it needed. That is now observable rather than inferred: every i
 warning naming the queue, the count and the space when the condition starts. It clears on its own when
 the instance count drops, so a value that persists is the evidence this entry asks for.
 
+**Making a delayed message block its key.** `Message.delayedOrdered` sets `visible_at`, and only visible
+rows are dispatched, so an undelayed later `key_order` overtakes a delayed earlier one.
+`PostgresqlDurableQueues` blocks the key instead — its fetch barrier does not filter on
+`next_delivery_ts` — so the same call behaves differently on the two engines. That matters more than it
+looks, because the adapter reaches this from an ordinary `DurableQueues` call:
+`queueMessage(queue, orderedMessage, deliveryDelay)`. Retiring the factory is therefore not an option;
+it exists to serve that contract.
+
+Not built because of where the cost falls. The owner would have to *hold* rows that are not yet due
+rather than never see them: the ordered cursor read would stop filtering `visible_at <= now()` —
+widening the read that runs roughly twice per delivered message — `OrderedRow` would have to carry
+`visible_at` so dispatch can gate on it, and the release would need the interval-not-timestamp
+treatment the retry schedule already uses, since comparing a server `visible_at` against a local clock
+is exactly what §12's rule forbids. Once the cursor passes a not-yet-due row nothing re-reads it — the
+head sweep filters `visible_at` too — so the row has to be held from first sight, which makes this a
+change to the lane's in-memory state machine rather than a query tweak, in the code where this
+module's defects have clustered.
+*Reopen when* a caller is found mixing delayed and undelayed messages on one key, or when
+`orderViolations` is non-zero on a queue whose producer is known to number and commit in one order.
+Both are observable: the counter is on `QueueStatistics` and the console. Until then the honest
+position is that a per-key delay reorders, said at the factory, in the README and here.
+
 **Tier 3 WAL wake-up.** The gate is against **Tier 1**, not Tier 2 — Tier 2 is a hand-off inside one
 JVM that never reaches the database, so nothing replaces it. Tier 1 is the cross-JVM path a WAL stream
 would replace, at 1.76 ms p50 / 2.63 ms p99, and beating that does not pay for `wal_level = logical`,

@@ -275,7 +275,7 @@ bookkeeping error. The engine counts what that costs instead of claiming it cann
 | Cause | What happens | What to do |
 |---|---|---|
 | **Producer numbered and committed in different orders** | Two transactions enqueue for one key; the one holding the lower `key_order` commits second. The higher one was already delivered | Enqueue a key's messages from **one** transaction, or keep one writer per key. This is the only cause that is a producer bug |
-| **`Message.delayedOrdered`** | Only rows with `visible_at <= now()` are dispatched, so an undelayed later `key_order` overtakes a delayed earlier one | A per-key delay *is* a reordering instruction — do not mix delayed and undelayed messages on one key |
+| **`Message.delayedOrdered`** | Only rows with `visible_at <= now()` are dispatched, so an undelayed later `key_order` overtakes a delayed earlier one. `postgresql-queue` blocks the key instead, and the adapter reaches this from `queueMessage(queue, orderedMessage, deliveryDelay)` — so the same `DurableQueues` call behaves differently on the two engines. Left as it is, with the reasoning and the trigger to revisit in [§18.3](../../docs/durable-queue-shard-owned.md) | A per-key delay *is* a reordering instruction. Keep a key's messages either all delayed or all not, with the same delay; otherwise enqueue undelayed and let the handler decide when to act |
 | **Dead letter** | ~~The key is released and later messages proceed without it~~ — no longer true. A key **never advances past a dead letter**: messages behind one are dead-lettered with it, unhandled, and marked `neverDelivered()`. See [Dead letters block their key](#dead-letters-block-their-key) | Watch the dead-letter count. A key that stops is reported once at WARN, and its backlog shows up there rather than as queue depth |
 | **Resurrecting a dead letter** | It returns with its original `key_order` and a fresh sequence value. Because the key was blocked behind it, nothing ran ahead of it — but a message that commits late under a *lower* order still counts a violation | Resurrect a key's dead letters lowest `key_order` first; see below |
 | **`watermarkCap` fires** | A write transaction older than the cap (60 s) is stepped over rather than waited out. Its rows are still delivered — the head sweep finds them — but late, relative to their key | Find the long-running write transaction. The cap is an escape hatch, not a knob |
@@ -354,7 +354,7 @@ strategies carry the clause, so the barrier holds across processes the same way 
 |---|---|---|
 | Producer numbered and committed in different orders | Reorders, and reports nothing | Reorders, counted as `orderViolations` |
 | Retry backoff | Key blocked | Key blocked |
-| Delayed message on a key | Key blocked behind it | **Overtaken** |
+| Delayed message on a key | Key blocked behind it | **Overtaken** — the one row where this engine is weaker, [deliberately](../../docs/durable-queue-shard-owned.md) (§18.3) |
 | Dead letter | Key blocked until the message is resurrected or deleted; the messages behind it stay queued | Key blocked the same way, but the messages behind it are **dead-lettered rather than left queued**, so the lane holds nothing undeliverable |
 | Resurrecting a dead letter | Delivered first; the key was waiting for it, and its successors are still queued | Delivered first; its successors are dead letters too, so recovery walks the key in ascending `key_order` |
 | At-least-once duplicates | Yes | Yes |
@@ -370,10 +370,11 @@ where postgresql-queue reports nothing at all.
 
 **Where that leaves the choice.** For a key carrying state transitions that must never be applied
 with one missing — an aggregate's events, a balance, a state machine — the two engines now behave the
-same way on the case that matters: the key stops. What is left to check before adopting this one is
-the delayed-message row, and the fact that a stalled key's backlog lands in the dead-letter table
-rather than staying queued. The reasoning is in
-[docs/durable-queue-shard-owned.md](../../docs/durable-queue-shard-owned.md) §9.1.
+same way on the case that matters: the key stops ([§9.1](../../docs/durable-queue-shard-owned.md)).
+Two things are left to check before adopting this one: a stalled key's backlog lands in the
+dead-letter table rather than staying queued, and **a delayed message does not block its key**. If you
+put delays on ordered messages, that second one is the question to answer first — the reasoning for
+leaving it, and what would reopen it, is in §18.3.
 
 #### `key_order` is a primary key, not a hint
 

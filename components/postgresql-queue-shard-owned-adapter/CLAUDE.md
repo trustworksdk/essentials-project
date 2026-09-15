@@ -4,6 +4,7 @@ Presents the shard-owned engine as a `DurableQueues`, so `Inbox`, `Outbox` and `
 
 Engine docs: `docs/durable-queue-shard-owned.md`.
 
+
 ## Why this is a small adapter and not a rewrite
 
 Inbox, Outbox and `DurableLocalCommandBus` touch **8** of `DurableQueues`' 30 methods and never touch a `QueueEntryId`: `queueMessage`, `queueMessages`, `consumeFromQueue`, `purgeQueue`, `getTotalMessagesQueuedFor`, `getUnitOfWorkFactory`, `getTransactionalMode`.
@@ -20,6 +21,7 @@ Inbox, Outbox and `DurableLocalCommandBus` touch **8** of `DurableQueues`' 30 me
 
 ## Gotchas
 
+- **`queueMessage(queue, OrderedMessage, delay)` is the one call whose ORDERING differs from `PostgresqlDurableQueues`.** There the delay blocks the whole key; here only visible rows are dispatched, so an undelayed later `order` for that key goes first. `toEngineMessage` is where the adapter reaches `Message.delayedOrdered`, which is why that factory cannot simply be retired. Left deliberately — reasoning and reopen trigger in `docs/durable-queue-shard-owned.md` §18.3.
 - **`InboxName.asQueueName()` is `Inbox:<name>`, and the codec's separator is a colon.** So every queue this module exists to serve contains the separator. `decode` splits on the **last** colon — a `MessageId` never contains one. Splitting on the first truncates every inbox and outbox to `"Inbox"`/`"Outbox"` and reports "no such message" against a queue that exists. `an_inbox_or_outbox_queue_name_survives_although_it_contains_the_separator` derives the names from the real types, so a change to that derivation breaks the test rather than production.
 - **The queue name has to be inside the `QueueEntryId`.** Most of the by-id surface takes an entry id and nothing else, which works for `PostgresqlDurableQueues` because its ids are UUIDs. A `MessageId` is unique per queue only — `u-0-1` exists in every queue — so ignoring that would let `deleteMessage` delete an unrelated queue's message and return `true`.
 - **`SingleOperationTransaction` only; `FullyTransactional` is refused, not approximated.** Acks are batched and flushed on the owner's connection under a fence, and cannot enlist in a caller's transaction. Reporting the mode without honouring it converts "handler writes and dequeue commit together" into duplicates after a crash.

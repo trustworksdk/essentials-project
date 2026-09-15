@@ -71,6 +71,19 @@ public record Message(byte[] payload, int payloadType, String key, long keyOrder
         return new Message(payload, payloadType, null, 0L, requireNonNull(delay, "No delay provided"));
     }
 
+    /**
+     * An ordered message that becomes eligible after {@code delay}.
+     * <p>
+     * <b>A delay on a key is a reordering instruction.</b> Only visible rows are dispatched, so a later
+     * {@code key_order} for this key that is not delayed overtakes this one, and the key's guarantee
+     * does not hold across the two. {@code PostgresqlDurableQueues} blocks the key behind a delayed
+     * message instead, so the same call behaves differently on the two engines — a known difference,
+     * deliberately left, with the reasoning and the trigger to revisit it in
+     * {@code docs/durable-queue-shard-owned.md} §18.3.
+     * <p>
+     * Safe when a key's messages are either all delayed or all not, and when the delay is the same for
+     * all of them. Otherwise use {@link #ordered} and let the handler decide when to act.
+     */
     public static Message delayedOrdered(byte[] payload, int payloadType, String key, long keyOrder,
                                          java.time.Duration delay) {
         return new Message(payload, payloadType, requireNonNull(key, "No key provided"), keyOrder,

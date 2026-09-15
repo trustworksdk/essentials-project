@@ -24,6 +24,7 @@ Presents the [shard-owned queue engine](../postgresql-queue-shard-owned/README.m
 - [Stored Format](#stored-format)
 - [Reading Queue Counts Correctly](#reading-queue-counts-correctly)
 - [Comparison with PostgresqlDurableQueues](#comparison-with-postgresqldurablequeues)
+- ⚠️ [A delivery delay on an OrderedMessage reorders its key](#-a-delivery-delay-on-an-orderedmessage-reorders-its-key)
 - [Gotchas](#gotchas)
 
 ## Overview
@@ -356,10 +357,30 @@ one, `delivered = 0`. **Reading that as a stalled projection is the obvious mist
 | **Queue declaration** | implicit | auto-registered at `autoRegisterShardCount`, or declared |
 | **Table names** | configurable → sanitize them | fixed constants |
 | **`DurableQueuesInterceptor`** | supported | supported |
-| **Ordering across processes** | per consumer coordination | a consequence of shard ownership |
+| **Ordering across processes** | a barrier in SQL on every fetch | a consequence of shard ownership |
+| **A key behind a dead letter** | never advances; messages behind it stay queued | never advances; messages behind it are dead-lettered too |
+| **`queueMessage(queue, OrderedMessage, delay)`** | the delay blocks the key | **the delay does not block the key** — see below |
+
+### ⚠️ A delivery delay on an `OrderedMessage` reorders its key
+
+`queueMessage(queueName, orderedMessage, deliveryDelay)` is the one call whose *ordering* differs
+between the two engines. `PostgresqlDurableQueues` holds the whole key behind the delayed message —
+its per-key barrier does not look at `next_delivery_ts`. This engine dispatches only messages that are
+visible, so a later `order` for that key which is *not* delayed is delivered first.
+
+Everything else about ordering now matches, including a key never advancing past a dead letter. This
+one is left as it is deliberately, because fixing it means the owner holding not-yet-due rows in
+memory and widening the read on the delivery path; the reasoning and what would reopen it are in
+[docs/durable-queue-shard-owned.md](../../docs/durable-queue-shard-owned.md) §18.3.
+
+**What to do:** keep an ordering key's messages either all delayed or all not, with the same delay. If
+you need one message held back and the rest to wait for it, enqueue it undelayed and let the handler
+decide when to act — or stay on `postgresql-queue` for that queue.
 
 ## Gotchas
 
+- **A delay on an `OrderedMessage` does not hold its key.** See above — the only ordering behaviour
+  that still differs from `PostgresqlDurableQueues`.
 - **`FullyTransactional` is refused, not approximated.** Applications that set it must change.
 - **The delivery-path `QueuedMessage` is partial** and three groups of accessors throw. Grep for
   `getTotalDeliveryAttempts`, `getAddedTimestamp` and `getLastDeliveryError` in your delivery paths
