@@ -51,13 +51,15 @@ public final class RowLeaseQueueSession implements QueueSession {
     private static final Logger log = LoggerFactory.getLogger(RowLeaseQueueSession.class);
 
     private final ShardOwnedStorage storage;
-    private final DataSource     dataSource;
-    private final int            shardCount;
-    private final long           fence;
-    private final long           leaseMillis;
-    private final int            maxPerPoll;
+    private final DataSource        dataSource;
+    private final int               shardCount;
+    private final long              fence;
+    private final long              leaseMillis;
+    private final int               maxPerPoll;
 
-    /** Which shard each pulled message came from, so acknowledgement can address the right one. */
+    /**
+     * Which shard each pulled message came from, so acknowledgement can address the right one.
+     */
     private final Map<Long, Integer> shardBySeq = new HashMap<>();
     private       int                nextShard;
     private       boolean            closed;
@@ -81,14 +83,14 @@ public final class RowLeaseQueueSession implements QueueSession {
         if (closed || max <= 0) {
             return List.of();
         }
-        var limit = Math.min(max, maxPerPoll);
+        var limit  = Math.min(max, maxPerPoll);
         var pulled = new ArrayList<PulledMessage>();
         try (var connection = dataSource.getConnection()) {
             // Round-robin the starting shard so a session does not drain shard 0 while later shards
             // sit untouched, and so several sessions do not all contend on the same one first.
             for (var offset = 0; offset < shardCount && pulled.size() < limit; offset++) {
                 var shard = (nextShard + offset) % shardCount;
-                var rows = storage.claimForSession(connection, shard, limit - pulled.size(), fence, leaseMillis);
+                var rows  = storage.claimForSession(connection, shard, limit - pulled.size(), fence, leaseMillis);
                 for (var row : rows) {
                     shardBySeq.put(row.seq(), row.shard());
                     pulled.add(new PulledMessage(new MessageId(MessageId.Lane.UNORDERED, row.shard(), row.seq()),
@@ -110,7 +112,7 @@ public final class RowLeaseQueueSession implements QueueSession {
         for (var id : ids) {
             byShard.computeIfAbsent(id.shard(), shard -> new ArrayList<>()).add(id.sequence());
         }
-        var deleted = 0;
+        var deleted  = 0;
         var expected = ids.size();
         try (var connection = dataSource.getConnection()) {
             for (var entry : byShard.entrySet()) {
@@ -154,7 +156,9 @@ public final class RowLeaseQueueSession implements QueueSession {
         }
     }
 
-    /** Rows still held, for tests and for a caller that wants to know what it is on the hook for. */
+    /**
+     * Rows still held, for tests and for a caller that wants to know what it is on the hook for.
+     */
     public int messagesHeld() {
         return shardBySeq.size();
     }

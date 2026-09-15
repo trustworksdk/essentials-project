@@ -138,18 +138,18 @@ import static dk.trustworks.essentials.shared.interceptor.InterceptorChain.newIn
 public class ShardOwnedDurableQueues implements DurableQueues {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedDurableQueues.class);
 
-    private final MessageQueues                              queues;
-    private final JSONSerializer                             jsonSerializer;
-    private final UnitOfWorkFactory<? extends UnitOfWork>    unitOfWorkFactory;
-    private final DataSource                                 dataSource;
+    private final       MessageQueues                           queues;
+    private final       JSONSerializer                          jsonSerializer;
+    private final       UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory;
+    private final       DataSource                              dataSource;
     /**
      * The unordered shard count an invented queue is registered with when the caller does not choose
      * one. Four is the measured throughput knee; see the builder's setter for why this defaults to
      * registering rather than refusing.
      */
-    public static final int DEFAULT_AUTO_REGISTER_SHARD_COUNT = 4;
+    public static final int                                     DEFAULT_AUTO_REGISTER_SHARD_COUNT = 4;
 
-    private final int                                        autoRegisterShardCount;
+    private final int autoRegisterShardCount;
 
     private final Map<QueueName, ShardOwnedDurableQueueConsumer> consumers = new ConcurrentHashMap<>();
 
@@ -221,7 +221,9 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                       .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)));
     }
 
-    /** The queues this process is actually consuming from, which is a subset of what is registered. */
+    /**
+     * The queues this process is actually consuming from, which is a subset of what is registered.
+     */
     @Override
     public Set<QueueName> getActiveQueueNames() {
         return consumers.entrySet().stream()
@@ -260,7 +262,7 @@ public class ShardOwnedDurableQueues implements DurableQueues {
      * Access to the configured {@link DurableQueuesInterceptor}'s
      *
      * @return read-only list of the configured {@link DurableQueuesInterceptor}'s, in the order they
-     *         run
+     * run
      */
     public List<DurableQueuesInterceptor> getInterceptors() {
         return Collections.unmodifiableList(interceptors);
@@ -306,10 +308,10 @@ public class ShardOwnedDurableQueues implements DurableQueues {
 
         var ids = onQueue(queueName, "queue " + messages.size() + " message(s) on '" + queueName + "'",
                           () -> {
-                                var connection = currentTransactionConnection();
-                                return connection == null ? queue.enqueue(messages)
-                                                          : queue.enqueue(connection, messages);
-                            });
+                              var connection = currentTransactionConnection();
+                              return connection == null ? queue.enqueue(messages)
+                                                        : queue.enqueue(connection, messages);
+                          });
         return ids.stream().map(id -> QueueEntryIdCodec.encode(queueName, id)).toList();
     }
 
@@ -330,9 +332,9 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                                () -> {
                                                    var queueName = operation.getQueueName();
                                                    var queue     = resolve(queueName);
-                                                   var entryId   = doQueueMessages(queueName,
-                                                                                   List.of(operation.getMessage()),
-                                                                                   null).get(0);
+                                                   var entryId = doQueueMessages(queueName,
+                                                                                 List.of(operation.getMessage()),
+                                                                                 null).get(0);
                                                    var messageId = QueueEntryIdCodec.decode(entryId).messageId();
                                                    runOnQueue(queueName, "dead-letter the message just queued on '" + queueName + "'",
                                                               () -> queue.markAsDeadLetter(messageId, describe(operation.getCauseOfError())));
@@ -358,8 +360,8 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         var existing  = consumers.get(queueName);
         if (existing != null) {
             throw new IllegalStateException("There is already a consumer on queue '" + queueName + "' in this process. "
-                                            + "Two consumers for one queue would register as two instances and each be "
-                                            + "allowed half its shards.");
+                                                    + "Two consumers for one queue would register as two instances and each be "
+                                                    + "allowed half its shards.");
         }
         var consumer = new ShardOwnedDurableQueueConsumer(operation, resolve(queueName), jsonSerializer,
                                                           this::stopConsuming, this::handleWithInterceptors);
@@ -572,8 +574,8 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     public Optional<QueuedMessage> getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery operation) {
         throw new UnsupportedOperationException(
                 "Pulling a single message requires a row-lease session that outlives this call - open one with "
-                + "MessageQueue.openSession(SessionScope.MESSAGE, leaseDuration) and acknowledge through it. A "
-                + "session opened and abandoned per call would leave a lease on every message it returned.");
+                        + "MessageQueue.openSession(SessionScope.MESSAGE, leaseDuration) and acknowledge through it. A "
+                        + "session opened and abandoned per call would leave a lease on every message it returned.");
     }
 
     // --------------------------------------------------------------- counts
@@ -701,8 +703,8 @@ public class ShardOwnedDurableQueues implements DurableQueues {
                                                                         int maxNumberOfMessagesToReturn) {
         throw new UnsupportedOperationException(
                 "Ordering a queue by next-delivery timestamp across every shard of both lanes. There is no index that "
-                + "produces that order and no single sequence to merge on - which is a different question from "
-                + "getQueuedMessages, which pages by id and is served.");
+                        + "produces that order and no single sequence to merge on - which is a different question from "
+                        + "getQueuedMessages, which pages by id and is served.");
     }
 
     @Override
@@ -736,9 +738,9 @@ public class ShardOwnedDurableQueues implements DurableQueues {
         if (message instanceof OrderedMessage ordered) {
             return delay == null
                    ? dk.trustworks.essentials.components.queue.shardowned.spi.Message.ordered(payload, MessageEnvelope.FORMAT_VERSION,
-                                                                                ordered.getKey(), ordered.getOrder())
+                                                                                              ordered.getKey(), ordered.getOrder())
                    : dk.trustworks.essentials.components.queue.shardowned.spi.Message.delayedOrdered(payload, MessageEnvelope.FORMAT_VERSION,
-                                                                                       ordered.getKey(), ordered.getOrder(), delay);
+                                                                                                     ordered.getKey(), ordered.getOrder(), delay);
         }
         return delay == null
                ? dk.trustworks.essentials.components.queue.shardowned.spi.Message.of(payload, MessageEnvelope.FORMAT_VERSION)
@@ -797,15 +799,15 @@ public class ShardOwnedDurableQueues implements DurableQueues {
     private MessageQueue resolve(QueueName queueName) {
         requireNonNull(queueName, "No queueName provided");
         var engineQueueName = dk.trustworks.essentials.components.queue.shardowned.spi.QueueName.of(queueName.toString());
-        var found = onQueue(queueName, "resolve queue '" + queueName + "'", () -> queues.findQueue(engineQueueName));
+        var found           = onQueue(queueName, "resolve queue '" + queueName + "'", () -> queues.findQueue(engineQueueName));
         if (found.isPresent()) {
             return found.get();
         }
         if (autoRegisterShardCount == 0) {
             throw new IllegalArgumentException(
                     "Queue '" + queueName + "' is not registered. The shard-owned engine will not invent a shard count: "
-                    + "it caps how many instances can consume the queue and, on the ordered lane, cannot be lowered "
-                    + "afterwards. Register it explicitly, or set autoRegisterShardCount on the builder.");
+                            + "it caps how many instances can consume the queue and, on the ordered lane, cannot be lowered "
+                            + "afterwards. Register it explicitly, or set autoRegisterShardCount on the builder.");
         }
         runOnQueue(queueName, "register queue '" + queueName + "'",
                    () -> ShardOwnedSchema.registerQueue(dataSource, engineQueueName, autoRegisterShardCount));

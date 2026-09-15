@@ -16,9 +16,8 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
-import org.slf4j.*;
-
 import dk.trustworks.essentials.shared.Lifecycle;
+import org.slf4j.*;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
@@ -26,7 +25,6 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
-import java.util.function.*;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
 
@@ -71,58 +69,68 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedQueue.class);
 
-    private final ShardOwnedStorage storage;
-    private final DataSource     dataSource;
-    private final short          queueId;
+    private final    ShardOwnedStorage storage;
+    private final    DataSource        dataSource;
+    private final    short             queueId;
     /**
      * Mutable, and read on the enqueue path as well as by the heartbeat, because a queue picks up a
      * grown shard count at runtime rather than needing the process restarted. See
      * {@link #refreshShardCount()}.
      */
-    private volatile int         shardCount;
+    private volatile int               shardCount;
     /**
      * The ordered routing space THIS queue was created with, 0 until first resolved from the
      * registry. Not {@code ShardOwnedSchema.ORDERED_UNITS}: that constant is the default for a queue
      * being created, and a queue that already holds data keeps the space its keys were routed under.
      * Resolved once, because nothing changes it while the queue exists.
      */
-    private volatile int         orderedUnits;
-    private final String         instanceId;
+    private volatile int               orderedUnits;
+    private final    String            instanceId;
 
-    private final AtomicBoolean       running = new AtomicBoolean();
-    private final AtomicBoolean       flushOnExit = new AtomicBoolean(true);
-    private final AtomicInteger       enqueueShardCursor = new AtomicInteger();
-    private final List<LeasedOwner>   owners = new CopyOnWriteArrayList<>();
-    /** Shards this instance owns, to their owner — the lookup that makes local hand-off possible. */
-    private final Map<Integer, ShardOwner> ownedShards = new ConcurrentHashMap<>();
-    private String activeLane = "unordered";
-    private final ShardOwnerMetrics   metrics;
+    private final    AtomicBoolean            running             = new AtomicBoolean();
+    private final    AtomicBoolean            flushOnExit         = new AtomicBoolean(true);
+    private final    AtomicInteger            enqueueShardCursor  = new AtomicInteger();
+    private final    List<LeasedOwner>        owners              = new CopyOnWriteArrayList<>();
+    /**
+     * Shards this instance owns, to their owner — the lookup that makes local hand-off possible.
+     */
+    private final    Map<Integer, ShardOwner> ownedShards         = new ConcurrentHashMap<>();
+    private          String                   activeLane          = "unordered";
+    private final    ShardOwnerMetrics        metrics;
     /**
      * The threads and connections this queue borrows. Shared with every other queue in the process,
      * which is what stops database contact scaling with the number of queues.
      */
-    private ShardRuntime              runtime;
-    /** True when this queue borrowed the shared runtime and must hand it back on stop. */
-    private boolean                   borrowedShared;
-    /** This queue's slot on the shared heartbeat scheduler. */
-    private ScheduledFuture<?> heartbeat;
-    private long                            leaseTtlMillis;
-    private PayloadHandler                  activeHandler;
-    private OrderedPayloadHandler           activeOrderedHandler;
-    private ShardOwnerSettings              activeSettings;
-    private RedeliveryPolicy                activePolicy;
-    private int                             maxShardsHeld;
+    private          ShardRuntime             runtime;
+    /**
+     * True when this queue borrowed the shared runtime and must hand it back on stop.
+     */
+    private          boolean                  borrowedShared;
+    /**
+     * This queue's slot on the shared heartbeat scheduler.
+     */
+    private          ScheduledFuture<?>       heartbeat;
+    private          long                     leaseTtlMillis;
+    private          PayloadHandler           activeHandler;
+    private          OrderedPayloadHandler    activeOrderedHandler;
+    private          ShardOwnerSettings       activeSettings;
+    private          RedeliveryPolicy         activePolicy;
+    private          int                      maxShardsHeld;
     /**
      * Tier 2 can be turned off so its effect can be measured rather than assumed. It is a latency
      * mechanism, and the cost decomposition showed it is not free: the pre-claim stamp widens the
      * row and local hand-offs wake the owner more often.
      */
-    private volatile boolean localHandoffEnabled = true;
-    /** How many handler invocations this consumer may have in flight. See {@code ConsumerOptions}. */
-    private int              parallelConsumers = 8;
-    private HandlerDispatch  dispatch;
+    private volatile boolean                  localHandoffEnabled = true;
+    /**
+     * How many handler invocations this consumer may have in flight. See {@code ConsumerOptions}.
+     */
+    private          int                      parallelConsumers   = 8;
+    private          HandlerDispatch          dispatch;
 
-    /** Set before {@link #start()}. Per consumer, not per process — see {@code ConsumerOptions}. */
+    /**
+     * Set before {@link #start()}. Per consumer, not per process — see {@code ConsumerOptions}.
+     */
     public ShardOwnedQueue setParallelConsumers(int parallelConsumers) {
         this.parallelConsumers = parallelConsumers;
         return this;
@@ -140,7 +148,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         this(dataSource, queueId, shardCount, instanceId, new ShardOwnerMetrics());
     }
 
-    /** Join a runtime shared with the other queues in this process. Set before {@link #start()}. */
+    /**
+     * Join a runtime shared with the other queues in this process. Set before {@link #start()}.
+     */
     ShardOwnedQueue useRuntime(ShardRuntime runtime) {
         this.runtime = requireNonNull(runtime, "No runtime provided");
         this.borrowedShared = false;
@@ -152,9 +162,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * than one queue: connections and threads then belong to the process rather than to each queue.
      *
      * @deprecated since 0.51.0 — use {@link #builder()} and
-     *             {@link ShardOwnedQueueBuilder#setRuntime(ShardRuntime)}, which names its arguments
-     *             rather than relying on the order of a {@code short}, an {@code int} and a
-     *             {@code String}.
+     * {@link ShardOwnedQueueBuilder#setRuntime(ShardRuntime)}, which names its arguments
+     * rather than relying on the order of a {@code short}, an {@code int} and a
+     * {@code String}.
      */
     @Deprecated(forRemoval = true, since = "0.51.0")
     public ShardOwnedQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
@@ -212,7 +222,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         }
     }
 
-    /** The routing space this queue's ordered keys live in. Resolved once from the registry. */
+    /**
+     * The routing space this queue's ordered keys live in. Resolved once from the registry.
+     */
     private int orderedUnits() throws SQLException {
         var units = orderedUnits;
         if (units == 0) {
@@ -267,11 +279,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * lanes" and silently consumes only the second. Re-configuring the same lane is allowed.
      */
     public ShardOwnedQueue configureOrdered(OrderedPayloadHandler handler, ShardOwnerSettings settings,
-                                         int maxShards, RedeliveryPolicy redeliveryPolicy) {
+                                            int maxShards, RedeliveryPolicy redeliveryPolicy) {
         requireTrue(activeHandler == null,
                     "This queue is already configured for the unordered lane. One instance serves one "
-                    + "lane — build a second ShardOwnedQueue for the ordered lane, sharing this "
-                    + "instance id so the pair counts as one member of the cluster.");
+                            + "lane — build a second ShardOwnedQueue for the ordered lane, sharing this "
+                            + "instance id so the pair counts as one member of the cluster.");
         activeLane = "ordered";
         activeOrderedHandler = requireNonNull(handler, "No handler provided");
         activeSettings = requireNonNull(settings, "No settings provided");
@@ -285,11 +297,11 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * see that method for why.
      */
     public ShardOwnedQueue configureUnordered(PayloadHandler handler, ShardOwnerSettings settings,
-                                           int maxShards, RedeliveryPolicy redeliveryPolicy) {
+                                              int maxShards, RedeliveryPolicy redeliveryPolicy) {
         requireTrue(activeOrderedHandler == null,
                     "This queue is already configured for the ordered lane. One instance serves one "
-                    + "lane — build a second ShardOwnedQueue for the unordered lane, sharing this "
-                    + "instance id so the pair counts as one member of the cluster.");
+                            + "lane — build a second ShardOwnedQueue for the unordered lane, sharing this "
+                            + "instance id so the pair counts as one member of the cluster.");
         activeLane = "unordered";
         activeHandler = requireNonNull(handler, "No handler provided");
         activeSettings = requireNonNull(settings, "No settings provided");
@@ -333,8 +345,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // should see that rather than whatever unrelated statement happened to run first.
         ShardOwnedSchema.verifyWatermarkPrerequisites(dataSource);
 
-        var handler = activeOrderedHandler;
-        var settings = activeSettings;
+        var handler          = activeOrderedHandler;
+        var settings         = activeSettings;
         var redeliveryPolicy = activePolicy;
 
         // The caller's maxShards does NOT apply to this lane, and honouring it would strand messages.
@@ -417,10 +429,10 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
     }
 
     private void startUnordered() throws SQLException {
-        var handler = activeHandler;
-        var settings = activeSettings;
+        var handler          = activeHandler;
+        var settings         = activeSettings;
         var redeliveryPolicy = activePolicy;
-        var maxShards = maxShardsHeld;
+        var maxShards        = maxShardsHeld;
 
         var leased = new ArrayList<int[]>();
         leaseTtlMillis = Math.max(1_000L, settings.leaseTtlMillis());
@@ -537,8 +549,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         if (deliveryPaused.compareAndSet(false, true)) {
             metrics.deliveryPauses.increment();
             log.warn("Instance {} has not confirmed its liveness for {} ms, which is past the {} ms the rest of the "
-                     + "cluster waits before taking its units. Pausing delivery until it can: whatever it delivered "
-                     + "from here on would be work a successor is doing too",
+                             + "cluster waits before taking its units. Pausing delivery until it can: whatever it delivered "
+                             + "from here on would be work a successor is doing too",
                      instanceId, staleForMillis, leaseTtlMillis);
         }
         return false;
@@ -634,7 +646,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                         // this instance was gone, and that is worth knowing. One line for the tick
                         // rather than one per unit, because a handover takes them in a batch.
                         log.warn("Instance {} lost {} {} unit(s) [{}] on queue {} to another instance; "
-                                 + "their owners are stopping and will not acknowledge under the old fence",
+                                         + "their owners are stopping and will not acknowledge under the old fence",
                                  instanceId, taken.size(), lane, summarise(taken), queueId);
                     }
                 } catch (Exception e) {
@@ -693,7 +705,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         var updated = registered.getAsInt();
         if (updated < shardCount) {
             log.warn("Queue {} reports {} shards in the registry but this instance holds {}; ignoring, "
-                     + "because dropping shards at runtime would strand whatever is in them",
+                             + "because dropping shards at runtime would strand whatever is in them",
                      queueId, updated, shardCount);
             return;
         }
@@ -717,16 +729,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * long as it stayed that way.
      */
     private void reportSurplusInstances(int liveInstances, int units) {
-        var surplus = Math.max(0, liveInstances - units);
+        var surplus  = Math.max(0, liveInstances - units);
         var previous = metrics.surplusInstances.getAndSet(surplus);
         if (surplus == previous) {
             return;
         }
         if (surplus > 0) {
             log.warn("Queue {} has {} live instance(s) against {} {} unit(s), so {} can hold nothing on that lane. "
-                     + "Nothing is lost, duplicated or reordered and it recovers when the instance count drops — but "
-                     + "the {} lane's space is fixed for the life of the queue, so this is the deployment that would "
-                     + "need a larger one at creation",
+                             + "Nothing is lost, duplicated or reordered and it recovers when the instance count drops — but "
+                             + "the {} lane's space is fixed for the life of the queue, so this is the deployment that would "
+                             + "need a larger one at creation",
                      queueId, liveInstances, units, activeLane, surplus, activeLane);
         } else {
             log.info("Queue {} no longer has more instances than {} units; every instance can hold something again",
@@ -739,7 +751,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         // Per lane: the ordered lane's unit space is fixed and the unordered lane's is configurable,
         // so one fair share for both would hand this instance a quota computed against the wrong
         // number and leave units permanently unowned.
-        var units = "ordered".equals(activeLane) ? orderedUnits() : shardCount;
+        var units     = "ordered".equals(activeLane) ? orderedUnits() : shardCount;
         var fairShare = Math.min(maxShardsHeld, (units + liveInstances - 1) / liveInstances);
         reportSurplusInstances(liveInstances, units);
 
@@ -779,7 +791,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             }
             if (!released.isEmpty()) {
                 log.info("Instance {} released {} unordered shard(s) [{}] on queue {} — fair share is {} of {} "
-                         + "across {} instance(s); now holding {}",
+                                 + "across {} instance(s); now holding {}",
                          instanceId, released.size(), summarise(released), queueId, fairShare, shardCount,
                          liveInstances, countHeld());
             }
@@ -861,7 +873,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             // report the same shed every heartbeat until it completes.
             if (!asked.isEmpty()) {
                 log.info("Instance {} is draining {} ordered unit(s) [{}] on queue {} before releasing them "
-                         + "— fair share is {} of {}; a key in flight is finished, never handed over mid-key",
+                                 + "— fair share is {} of {}; a key in flight is finished, never handed over mid-key",
                          instanceId, asked.size(), summarise(asked), queueId, fairShare, orderedUnits());
             }
             return;
@@ -874,9 +886,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
      * instance has finished draining one.
      */
     private void acquireFreeOrderedShards(int fairShare) throws SQLException {
-        var limit = Math.min(fairShare, maxShardsHeld);
+        var limit      = Math.min(fairShare, maxShardsHeld);
         var heldShards = owners.stream().filter(LeasedOwner::leaseHeld).map(LeasedOwner::shard).collect(java.util.stream.Collectors.toSet());
-        var acquired = new ArrayList<Integer>();
+        var acquired   = new ArrayList<Integer>();
         for (var shard = 0; shard < orderedUnits() && heldShards.size() < limit; shard++) {
             if (heldShards.contains(shard)) {
                 continue;
@@ -947,12 +959,16 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return (int) countHeld();
     }
 
-    /** Wake-up hints the process received — a property of the shared listener, not of this queue. */
+    /**
+     * Wake-up hints the process received — a property of the shared listener, not of this queue.
+     */
     public long notificationsReceived() {
         return runtime == null ? 0L : runtime.notificationsReceived();
     }
 
-    /** LISTEN establishments — one at startup, plus one per recovery from a lost connection. */
+    /**
+     * LISTEN establishments — one at startup, plus one per recovery from a lost connection.
+     */
     public long listenerReconnects() {
         return runtime == null ? 0L : runtime.listenerReconnects();
     }
@@ -995,7 +1011,7 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
                 storage.deregisterInstance(instanceId);
             } catch (SQLException e) {
                 log.warn("Instance {} could not deregister on stop; it will age out of the membership "
-                         + "table instead, and survivors will be held at a stale fair share until it does",
+                                 + "table instead, and survivors will be held at a stale fair share until it does",
                          instanceId, e);
             }
         });
@@ -1035,8 +1051,8 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
             thread.join(SHUTDOWN_BUDGET.toMillis());
             if (thread.isAlive()) {
                 log.warn("Instance {} gave up handing back queue {} after {} — the database did not "
-                         + "answer. Leases expire and the membership row ages out on their own; the "
-                         + "successor pays its lease TTL rather than taking over at once",
+                                 + "answer. Leases expire and the membership row ages out on their own; the "
+                                 + "successor pays its lease TTL rather than taking over at once",
                          instanceId, queueId, SHUTDOWN_BUDGET);
             }
         } catch (InterruptedException e) {
@@ -1097,7 +1113,9 @@ public final class ShardOwnedQueue implements Lifecycle, AutoCloseable {
         return storage;
     }
 
-    /** The interned id this queue addresses. */
+    /**
+     * The interned id this queue addresses.
+     */
     public short queueId() {
         return queueId;
     }

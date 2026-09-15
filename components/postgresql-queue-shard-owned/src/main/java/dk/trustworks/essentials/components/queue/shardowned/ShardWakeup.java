@@ -31,7 +31,7 @@ package dk.trustworks.essentials.components.queue.shardowned;
 final class ShardWakeup {
     private final Object      lock = new Object();
     private final ShardWakeup parent;
-    private boolean           signalled;
+    private       boolean     signalled;
 
     ShardWakeup() {
         this(null);

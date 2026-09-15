@@ -55,7 +55,9 @@ public interface QueueObserver {
         delivery.run();
     }
 
-    /** Successful handling, measured from dispatch to return. */
+    /**
+     * Successful handling, measured from dispatch to return.
+     */
     default void delivered(String key, long durationNanos) {
     }
 
@@ -68,7 +70,9 @@ public interface QueueObserver {
     default void deadLettered(MessageId id, int attempts, Throwable cause) {
     }
 
-    /** A shard was taken or lost, which is the signal that consumers are moving. */
+    /**
+     * A shard was taken or lost, which is the signal that consumers are moving.
+     */
     default void shardOwnershipChanged(int shard, boolean acquired) {
     }
 }

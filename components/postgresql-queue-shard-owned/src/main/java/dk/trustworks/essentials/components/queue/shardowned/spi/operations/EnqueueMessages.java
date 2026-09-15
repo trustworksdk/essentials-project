@@ -35,7 +35,7 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *                   share the caller's commit
  */
 public final class EnqueueMessages {
-    private List<Message>          messages;
+    private       List<Message>        messages;
     private final Optional<Connection> connection;
 
     public EnqueueMessages(List<Message> messages, Connection connection) {

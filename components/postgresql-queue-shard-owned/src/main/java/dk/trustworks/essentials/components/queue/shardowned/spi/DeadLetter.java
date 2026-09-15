@@ -39,7 +39,9 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
 public record DeadLetter(MessageId id, String key, byte[] payload, int payloadType, int attempts, String lastError,
                          Long blockedByKeyOrder) {
 
-    /** The error recorded for a message parked because its key was already blocked. */
+    /**
+     * The error recorded for a message parked because its key was already blocked.
+     */
     public static final String BLOCKED_BEHIND_DEAD_LETTER = "never delivered: the key was blocked by an earlier dead letter";
 
     /**

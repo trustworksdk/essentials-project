@@ -49,20 +49,22 @@ public final class ShardOwnerMetrics {
         this.observer = requireNonNull(observer, "No observer provided");
     }
 
-    /** The consumer's observer. Never null — an engine with nobody watching gets a no-op. */
+    /**
+     * The consumer's observer. Never null — an engine with nobody watching gets a no-op.
+     */
     public QueueObserver observer() {
         return observer;
     }
 
-    public final LongAdder     delivered            = new LongAdder();
-    public final LongAdder     cursorReads          = new LongAdder();
-    public final LongAdder     holesObserved        = new LongAdder();
-    public final LongAdder     holesResolved        = new LongAdder();
-    public final LongAdder     holesAbandoned       = new LongAdder();
-    public final LongAdder     holeChaseQueries     = new LongAdder();
-    public final LongAdder     holeResolutionNanos  = new LongAdder();
-    public final LongAdder     headSweeps           = new LongAdder();
-    public final LongAdder     sweepRecoveries      = new LongAdder();
+    public final LongAdder     delivered                        = new LongAdder();
+    public final LongAdder     cursorReads                      = new LongAdder();
+    public final LongAdder     holesObserved                    = new LongAdder();
+    public final LongAdder     holesResolved                    = new LongAdder();
+    public final LongAdder     holesAbandoned                   = new LongAdder();
+    public final LongAdder     holeChaseQueries                 = new LongAdder();
+    public final LongAdder     holeResolutionNanos              = new LongAdder();
+    public final LongAdder     headSweeps                       = new LongAdder();
+    public final LongAdder     sweepRecoveries                  = new LongAdder();
     /**
      * Ordered lane only. The hole counters above describe the unordered lane's mechanism; the ordered
      * lane replaced it with a safe watermark and these describe that one.
@@ -81,10 +83,10 @@ public final class ShardOwnerMetrics {
      * whether the pump's batching is working, and the only honest way to state the idle cost of a
      * given shard count.
      */
-    public final LongAdder     orderedReadStatements = new LongAdder();
-    public final LongAdder     horizonProbes        = new LongAdder();
-    public final LongAdder     watermarkAdvances    = new LongAdder();
-    public final LongAdder     watermarkCapped      = new LongAdder();
+    public final LongAdder     orderedReadStatements            = new LongAdder();
+    public final LongAdder     horizonProbes                    = new LongAdder();
+    public final LongAdder     watermarkAdvances                = new LongAdder();
+    public final LongAdder     watermarkCapped                  = new LongAdder();
     /**
      * Sequence values — NOT rows — between the safe watermark and the newest value this owner has
      * seen. An upper bound on the re-read window, and a loose one: the ordered lane draws from one
@@ -93,27 +95,27 @@ public final class ShardOwnerMetrics {
      * rows. Use {@code cursorReadsPerMessage} to size the actual cost; use this to see whether the
      * watermark is keeping up at all.
      */
-    public final AtomicInteger maxWatermarkLagSeq   = new AtomicInteger();
-    public final LongAdder     ackFlushes           = new LongAdder();
-    public final LongAdder     handlerFailures      = new LongAdder();
+    public final AtomicInteger maxWatermarkLagSeq               = new AtomicInteger();
+    public final LongAdder     ackFlushes                       = new LongAdder();
+    public final LongAdder     handlerFailures                  = new LongAdder();
     /**
      * Rows whose attempt count a new owner bumped on takeover. The fast path never writes an
      * attempt count, so this is the only thing standing between a JVM-killing handler and an
      * infinite redelivery loop — which makes it worth counting rather than only logging.
      */
-    public final LongAdder     takeoverAttemptBumps = new LongAdder();
+    public final LongAdder     takeoverAttemptBumps             = new LongAdder();
     /**
      * Messages whose handler returned while the thread was interrupted. Not acknowledged, because an
      * interrupted handler cannot be assumed to have finished — see {@code ShardOwner.deliver}.
      */
-    public final LongAdder     abandonedOnInterrupt = new LongAdder();
+    public final LongAdder     abandonedOnInterrupt             = new LongAdder();
     /**
      * Messages delivered for a key after a HIGHER key_order for that key had already been delivered.
      * The ordered lane advances a key through the values that are present rather than waiting for a
      * producer-assigned gap that may never be filled, so this is possible — and counted, so the
      * exposure is a measurement rather than a claim.
      */
-    public final LongAdder     orderViolations      = new LongAdder();
+    public final LongAdder     orderViolations                  = new LongAdder();
     /**
      * Times a key was recorded as blocked by a dead letter. A key never advances past one, so a
      * non-zero value means some key stopped and is waiting for the dead letter to be resurrected or
@@ -121,7 +123,7 @@ public final class ShardOwnerMetrics {
      * blocks from the dead-letter table, so the same key legitimately registers again under its new
      * owner.
      */
-    public final LongAdder     keysBlockedByDeadLetter = new LongAdder();
+    public final LongAdder     keysBlockedByDeadLetter          = new LongAdder();
     /**
      * Messages moved to the dead-letter table without ever being handed to a handler, because their
      * key was blocked. These are the {@link dk.trustworks.essentials.components.queue.shardowned.spi.DeadLetter#neverDelivered()}
@@ -129,47 +131,67 @@ public final class ShardOwnerMetrics {
      * broken handler.
      */
     public final LongAdder     messagesPoisonedBehindDeadLetter = new LongAdder();
-    /** Reads of the blocked-key state. Issued on takeover, and per sweep only while a block stands. */
-    public final LongAdder     deadLetterBlockReads = new LongAdder();
-    /** Ordered shards this instance was asked to give up because it held more than its fair share. */
-    public final LongAdder     shedsStarted         = new LongAdder();
-    /** Sheds that quiesced and released, so another instance could take the shard. */
-    public final LongAdder     shedsCompleted       = new LongAdder();
+    /**
+     * Reads of the blocked-key state. Issued on takeover, and per sweep only while a block stands.
+     */
+    public final LongAdder     deadLetterBlockReads             = new LongAdder();
+    /**
+     * Ordered shards this instance was asked to give up because it held more than its fair share.
+     */
+    public final LongAdder     shedsStarted                     = new LongAdder();
+    /**
+     * Sheds that quiesced and released, so another instance could take the shard.
+     */
+    public final LongAdder     shedsCompleted                   = new LongAdder();
     /**
      * Sheds abandoned because a key was still in a handler when the grace ran out. The shard stays
      * here: unbalanced beats reordered. A non-zero count means handlers run longer than
      * {@link ShardOwnerSettings#shedGrace}, not that anything is broken.
      */
-    public final LongAdder     shedsAbandoned       = new LongAdder();
-    public final LongAdder     retriesScheduled     = new LongAdder();
-    public final LongAdder     retriesDispatched    = new LongAdder();
-    public final LongAdder     deadLettered         = new LongAdder();
-    /** Idle waits released by a notification rather than by the backstop timeout. */
-    public final LongAdder     wakeupsHonoured      = new LongAdder();
-    public final LongAdder     backstopPolls        = new LongAdder();
-    /** Messages delivered without ever being read back, because the enqueuing JVM owned the shard. */
-    public final LongAdder     localHandoffs        = new LongAdder();
-    /** Cursor reads avoided because the owner had locally handed-off work to process instead. */
-    public final LongAdder     readsSkippedByHandoff = new LongAdder();
-    /** Acknowledgements the fence clause rejected because the lease had moved on. */
-    public final LongAdder     fencedOutAcks         = new LongAdder();
-    public final LongAdder     leaseRenewals         = new LongAdder();
-    public final LongAdder     leasesLost            = new LongAdder();
-    /** Connections lost underneath an owner and reconnected. Routine in production; not fatal. */
-    public final LongAdder     connectionFailures    = new LongAdder();
+    public final LongAdder     shedsAbandoned                   = new LongAdder();
+    public final LongAdder     retriesScheduled                 = new LongAdder();
+    public final LongAdder     retriesDispatched                = new LongAdder();
+    public final LongAdder     deadLettered                     = new LongAdder();
+    /**
+     * Idle waits released by a notification rather than by the backstop timeout.
+     */
+    public final LongAdder     wakeupsHonoured                  = new LongAdder();
+    public final LongAdder     backstopPolls                    = new LongAdder();
+    /**
+     * Messages delivered without ever being read back, because the enqueuing JVM owned the shard.
+     */
+    public final LongAdder     localHandoffs                    = new LongAdder();
+    /**
+     * Cursor reads avoided because the owner had locally handed-off work to process instead.
+     */
+    public final LongAdder     readsSkippedByHandoff            = new LongAdder();
+    /**
+     * Acknowledgements the fence clause rejected because the lease had moved on.
+     */
+    public final LongAdder     fencedOutAcks                    = new LongAdder();
+    public final LongAdder     leaseRenewals                    = new LongAdder();
+    public final LongAdder     leasesLost                       = new LongAdder();
+    /**
+     * Connections lost underneath an owner and reconnected. Routine in production; not fatal.
+     */
+    public final LongAdder     connectionFailures               = new LongAdder();
     /**
      * Units taken, <b>including the first acquisition at start-up</b>. It counted only rebalance
      * acquisitions until the admin API began publishing it, so a single instance holding every unit
      * of a queue reported zero — which reads as "this instance has taken nothing" rather than "this
      * instance never had to rebalance".
      */
-    public final LongAdder     shardsAcquired        = new LongAdder();
-    public final LongAdder     shardsReleased        = new LongAdder();
-    /** Dispatch attempts skipped because that key already had a message in flight. */
-    public final LongAdder     keyHeadOfLineBlocks  = new LongAdder();
-    public final AtomicInteger maxPendingHoles      = new AtomicInteger();
-    /** Peak number of distinct keys handled concurrently — the evidence for cross-key parallelism. */
-    public final AtomicInteger maxConcurrentKeys    = new AtomicInteger();
+    public final LongAdder     shardsAcquired                   = new LongAdder();
+    public final LongAdder     shardsReleased                   = new LongAdder();
+    /**
+     * Dispatch attempts skipped because that key already had a message in flight.
+     */
+    public final LongAdder     keyHeadOfLineBlocks              = new LongAdder();
+    public final AtomicInteger maxPendingHoles                  = new AtomicInteger();
+    /**
+     * Peak number of distinct keys handled concurrently — the evidence for cross-key parallelism.
+     */
+    public final AtomicInteger maxConcurrentKeys                = new AtomicInteger();
     /**
      * Live instances beyond the lane's routing space, or zero — the consumers that can hold nothing
      * because there are no units left to give them.
@@ -181,7 +203,7 @@ public final class ShardOwnerMetrics {
      * the life of the queue — so this is the number that decides whether growing it would have been
      * worth building. Without it the question can only be guessed at.
      */
-    public final AtomicInteger surplusInstances     = new AtomicInteger();
+    public final AtomicInteger surplusInstances                 = new AtomicInteger();
     /**
      * Times this instance stopped dispatching because it had not been able to confirm its own
      * liveness within the lease — see {@code ShardOwnedQueue.deliveryPermitted}.
@@ -190,7 +212,7 @@ public final class ShardOwnerMetrics {
      * the cluster waits before taking this instance's units. Nothing was lost; what it says is that
      * this instance spent time holding units it could no longer vouch for.
      */
-    public final LongAdder     deliveryPauses       = new LongAdder();
+    public final LongAdder     deliveryPauses                   = new LongAdder();
 
     /**
      * The operator-facing subset, as a stable shape.

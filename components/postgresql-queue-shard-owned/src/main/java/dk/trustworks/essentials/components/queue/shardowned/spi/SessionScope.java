@@ -56,6 +56,8 @@ public enum SessionScope {
      * every row in one statement either way. What differs is how much a session holds at once.
      */
     BATCH,
-    /** A whole shard. No per-message write at all. Ordering safe, blocks the shard. */
+    /**
+     * A whole shard. No per-message write at all. Ordering safe, blocks the shard.
+     */
     SHARD
 }

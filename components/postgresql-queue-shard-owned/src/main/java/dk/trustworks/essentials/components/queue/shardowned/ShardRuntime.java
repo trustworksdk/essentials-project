@@ -93,9 +93,9 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
             // kind of thing that is only discovered while reading a heap dump.
             if (!existing.runtime().settings.equals(settings)) {
                 log.warn("A shared ShardRuntime for this DataSource already exists and was built with "
-                         + "different settings; the settings passed here are ignored. Construct the "
-                         + "ShardRuntime yourself and pass it to every ShardOwnedQueue if the process "
-                         + "needs a specific configuration. In force: {}. Ignored: {}",
+                                 + "different settings; the settings passed here are ignored. Construct the "
+                                 + "ShardRuntime yourself and pass it to every ShardOwnedQueue if the process "
+                                 + "needs a specific configuration. In force: {}. Ignored: {}",
                          existing.runtime().settings, settings);
             }
             SHARED.put(dataSource, new Shared(existing.runtime(), existing.borrowers() + 1));
@@ -106,7 +106,9 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         return runtime;
     }
 
-    /** Give a shared runtime back. The last borrower out closes it. */
+    /**
+     * Give a shared runtime back. The last borrower out closes it.
+     */
     static synchronized void releaseShared(DataSource dataSource) {
         var existing = SHARED.get(dataSource);
         if (existing == null) {
@@ -120,22 +122,22 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         existing.runtime().stop();
     }
 
-    private final DataSource                dataSource;
-    private final ShardOwnerSettings        settings;
-    private final ShardOwnerMetrics         metrics;
-    private final AtomicBoolean             running = new AtomicBoolean();
-    private final AtomicBoolean             flushOnExit = new AtomicBoolean(true);
-    private final List<ShardPump>           pumps = new ArrayList<>();
-    private final Map<String, ShardWakeup>  wakeups = new ConcurrentHashMap<>();
+    private final DataSource               dataSource;
+    private final ShardOwnerSettings       settings;
+    private final ShardOwnerMetrics        metrics;
+    private final AtomicBoolean            running     = new AtomicBoolean();
+    private final AtomicBoolean            flushOnExit = new AtomicBoolean(true);
+    private final List<ShardPump>          pumps       = new ArrayList<>();
+    private final Map<String, ShardWakeup> wakeups     = new ConcurrentHashMap<>();
     /**
      * Recreated by every {@link #start()}, because an {@code ExecutorService} cannot be restarted
      * once shut down. This is what makes the runtime genuinely restartable rather than merely
      * stoppable — the same distinction {@code ShardOwnedQueue.stop()} had to make.
      */
-    private ExecutorService                 pumpExecutor;
-    private ExecutorService                 handlerExecutor;
-    private ScheduledExecutorService        heartbeat;
-    private ShardWakeupListener             listener;
+    private       ExecutorService          pumpExecutor;
+    private       ExecutorService          handlerExecutor;
+    private       ScheduledExecutorService heartbeat;
+    private       ShardWakeupListener      listener;
 
     public ShardRuntime(DataSource dataSource, ShardOwnerSettings settings) {
         this(dataSource, settings, new ShardOwnerMetrics());
@@ -225,7 +227,9 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         return new HandlerDispatch(handlerExecutor, new Semaphore(Math.max(1, parallelConsumers)));
     }
 
-    /** Register a queue's heartbeat. One scheduler thread runs every queue's renewals and rebalances. */
+    /**
+     * Register a queue's heartbeat. One scheduler thread runs every queue's renewals and rebalances.
+     */
     ScheduledFuture<?> scheduleHeartbeat(Runnable task, long intervalMillis) {
         return heartbeat.scheduleAtFixedRate(task, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
     }
@@ -242,7 +246,9 @@ public final class ShardRuntime implements Lifecycle, AutoCloseable {
         return pumps.size();
     }
 
-    /** Equivalent to {@link #stop()}, so try-with-resources and a container both work. */
+    /**
+     * Equivalent to {@link #stop()}, so try-with-resources and a container both work.
+     */
     @Override
     public void close() {
         stop();

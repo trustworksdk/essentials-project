@@ -36,13 +36,19 @@ public interface Subscription extends Lifecycle, AutoCloseable {
      */
     int shardsHeld();
 
-    /** Unordered-lane shards held, out of the queue's {@code shardCount}. */
+    /**
+     * Unordered-lane shards held, out of the queue's {@code shardCount}.
+     */
     int unorderedShardsHeld();
 
-    /** Ordered-lane units held, out of the queue's fixed routing space. */
+    /**
+     * Ordered-lane units held, out of the queue's fixed routing space.
+     */
     int orderedUnitsHeld();
 
-    /** Equivalent to {@link #stop()}. */
+    /**
+     * Equivalent to {@link #stop()}.
+     */
     @Override
     default void close() {
         stop();

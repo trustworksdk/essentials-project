@@ -54,7 +54,7 @@ import java.util.*;
  *     <dd>Acknowledgement is what the owner does when a handler returns, and letting an arbitrary
  *         caller do it means the engine cannot know whether the work was done. That one stays a
  *         {@link QueueSession} operation, which is the thing that actually holds the right.
- *         <p>
+ * <p>
  *         <b>The rest of the by-id family is now supported, and an earlier version of this javadoc
  *         was wrong to exclude it.</b> It argued that acting on a message by id requires a per-message
  *         claim flag, which conflated two different things: addressing a row, and knowing whether

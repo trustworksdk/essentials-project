@@ -56,15 +56,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 public final class ShardOwnedQueuedMessage implements QueuedMessage {
 
-    private final QueueEntryId  id;
-    private final QueueName     queueName;
-    private final Message       message;
-    private final int           totalDeliveryAttempts;
+    private final QueueEntryId   id;
+    private final QueueName      queueName;
+    private final Message        message;
+    private final int            totalDeliveryAttempts;
     private final OffsetDateTime addedTimestamp;
     private final OffsetDateTime nextDeliveryTimestamp;
     private final boolean        deadLetterMessage;
     private final String         lastDeliveryError;
-    /** Set only on the push path; every accessor the engine cannot answer there consults it. */
+    /**
+     * Set only on the push path; every accessor the engine cannot answer there consults it.
+     */
     private final boolean        partial;
 
     private volatile Duration manualRedeliveryDelay;
@@ -89,7 +91,9 @@ public final class ShardOwnedQueuedMessage implements QueuedMessage {
         this.partial = partial;
     }
 
-    /** Fully populated, from a row the adapter read itself. */
+    /**
+     * Fully populated, from a row the adapter read itself.
+     */
     public static ShardOwnedQueuedMessage read(QueueEntryId id,
                                                QueueName queueName,
                                                Message message,
@@ -125,20 +129,15 @@ public final class ShardOwnedQueuedMessage implements QueuedMessage {
     private <T> T unavailable(String what) {
         throw new UnsupportedOperationException(
                 what + " is not available to a handler on the shard-owned engine's push delivery path. "
-                + "The engine's MessageHandler receives (messageId, key, payload, payloadType) only - the value "
-                + "exists on the row but is not in the SELECT the delivery path issues, and adding it would widen "
-                + "a read that runs roughly twice per delivered message. getId() IS available here: pass it to "
-                + "getQueuedMessage(queueEntryId) to read the full row when you need this. See this module's "
-                + "CLAUDE.md for why it is not simply added.");
+                        + "The engine's MessageHandler receives (messageId, key, payload, payloadType) only - the value "
+                        + "exists on the row but is not in the SELECT the delivery path issues, and adding it would widen "
+                        + "a read that runs roughly twice per delivered message. getId() IS available here: pass it to "
+                        + "getQueuedMessage(queueEntryId) to read the full row when you need this. See this module's "
+                        + "CLAUDE.md for why it is not simply added.");
     }
 
     @Override
     public QueueEntryId getId() {
-        // Answered on BOTH shapes. This used to throw on the push path along with everything else,
-        // and it was the accessor that actually hurt: framework code reaches for the id far more often
-        // than for an attempt count, and an eager log argument -- log.trace("...{}", msg.getId()) --
-        // evaluates regardless of level, so a trace statement nobody enabled dead-lettered every
-        // message it touched. Supplying it costs the delivery path nothing; see beingDelivered.
         return id;
     }
 
@@ -226,21 +225,11 @@ public final class ShardOwnedQueuedMessage implements QueuedMessage {
         return manualRedeliveryDelay;
     }
 
-    /**
-     * The id is printed on both shapes, because it is answered on both. This used to render
-     * {@code <not available during push delivery>} when partial — true when everything on the push
-     * path threw, and left behind when {@link #getId()} started being supplied. A toString that
-     * disclaims the one field a reader is most likely to be looking for makes a partial message look
-     * more partial than it is, in exactly the logs someone reads while diagnosing one.
-     * <p>
-     * {@code partial} is reported as its own field instead, since what is missing is the attempt
-     * counts and the timestamps — and those are named by the exception each of them throws.
-     */
     @Override
     public String toString() {
         return "ShardOwnedQueuedMessage{queueName=" + queueName
-               + ", id=" + id
-               + ", partial=" + partial
-               + ", deliveryMode=" + getDeliveryMode() + "}";
+                + ", id=" + id
+                + ", partial=" + partial
+                + ", deliveryMode=" + getDeliveryMode() + "}";
     }
 }

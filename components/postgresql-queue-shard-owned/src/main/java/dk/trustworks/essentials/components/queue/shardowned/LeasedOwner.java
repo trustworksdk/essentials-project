@@ -57,10 +57,14 @@ interface LeasedOwner {
      */
     boolean needsAttention();
 
-    /** Called once per connection, including after a reconnect. */
+    /**
+     * Called once per connection, including after a reconnect.
+     */
     void onTakeover(Connection connection) throws SQLException;
 
-    /** Flush outstanding acknowledgements while the fence is still valid. */
+    /**
+     * Flush outstanding acknowledgements while the fence is still valid.
+     */
     void flushOnStop(Connection connection) throws SQLException;
 
     /**
@@ -74,7 +78,9 @@ interface LeasedOwner {
 
     long fence();
 
-    /** {@code "unordered"} or {@code "ordered"} — leases are scoped per lane. */
+    /**
+     * {@code "unordered"} or {@code "ordered"} — leases are scoped per lane.
+     */
     String lane();
 
     boolean leaseHeld();
@@ -101,7 +107,9 @@ interface LeasedOwner {
         TAKEN
     }
 
-    /** Called when this owner's lease ends, for either reason. */
+    /**
+     * Called when this owner's lease ends, for either reason.
+     */
     void onLeaseEnded(LeaseEnd reason);
 
     /**

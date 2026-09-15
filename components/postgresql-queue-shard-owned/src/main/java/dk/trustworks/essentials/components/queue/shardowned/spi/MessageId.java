@@ -57,7 +57,9 @@ public record MessageId(Lane lane, int shard, long sequence) {
             this.code = code;
         }
 
-        /** The single character this lane is written as in a {@link MessageId}'s text form. */
+        /**
+         * The single character this lane is written as in a {@link MessageId}'s text form.
+         */
         public char code() {
             return code;
         }

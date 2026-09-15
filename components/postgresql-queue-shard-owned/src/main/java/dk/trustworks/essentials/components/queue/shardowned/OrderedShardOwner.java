@@ -21,7 +21,6 @@ import org.slf4j.*;
 
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -52,21 +51,21 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class OrderedShardOwner implements BatchReadableOwner {
     private static final Logger log = LoggerFactory.getLogger(OrderedShardOwner.class);
 
-    private final ShardOwnedStorage             storage;
-    private final int                        shard;
-    private final long                       fence;
-    private final ShardOwnerSettings         settings;
-    private final OrderedPayloadHandler      handler;
-    private final ShardOwnerMetrics          metrics;
-    private final RedeliveryPolicy           redeliveryPolicy;
+    private final ShardOwnedStorage     storage;
+    private final int                   shard;
+    private final long                  fence;
+    private final ShardOwnerSettings    settings;
+    private final OrderedPayloadHandler handler;
+    private final ShardOwnerMetrics     metrics;
+    private final RedeliveryPolicy      redeliveryPolicy;
 
     /**
      * Per-key retry schedule. A failing message must keep its key blocked until it is retried or
      * dead-lettered — releasing the key early would let a later message overtake the one that
      * failed, which is precisely the ordering guarantee being sold.
      */
-    private final PriorityQueue<OrderedRetry> retrySchedule = new PriorityQueue<>(Comparator.comparingLong(OrderedRetry::dueNanos));
-    private final Map<Long, Integer>          attemptsBySeq = new HashMap<>();
+    private final PriorityQueue<OrderedRetry> retrySchedule     = new PriorityQueue<>(Comparator.comparingLong(OrderedRetry::dueNanos));
+    private final Map<Long, Integer>          attemptsBySeq     = new HashMap<>();
     private final Set<String>                 keysAwaitingRetry = new HashSet<>();
 
     /**
@@ -74,19 +73,24 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * watermark</em>, not a high-water mark: it only passes a sequence value once no transaction that
      * could still commit that value is running. See {@link #advanceWatermark}.
      */
-    private long safeCursor;
-    /** Highest sequence value observed. The watermark trails this; the gap is the re-read window. */
-    private long maxSeen;
+    private       long                           safeCursor;
+    /**
+     * Highest sequence value observed. The watermark trails this; the gap is the re-read window.
+     */
+    private       long                           maxSeen;
     /**
      * Observations waiting for the horizon to retire them, oldest first. Each says "at this moment the
      * highest value seen was {@code maxSeen}, and these write transactions were running". Once none of
      * them is running, everything at or below that {@code maxSeen} has resolved.
      */
     private final ArrayDeque<WatermarkCandidate> watermarkCandidates = new ArrayDeque<>();
+
     private record WatermarkCandidate(long maxSeen, Set<Long> runningXids, long observedAtNanos) {
     }
 
-    /** Rows the pump read on this owner's behalf, consumed by the next pass. Pump thread only. */
+    /**
+     * Rows the pump read on this owner's behalf, consumed by the next pass. Pump thread only.
+     */
     private BatchRead pendingBatch;
 
     private record BatchRead(List<ShardOwnedStorage.OrderedRow> cursorRows,
@@ -94,16 +98,26 @@ final class OrderedShardOwner implements BatchReadableOwner {
                              OptionalLong nextVisibleMillis) {
     }
 
-    /** Everything known but not yet delivered, grouped by key and ordered within it. */
-    private final Map<String, TreeMap<Long, ShardOwnedStorage.OrderedRow>> readyByKey = new HashMap<>();
-    /** Keys with a message currently in a handler. At most one per key, which is what enforces FIFO. */
-    private final Set<String> keysInFlight = new HashSet<>();
-    /** Highest key_order handed to a handler per key, used to detect ordering violations. */
-    private final Map<String, Long> highestDeliveredOrder = new HashMap<>();
-    /** Sequence values handled and awaiting the next ack flush. */
-    private final Set<Long> pendingAcks = new HashSet<>();
-    /** Sequence values already seen, so a sweep or a chase cannot re-queue them. */
-    private final Set<Long> seen = new HashSet<>();
+    /**
+     * Everything known but not yet delivered, grouped by key and ordered within it.
+     */
+    private final Map<String, TreeMap<Long, ShardOwnedStorage.OrderedRow>> readyByKey            = new HashMap<>();
+    /**
+     * Keys with a message currently in a handler. At most one per key, which is what enforces FIFO.
+     */
+    private final Set<String>                                              keysInFlight          = new HashSet<>();
+    /**
+     * Highest key_order handed to a handler per key, used to detect ordering violations.
+     */
+    private final Map<String, Long>                                        highestDeliveredOrder = new HashMap<>();
+    /**
+     * Sequence values handled and awaiting the next ack flush.
+     */
+    private final Set<Long>                                                pendingAcks           = new HashSet<>();
+    /**
+     * Sequence values already seen, so a sweep or a chase cannot re-queue them.
+     */
+    private final Set<Long>                                                seen                  = new HashSet<>();
     /**
      * Keys with a dead letter, and the lowest {@code key_order} it was recorded at. A key never
      * advances past a dead letter: nothing above that value is delivered, and anything that arrives
@@ -115,7 +129,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * would mean every ownership change silently resumed a key past the message nobody handled —
      * which is the failure the rule exists to prevent, reintroduced by its own enforcement.
      */
-    private final Map<String, Long> deadLetterBlocks = new HashMap<>();
+    private final Map<String, Long>                                        deadLetterBlocks      = new HashMap<>();
     /**
      * Sequence values to move to the dead-letter table on the next pass, because their key is blocked.
      * <p>
@@ -125,7 +139,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * stalled key from growing without bound in front of the cursor, and what spares the head sweep
      * from spending its batch re-reading rows it can never deliver.
      */
-    private final List<PoisonCandidate> pendingPoison = new ArrayList<>();
+    private final List<PoisonCandidate>                                    pendingPoison         = new ArrayList<>();
+
     /**
      * Carries the key and order, not just the sequence value, because a candidate is re-tested against
      * the blocks before it is moved. Between being queued and being written, a refresh can find that
@@ -137,7 +152,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
             return row.seq();
         }
     }
-    /** Set once a WARN has been logged for a key, so a blocked key is reported on transition only. */
+
+    /**
+     * Set once a WARN has been logged for a key, so a blocked key is reported on transition only.
+     */
     private final Set<String> reportedBlocks = new HashSet<>();
     /**
      * Set when a row arrives at exactly a key's blocked {@code key_order} — which can only be the
@@ -151,7 +169,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * {@code maxSweepInterval} on a shard that has stopped delivering — so a resurrect would appear to
      * do nothing for up to thirty seconds.
      */
-    private boolean blockRefreshRequested;
+    private       boolean     blockRefreshRequested;
 
     /**
      * Handlers run here, not on the pump thread.
@@ -170,10 +188,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * {@code activeKeys} against {@code keyConcurrency}, per shard, as before — but the bound no
      * longer costs a platform thread whether or not it is being used.
      */
-    private final HandlerDispatch  dispatch;
-    private final Object           stateLock = new Object();
-    private final AtomicInteger    activeKeys = new AtomicInteger();
-    private final String           instanceId;
+    private final    HandlerDispatch                    dispatch;
+    private final    Object                             stateLock    = new Object();
+    private final    AtomicInteger                      activeKeys   = new AtomicInteger();
+    private final    String                             instanceId;
     /**
      * Tier 1, which this lane went without.
      * <p>
@@ -183,14 +201,20 @@ final class OrderedShardOwner implements BatchReadableOwner {
      * already built, tested and measured; it was simply never wired to this lane, and every headline
      * latency figure in the design came from the unordered one.
      */
-    private final ShardWakeup      wakeup;
-    /** Cleared when the lease is lost, so this owner stops rather than racing its successor. */
-    private final AtomicBoolean    leaseHeld = new AtomicBoolean(true);
-    /** Set when this owner has been asked to give the shard up. See {@link #beginShedding()}. */
-    private final AtomicBoolean    shedding = new AtomicBoolean();
-    /** Set once the shard has quiesced and its acknowledgements are flushed — safe to release. */
-    private final AtomicBoolean    shedComplete = new AtomicBoolean();
-    private volatile long          shedDeadlineNanos;
+    private final    ShardWakeup                        wakeup;
+    /**
+     * Cleared when the lease is lost, so this owner stops rather than racing its successor.
+     */
+    private final    AtomicBoolean                      leaseHeld    = new AtomicBoolean(true);
+    /**
+     * Set when this owner has been asked to give the shard up. See {@link #beginShedding()}.
+     */
+    private final    AtomicBoolean                      shedding     = new AtomicBoolean();
+    /**
+     * Set once the shard has quiesced and its acknowledgements are flushed — safe to release.
+     */
+    private final    AtomicBoolean                      shedComplete = new AtomicBoolean();
+    private volatile long                               shedDeadlineNanos;
     /**
      * Whether this owner's instance has confirmed its own liveness recently enough to dispatch —
      * supplied by {@link ShardOwnedQueue} after construction. Null means always, which is what an
@@ -218,15 +242,15 @@ final class OrderedShardOwner implements BatchReadableOwner {
     private long lastAckFlushNanos;
 
     OrderedShardOwner(ShardOwnedStorage storage,
-                             int shard,
-                             long fence,
-                             ShardOwnerSettings settings,
-                             OrderedPayloadHandler handler,
-                             ShardOwnerMetrics metrics,
-                             RedeliveryPolicy redeliveryPolicy,
-                             String instanceId,
-                             ShardWakeup wakeup,
-                             HandlerDispatch dispatch) {
+                      int shard,
+                      long fence,
+                      ShardOwnerSettings settings,
+                      OrderedPayloadHandler handler,
+                      ShardOwnerMetrics metrics,
+                      RedeliveryPolicy redeliveryPolicy,
+                      String instanceId,
+                      ShardWakeup wakeup,
+                      HandlerDispatch dispatch) {
         this.storage = requireNonNull(storage, "No storage provided");
         this.shard = shard;
         this.fence = fence;
@@ -308,7 +332,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
 
     @Override
     public long parkDeadlineMillis() {
-        var now = System.nanoTime();
+        var now        = System.nanoTime();
         var untilSweep = (sweepIntervalNanos - (now - lastSweepNanos)) / 1_000_000L;
         if (nextVisibleAtNanos != Long.MAX_VALUE) {
             untilSweep = Math.min(untilSweep, Math.max(0L, (nextVisibleAtNanos - now) / 1_000_000L));
@@ -388,7 +412,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         // in the set, and treating it as retired would step over it. See ShardOwnedStorage.
         advanceWatermark(connection);
 
-        var now = System.nanoTime();
+        var now           = System.nanoTime();
         var sweptThisPass = false;
         if (batch != null) {
             // The pump decided, via batchSweepDue, before issuing the statement. A null list means it
@@ -426,7 +450,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         }
 
         if (!pendingAcks.isEmpty()
-            && (pendingAcks.size() >= settings.ackBatchSize() || now - lastAckFlushNanos >= settings.ackFlushIntervalNanos())) {
+                && (pendingAcks.size() >= settings.ackBatchSize() || now - lastAckFlushNanos >= settings.ackFlushIntervalNanos())) {
             flushAcks(connection);
             lastAckFlushNanos = now;
         }
@@ -517,7 +541,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
         synchronized (stateLock) {
             var exhaustedKeys = new ArrayList<String>();
             for (var entry : readyByKey.entrySet()) {
-                var key = entry.getKey();
+                var key     = entry.getKey();
                 var byOrder = entry.getValue();
                 if (byOrder.isEmpty()) {
                     exhaustedKeys.add(key);
@@ -550,7 +574,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
                     exhaustedKeys.add(key);
                     continue;
                 }
-                var next = byOrder.pollFirstEntry();
+                var next     = byOrder.pollFirstEntry();
                 var previous = highestDeliveredOrder.get(key);
                 if (previous != null && next.getKey() < previous) {
                     metrics.orderViolations.increment();
@@ -649,7 +673,7 @@ final class OrderedShardOwner implements BatchReadableOwner {
      */
     private void blockKey(String key, long keyOrder) {
         var previous = deadLetterBlocks.merge(key, keyOrder, Math::min);
-        var held = readyByKey.get(key);
+        var held     = readyByKey.get(key);
         if (held != null) {
             var above = held.tailMap(previous, false);
             above.values().forEach(row -> pendingPoison.add(new PoisonCandidate(row, key, row.keyOrder())));
@@ -661,8 +685,8 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // only signal — the messages behind it are moved out of the queue, so depth falls rather
             // than rises, and a rising dead-letter count is what is left to notice.
             log.warn("Ordered shard {}: key '{}' is blocked at key_order {} — its message was dead-lettered, so "
-                     + "nothing above that order will be delivered and anything arriving for it is dead-lettered "
-                     + "too. Resurrect or delete the dead letter to release the key",
+                             + "nothing above that order will be delivered and anything arriving for it is dead-lettered "
+                             + "too. Resurrect or delete the dead letter to release the key",
                      shard, key, previous);
         }
         metrics.keysBlockedByDeadLetter.increment();
@@ -772,17 +796,17 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // which is the overwhelming majority of them, and it must not pay for the horizon probe.
             return;
         }
-        var now = System.nanoTime();
+        var now     = System.nanoTime();
         var running = storage.runningWriteTransactionIds(connection);
         lastHorizonProbeNanos = now;
         metrics.horizonProbes.increment();
 
         var advanceTo = -1L;
-        var capped = false;
+        var capped    = false;
         while (!watermarkCandidates.isEmpty()) {
             var candidate = watermarkCandidates.peekFirst();
-            var retired = Collections.disjoint(candidate.runningXids(), running);
-            var expired = now - candidate.observedAtNanos() > settings.watermarkCapNanos();
+            var retired   = Collections.disjoint(candidate.runningXids(), running);
+            var expired   = now - candidate.observedAtNanos() > settings.watermarkCapNanos();
             if (!retired && !expired) {
                 break;
             }
@@ -796,10 +820,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
             if (capped) {
                 metrics.watermarkCapped.increment();
                 log.debug("Ordered shard {}: watermark advanced to {} on the wall-clock cap — a write "
-                          + "transaction outlived watermarkCap ({}s). Messages from that transaction "
-                          + "may have been skipped; find the long transaction rather than raising the "
-                          + "cap. Note this lane does not use holeExpiry, which an earlier version of "
-                          + "this message named.", shard, safeCursor, settings.watermarkCap().toSeconds());
+                                  + "transaction outlived watermarkCap ({}s). Messages from that transaction "
+                                  + "may have been skipped; find the long transaction rather than raising the "
+                                  + "cap. Note this lane does not use holeExpiry, which an earlier version of "
+                                  + "this message named.", shard, safeCursor, settings.watermarkCap().toSeconds());
             }
         }
         if (maxSeen > safeCursor) {
@@ -808,12 +832,12 @@ final class OrderedShardOwner implements BatchReadableOwner {
             // empty and the owner would probe the horizon forever on a queue with nothing left to do.
             watermarkCandidates.addLast(new WatermarkCandidate(maxSeen, running, now));
             metrics.maxWatermarkLagSeq.accumulateAndGet((int) Math.min(Integer.MAX_VALUE, maxSeen - safeCursor),
-                                                         Math::max);
+                                                        Math::max);
         }
     }
 
     private void sweep(Connection connection) throws SQLException {
-        var rows = storage.sweepOrderedFromHead(connection, shard, settings.readBatchSize());
+        var rows      = storage.sweepOrderedFromHead(connection, shard, settings.readBatchSize());
         var untilNext = storage.millisUntilNextVisible(connection, ShardOwnedSchema.ORDERED_TABLE, shard);
         metrics.orderedReadStatements.add(2);
         applySweptRows(rows, untilNext);
@@ -927,7 +951,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
         return false;
     }
 
-    /** True once the shard has quiesced and its acknowledgements are flushed. */
+    /**
+     * True once the shard has quiesced and its acknowledgements are flushed.
+     */
     public boolean shedComplete() {
         return shedComplete.get();
     }
@@ -956,7 +982,9 @@ final class OrderedShardOwner implements BatchReadableOwner {
         return leaseHeld.get();
     }
 
-    /** See {@link LeasedOwner#deliveryPermitted()}. Set once, by the queue that built this owner. */
+    /**
+     * See {@link LeasedOwner#deliveryPermitted()}. Set once, by the queue that built this owner.
+     */
     void setDeliveryGate(java.util.function.BooleanSupplier deliveryGate) {
         this.deliveryGate = deliveryGate;
     }

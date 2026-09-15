@@ -21,8 +21,8 @@ import org.slf4j.*;
 
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -49,22 +49,22 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class ShardOwner implements LeasedOwner {
     private static final Logger log = LoggerFactory.getLogger(ShardOwner.class);
 
-    private final ShardOwnedStorage      storage;
-    private final int                 shard;
-    private final long                fence;
-    private final ShardOwnerSettings  settings;
-    private final PayloadHandler      handler;
-    private final ShardOwnerMetrics   metrics;
-    private final RedeliveryPolicy    redeliveryPolicy;
-    private final ShardWakeup         wakeup;
-    private final String              instanceId;
+    private final    ShardOwnedStorage                            storage;
+    private final    int                                          shard;
+    private final    long                                         fence;
+    private final    ShardOwnerSettings                           settings;
+    private final    PayloadHandler                               handler;
+    private final    ShardOwnerMetrics                            metrics;
+    private final    RedeliveryPolicy                             redeliveryPolicy;
+    private final    ShardWakeup                                  wakeup;
+    private final    String                                       instanceId;
     /**
      * Whether this owner's instance has confirmed its own liveness recently enough to dispatch —
      * supplied by {@link ShardOwnedQueue} after construction rather than through a constructor
      * already at its argument ceiling. Null for an owner built without one, which then always
      * dispatches.
      */
-    private volatile BooleanSupplier  deliveryGate;
+    private volatile BooleanSupplier                              deliveryGate;
     /**
      * Handlers run here, not on the pump thread.
      * <p>
@@ -74,14 +74,16 @@ final class ShardOwner implements LeasedOwner {
      * executor keeps shards independent without a platform thread per shard, and
      * {@link ShardOwnerSettings#keyConcurrency} bounds how many messages one shard may have in flight.
      */
-    private final HandlerDispatch     dispatch;
+    private final    HandlerDispatch                              dispatch;
     /**
      * Guards everything the pump thread and the handler threads both touch. Delivery used to be
      * inline and every field below was single-threaded; it is not any more.
      */
-    private final Object              stateLock = new Object();
-    /** Cleared when the lease is lost, so the owner stops dispatching rather than racing its successor. */
-    private final AtomicBoolean       leaseHeld = new AtomicBoolean(true);
+    private final    Object                                       stateLock     = new Object();
+    /**
+     * Cleared when the lease is lost, so the owner stops dispatching rather than racing its successor.
+     */
+    private final    AtomicBoolean                                leaseHeld     = new AtomicBoolean(true);
     /**
      * Messages handed straight from a local enqueue, bypassing the read path entirely.
      * <p>
@@ -90,7 +92,7 @@ final class ShardOwner implements LeasedOwner {
      * sweep is what still delivers the message, filtered by the owner's own in-memory dedup. Making
      * the sweep exclude them would turn a lost hand-off into a permanently stuck message.
      */
-    private final ConcurrentLinkedQueue<ShardOwnedStorage.Row> localHandoffs = new ConcurrentLinkedQueue<>();
+    private final    ConcurrentLinkedQueue<ShardOwnedStorage.Row> localHandoffs = new ConcurrentLinkedQueue<>();
 
     /**
      * The in-memory retry schedule — §4.6's timer wheel at the scale one shard needs.
@@ -103,14 +105,22 @@ final class ShardOwner implements LeasedOwner {
     private final PriorityQueue<Retry> retrySchedule = new PriorityQueue<>(Comparator.comparingLong(Retry::dueNanos));
     private final Map<Long, Integer>   attemptsBySeq = new HashMap<>();
 
-    /** Highest sequence value read. Advances past holes rather than waiting on them. */
-    private long cursor;
-    /** Sequence values the cursor stepped over, mapped to when they were first missed. */
+    /**
+     * Highest sequence value read. Advances past holes rather than waiting on them.
+     */
+    private       long                cursor;
+    /**
+     * Sequence values the cursor stepped over, mapped to when they were first missed.
+     */
     private final TreeMap<Long, Long> pendingHoles = new TreeMap<>();
-    /** Delivered but not yet acknowledged, so a sweep does not deliver them twice. */
-    private final TreeSet<Long> inFlight = new TreeSet<>();
-    /** Handled and awaiting the next ack flush. */
-    private final TreeSet<Long> pendingAcks = new TreeSet<>();
+    /**
+     * Delivered but not yet acknowledged, so a sweep does not deliver them twice.
+     */
+    private final TreeSet<Long>       inFlight     = new TreeSet<>();
+    /**
+     * Handled and awaiting the next ack flush.
+     */
+    private final TreeSet<Long>       pendingAcks  = new TreeSet<>();
 
     private long lastChaseNanos;
     private long lastSweepNanos;
@@ -132,15 +142,15 @@ final class ShardOwner implements LeasedOwner {
     private long nextVisibleAtNanos = Long.MAX_VALUE;
 
     ShardOwner(ShardOwnedStorage storage,
-                      int shard,
-                      long fence,
-                      ShardOwnerSettings settings,
-                      PayloadHandler handler,
-                      ShardOwnerMetrics metrics,
-                      RedeliveryPolicy redeliveryPolicy,
-                      ShardWakeup wakeup,
-                      String instanceId,
-                      HandlerDispatch dispatch) {
+               int shard,
+               long fence,
+               ShardOwnerSettings settings,
+               PayloadHandler handler,
+               ShardOwnerMetrics metrics,
+               RedeliveryPolicy redeliveryPolicy,
+               ShardWakeup wakeup,
+               String instanceId,
+               HandlerDispatch dispatch) {
         this.storage = requireNonNull(storage, "No storage provided");
         this.shard = shard;
         this.fence = fence;
@@ -154,7 +164,9 @@ final class ShardOwner implements LeasedOwner {
         this.dispatch = requireNonNull(dispatch, "No dispatch provided");
     }
 
-    /** See {@link LeasedOwner#deliveryPermitted()}. Set once, by the queue that built this owner. */
+    /**
+     * See {@link LeasedOwner#deliveryPermitted()}. Set once, by the queue that built this owner.
+     */
     void setDeliveryGate(BooleanSupplier deliveryGate) {
         this.deliveryGate = deliveryGate;
     }
@@ -233,7 +245,7 @@ final class ShardOwner implements LeasedOwner {
         // The sweep counts as a deadline too: a pump parked on its backstop must still come back in
         // time to run each of its shards' sweeps, whatever the backstop happens to be set to.
         var untilSweep = (sweepIntervalNanos - (now - lastSweepNanos)) / 1_000_000L;
-        var deadline = Math.max(0L, untilSweep);
+        var deadline   = Math.max(0L, untilSweep);
         if (nextVisibleAtNanos != Long.MAX_VALUE) {
             deadline = Math.min(deadline, Math.max(0L, (nextVisibleAtNanos - now) / 1_000_000L));
         }
@@ -365,8 +377,8 @@ final class ShardOwner implements LeasedOwner {
         boolean due;
         synchronized (stateLock) {
             due = !pendingAcks.isEmpty()
-                  && (pendingAcks.size() >= settings.ackBatchSize()
-                      || now - lastAckFlushNanos >= settings.ackFlushIntervalNanos());
+                    && (pendingAcks.size() >= settings.ackBatchSize()
+                    || now - lastAckFlushNanos >= settings.ackFlushIntervalNanos());
         }
         if (due) {
             flushAcks(connection, false);
@@ -602,7 +614,7 @@ final class ShardOwner implements LeasedOwner {
      * so the common case collapses to a single range delete over physically adjacent rows.
      */
     private void flushAcks(Connection connection, boolean force) throws SQLException {
-        long contiguousThrough;
+        long       contiguousThrough;
         List<Long> stragglers;
         // Everything below reads three collections the handler threads mutate. Iterating them
         // unguarded threw ConcurrentModificationException out of pumpOnce, which the pump did not
@@ -626,8 +638,8 @@ final class ShardOwner implements LeasedOwner {
             // The floor is therefore the lowest sequence value that is either in flight or a known hole.
             // Nothing at or above it may be deleted, however contiguous the prefix looks.
             var inFlightFloor = inFlight.isEmpty() ? Long.MAX_VALUE : inFlight.first();
-            var holeFloor = pendingHoles.isEmpty() ? Long.MAX_VALUE : pendingHoles.firstKey();
-            var safeFloor = Math.min(inFlightFloor, holeFloor);
+            var holeFloor     = pendingHoles.isEmpty() ? Long.MAX_VALUE : pendingHoles.firstKey();
+            var safeFloor     = Math.min(inFlightFloor, holeFloor);
 
             contiguousThrough = 0L;
             var expected = pendingAcks.first();

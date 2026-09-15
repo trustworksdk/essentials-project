@@ -80,7 +80,7 @@ public final class QueueEntryIdCodec {
         if (separator <= 0 || separator == raw.length() - 1) {
             throw new IllegalArgumentException(
                     "'" + raw + "' is not a shard-owned queue entry id - expected '<queueName>"
-                    + SEPARATOR + "<lane>-<shard>-<sequence>', e.g. 'orders" + SEPARATOR + "u-3-1042'");
+                            + SEPARATOR + "<lane>-<shard>-<sequence>', e.g. 'orders" + SEPARATOR + "u-3-1042'");
         }
         return new Decoded(QueueName.of(raw.substring(0, separator)),
                            MessageId.parse(raw.substring(separator + 1)));

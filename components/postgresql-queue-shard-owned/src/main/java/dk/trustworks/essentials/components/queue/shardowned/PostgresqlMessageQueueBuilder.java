@@ -48,7 +48,9 @@ public final class PostgresqlMessageQueueBuilder {
         return this;
     }
 
-    /** Fixed at schema creation: changing it re-routes keys and breaks ordering for in-flight work. */
+    /**
+     * Fixed at schema creation: changing it re-routes keys and breaks ordering for in-flight work.
+     */
     public PostgresqlMessageQueueBuilder setShardCount(int shardCount) {
         this.shardCount = shardCount;
         return this;
@@ -59,7 +61,9 @@ public final class PostgresqlMessageQueueBuilder {
         return this;
     }
 
-    /** Engine tuning shared by this queue's consumers. Defaults to {@link ShardOwnerSettings#defaults()}. */
+    /**
+     * Engine tuning shared by this queue's consumers. Defaults to {@link ShardOwnerSettings#defaults()}.
+     */
     public PostgresqlMessageQueueBuilder setSettings(ShardOwnerSettings settings) {
         this.settings = settings;
         return this;
@@ -89,8 +93,8 @@ public final class PostgresqlMessageQueueBuilder {
             var registered = ShardOwnedSchema.resolve(dataSource, queueName)
                                              .orElseThrow(() -> new IllegalStateException(
                                                      "Queue '" + queueName + "' is not registered. Call "
-                                                     + "ShardOwnedSchema.registerQueue(dataSource, queueName, shardCount) "
-                                                     + "first — building a queue cannot invent a shard count for it"));
+                                                             + "ShardOwnedSchema.registerQueue(dataSource, queueName, shardCount) "
+                                                             + "first — building a queue cannot invent a shard count for it"));
             this.queueId = registered.queueId();
             this.shardCount = registered.shardCount();
         } catch (SQLException e) {

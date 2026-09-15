@@ -70,18 +70,20 @@ public final class ShardOwnedSchema {
      */
     public static final int ORDERED_UNITS = 64;
 
-    public static final String UNORDERED_TABLE = "shard_queue_unordered";
-    public static final String ORDERED_TABLE   = "shard_queue_ordered";
-    public static final String DLQ_TABLE       = "shard_queue_dead_letter";
-    public static final String LEASE_TABLE     = "shard_queue_lease";
-    public static final String INSTANCE_TABLE  = "shard_queue_instance";
+    public static final String UNORDERED_TABLE        = "shard_queue_unordered";
+    public static final String ORDERED_TABLE          = "shard_queue_ordered";
+    public static final String DLQ_TABLE              = "shard_queue_dead_letter";
+    public static final String LEASE_TABLE            = "shard_queue_lease";
+    public static final String INSTANCE_TABLE         = "shard_queue_instance";
     public static final String SESSION_FENCE_SEQUENCE = "shard_queue_session_fence";
-    public static final String REGISTRY_TABLE = "shard_queue_registry";
-    public static final String QUEUE_ID_SEQUENCE = "shard_queue_id_seq";
-    /** Views that render {@code bytea} payloads as text, for reading a queue in {@code psql}. */
-    public static final String UNORDERED_VIEW   = "shard_queue_unordered_readable";
-    public static final String ORDERED_VIEW     = "shard_queue_ordered_readable";
-    public static final String DLQ_VIEW         = "shard_queue_dead_letter_readable";
+    public static final String REGISTRY_TABLE         = "shard_queue_registry";
+    public static final String QUEUE_ID_SEQUENCE      = "shard_queue_id_seq";
+    /**
+     * Views that render {@code bytea} payloads as text, for reading a queue in {@code psql}.
+     */
+    public static final String UNORDERED_VIEW         = "shard_queue_unordered_readable";
+    public static final String ORDERED_VIEW           = "shard_queue_ordered_readable";
+    public static final String DLQ_VIEW               = "shard_queue_dead_letter_readable";
 
     /**
      * The framework's bootstrap advisory-lock key, so this engine's DDL serialises behind the same
@@ -295,7 +297,7 @@ public final class ShardOwnedSchema {
             // smallint, so the ceiling is 32 767 queues. Gaps are harmless: an id is an interning
             // token, and a burned value from a losing INSERT ... ON CONFLICT means nothing.
             statement.execute("CREATE SEQUENCE IF NOT EXISTS " + QUEUE_ID_SEQUENCE
-                              + " START WITH 1 INCREMENT BY 1 MAXVALUE 32767");
+                                      + " START WITH 1 INCREMENT BY 1 MAXVALUE 32767");
             statement.execute("""
                               CREATE TABLE IF NOT EXISTS %s (
                                   queue_id    smallint    NOT NULL PRIMARY KEY,
@@ -314,7 +316,7 @@ public final class ShardOwnedSchema {
             // in the shared `lease` column. The two mean opposite things and are read by the same
             // predicates; keeping their ranges disjoint removes a whole class of confusion.
             statement.execute("CREATE SEQUENCE IF NOT EXISTS " + SESSION_FENCE_SEQUENCE
-                              + " START WITH 1 INCREMENT BY 1");
+                                      + " START WITH 1 INCREMENT BY 1");
 
             // Payloads are bytea because the database never looks inside them, and that is what
             // makes the write path cheap. The cost is that `SELECT payload FROM ...` in psql returns
@@ -326,33 +328,33 @@ public final class ShardOwnedSchema {
             // back to hex rather than raising, because a view that throws on one binary row is worse
             // than one that shows it as hex.
             statement.execute("CREATE OR REPLACE FUNCTION shard_queue_readable(payload bytea)"
-                              + " RETURNS text AS $$"
-                              + " BEGIN RETURN convert_from(payload, 'UTF8');"
-                              + " EXCEPTION WHEN others THEN RETURN encode(payload, 'hex');"
-                              + " END $$ LANGUAGE plpgsql IMMUTABLE");
+                                      + " RETURNS text AS $$"
+                                      + " BEGIN RETURN convert_from(payload, 'UTF8');"
+                                      + " EXCEPTION WHEN others THEN RETURN encode(payload, 'hex');"
+                                      + " END $$ LANGUAGE plpgsql IMMUTABLE");
             statement.execute("CREATE OR REPLACE VIEW " + UNORDERED_VIEW + " AS"
-                              + " SELECT r.queue_name, u.queue_id, u.shard, u.seq, u.payload_type,"
-                              + "        shard_queue_readable(u.payload) AS payload,"
-                              + "        u.attempts, u.enqueued_at, u.visible_at,"
-                              + "        u.visible_at <= now() AS deliverable"
-                              + "   FROM " + UNORDERED_TABLE + " u"
-                              + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = u.queue_id");
+                                      + " SELECT r.queue_name, u.queue_id, u.shard, u.seq, u.payload_type,"
+                                      + "        shard_queue_readable(u.payload) AS payload,"
+                                      + "        u.attempts, u.enqueued_at, u.visible_at,"
+                                      + "        u.visible_at <= now() AS deliverable"
+                                      + "   FROM " + UNORDERED_TABLE + " u"
+                                      + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = u.queue_id");
             statement.execute("CREATE OR REPLACE VIEW " + ORDERED_VIEW + " AS"
-                              + " SELECT r.queue_name, o.queue_id, o.shard, o.msg_key, o.key_order, o.seq,"
-                              + "        o.payload_type, shard_queue_readable(o.payload) AS payload,"
-                              + "        o.attempts, o.enqueued_at, o.visible_at,"
-                              + "        o.visible_at <= now() AS deliverable"
-                              + "   FROM " + ORDERED_TABLE + " o"
-                              + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = o.queue_id");
+                                      + " SELECT r.queue_name, o.queue_id, o.shard, o.msg_key, o.key_order, o.seq,"
+                                      + "        o.payload_type, shard_queue_readable(o.payload) AS payload,"
+                                      + "        o.attempts, o.enqueued_at, o.visible_at,"
+                                      + "        o.visible_at <= now() AS deliverable"
+                                      + "   FROM " + ORDERED_TABLE + " o"
+                                      + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = o.queue_id");
             statement.execute("CREATE OR REPLACE VIEW " + DLQ_VIEW + " AS"
-                              + " SELECT r.queue_name, d.queue_id, d.shard, d.source_lane, d.msg_key,"
-                              + "        d.key_order, d.seq, d.payload_type,"
-                              + "        shard_queue_readable(d.payload) AS payload,"
-                              + "        d.attempts, d.last_error, d.dead_lettered_at,"
-                              + "        d.blocked_by_key_order,"
-                              + "        d.blocked_by_key_order IS NOT NULL AS never_delivered"
-                              + "   FROM " + DLQ_TABLE + " d"
-                              + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = d.queue_id");
+                                      + " SELECT r.queue_name, d.queue_id, d.shard, d.source_lane, d.msg_key,"
+                                      + "        d.key_order, d.seq, d.payload_type,"
+                                      + "        shard_queue_readable(d.payload) AS payload,"
+                                      + "        d.attempts, d.last_error, d.dead_lettered_at,"
+                                      + "        d.blocked_by_key_order,"
+                                      + "        d.blocked_by_key_order IS NOT NULL AS never_delivered"
+                                      + "   FROM " + DLQ_TABLE + " d"
+                                      + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = d.queue_id");
         });
     }
 
@@ -462,9 +464,9 @@ public final class ShardOwnedSchema {
             try (var connection = dataSource.getConnection();
                  var statement = connection.prepareStatement(
                          "INSERT INTO " + REGISTRY_TABLE
-                         + " (queue_id, queue_name, shard_count, ordered_units)"
-                         + " VALUES (nextval('" + QUEUE_ID_SEQUENCE + "'), ?, ?, ?)"
-                         + " ON CONFLICT (queue_name) DO NOTHING")) {
+                                 + " (queue_id, queue_name, shard_count, ordered_units)"
+                                 + " VALUES (nextval('" + QUEUE_ID_SEQUENCE + "'), ?, ?, ?)"
+                                 + " ON CONFLICT (queue_name) DO NOTHING")) {
                 statement.setString(1, name.value());
                 statement.setInt(2, shardCount);
                 statement.setInt(3, orderedUnits);
@@ -480,9 +482,9 @@ public final class ShardOwnedSchema {
         if (registered.shardCount() != shardCount) {
             throw new IllegalStateException(
                     "Queue '" + name + "' is already registered with " + registered.shardCount()
-                    + " shards and cannot be re-registered with " + shardCount
-                    + ". Shards are the unit of ordering: a key's shard is hash(key) mod shardCount, "
-                    + "so changing the count re-routes every key and leaves shards nobody owns");
+                            + " shards and cannot be re-registered with " + shardCount
+                            + ". Shards are the unit of ordering: a key's shard is hash(key) mod shardCount, "
+                            + "so changing the count re-routes every key and leaves shards nobody owns");
         }
         // NO guard on a differing ORDERED_UNITS, deliberately. An earlier revision refused here, which
         // turned a version upgrade into "drain this queue and re-create it" — the manual, outage-shaped
@@ -533,8 +535,8 @@ public final class ShardOwnedSchema {
         if (newShardCount <= current.shardCount()) {
             throw new IllegalStateException(
                     "Queue '" + name + "' has " + current.shardCount() + " shards and can only grow: "
-                    + newShardCount + " is not an increase. Shrinking would leave the messages in the "
-                    + "removed shards addressed by nobody");
+                            + newShardCount + " is not an increase. Shrinking would leave the messages in the "
+                            + "removed shards addressed by nobody");
         }
         // No ordered-lane guard, and its removal is the point of the fixed routing space.
         //
@@ -611,12 +613,12 @@ public final class ShardOwnedSchema {
                         if (!visible) {
                             throw new IllegalStateException(
                                     "This database does not show one connection the transaction id of "
-                                    + "another (pg_stat_activity.backend_xid was not visible for a "
-                                    + "backend that certainly held one). The ordered lane's cursor "
-                                    + "depends on that to decide when a sequence value can never "
-                                    + "arrive; without it the cursor would step over messages whose "
-                                    + "transaction is still running, losing them. Grant the queue's "
-                                    + "role pg_read_all_stats, or use the unordered lane.");
+                                            + "another (pg_stat_activity.backend_xid was not visible for a "
+                                            + "backend that certainly held one). The ordered lane's cursor "
+                                            + "depends on that to decide when a sequence value can never "
+                                            + "arrive; without it the cursor would step over messages whose "
+                                            + "transaction is still running, losing them. Grant the queue's "
+                                            + "role pg_read_all_stats, or use the unordered lane.");
                         }
                     }
                 }
@@ -627,8 +629,8 @@ public final class ShardOwnedSchema {
         } catch (SQLException e) {
             throw new SQLException(
                     "Could not verify that pg_stat_activity.backend_xid is readable, which the ordered "
-                    + "lane's cursor depends on for correctness. Grant the queue's role "
-                    + "pg_read_all_stats, or use the unordered lane.", e);
+                            + "lane's cursor depends on for correctness. Grant the queue's role "
+                            + "pg_read_all_stats, or use the unordered lane.", e);
         }
         synchronized (WATERMARK_VERIFIED) {
             WATERMARK_VERIFIED.add(dataSource);
@@ -657,14 +659,16 @@ public final class ShardOwnedSchema {
         }
     }
 
-    /** What a name is interned to, or empty if it has never been registered. */
+    /**
+     * What a name is interned to, or empty if it has never been registered.
+     */
     public static Optional<RegisteredQueue> resolve(DataSource dataSource, QueueName name) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
         requireNonNull(name, "No queue name provided");
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
                      "SELECT queue_id, shard_count, ordered_units FROM " + REGISTRY_TABLE
-                     + " WHERE queue_name = ?")) {
+                             + " WHERE queue_name = ?")) {
             statement.setString(1, name.value());
             try (var resultSet = statement.executeQuery()) {
                 return resultSet.next()
@@ -675,7 +679,9 @@ public final class ShardOwnedSchema {
         }
     }
 
-    /** Every registered queue, for an admin surface or a start-up log line. */
+    /**
+     * Every registered queue, for an admin surface or a start-up log line.
+     */
     public static List<QueueName> queueNames(DataSource dataSource) throws SQLException {
         requireNonNull(dataSource, "No dataSource provided");
         try (var connection = dataSource.getConnection();
@@ -722,10 +728,10 @@ public final class ShardOwnedSchema {
             // CACHE 1 so an allocated value is one that will be committed, and because the watermark's
             // safety argument rests on values being handed out in wall-clock order. Never raise it.
             statement.execute("CREATE SEQUENCE IF NOT EXISTS " + orderedSequenceName(queueId)
-                              + " START WITH 1 INCREMENT BY 1 CACHE 1");
+                                      + " START WITH 1 INCREMENT BY 1 CACHE 1");
             for (var shard = 0; shard < shardCount; shard++) {
                 statement.execute("CREATE SEQUENCE IF NOT EXISTS " + sequenceName(queueId, shard)
-                                  + " START WITH 1 INCREMENT BY 1 CACHE 1");
+                                          + " START WITH 1 INCREMENT BY 1 CACHE 1");
             }
         });
         seedLeases(dataSource, queueId, shardCount, orderedUnits);
@@ -736,7 +742,7 @@ public final class ShardOwnedSchema {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
                      "INSERT INTO " + LEASE_TABLE + " (queue_id, lane, shard, owner, fence) "
-                     + "VALUES (?, ?, ?, NULL, 0) ON CONFLICT DO NOTHING")) {
+                             + "VALUES (?, ?, ?, NULL, 0) ON CONFLICT DO NOTHING")) {
             // Per lane, because the two no longer have the same number of units: the ordered lane's
             // space is fixed at ORDERED_UNITS and the unordered lane's is the caller's shard count.
             seedLane(statement, queueId, "unordered", shardCount);
@@ -749,7 +755,9 @@ public final class ShardOwnedSchema {
         return "shard_queue_seq_q" + queueId + "_s" + shard;
     }
 
-    /** One per queue, not one per shard — see the reasoning in {@link #registerQueue}. */
+    /**
+     * One per queue, not one per shard — see the reasoning in {@link #registerQueue}.
+     */
     public static String orderedSequenceName(short queueId) {
         return "shard_queue_ordered_seq_q" + queueId;
     }

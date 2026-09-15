@@ -61,35 +61,37 @@ import static dk.trustworks.essentials.shared.FailFast.*;
 public final class PostgresqlMessageQueue implements MessageQueue {
     private static final Logger log = LoggerFactory.getLogger(PostgresqlMessageQueue.class);
 
-    private final ShardOwnedStorage storage;
-    private final DataSource     dataSource;
-    private final short          queueId;
+    private final    ShardOwnedStorage storage;
+    private final    DataSource        dataSource;
+    private final    short             queueId;
     /**
      * Refreshed from the registry, because enqueue routing has to learn about a grown shard count
      * too. Wiring only the consumer side would leave a producer routing keys by the old modulus
      * while its own consumers leased the new shards — which is the divergence the registry exists to
      * prevent, reintroduced by fixing half of it.
      */
-    private volatile int         shardCount;
-    /** This queue's ordered routing space, from the registry. 0 until resolved; never changes after. */
-    private volatile int         orderedUnits;
-    private volatile long        shardCountCheckedAtNanos;
-    private final String         instanceId;
+    private volatile int               shardCount;
+    /**
+     * This queue's ordered routing space, from the registry. 0 until resolved; never changes after.
+     */
+    private volatile int               orderedUnits;
+    private volatile long              shardCountCheckedAtNanos;
+    private final    String            instanceId;
 
     private final ShardOwnerSettings settings;
 
-    private final List<ShardOwnedQueue> consumers = new ArrayList<>();
+    private final List<ShardOwnedQueue>         consumers          = new ArrayList<>();
     /**
      * False until something is actually running. It used to be seeded {@code true}, so a queue that
      * had never consumed reported itself started and the first {@link #start()} was a no-op.
      */
-    private final AtomicBoolean       started   = new AtomicBoolean();
-    private final List<QueueObserver> observers = new CopyOnWriteArrayList<>();
+    private final AtomicBoolean                 started            = new AtomicBoolean();
+    private final List<QueueObserver>           observers          = new CopyOnWriteArrayList<>();
     /**
      * Sorted by {@link InterceptorOrder} on registration rather than on every call: the sort is
      * reflection over annotations, and doing it per delivered message would put it on the hot path.
      */
-    private final List<MessageQueueInterceptor> interceptors = new CopyOnWriteArrayList<>();
+    private final List<MessageQueueInterceptor> interceptors       = new CopyOnWriteArrayList<>();
     /**
      * Round-robin across shards, one step per message.
      * <p>
@@ -98,13 +100,13 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * on a single shard, so the other shards' owners sit idle and the batch is serialised behind one
      * of them. Shards are the unit of parallelism; the enqueue has to actually use them.
      */
-    private final AtomicInteger enqueueShardCursor = new AtomicInteger();
+    private final AtomicInteger                 enqueueShardCursor = new AtomicInteger();
     /**
      * Distinguishes subscriptions of one process from each other in the membership table. The first
      * uses the caller's instance id verbatim, so the ordinary single-consumer case has the id the
      * caller chose.
      */
-    private final AtomicInteger subscriptionCount = new AtomicInteger();
+    private final AtomicInteger                 subscriptionCount  = new AtomicInteger();
 
     public static PostgresqlMessageQueueBuilder builder() {
         return new PostgresqlMessageQueueBuilder();
@@ -124,9 +126,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      *                 {@link ShardOwnerSettings#defaults()}; {@link #consume} used to hardcode that
      *                 call, which left the contract with no way to configure the engine at all.
      * @deprecated since 0.51.0 — use {@link #builder()} and
-     *             {@link PostgresqlMessageQueueBuilder#setSettings(ShardOwnerSettings)}, which names
-     *             its arguments instead of relying on the order of a {@code short}, an {@code int}
-     *             and a {@code String}.
+     * {@link PostgresqlMessageQueueBuilder#setSettings(ShardOwnerSettings)}, which names
+     * its arguments instead of relying on the order of a {@code short}, an {@code int}
+     * and a {@code String}.
      */
     @Deprecated(forRemoval = true, since = "0.51.0")
     public PostgresqlMessageQueue(DataSource dataSource, short queueId, int shardCount, String instanceId,
@@ -139,12 +141,16 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         this.storage = new ShardOwnedStorage(dataSource, queueId);
     }
 
-    /** The interned id this queue addresses. */
+    /**
+     * The interned id this queue addresses.
+     */
     public short queueId() {
         return queueId;
     }
 
-    /** Fixed for the life of the queue; taken from the registry when built from a name. */
+    /**
+     * Fixed for the life of the queue; taken from the registry when built from a name.
+     */
     public int shardCount() {
         return shardCount;
     }
@@ -244,7 +250,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
     }
 
-    /** Carries a {@link SQLException} across the chain's unchecked functional boundary. */
+    /**
+     * Carries a {@link SQLException} across the chain's unchecked functional boundary.
+     */
     private static final class UncheckedSqlException extends RuntimeException {
         UncheckedSqlException(SQLException cause) {
             super(cause);
@@ -265,9 +273,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         // A batch may mix lanes, and the lanes are different tables with different keys, so the
         // split has to happen before anything can be routed. Positions are carried through it so the
         // returned ids line up with the input however the batch ends up being divided.
-        var routed = route(messages);
+        var routed           = route(messages);
         var unorderedByShard = routed.unordered();
-        var orderedByShard = routed.ordered();
+        var orderedByShard   = routed.ordered();
 
         var ids = new MessageId[messages.size()];
         try (var connection = dataSource.getConnection()) {
@@ -314,7 +322,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
         requireTrue(!connection.getAutoCommit(),
                     "The connection is in autocommit mode, so it cannot carry a transaction for the "
-                    + "enqueue to join. Begin a transaction first, or use enqueue(List) instead");
+                            + "enqueue to join. Begin a transaction first, or use enqueue(List) instead");
         if (!interceptors.isEmpty()) {
             return intercepted(messages, connection, this::enqueueOnConnection);
         }
@@ -323,7 +331,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
 
     private List<MessageId> enqueueOnConnection(List<Message> messages, Connection connection) throws SQLException {
         var routed = route(messages);
-        var ids = new MessageId[messages.size()];
+        var ids    = new MessageId[messages.size()];
         writeBatch(connection, messages, routed.unordered(), routed.ordered(), ids);
         // Observers are told now rather than on commit: this method does not know when, or whether,
         // the caller commits. An observer counting enqueues on a rolled-back transaction is a
@@ -349,7 +357,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
      * this engine's whole argument is about what a message costs. Growth is picked up within the
      * refresh interval, which is the same window the consumer side takes.
      */
-    /** The routing space this queue's ordered keys live in — the registry's, not the constant's. */
+    /**
+     * The routing space this queue's ordered keys live in — the registry's, not the constant's.
+     */
     private int orderedUnits() throws SQLException {
         var units = orderedUnits;
         if (units == 0) {
@@ -380,12 +390,14 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         }
     }
 
-    /** Decide the lane and shard of every message, keeping each one's position in the input. */
+    /**
+     * Decide the lane and shard of every message, keeping each one's position in the input.
+     */
     private Routed route(List<Message> messages) throws SQLException {
         refreshShardCountIfDue();
         // Resolved once per queue, outside the loop: it is a property of the queue's stored data, not
         // of the batch, and it never changes while the queue exists.
-        var units = orderedUnits();
+        var units            = orderedUnits();
         var unorderedByShard = new LinkedHashMap<Integer, List<Integer>>();
         var orderedByShard   = new LinkedHashMap<Integer, List<Integer>>();
         for (var position = 0; position < messages.size(); position++) {
@@ -403,7 +415,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     private void notifyEnqueued(Map<Integer, List<Integer>> unorderedByShard,
                                 Map<Integer, List<Integer>> orderedByShard) {
         var unorderedCount = unorderedByShard.values().stream().mapToInt(List::size).sum();
-        var orderedCount = orderedByShard.values().stream().mapToInt(List::size).sum();
+        var orderedCount   = orderedByShard.values().stream().mapToInt(List::size).sum();
         if (unorderedCount > 0) {
             notifyObservers(observer -> observer.enqueued(unorderedCount, false));
         }
@@ -417,30 +429,30 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                             Map<Integer, List<Integer>> unorderedByShard,
                             Map<Integer, List<Integer>> orderedByShard,
                             MessageId[] ids) throws SQLException {
-                for (var entry : unorderedByShard.entrySet()) {
-                    var positions = entry.getValue();
-                    var rows = positions.stream()
-                                        .map(messages::get)
-                                        .map(message -> new ShardOwnedStorage.PayloadRow(message.payload(),
-                                                                                         message.payloadType(),
-                                                                                         message.delay()))
-                                        .toList();
-                    var seqs = storage.enqueueRows(connection, entry.getKey(), rows);
-                    assign(ids, positions, seqs, MessageId.Lane.UNORDERED, entry.getKey());
-                }
-                for (var entry : orderedByShard.entrySet()) {
-                    var positions = entry.getValue();
-                    var rows = positions.stream()
-                                        .map(messages::get)
-                                        .map(message -> new ShardOwnedStorage.OrderedPayload(message.key(),
-                                                                                             message.keyOrder(),
-                                                                                             message.payload(),
-                                                                                             message.payloadType(),
-                                                                                             message.delay()))
-                                        .toList();
-                    var seqs = storage.enqueueOrderedBatch(connection, entry.getKey(), rows);
-                    assign(ids, positions, seqs, MessageId.Lane.ORDERED, entry.getKey());
-                }
+        for (var entry : unorderedByShard.entrySet()) {
+            var positions = entry.getValue();
+            var rows = positions.stream()
+                                .map(messages::get)
+                                .map(message -> new ShardOwnedStorage.PayloadRow(message.payload(),
+                                                                                 message.payloadType(),
+                                                                                 message.delay()))
+                                .toList();
+            var seqs = storage.enqueueRows(connection, entry.getKey(), rows);
+            assign(ids, positions, seqs, MessageId.Lane.UNORDERED, entry.getKey());
+        }
+        for (var entry : orderedByShard.entrySet()) {
+            var positions = entry.getValue();
+            var rows = positions.stream()
+                                .map(messages::get)
+                                .map(message -> new ShardOwnedStorage.OrderedPayload(message.key(),
+                                                                                     message.keyOrder(),
+                                                                                     message.payload(),
+                                                                                     message.payloadType(),
+                                                                                     message.delay()))
+                                .toList();
+            var seqs = storage.enqueueOrderedBatch(connection, entry.getKey(), rows);
+            assign(ids, positions, seqs, MessageId.Lane.ORDERED, entry.getKey());
+        }
     }
 
     /**
@@ -477,7 +489,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         //
         // A second consume() on the same queue is a genuinely separate competing consumer, so that
         // one does get its own identity.
-        var subscription = subscriptionCount.getAndIncrement();
+        var subscription       = subscriptionCount.getAndIncrement();
         var consumerInstanceId = subscription == 0 ? instanceId : instanceId + "-" + subscription;
 
         // The engine reports retries, dead letters and shard ownership from the places that know the
@@ -552,9 +564,9 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             // wrong failure.
             if (!consumers.isEmpty()) {
                 log.warn("Queue {} already has {} consumer(s) registered in this process; instance '{}' is being added as "
-                         + "another COMPETING consumer, so each of them owns a share of the units and counts as a separate "
-                         + "live instance. One consume() already serves BOTH lanes — the ordering key is null for an "
-                         + "unordered message — so a second one is not 'the other lane'",
+                                 + "another COMPETING consumer, so each of them owns a share of the units and counts as a separate "
+                                 + "live instance. One consume() already serves BOTH lanes — the ordering key is null for an "
+                                 + "unordered message — so a second one is not 'the other lane'",
                          queueId, consumers.size() / 2, consumerInstanceId);
             }
             consumers.add(unorderedConsumer);
@@ -628,8 +640,8 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     }
 
     private void deliver(MessageHandler handler, MessageId messageId, String key, byte[] payload, int payloadType) {
-        var startNanos = System.nanoTime();
-        var handlerFailure = new Throwable[1];
+        var startNanos       = System.nanoTime();
+        var handlerFailure   = new Throwable[1];
         var handlerSucceeded = new boolean[1];
         Runnable delivery = () -> {
             try {
@@ -664,7 +676,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
             // observer is broken. Log it loudly and acknowledge.
             if (handlerSucceeded[0] && handlerFailure[0] == null) {
                 log.error("An observer threw after the handler for key {} had already succeeded. "
-                          + "The message is acknowledged; fix the observer", key, e);
+                                  + "The message is acknowledged; fix the observer", key, e);
             } else {
                 // Either the handler threw, or an observer threw BEFORE calling through — in which
                 // case the message genuinely was not handled and must be retried.
@@ -709,7 +721,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
     public QueueStatistics statistics() {
         synchronized (consumers) {
             var counted = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<ShardOwnerMetrics, Boolean>());
-            var total = QueueStatistics.NONE;
+            var total   = QueueStatistics.NONE;
             for (var consumer : consumers) {
                 if (counted.add(consumer.metrics())) {
                     total = total.plus(consumer.metrics().statistics());
@@ -824,7 +836,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         var restored = storage.resurrectKey(ShardOwnedSchema.unitForKey(key, orderedUnits()), key);
         if (restored > 0) {
             log.info("Queue {}: resurrected {} dead letter(s) for key '{}' — the key resumes at its lowest "
-                     + "restored key_order", queueId, restored, key);
+                             + "restored key_order", queueId, restored, key);
         }
         return restored;
     }

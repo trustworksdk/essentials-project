@@ -58,7 +58,9 @@ public record QueueHealth(int shardCount,
         return Math.max(0, (shardCount + orderedUnits) - unorderedOwned - orderedOwned);
     }
 
-    /** True when every shard of both lanes has a live owner. */
+    /**
+     * True when every shard of both lanes has a live owner.
+     */
     public boolean fullyOwned() {
         return unownedShards() == 0;
     }

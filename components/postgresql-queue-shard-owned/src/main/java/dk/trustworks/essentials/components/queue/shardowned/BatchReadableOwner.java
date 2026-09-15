@@ -52,7 +52,9 @@ import java.util.*;
  */
 interface BatchReadableOwner extends LeasedOwner {
 
-    /** The queue this owner's rows live in. A pump serves several; a batched statement binds one. */
+    /**
+     * The queue this owner's rows live in. A pump serves several; a batched statement binds one.
+     */
     short queueId();
 
     /**
@@ -64,10 +66,14 @@ interface BatchReadableOwner extends LeasedOwner {
      */
     ShardOwnerMetrics ownerMetrics();
 
-    /** Where this owner's next cursor read would start. */
+    /**
+     * Where this owner's next cursor read would start.
+     */
     long batchReadCursor();
 
-    /** Whether this owner would also sweep from the head this pass. */
+    /**
+     * Whether this owner would also sweep from the head this pass.
+     */
     boolean batchSweepDue();
 
     /**

@@ -34,7 +34,7 @@ public class ShardOwnedDurableQueuesBuilder {
 
     private MessageQueues                           queues;
     private JSONSerializer                          jsonSerializer;
-    private UnitOfWorkFactory<? extends UnitOfWork>  unitOfWorkFactory;
+    private UnitOfWorkFactory<? extends UnitOfWork> unitOfWorkFactory;
     private DataSource                              dataSource;
     /**
      * Defaults to {@link ShardOwnedDurableQueues#DEFAULT_AUTO_REGISTER_SHARD_COUNT}. Zero means
@@ -55,7 +55,9 @@ public class ShardOwnedDurableQueuesBuilder {
         return this;
     }
 
-    /** Serializes message payloads and metadata into the stored envelope. */
+    /**
+     * Serializes message payloads and metadata into the stored envelope.
+     */
     public ShardOwnedDurableQueuesBuilder setJsonSerializer(JSONSerializer jsonSerializer) {
         this.jsonSerializer = jsonSerializer;
         return this;
@@ -71,7 +73,9 @@ public class ShardOwnedDurableQueuesBuilder {
         return this;
     }
 
-    /** Required unless {@link #setAutoRegisterShardCount(int)} is set to zero — registration writes through it. */
+    /**
+     * Required unless {@link #setAutoRegisterShardCount(int)} is set to zero — registration writes through it.
+     */
     public ShardOwnedDurableQueuesBuilder setDataSource(DataSource dataSource) {
         this.dataSource = dataSource;
         return this;

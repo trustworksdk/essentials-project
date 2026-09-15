@@ -32,15 +32,15 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * with the wrong number of shards. Naming them at the call site is what makes that impossible.
  */
 public final class ShardOwnedQueueBuilder {
-    private DataSource         dataSource;
-    private short              queueId;
-    private int                shardCount;
-    private String             instanceId;
-    private QueueName          queueName;
-    private ShardRuntime       runtime;
-    private ShardOwnerMetrics  metrics;
-    private int                parallelConsumers = 8;
-    private boolean            localHandoffEnabled = true;
+    private DataSource        dataSource;
+    private short             queueId;
+    private int               shardCount;
+    private String            instanceId;
+    private QueueName         queueName;
+    private ShardRuntime      runtime;
+    private ShardOwnerMetrics metrics;
+    private int               parallelConsumers   = 8;
+    private boolean           localHandoffEnabled = true;
 
     public ShardOwnedQueueBuilder setDataSource(DataSource dataSource) {
         this.dataSource = dataSource;
@@ -92,13 +92,17 @@ public final class ShardOwnedQueueBuilder {
         return this;
     }
 
-    /** Handlers in flight for this consumer. See {@code ConsumerOptions.parallelConsumers}. */
+    /**
+     * Handlers in flight for this consumer. See {@code ConsumerOptions.parallelConsumers}.
+     */
     public ShardOwnedQueueBuilder setParallelConsumers(int parallelConsumers) {
         this.parallelConsumers = parallelConsumers;
         return this;
     }
 
-    /** Turn Tier 2 off to measure the read path rather than the hand-off. */
+    /**
+     * Turn Tier 2 off to measure the read path rather than the hand-off.
+     */
     public ShardOwnedQueueBuilder setLocalHandoffEnabled(boolean localHandoffEnabled) {
         this.localHandoffEnabled = localHandoffEnabled;
         return this;
@@ -128,8 +132,8 @@ public final class ShardOwnedQueueBuilder {
             var registered = ShardOwnedSchema.resolve(dataSource, queueName)
                                              .orElseThrow(() -> new IllegalStateException(
                                                      "Queue '" + queueName + "' is not registered. Call "
-                                                     + "ShardOwnedSchema.registerQueue(dataSource, queueName, shardCount) "
-                                                     + "first — building a queue cannot invent a shard count for it"));
+                                                             + "ShardOwnedSchema.registerQueue(dataSource, queueName, shardCount) "
+                                                             + "first — building a queue cannot invent a shard count for it"));
             this.queueId = registered.queueId();
             this.shardCount = registered.shardCount();
         } catch (SQLException e) {

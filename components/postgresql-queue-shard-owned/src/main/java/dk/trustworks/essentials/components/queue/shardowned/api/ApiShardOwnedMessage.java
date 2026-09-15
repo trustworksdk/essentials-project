@@ -39,20 +39,20 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * The queue name travels with the id because {@link MessageId} is unique within a queue, not across
  * queues — a message read from one queue's response is meaningless when applied to another.
  *
- * @param payload      the payload rendered as text, or {@code null} if the caller may not read it.
- *                     Never an empty string for a withheld payload: an empty payload is a legal
- *                     message and must stay distinguishable from a redacted one
- * @param attempts     deliveries recorded so far. Written at failure or at takeover rather than at
- *                     dispatch, so a message read while in flight shows one lower than the number of
- *                     times a handler has actually seen it
- * @param visibleAt    when the message becomes eligible for delivery; {@code null} for a dead letter,
- *                     which is not eligible at all
- * @param isDeadLetter whether this was read from the dead-letter table rather than from a lane
+ * @param payload           the payload rendered as text, or {@code null} if the caller may not read it.
+ *                          Never an empty string for a withheld payload: an empty payload is a legal
+ *                          message and must stay distinguishable from a redacted one
+ * @param attempts          deliveries recorded so far. Written at failure or at takeover rather than at
+ *                          dispatch, so a message read while in flight shows one lower than the number of
+ *                          times a handler has actually seen it
+ * @param visibleAt         when the message becomes eligible for delivery; {@code null} for a dead letter,
+ *                          which is not eligible at all
+ * @param isDeadLetter      whether this was read from the dead-letter table rather than from a lane
  * @param blockedByKeyOrder for a dead letter that was never delivered, the {@code key_order} of the
- *                     message whose failure stopped its key; {@code null} for anything else, including
- *                     a dead letter that was itself tried and failed. An operator cannot tell those
- *                     two apart from {@code attempts}, which a takeover bumps on rows that never ran,
- *                     and this is the field that separates a broken handler from a broken key
+ *                          message whose failure stopped its key; {@code null} for anything else, including
+ *                          a dead letter that was itself tried and failed. An operator cannot tell those
+ *                          two apart from {@code attempts}, which a takeover bumps on rows that never ran,
+ *                          and this is the field that separates a broken handler from a broken key
  */
 public record ApiShardOwnedMessage(String id,
                                    QueueName queueName,
@@ -69,7 +69,9 @@ public record ApiShardOwnedMessage(String id,
                                    String lastError,
                                    Long blockedByKeyOrder) {
 
-    /** True when this dead letter was never handed to a handler — its key was already blocked. */
+    /**
+     * True when this dead letter was never handed to a handler — its key was already blocked.
+     */
     public boolean neverDelivered() {
         return blockedByKeyOrder != null;
     }

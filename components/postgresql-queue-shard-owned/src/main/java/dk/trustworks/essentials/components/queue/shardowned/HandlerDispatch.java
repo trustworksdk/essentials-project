@@ -61,7 +61,9 @@ record HandlerDispatch(Executor executor, Semaphore consumerPermits) {
         return new HandlerDispatch(executor, new Semaphore(Math.max(1, parallelConsumers)));
     }
 
-    /** Inline and unbounded — for tests that want no concurrency at all. */
+    /**
+     * Inline and unbounded — for tests that want no concurrency at all.
+     */
     public static HandlerDispatch inline() {
         return new HandlerDispatch(Runnable::run, new Semaphore(Integer.MAX_VALUE));
     }

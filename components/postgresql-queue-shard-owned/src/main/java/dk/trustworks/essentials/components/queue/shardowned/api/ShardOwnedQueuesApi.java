@@ -114,7 +114,7 @@ public interface ShardOwnedQueuesApi {
      * Remove a message from its lane without delivering it.
      *
      * @return whether a row was removed. {@code false} means it was already gone — delivered and
-     *         acknowledged, or deleted by someone else
+     * acknowledged, or deleted by someone else
      */
     boolean deleteMessage(Object principal, QueueName queueName, MessageId messageId);
 

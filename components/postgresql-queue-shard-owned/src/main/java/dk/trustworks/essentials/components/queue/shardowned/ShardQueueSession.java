@@ -47,14 +47,16 @@ public final class ShardQueueSession implements QueueSession {
     private static final Logger log = LoggerFactory.getLogger(ShardQueueSession.class);
 
     private final ShardOwnedStorage storage;
-    private final DataSource     dataSource;
-    private final String         sessionId;
-    private final long           leaseMillis;
-    private final List<int[]>    held = new ArrayList<>();
+    private final DataSource        dataSource;
+    private final String            sessionId;
+    private final long              leaseMillis;
+    private final List<int[]>       held = new ArrayList<>();
 
-    /** Per shard, the highest sequence value handed to the caller. */
+    /**
+     * Per shard, the highest sequence value handed to the caller.
+     */
     private final Map<Integer, Long> cursors = new HashMap<>();
-    private boolean closed;
+    private       boolean            closed;
 
     ShardQueueSession(ShardOwnedStorage storage,
                       DataSource dataSource,
@@ -87,7 +89,7 @@ public final class ShardQueueSession implements QueueSession {
                 if (pulled.size() >= max) {
                     break;
                 }
-                var shard = entry[0];
+                var shard  = entry[0];
                 var cursor = cursors.getOrDefault(shard, 0L);
                 // The same forward cursor scan the engine's own owners use. The session's fence is
                 // passed so anything it pre-claimed for itself is skipped, exactly as for an owner.
@@ -113,7 +115,7 @@ public final class ShardQueueSession implements QueueSession {
         try (var connection = dataSource.getConnection()) {
             for (var entry : held) {
                 var shard = entry[0];
-                var seqs = ids.stream().filter(id -> id.shard() == shard).map(MessageId::sequence).toList();
+                var seqs  = ids.stream().filter(id -> id.shard() == shard).map(MessageId::sequence).toList();
                 if (seqs.isEmpty()) {
                     continue;
                 }

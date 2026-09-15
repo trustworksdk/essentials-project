@@ -38,7 +38,9 @@ import static dk.trustworks.essentials.shared.FailFast.*;
  */
 public record QueueName(String value) implements Comparable<QueueName> {
 
-    /** Long enough for any sensible name, short enough to index and to read in a log line. */
+    /**
+     * Long enough for any sensible name, short enough to index and to read in a log line.
+     */
     public static final int MAX_LENGTH = 255;
 
     public QueueName {

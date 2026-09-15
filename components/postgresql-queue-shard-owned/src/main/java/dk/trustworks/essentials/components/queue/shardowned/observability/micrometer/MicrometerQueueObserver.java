@@ -49,23 +49,27 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  */
 public final class MicrometerQueueObserver implements QueueObserver {
 
-    public static final String ENQUEUED_COUNTER    = "essentials.queue.enqueued";
-    public static final String DELIVERY_TIMER      = "essentials.queue.delivery";
-    public static final String FAILURES_COUNTER    = "essentials.queue.delivery.failures";
-    public static final String RETRIES_COUNTER     = "essentials.queue.retries";
-    public static final String DEAD_LETTER_COUNTER = "essentials.queue.deadletters";
-    public static final String OWNERSHIP_COUNTER   = "essentials.queue.shard.ownership";
-    public static final String DEPTH_GAUGE         = "essentials.queue.depth";
-    /** Shards of this queue with a live owner, tagged by lane. */
-    public static final String SHARDS_OWNED_GAUGE  = "essentials.queue.shards.owned";
+    public static final String ENQUEUED_COUNTER     = "essentials.queue.enqueued";
+    public static final String DELIVERY_TIMER       = "essentials.queue.delivery";
+    public static final String FAILURES_COUNTER     = "essentials.queue.delivery.failures";
+    public static final String RETRIES_COUNTER      = "essentials.queue.retries";
+    public static final String DEAD_LETTER_COUNTER  = "essentials.queue.deadletters";
+    public static final String OWNERSHIP_COUNTER    = "essentials.queue.shard.ownership";
+    public static final String DEPTH_GAUGE          = "essentials.queue.depth";
+    /**
+     * Shards of this queue with a live owner, tagged by lane.
+     */
+    public static final String SHARDS_OWNED_GAUGE   = "essentials.queue.shards.owned";
     /**
      * Shards, across both lanes, that no live instance is reading. <b>The one to alert on.</b> Zero in
      * steady state, briefly non-zero while shards move, persistently non-zero when messages are
      * sitting in shards nobody reads.
      */
     public static final String SHARDS_UNOWNED_GAUGE = "essentials.queue.shards.unowned";
-    /** Instances heartbeating for this queue. Below the number of running processes means colliding ids. */
-    public static final String INSTANCES_GAUGE     = "essentials.queue.instances";
+    /**
+     * Instances heartbeating for this queue. Below the number of running processes means colliding ids.
+     */
+    public static final String INSTANCES_GAUGE      = "essentials.queue.instances";
 
     public static final String LANE_TAG   = "lane";
     public static final String CHANGE_TAG = "change";
@@ -251,12 +255,14 @@ public final class MicrometerQueueObserver implements QueueObserver {
      * it.
      */
     private static final class CachedHealth {
-        private final MessageQueue queue;
-        private final long         maxAgeNanos;
-        private final AtomicReference<QueueHealth> value = new AtomicReference<>(new QueueHealth(0, 0, 0, 0, 0));
-        private final AtomicLong                   readAt = new AtomicLong();
-        /** Explicit, for the overflow reason spelled out on {@link CachedDepth}. */
-        private volatile boolean loaded;
+        private final    MessageQueue                 queue;
+        private final    long                         maxAgeNanos;
+        private final    AtomicReference<QueueHealth> value  = new AtomicReference<>(new QueueHealth(0, 0, 0, 0, 0));
+        private final    AtomicLong                   readAt = new AtomicLong();
+        /**
+         * Explicit, for the overflow reason spelled out on {@link CachedDepth}.
+         */
+        private volatile boolean                      loaded;
 
         private CachedHealth(MessageQueue queue, long maxAgeNanos) {
             this.queue = queue;
@@ -286,17 +292,17 @@ public final class MicrometerQueueObserver implements QueueObserver {
      * single-flighted on refresh, so a burst of scrapes issues one query rather than one each.
      */
     private static final class CachedDepth {
-        private final MessageQueue                  queue;
-        private final long                          maxAgeNanos;
-        private final AtomicReference<QueueDepth>   value      = new AtomicReference<>(new QueueDepth(0, 0, 0));
-        private final AtomicLong                    readAt     = new AtomicLong();
-        private final AtomicBoolean                 refreshing = new AtomicBoolean();
+        private final    MessageQueue                queue;
+        private final    long                        maxAgeNanos;
+        private final    AtomicReference<QueueDepth> value      = new AtomicReference<>(new QueueDepth(0, 0, 0));
+        private final    AtomicLong                  readAt     = new AtomicLong();
+        private final    AtomicBoolean               refreshing = new AtomicBoolean();
         /**
          * Explicit rather than a sentinel in {@link #readAt}. {@code System.nanoTime()} may be
          * negative, so seeding the timestamp with {@code Long.MIN_VALUE} and subtracting it overflows;
          * the staleness test then reads as fresh and the gauge reports its seed of zero forever.
          */
-        private volatile boolean loaded;
+        private volatile boolean                     loaded;
 
         private CachedDepth(MessageQueue queue, long maxAgeNanos) {
             this.queue = queue;

@@ -48,11 +48,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     private static final Logger log = LoggerFactory.getLogger(ShardOwnedDurableQueueConsumer.class);
 
-    private final ConsumeFromQueue                 operation;
-    private final MessageQueue                     queue;
-    private final JSONSerializer                   jsonSerializer;
-    private final Consumer<DurableQueueConsumer>   onCancel;
-    private final DeliveryDispatch                 delivery;
+    private final ConsumeFromQueue               operation;
+    private final MessageQueue                   queue;
+    private final JSONSerializer                 jsonSerializer;
+    private final Consumer<DurableQueueConsumer> onCancel;
+    private final DeliveryDispatch               delivery;
 
     private volatile Subscription subscription;
 
@@ -147,11 +147,11 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
         if (payloadType != MessageEnvelope.FORMAT_VERSION) {
             throw new DurableQueueException(
                     "Message was written in envelope format " + payloadType + ", and this adapter reads format "
-                    + MessageEnvelope.FORMAT_VERSION
-                    + ". A message enqueued by something other than this adapter cannot be delivered through it.",
+                            + MessageEnvelope.FORMAT_VERSION
+                            + ". A message enqueued by something other than this adapter cannot be delivered through it.",
                     queueName());
         }
-        var message       = MessageEnvelope.deserialize(jsonSerializer, payload, key, 0L);
+        var message = MessageEnvelope.deserialize(jsonSerializer, payload, key, 0L);
         var queuedMessage = ShardOwnedQueuedMessage.beingDelivered(queueName(),
                                                                    QueueEntryIdCodec.encode(queueName(), messageId),
                                                                    message);
@@ -185,7 +185,7 @@ class ShardOwnedDurableQueueConsumer implements DurableQueueConsumer {
     static final class ManualRedeliveryRequested extends RuntimeException {
         ManualRedeliveryRequested(java.time.Duration requestedDelay) {
             super("The handler asked for redelivery in " + requestedDelay
-                  + "; the engine will reschedule at its own next backoff interval");
+                          + "; the engine will reschedule at its own next backoff interval");
         }
     }
 }

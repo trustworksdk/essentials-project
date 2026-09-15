@@ -40,14 +40,14 @@ import java.time.Duration;
  *                          that the drift which ruins an absolute throughput figure is common to
  *                          every arm:
  *                          <pre>
- *                            permits    msg/s    % of peak    msg/s per permit
- *                                  1      399          11%                 399
- *                                  4    1 622          47%                 406
- *                                  8    2 420          70%                 302
- *                                 16    2 924          84%                 183
- *                                 32    3 445          99%                 108
- *                                 64    3 475         100%                  54
- *                          </pre>
+ *                                                     permits    msg/s    % of peak    msg/s per permit
+ *                                                           1      399          11%                 399
+ *                                                           4    1 622          47%                 406
+ *                                                           8    2 420          70%                 302
+ *                                                          16    2 924          84%                 183
+ *                                                          32    3 445          99%                 108
+ *                                                          64    3 475         100%                  54
+ *                                                   </pre>
  *                          Throughput peaks at 32, and 32 was briefly the default. That was
  *                          optimising the wrong thing. Return per permit is flat to 4 and then
  *                          collapses, and the peak is the ceiling for <em>one consumer alone on the

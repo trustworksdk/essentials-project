@@ -23,7 +23,6 @@ import org.slf4j.*;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.util.Map;
-import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -48,13 +47,15 @@ public final class ShardWakeupListener implements Lifecycle, AutoCloseable {
 
     public static final String CHANNEL = "shard_queue_wakeup";
 
-    private final DataSource                dataSource;
-    /** Keyed {@code queueId:lane:shard} — the notification payload, so routing needs no other state. */
-    private final Map<String, ShardWakeup>  wakeups;
-    private final AtomicBoolean            running = new AtomicBoolean();
+    private final DataSource               dataSource;
+    /**
+     * Keyed {@code queueId:lane:shard} — the notification payload, so routing needs no other state.
+     */
+    private final Map<String, ShardWakeup> wakeups;
+    private final AtomicBoolean            running               = new AtomicBoolean();
     private final LongAdder                notificationsReceived = new LongAdder();
     private final LongAdder                reconnects            = new LongAdder();
-    private Thread                         thread;
+    private       Thread                   thread;
 
     /**
      * One listener serves every queue and both lanes. The channel was always global and the payload
@@ -102,7 +103,9 @@ public final class ShardWakeupListener implements Lifecycle, AutoCloseable {
         return running.get();
     }
 
-    /** Equivalent to {@link #stop()}. */
+    /**
+     * Equivalent to {@link #stop()}.
+     */
     @Override
     public void close() {
         stop();
@@ -151,7 +154,9 @@ public final class ShardWakeupListener implements Lifecycle, AutoCloseable {
         }
     }
 
-    /** How many times LISTEN has been established — one on startup, one per recovery after that. */
+    /**
+     * How many times LISTEN has been established — one on startup, one per recovery after that.
+     */
     public long reconnects() {
         return reconnects.sum();
     }

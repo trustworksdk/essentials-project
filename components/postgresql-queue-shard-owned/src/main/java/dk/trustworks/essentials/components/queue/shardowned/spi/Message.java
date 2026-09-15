@@ -26,26 +26,26 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * write volume at 3%, so there is nothing here worth spending a coupling on.
  *
  * @param payloadType a discriminator the application defines, so a handler can tell what the bytes
- *              are without unpacking them first. <b>Opaque to the engine.</b> It is stored, carried
- *              through dead-lettering and resurrection, and handed back to the handler; it is never
- *              compared, indexed or interpreted, and nothing validates it.
- *              <p>
- *              There is deliberately no registry mapping it to a type name, which means the mapping
- *              lives in each application — two services disagreeing about what {@code 1} means is not
- *              something this engine can detect. An earlier draft described it as an "interned FQCN"
- *              and justified it as keeping an index dense; neither was true, since the column is in
- *              no index and nothing interns it.
- * @param key   the ordering key, or null for the unordered lane. Messages sharing a key are never
- *              delivered concurrently, and are delivered in ascending {@code keyOrder} among those
- *              committed and visible when the key is free. A key does not wait for a {@code keyOrder}
- *              that has not arrived — one committing late, after a higher one was delivered, is
- *              counted rather than prevented. The cases, and the two that look like they should
- *              reorder but do not, are in the ordering-guarantee section of this module's README
- * @param keyOrder position within the key, supplied by the producer because only the producer knows
- *              the intended order. Part of the ordered table's primary key, so a value may not be
- *              reused for a key — the enqueue fails rather than overwriting. Gaps are allowed.
- *              Ignored when {@code key} is null
- * @param delay how long before the message becomes eligible for delivery
+ *                    are without unpacking them first. <b>Opaque to the engine.</b> It is stored, carried
+ *                    through dead-lettering and resurrection, and handed back to the handler; it is never
+ *                    compared, indexed or interpreted, and nothing validates it.
+ *                    <p>
+ *                    There is deliberately no registry mapping it to a type name, which means the mapping
+ *                    lives in each application — two services disagreeing about what {@code 1} means is not
+ *                    something this engine can detect. An earlier draft described it as an "interned FQCN"
+ *                    and justified it as keeping an index dense; neither was true, since the column is in
+ *                    no index and nothing interns it.
+ * @param key         the ordering key, or null for the unordered lane. Messages sharing a key are never
+ *                    delivered concurrently, and are delivered in ascending {@code keyOrder} among those
+ *                    committed and visible when the key is free. A key does not wait for a {@code keyOrder}
+ *                    that has not arrived — one committing late, after a higher one was delivered, is
+ *                    counted rather than prevented. The cases, and the two that look like they should
+ *                    reorder but do not, are in the ordering-guarantee section of this module's README
+ * @param keyOrder    position within the key, supplied by the producer because only the producer knows
+ *                    the intended order. Part of the ordered table's primary key, so a value may not be
+ *                    reused for a key — the enqueue fails rather than overwriting. Gaps are allowed.
+ *                    Ignored when {@code key} is null
+ * @param delay       how long before the message becomes eligible for delivery
  */
 public record Message(byte[] payload, int payloadType, String key, long keyOrder, java.time.Duration delay) {
 

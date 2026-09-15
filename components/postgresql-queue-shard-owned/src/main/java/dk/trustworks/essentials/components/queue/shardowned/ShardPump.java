@@ -49,17 +49,17 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 final class ShardPump implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(ShardPump.class);
 
-    private final ShardOwnedStorage       storage;
-    private final ShardOwnerSettings   settings;
-    private final ShardOwnerMetrics    metrics;
-    private final ShardWakeup          wakeup = new ShardWakeup();
+    private final ShardOwnedStorage                 storage;
+    private final ShardOwnerSettings                settings;
+    private final ShardOwnerMetrics                 metrics;
+    private final ShardWakeup                       wakeup = new ShardWakeup();
     private final CopyOnWriteArrayList<LeasedOwner> owners = new CopyOnWriteArrayList<>();
-    private final AtomicBoolean        running;
-    private final AtomicBoolean        flushOnExit;
-    private final String               name;
+    private final AtomicBoolean                     running;
+    private final AtomicBoolean                     flushOnExit;
+    private final String                            name;
 
     ShardPump(ShardOwnedStorage storage, ShardOwnerSettings settings, ShardOwnerMetrics metrics,
-                     AtomicBoolean running, AtomicBoolean flushOnExit, String name) {
+              AtomicBoolean running, AtomicBoolean flushOnExit, String name) {
         this.storage = requireNonNull(storage, "No storage provided");
         this.settings = requireNonNull(settings, "No settings provided");
         this.metrics = requireNonNull(metrics, "No metrics provided");
@@ -68,7 +68,9 @@ final class ShardPump implements Runnable {
         this.name = requireNonNull(name, "No name provided");
     }
 
-    /** The wake-up every shard this pump serves is registered against. */
+    /**
+     * The wake-up every shard this pump serves is registered against.
+     */
     public ShardWakeup wakeup() {
         return wakeup;
     }
@@ -97,7 +99,7 @@ final class ShardPump implements Runnable {
                 var takenOver = Collections.newSetFromMap(new IdentityHashMap<LeasedOwner, Boolean>());
 
                 while (running.get()) {
-                    var delivered = 0;
+                    var delivered       = 0;
                     var statementFailed = false;
                     // needsAttention has a side effect — it consumes the shard's wake-up flag — so
                     // it must be asked exactly once per owner per pass.
@@ -155,7 +157,7 @@ final class ShardPump implements Runnable {
                             }
                             statementFailed = true;
                             log.error("{}: shard {} issued a statement that failed on a healthy "
-                                      + "connection; continuing with the other shards", name, owner.shard(), e);
+                                              + "connection; continuing with the other shards", name, owner.shard(), e);
                         }
                     }
                     owners.removeIf(owner -> {
@@ -227,7 +229,7 @@ final class ShardPump implements Runnable {
                 batchReadQueue(connection, entry.getKey(), entry.getValue());
             } catch (SQLException | RuntimeException e) {
                 log.warn("{}: batched read for queue {} failed; those shards read for themselves this "
-                         + "pass", name, entry.getKey(), e);
+                                 + "pass", name, entry.getKey(), e);
             }
         }
     }
@@ -253,8 +255,8 @@ final class ShardPump implements Runnable {
         for (var index = 0; index < sweeping.size(); index++) {
             sweptShards[index] = sweeping.get(index).shard();
         }
-        var sweptRows   = storage.sweepOrderedFromHeads(connection, queueId, sweptShards,
-                                                        settings.readBatchSize());
+        var sweptRows = storage.sweepOrderedFromHeads(connection, queueId, sweptShards,
+                                                      settings.readBatchSize());
         var nextVisible = storage.millisUntilNextVisibleByShard(connection, queueId,
                                                                 ShardOwnedSchema.ORDERED_TABLE, sweptShards);
         // On the OWNERS' metrics, not this pump's: the runtime builds its own counters, so counting
