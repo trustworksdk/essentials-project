@@ -1,0 +1,2 @@
+dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.ShardOwnedQueueAutoConfiguration
+dk.trustworks.essentials.components.boot.autoconfigure.queue.shardowned.ShardOwnedQueuesAdminApiAutoConfiguration

@@ -3,6 +3,16 @@ spring:
     compose:
       enabled: true
       file: classpath:compose.yml
+      # start-only, not the default start-and-stop, because more than one instance shares this
+      # database. Under the default, whichever instance started PostgreSQL takes it down with it on
+      # shutdown, and every surviving instance then logs connection refusals forever — the engine
+      # reconnects rather than dying (an owner that dies holds its leases), Hikari waits out its 30s
+      # connectionTimeout, and the CDC tailer backs off and retries. All correct behaviour for a
+      # transient outage, and unbounded noise for one that is permanent.
+      #
+      # The database therefore outlives the demo. Stop it with `docker compose down` (add `-v` to
+      # discard the event store) when finished.
+      lifecycle-management: start-only
   datasource:
     url: jdbc:postgresql://localhost:5432/essentials-trading-demo
     username: essentials
@@ -27,10 +37,35 @@ essentials:
     max-polling-interval: 2s
     transactional-mode: singleoperationtransaction
     verbose-tracing: false
-    enable-queue-statistics: true
+    # Off (which is also the default): it triggers on the `durable_queues` table, and this demo runs
+    # durable queues on the shard-owned engine. Turn it back on alongside
+    # essentials.shard-owned-queue.durable-queues-enabled=false.
+    enable-queue-statistics: false
     shared-queue-statistics-table-name: durable_queues_statistics
     enable-queue-statistics-ttl: true
     queue-statistics-ttl-duration: 90
+  # The shard-owned queue engine. The queue is declared here as data — name to unordered shard
+  # count — because a name in a YAML file cannot become a bean name without inventing a mapping
+  # that would then be part of the contract. The ordered lane takes no count: it routes on its own
+  # fixed space, recorded per queue when the queue is created.
+  shard-owned-queue:
+    enabled: true
+    initialize-schema: true
+    pump-threads: 2
+    # No `queues:` list. Nothing here needs one: the DurableQueues adapter registers the queues the
+    # framework invents, and QueueLoadGenerator registers its own through
+    # ShardOwnedQueueFactory.register, so its name lives in that class rather than in two places that
+    # have to agree. Listing a queue here is for one an application wants to exist before anything
+    # touches it — `name: <unordered shard count>`, with `ordered-units.<name>` to size the other lane.
+    # Run the application's DurableQueues on this engine, so Inbox, Outbox and every
+    # EventProcessor's projections are delivered by it. Set to false to run the same demo on
+    # PostgresqlDurableQueues instead — both implement the interface, so it is an A/B.
+    #
+    # This is the only line needed. The queues the framework invents — Inbox:<processor>,
+    # <processor>:queue, DefaultCommandQueue — register themselves on first use with
+    # auto-register-shard-count unordered shards, which defaults to 4.
+    durable-queues-enabled: true
+
   fenced-lock-manager:
     fenced-locks-table-name: fenced_locks
     lock-confirmation-interval: 5s

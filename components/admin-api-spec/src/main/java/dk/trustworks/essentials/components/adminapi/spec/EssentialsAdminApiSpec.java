@@ -22,6 +22,7 @@ import dk.trustworks.essentials.components.eventsourced.eventstore.postgresql.ap
 import dk.trustworks.essentials.components.foundation.fencedlock.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues.QueueingSortOrder;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
+import dk.trustworks.essentials.components.queue.shardowned.api.*;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import io.swagger.v3.oas.models.media.*;
@@ -60,7 +61,8 @@ final class EssentialsAdminApiSpec {
             AggregateLifecycleApi.class,
             AggregateLifecycleStatisticsApi.class,
             AggregateArchiveApi.class,
-            AggregateArchiveStatisticsApi.class);
+            AggregateArchiveStatisticsApi.class,
+            ShardOwnedQueuesApi.class);
 
     /** DTO record types reflected into {@code components.schemas} (nested types are resolved transitively). */
     static final List<Class<?>> DTO_CLASSES = List.of(
@@ -73,6 +75,9 @@ final class EssentialsAdminApiSpec {
             ApiTableActivityStatistics.class,
             ApiTableCacheHitRatio.class,
             ApiQueuedMessage.class,
+            ApiShardOwnedMessage.class,
+            ApiShardOwnedQueueStatus.class,
+            ApiShardOwnedQueueStatistics.class,
             ApiQueuedStatistics.class,
             ApiSubscription.class,
             ApiSubscriptionStatistics.class,
@@ -306,6 +311,107 @@ final class EssentialsAdminApiSpec {
          .roles(QUEUE_R, ADMIN)
          .pathParam("queueName", new StringSchema(), "The queue name.")
          .responseOptionalRef("ApiQueuedStatistics", "The queue statistics.");
+
+
+        // ---- shard-owned-queues ----
+        // Paths mirror the controller in spring-boot-starter-postgresql-queue-shard-owned. Every one
+        // is queue-scoped: a MessageId is (lane, shard, sequence) and unique per queue only, so the
+        // queue name is part of addressing a message rather than a convenience.
+        b.operation(ShardOwnedQueuesApi.class, "getQueueNames")
+         .operationId("shardOwnedGetQueueNames")
+         .tag("shard-owned-queues").get("/shard-owned-queues")
+         .summary("List the names of all accessible shard-owned queues.")
+         .roles(QUEUE_R, ADMIN)
+         .responseStringSet("The accessible queue names.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getQueueStatus")
+         .operationId("shardOwnedGetQueueStatus")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/status")
+         .summary("Depth and ownership for a queue, per lane.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseOptionalRef("ApiShardOwnedQueueStatus", "The queue's depth and ownership.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getQueueStatistics")
+         .operationId("shardOwnedGetQueueStatistics")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/statistics")
+         .summary("Delivery counters for a queue, as recorded by the instance answering the request.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseRef("ApiShardOwnedQueueStatistics", "This instance's counters for the queue.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getMessage")
+         .operationId("shardOwnedGetMessage")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/messages/{messageId}")
+         .summary("Get a single message by its id within a queue.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The message id, as lane-shard-sequence (for example u-3-1042).")
+         .responseOptionalRef("ApiShardOwnedMessage", "The message.");
+
+        b.operation(ShardOwnedQueuesApi.class, "getDeadLetterMessages")
+         .operationId("shardOwnedGetDeadLetterMessages")
+         .tag("shard-owned-queues").get("/shard-owned-queues/{queueName}/dead-letter-messages")
+         .summary("Page the dead letters of a queue.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .queryParam("offset", new IntegerSchema()._default(0), false, "Rows to skip.")
+         .queryParam("limit", new IntegerSchema()._default(100), false, "Maximum rows to return.")
+         .responseArray("ApiShardOwnedMessage");
+
+        b.operation(ShardOwnedQueuesApi.class, "deleteMessage")
+         .operationId("shardOwnedDeleteMessage")
+         .tag("shard-owned-queues").delete("/shard-owned-queues/{queueName}/messages/{messageId}")
+         .summary("Delete a message from its queue.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The message id.")
+         .responseDeleted();
+
+        b.operation(ShardOwnedQueuesApi.class, "retryMessage")
+         .operationId("shardOwnedRetryMessage")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/messages/{messageId}/retry")
+         .summary("Make a message visible again after an optional delay.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The message id.")
+         .responseMessageOperation();
+
+        b.operation(ShardOwnedQueuesApi.class, "markAsDeadLetterMessage")
+         .operationId("shardOwnedMarkAsDeadLetterMessage")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter")
+         .summary("Park a message as a dead letter.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The message id.")
+         .responseMessageOperation();
+
+        b.operation(ShardOwnedQueuesApi.class, "resurrectDeadLetterMessage")
+         .operationId("shardOwnedResurrectDeadLetterMessage")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/messages/{messageId}/resurrect")
+         .summary("Return a dead letter to its lane. It re-enters at a fresh sequence, so its id changes.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("messageId", new StringSchema(), "The dead-letter message id.")
+         .responseMessageOperation();
+
+        b.operation(ShardOwnedQueuesApi.class, "resurrectDeadLettersForKey")
+         .operationId("shardOwnedResurrectDeadLettersForKey")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect")
+         .summary("Return every dead letter of one ordered key to its lane, in key_order. The recovery "
+                  + "operation for a key stopped behind a dead letter.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("key", new StringSchema(), "The ordering key.")
+         .responseRef("ShardOwnedResurrectKeyResult", "How many messages were put back.");
+
+        b.operation(ShardOwnedQueuesApi.class, "purgeQueue")
+         .operationId("shardOwnedPurgeQueue")
+         .tag("shard-owned-queues").delete("/shard-owned-queues/{queueName}/messages")
+         .summary("Delete every message in a queue, both lanes.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseShardOwnedPurge();
 
         // ---- event-store ----
         b.operation(EventStoreApi.class, "findHighestGlobalEventOrderPersisted")

@@ -48,6 +48,16 @@
             <artifactId>eventsourced-aggregates</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+          The shard-owned engine. The lab keeps only the benchmarks that compare it against the
+          existing implementation, because those need the harness and both engines on one classpath;
+          the engine and its semantics tests live in the module itself.
+        -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>postgresql-queue-shard-owned</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
@@ -109,16 +119,30 @@
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
         </dependency>
+        <!--
+          Compile scope, not runtime: the shard-owned engine's LISTEN/NOTIFY wake-up needs
+          org.postgresql.PGConnection.getNotifications, which has no JDBC-standard equivalent.
+        -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <version>${postgresql.version}</version>
-            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.reactivestreams</groupId>
             <artifactId>reactive-streams</artifactId>
             <version>${reactive-streams.version}</version>
+        </dependency>
+        <!--
+          Latency histograms for the benchmark harness. HdrHistogram is used rather than a
+          hand-rolled histogram because percentile accuracy at the tail is the whole point of these
+          measurements: p99 and p999 are where a queue design's problems show up, and a naive
+          bucketed histogram either loses resolution exactly there or costs unbounded memory.
+        -->
+        <dependency>
+            <groupId>org.hdrhistogram</groupId>
+            <artifactId>HdrHistogram</artifactId>
+            <version>${hdrhistogram.version}</version>
         </dependency>
         <dependency>
             <groupId>org.jdbi</groupId>

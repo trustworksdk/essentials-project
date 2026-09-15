@@ -1102,6 +1102,581 @@ paths:
       x-required-roles:
       - essentials_queue_reader
       - essentials_admin
+  /shard-owned-queues:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: List the names of all accessible shard-owned queues.
+      operationId: shardOwnedGetQueueNames
+      responses:
+        "200":
+          description: 200 — The accessible queue names.
+          content:
+            application/json:
+              schema:
+                uniqueItems: true
+                type: array
+                items:
+                  type: string
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues/{queueName}/status:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: "Depth and ownership for a queue, per lane."
+      operationId: shardOwnedGetQueueStatus
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The queue's depth and ownership.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiShardOwnedQueueStatus"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues/{queueName}/statistics:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: "Delivery counters for a queue, as recorded by the instance answering\
+        \ the request."
+      operationId: shardOwnedGetQueueStatistics
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — This instance's counters for the queue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiShardOwnedQueueStatistics"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages/{messageId}:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: Get a single message by its id within a queue.
+      operationId: shardOwnedGetMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: "The message id, as lane-shard-sequence (for example u-3-1042)."
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The message.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiShardOwnedMessage"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No value exists for the given identifier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+    delete:
+      tags:
+      - shard-owned-queues
+      summary: Delete a message from its queue.
+      operationId: shardOwnedDeleteMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: The message id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the message was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/dead-letter-messages:
+    get:
+      tags:
+      - shard-owned-queues
+      summary: Page the dead letters of a queue.
+      operationId: shardOwnedGetDeadLetterMessages
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: offset
+        in: query
+        description: Rows to skip.
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 0
+      - name: limit
+        in: query
+        description: Maximum rows to return.
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 100
+      responses:
+        "200":
+          description: 200 — The matching items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApiShardOwnedMessage"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages/{messageId}/retry:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: Make a message visible again after an optional delay.
+      operationId: shardOwnedRetryMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: The message id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the operation took effect.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOperationResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages/{messageId}/mark-as-dead-letter:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: Park a message as a dead letter.
+      operationId: shardOwnedMarkAsDeadLetterMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: The message id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the operation took effect.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOperationResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages/{messageId}/resurrect:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: "Return a dead letter to its lane. It re-enters at a fresh sequence,\
+        \ so its id changes."
+      operationId: shardOwnedResurrectDeadLetterMessage
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: messageId
+        in: path
+        description: The dead-letter message id.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Whether the operation took effect.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageOperationResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect:
+    post:
+      tags:
+      - shard-owned-queues
+      summary: "Return every dead letter of one ordered key to its lane, in key_order.\
+        \ The recovery operation for a key stopped behind a dead letter."
+      operationId: shardOwnedResurrectDeadLettersForKey
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      - name: key
+        in: path
+        description: The ordering key.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — How many messages were put back.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShardOwnedResurrectKeyResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
+  /shard-owned-queues/{queueName}/messages:
+    delete:
+      tags:
+      - shard-owned-queues
+      summary: "Delete every message in a queue, both lanes."
+      operationId: shardOwnedPurgeQueue
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — Number of messages removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShardOwnedPurgeResult"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_writer
+      - essentials_admin
   /event-store/aggregate-types/{aggregateType}/highest-global-event-order:
     get:
       tags:
@@ -2666,6 +3241,160 @@ components:
         lastDelivery:
           type: string
           format: date-time
+    ApiShardOwnedMessage:
+      required:
+      - attempts
+      - isDeadLetter
+      - payloadType
+      - sequence
+      - shard
+      type: object
+      properties:
+        id:
+          type: string
+        queueName:
+          $ref: "#/components/schemas/QueueName"
+        lane:
+          type: string
+        shard:
+          type: integer
+          format: int32
+        sequence:
+          type: integer
+          format: int64
+        key:
+          type: string
+        payload:
+          type: string
+        payloadType:
+          type: integer
+          format: int32
+        attempts:
+          type: integer
+          format: int32
+        enqueuedAt:
+          type: string
+          format: date-time
+        visibleAt:
+          type: string
+          format: date-time
+        isDeadLetter:
+          type: boolean
+        lastError:
+          type: string
+        blockedByKeyOrder:
+          type: integer
+          format: int64
+    ApiShardOwnedQueueStatistics:
+      required:
+      - deadLettered
+      - delivered
+      - handlerFailures
+      - keysBlockedByDeadLetter
+      - leasesLost
+      - messagesPoisonedBehindDeadLetter
+      - orderViolations
+      - retriesDispatched
+      - retriesScheduled
+      - runningInThisInstance
+      - shardsAcquired
+      - shardsReleased
+      - sweepRecoveries
+      - watermarkCapped
+      type: object
+      properties:
+        queueName:
+          $ref: "#/components/schemas/QueueName"
+        runningInThisInstance:
+          type: boolean
+        delivered:
+          type: integer
+          format: int64
+        handlerFailures:
+          type: integer
+          format: int64
+        retriesScheduled:
+          type: integer
+          format: int64
+        retriesDispatched:
+          type: integer
+          format: int64
+        deadLettered:
+          type: integer
+          format: int64
+        orderViolations:
+          type: integer
+          format: int64
+        sweepRecoveries:
+          type: integer
+          format: int64
+        shardsAcquired:
+          type: integer
+          format: int64
+        shardsReleased:
+          type: integer
+          format: int64
+        leasesLost:
+          type: integer
+          format: int64
+        watermarkCapped:
+          type: integer
+          format: int64
+        keysBlockedByDeadLetter:
+          type: integer
+          format: int64
+        messagesPoisonedBehindDeadLetter:
+          type: integer
+          format: int64
+    ApiShardOwnedQueueStatus:
+      required:
+      - deadLetteredDepth
+      - fullyOwned
+      - liveInstances
+      - maxInstances
+      - orderedDepth
+      - orderedShardsOwned
+      - orderedUnits
+      - shardCount
+      - unorderedDepth
+      - unorderedShardsOwned
+      - unownedShards
+      type: object
+      properties:
+        queueName:
+          $ref: "#/components/schemas/QueueName"
+        shardCount:
+          type: integer
+          format: int32
+        orderedUnits:
+          type: integer
+          format: int32
+        unorderedDepth:
+          type: integer
+          format: int64
+        orderedDepth:
+          type: integer
+          format: int64
+        deadLetteredDepth:
+          type: integer
+          format: int64
+        unorderedShardsOwned:
+          type: integer
+          format: int32
+        orderedShardsOwned:
+          type: integer
+          format: int32
+        unownedShards:
+          type: integer
+          format: int32
+        fullyOwned:
+          type: boolean
+        liveInstances:
+          type: integer
+          format: int32
+        maxInstances:
+          type: integer
+          format: int32
     ApiSubscription:
       required:
       - aggregateType
@@ -2974,6 +3703,16 @@ components:
           type: integer
           format: int64
       description: A persisted global event order value.
+    MessageOperationResult:
+      required:
+      - applied
+      type: object
+      properties:
+        applied:
+          type: boolean
+      description: "Whether a shard-owned queue message operation took effect. False\
+        \ is a normal answer, not an error: the message may already have been delivered,\
+        \ deleted or moved by its owner."
     PurgeResult:
       required:
       - purgedCount
@@ -2983,6 +3722,11 @@ components:
           type: integer
           format: int32
       description: Number of messages removed by a purge.
+    QueueName:
+      type: object
+      properties:
+        value:
+          type: string
     QueueNameResult:
       required:
       - queueName
@@ -3010,3 +3754,23 @@ components:
           format: duration
           example: PT0S
       description: Re-queue parameters for resurrecting a dead-letter message.
+    ShardOwnedPurgeResult:
+      required:
+      - purgedCount
+      type: object
+      properties:
+        purgedCount:
+          type: integer
+          format: int64
+      description: "Rows removed by a shard-owned queue purge, across both lanes and\
+        \ the dead-letter table. Distinct from PurgeResult, which is int32."
+    ShardOwnedResurrectKeyResult:
+      required:
+      - resurrectedCount
+      type: object
+      properties:
+        resurrectedCount:
+          type: integer
+          format: int32
+      description: "Messages returned to the ordered lane by resurrecting a whole\
+        \ key. Zero is a normal answer: the key had no dead letters."
