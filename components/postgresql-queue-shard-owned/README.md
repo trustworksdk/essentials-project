@@ -276,14 +276,16 @@ bookkeeping error. The engine counts what that costs instead of claiming it cann
 |---|---|---|
 | **Producer numbered and committed in different orders** | Two transactions enqueue for one key; the one holding the lower `key_order` commits second. The higher one was already delivered | Enqueue a key's messages from **one** transaction, or keep one writer per key. This is the only cause that is a producer bug |
 | **`Message.delayedOrdered`** | Only rows with `visible_at <= now()` are dispatched, so an undelayed later `key_order` overtakes a delayed earlier one. `postgresql-queue` blocks the key instead, and the adapter reaches this from `queueMessage(queue, orderedMessage, deliveryDelay)` — so the same `DurableQueues` call behaves differently on the two engines. Left as it is, with the reasoning and the trigger to revisit in [§18.3](../../docs/durable-queue-shard-owned.md) | A per-key delay *is* a reordering instruction. Keep a key's messages either all delayed or all not, with the same delay; otherwise enqueue undelayed and let the handler decide when to act |
-| **Dead letter** | ~~The key is released and later messages proceed without it~~ — no longer true. A key **never advances past a dead letter**: messages behind one are dead-lettered with it, unhandled, and marked `neverDelivered()`. See [Dead letters block their key](#dead-letters-block-their-key) | Watch the dead-letter count. A key that stops is reported once at WARN, and its backlog shows up there rather than as queue depth |
-| **Resurrecting a dead letter** | It returns with its original `key_order` and a fresh sequence value. Because the key was blocked behind it, nothing ran ahead of it — but a message that commits late under a *lower* order still counts a violation | Resurrect a key's dead letters lowest `key_order` first; see below |
 | **`watermarkCap` fires** | A write transaction older than the cap (60 s) is stepped over rather than waited out. Its rows are still delivered — the head sweep finds them — but late, relative to their key | Find the long-running write transaction. The cap is an escape hatch, not a knob |
 | **An instance is declared dead** | Its units are taken while its handlers may still be running. The staleness gate stops it *dispatching*, not the handler already in flight | Nothing; this is the same window at-least-once delivery comes from |
 | **At-least-once redelivery** | A message handled but not yet acknowledged when its unit moves is delivered again by the successor, after the key has moved on | Make handlers idempotent — the contract requires it anyway |
 
-Two things that look like they should reorder and do not:
+Three things that look like they should reorder and do not:
 
+- **A dead letter never reorders.** The key stops at it, and the messages behind it are dead-lettered
+  too rather than delivered without it — see [Dead letters block their key](#dead-letters-block-their-key).
+  Resurrecting is likewise in order, because nothing ran ahead of the parked message while the key was
+  stopped.
 - **A retry never reorders.** A failing message keeps its key blocked for the whole backoff
   (`keysAwaitingRetry`) and is put back at its key's head, so the key retries *that* message before
   anything later. The same applies to a handler that returns while its thread is interrupted: the
