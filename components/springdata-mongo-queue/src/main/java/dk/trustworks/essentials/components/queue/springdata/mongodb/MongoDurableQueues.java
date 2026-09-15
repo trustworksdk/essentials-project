@@ -91,6 +91,12 @@ public final class MongoDurableQueues implements DurableQueues {
 
     protected static final Logger                                            log                                    = LoggerFactory.getLogger(MongoDurableQueues.class);
     public static final    String                                            DEFAULT_DURABLE_QUEUES_COLLECTION_NAME = "durable_queues";
+    /**
+     * The {@code messageHandlingTimeout} {@link #builder()} applies when none is set. Matches
+     * {@code PostgresqlDurableQueues.DEFAULT_MESSAGE_HANDLING_TIMEOUT} — the two implementations are alternatives for
+     * the same job, so a value that differs between them is a trap, not a tuning decision.
+     */
+    public static final    Duration                                          DEFAULT_MESSAGE_HANDLING_TIMEOUT       = Duration.ofSeconds(30);
     private final          Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory;
 
     protected       SpringMongoTransactionAwareUnitOfWorkFactory        unitOfWorkFactory;
@@ -401,7 +407,9 @@ public final class MongoDurableQueues implements DurableQueues {
      *                                     <b>Failure to adequately sanitize and validate this value could expose the application to malicious input attacks, compromising the security and integrity of the database.</b>
      * @param queuePollingOptimizerFactory optional {@link QueuePollingOptimizer} factory that creates a {@link QueuePollingOptimizer} per {@link ConsumeFromQueue} command -
      *                                     if set to null {@link #createQueuePollingOptimizerFor(ConsumeFromQueue)} is used instead
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     protected MongoDurableQueues(TransactionalMode transactionalMode,
                                  MongoTemplate mongoTemplate,
                                  SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
@@ -1633,6 +1641,35 @@ public final class MongoDurableQueues implements DurableQueues {
         public DurableQueuedMessage() {
         }
 
+        /**
+         * Create a {@link DurableQueuedMessageBuilder} that names every argument.
+         *
+         * @return the builder
+         */
+        public static DurableQueuedMessageBuilder builder() {
+            return new DurableQueuedMessageBuilder();
+        }
+
+        /**
+         * @param id                    the queue entry id
+         * @param queueName             the queue the message belongs to
+         * @param isBeingDelivered      whether the message is currently being delivered
+         * @param messagePayload        the serialized payload
+         * @param messagePayloadType    the payload's type name
+         * @param addedTimestamp        when the message was enqueued
+         * @param nextDeliveryTimestamp when the message next becomes a delivery candidate
+         * @param deliveryTimestamp     when the message was last delivered
+         * @param totalDeliveryAttempts total number of delivery attempts so far
+         * @param redeliveryAttempts    number of redelivery attempts so far
+         * @param lastDeliveryError     the last delivery error, or {@code null}
+         * @param isDeadLetterMessage   whether the message has been dead-lettered
+         * @param metaData              the message meta-data
+         * @param deliveryMode          {@code NORMAL} or {@code IN_ORDER}
+         * @param key                   the ordering key, or {@code null} for an unordered message
+         * @param keyOrder              the order within {@code key}, or {@code -1} for an unordered message
+         * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+         */
+        @Deprecated(forRemoval = true, since = "0.40.x")
         public DurableQueuedMessage(QueueEntryId id,
                                     QueueName queueName,
                                     boolean isBeingDelivered,
@@ -1849,6 +1886,17 @@ public final class MongoDurableQueues implements DurableQueues {
         private JSONSerializer jsonSerializer;
         private String sharedQueueCollectionName;
         private Function<ConsumeFromQueue, QueuePollingOptimizer> queuePollingOptimizerFactory;
+        // Aligned with PostgresqlDurableQueuesBuilder, which defaults the same way. Until 0.40.x this builder
+        // produced FullyTransactional (it delegated to the constructor taking a unitOfWorkFactory), so the two
+        // implementations disagreed about what "the default queue" means — the same divergence that was closed on the
+        // PostgreSQL side between its constructors and its builder. FullyTransactional is the side documented as
+        // broken for retries and dead-lettering, which is why convergence goes this way. Behaviour change for existing
+        // builder callers; called out in the migration guide.
+        private TransactionalMode transactionalMode = TransactionalMode.SingleOperationTransaction;
+        /**
+         * Only used when {@link #transactionalMode} is {@link TransactionalMode#SingleOperationTransaction}
+         */
+        private Duration messageHandlingTimeout = DEFAULT_MESSAGE_HANDLING_TIMEOUT;
 
         /**
          * @param mongoTemplate required
@@ -1896,13 +1944,45 @@ public final class MongoDurableQueues implements DurableQueues {
         }
 
         /**
+         * @param transactionalMode the transactional behaviour mode. Defaults to
+         *                          {@link TransactionalMode#SingleOperationTransaction}, matching
+         *                          {@code PostgresqlDurableQueues.builder()}. In that mode the consumer MUST
+         *                          acknowledge messages explicitly in a new {@code UnitOfWork}.
+         *                          {@link TransactionalMode#FullyTransactional} additionally requires
+         *                          {@link #setUnitOfWorkFactory(SpringMongoTransactionAwareUnitOfWorkFactory)} and a
+         *                          MongoDB replica set
+         * @return this builder
+         */
+        public Builder setTransactionalMode(TransactionalMode transactionalMode) {
+            this.transactionalMode = transactionalMode;
+            return this;
+        }
+
+        /**
+         * @param messageHandlingTimeout only used for {@link TransactionalMode#SingleOperationTransaction}: the timeout
+         *                               for messages that have been delivered but not yet acknowledged. After it
+         *                               elapses the delivery is reset and the message becomes a candidate again.
+         *                               Defaults to {@link #DEFAULT_MESSAGE_HANDLING_TIMEOUT}
+         * @return this builder
+         */
+        public Builder setMessageHandlingTimeout(Duration messageHandlingTimeout) {
+            this.messageHandlingTimeout = messageHandlingTimeout;
+            return this;
+        }
+
+        /**
          * @return the new {@link MongoDurableQueues}
          */
         @SuppressWarnings("removal")
         public MongoDurableQueues build() {
-            return new MongoDurableQueues(mongoTemplate,
+            return new MongoDurableQueues(transactionalMode,
+                                          mongoTemplate,
                                           unitOfWorkFactory,
+                                          messageHandlingTimeout,
                                           jsonSerializer,
+                                          // Passed through unchanged rather than defaulted: it was already required
+                                          // here (the constructor's requireNonNull rejects null), and quietly giving it
+                                          // a default would turn a fail-fast into a silent fallback collection.
                                           sharedQueueCollectionName,
                                           queuePollingOptimizerFactory);
         }

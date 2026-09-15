@@ -83,6 +83,17 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
     private final EventStreamGapHandler<CONFIG>              eventStreamGapHandler;
 
     /**
+     * Create a {@link PostgresqlEventStoreBuilder} that names every argument and accepts both plain values and
+     * {@link Optional}s.
+     *
+     * @param <CONFIG> the concrete {@link AggregateEventStreamConfiguration}
+     * @return the builder
+     */
+    public static <CONFIG extends AggregateEventStreamConfiguration> PostgresqlEventStoreBuilder<CONFIG> builder() {
+        return new PostgresqlEventStoreBuilder<>();
+    }
+
+    /**
      * Create a {@link PostgresqlEventStore} without EventStreamGapHandler (specifically with {@link NoEventStreamGapHandler}) as a backwards compatible configuration and
      * {@link NoOpEventStoreSubscriptionObserver}
      *
@@ -129,7 +140,9 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
      *                                                measure statistics related to {@link EventStoreSubscription}'s
      *                                                and calls to {@link #pollEvents(AggregateType, long, Optional, Optional, Optional, Optional, Optional)}
      * @param <STRATEGY>                              the persistence strategy type
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public <STRATEGY extends AggregateEventStreamPersistenceStrategy<CONFIG>> PostgresqlEventStore(EventStoreUnitOfWorkFactory unitOfWorkFactory,
                                                                                                    STRATEGY aggregateEventStreamPersistenceStrategy,
                                                                                                    Optional<EventStoreEventBus> eventStoreLocalEventBusOption,
@@ -756,7 +769,10 @@ public final class PostgresqlEventStore<CONFIG extends AggregateEventStreamConfi
         private final SubscriberId                     subscriberId;
         private final EventStorePollingOptimizer       pollingOptimizer;
 
-        public PollEventStoreTask(long demandForEvents,
+        // private, not public: PollEventStoreTask is itself a private inner class, so a public constructor was
+        // reachable by nobody and only served to trip the construction-ergonomics ceiling. Narrowing it is not an
+        // API change — a builder here would have invented public surface for a type that has none.
+        private PollEventStoreTask(long demandForEvents,
                                   FluxSink<PersistedEvent> sink,
                                   AggregateType aggregateType,
                                   Optional<Tenant> onlyIncludeEventIfItBelongsToTenant,

@@ -36,6 +36,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static dk.trustworks.essentials.spring.examples.postgresql.cqrs.ExampleTestImages.*;
 
 /**
  * Covers the {@code banking.open_account} slice: that the command opens an account with a zero balance, and that
@@ -47,14 +48,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class OpenAccountIT {
 
     @Container
-    static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(POSTGRES_IMAGE)
             .withDatabaseName("test")
             .withPassword("test")
             .withUsername("test");
 
     @Container
-    static org.testcontainers.kafka.KafkaContainer kafkaContainer = new org.testcontainers.kafka.KafkaContainer("apache/kafka-native:latest")
-            .withEnv("KAFKA_LISTENERS", "PLAINTEXT://:9092,BROKER://:9093,CONTROLLER://:9094");
+    static org.testcontainers.kafka.KafkaContainer kafkaContainer = new org.testcontainers.kafka.KafkaContainer(KAFKA_IMAGE)
+            .withStartupAttempts(2);
 
     @DynamicPropertySource
     static void setProperties(DynamicPropertyRegistry registry) {

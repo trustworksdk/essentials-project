@@ -50,6 +50,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static dk.trustworks.essentials.spring.examples.postgresql.cqrs.ExampleTestImages.POSTGRES_IMAGE;
 
 @Testcontainers
 @DirtiesContext
@@ -59,7 +60,7 @@ public class TaskProcessorIT {
 
 
     @Container
-    static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(POSTGRES_IMAGE)
             .withDatabaseName("test")
             .withPassword("test")
             .withUsername("test");

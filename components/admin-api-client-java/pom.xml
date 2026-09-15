@@ -47,7 +47,6 @@
              instance, retyped the async response interceptor from HttpResponse<String> to
              HttpResponse<InputStream> and made updateBaseUri final. -->
         <openapi-generator.version>7.24.0</openapi-generator.version>
-        <jakarta-annotation.version>2.1.1</jakarta-annotation.version>
         <!-- The contract this client is generated from -->
         <admin-api.spec>${project.basedir}/../admin-api-spec/openapi/essentials-admin-api.yaml</admin-api.spec>
         <generated.client.package>dk.trustworks.essentials.components.adminapi.client</generated.client.package>
@@ -67,10 +66,13 @@
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jdk8</artifactId>
         </dependency>
+        <!-- Deliberately unversioned: spring-boot-dependencies manages this at 3.0.0, which is what every
+             other module in the reactor resolves. This one carried an explicit 2.1.1, and a direct <version>
+             outranks management, so it was the only module on the Jakarta EE 10 line. The generated code only
+             uses @jakarta.annotation.Generated, present in both. -->
         <dependency>
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>
-            <version>${jakarta-annotation.version}</version>
         </dependency>
     </dependencies>
 

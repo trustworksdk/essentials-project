@@ -51,7 +51,7 @@
              and safe only while OpenApiContractCompatibilityTest passes, since that test is what actually
              drives openapi-diff. Treat a failure there as "revert the bump", not "fix the test". -->
         <swagger-core.version>2.2.52</swagger-core.version>
-        <swagger-parser.version>2.1.46</swagger-parser.version>
+        <swagger-parser.version>2.1.47</swagger-parser.version>
         <openapi-diff.version>2.1.7</openapi-diff.version>
         <build-helper-maven-plugin.version>3.6.1</build-helper-maven-plugin.version>
     </properties>
@@ -121,6 +121,20 @@
                 <targetPath>openapi</targetPath>
                 <includes>
                     <include>essentials-admin-api.yaml</include>
+                </includes>
+            </resource>
+            <!-- Repeated verbatim from the parent's <resources>, and it has to be: Maven REPLACES a list-valued
+                 element when a child redeclares it, it does not merge. Declaring <resources> here to add the
+                 contract above therefore drops every entry the parent declared, and this module shipped without
+                 META-INF/LICENSE for exactly that reason. The repo-root LICENSE.txt is not packaged by itself,
+                 so a consumer holding only the jar would see no licence at all.
+                 Keep in sync with the parent pom's <resources>; adding an entry there needs one here too.
+                 <testResources> is NOT redeclared in this module, so it still inherits and needs no copy. -->
+            <resource>
+                <directory>${maven.multiModuleProjectDirectory}</directory>
+                <targetPath>META-INF</targetPath>
+                <includes>
+                    <include>LICENSE.txt</include>
                 </includes>
             </resource>
         </resources>

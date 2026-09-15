@@ -39,6 +39,15 @@ public final class EventStoreEventBus implements EventBus, Lifecycle {
     private EventBus eventBus;
 
     /**
+     * Create an {@link EventStoreEventBusBuilder} that names every argument.
+     *
+     * @return the builder
+     */
+    public static EventStoreEventBusBuilder builder() {
+        return new EventStoreEventBusBuilder();
+    }
+
+    /**
      * Wrap an existing {@link EventBus} and provide the proper {@link UnitOfWorkLifecycleCallback} to ensure that {@link PersistedEvents} will be published
      * at all {@link CommitStage}'s
      *
@@ -117,7 +126,9 @@ public final class EventStoreEventBus implements EventBus, Lifecycle {
      * @param onErrorHandler                 the error handler which will be called if any subscriber/consumer fails to handle an event
      * @param overflowMaxRetries     the maximum number of retries for events that overflow the Flux
      * @param queuedTaskCapFactor            the factor to calculate queued task capacity
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public EventStoreEventBus(EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> eventStoreUnitOfWorkFactory,
                               int parallelThreads,
                               int eventBusBackpressureBufferSize,

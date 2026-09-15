@@ -38,11 +38,13 @@ jobs:
           cache: maven
 
       # Pre-pull so Testcontainers does not pay the pull inside a test's startup timeout.
-      # Keep these tags in sync with EssentialsTestContainers.POSTGRES_IMAGE / MONGO_IMAGE.
-      - name: Pre-pull database images
+      # Keep these tags in sync with EssentialsTestContainers.POSTGRES_IMAGE / MONGO_IMAGE and with the
+      # ExampleTestImages holder in each examples/essentials-spring-examples module.
+      - name: Pre-pull database and broker images
         run: |
           docker pull postgres:18.4
           docker pull mongo:8.2
+          docker pull apache/kafka-native:4.3.1
 
       - name: Build with Maven
         run: mvn -B verify --file pom.xml -DskipDependencyCheck=true

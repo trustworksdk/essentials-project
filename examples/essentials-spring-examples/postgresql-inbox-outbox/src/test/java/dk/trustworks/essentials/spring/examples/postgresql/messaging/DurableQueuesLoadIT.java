@@ -44,19 +44,20 @@ import java.util.stream.IntStream;
 
 import static dk.trustworks.essentials.shared.MessageFormatter.msg;
 import static org.assertj.core.api.Assertions.assertThat;
+import static dk.trustworks.essentials.spring.examples.postgresql.messaging.ExampleTestImages.*;
 
 @SpringBootTest(classes = TestApplication.class)
 @Testcontainers
 @DirtiesContext
 public class DurableQueuesLoadIT {
     @Container
-    static PostgreSQLContainer<?>                  postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    static PostgreSQLContainer<?>                  postgreSQLContainer = new PostgreSQLContainer<>(POSTGRES_IMAGE)
             .withDatabaseName("test")
             .withPassword("test")
             .withUsername("test");
     @Container
-    static org.testcontainers.kafka.KafkaContainer kafkaContainer      = new org.testcontainers.kafka.KafkaContainer("apache/kafka-native:latest")
-            .withEnv("KAFKA_LISTENERS", "PLAINTEXT://:9092,BROKER://:9093,CONTROLLER://:9094");
+    static org.testcontainers.kafka.KafkaContainer kafkaContainer      = new org.testcontainers.kafka.KafkaContainer(KAFKA_IMAGE)
+            .withStartupAttempts(2);
 
 
     @DynamicPropertySource

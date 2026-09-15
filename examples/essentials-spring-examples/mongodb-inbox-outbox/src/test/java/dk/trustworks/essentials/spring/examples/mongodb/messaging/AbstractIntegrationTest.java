@@ -25,6 +25,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import static dk.trustworks.essentials.spring.examples.mongodb.messaging.ExampleTestImages.*;
 
 /**
  * Shared container and context setup for this module's integration tests. Kafka is started even for tests that do not
@@ -36,11 +37,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @DirtiesContext
 public abstract class AbstractIntegrationTest {
     @Container
-    protected static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:latest");
+    protected static MongoDBContainer mongoDBContainer = new MongoDBContainer(MONGO_IMAGE);
 
     @Container
-    protected static org.testcontainers.kafka.KafkaContainer kafkaContainer = new org.testcontainers.kafka.KafkaContainer("apache/kafka-native:latest")
-            .withEnv("KAFKA_LISTENERS", "PLAINTEXT://:9092,BROKER://:9093,CONTROLLER://:9094");
+    protected static org.testcontainers.kafka.KafkaContainer kafkaContainer = new org.testcontainers.kafka.KafkaContainer(KAFKA_IMAGE)
+            .withStartupAttempts(2);
 
     @DynamicPropertySource
     protected static void setProperties(DynamicPropertyRegistry registry) {

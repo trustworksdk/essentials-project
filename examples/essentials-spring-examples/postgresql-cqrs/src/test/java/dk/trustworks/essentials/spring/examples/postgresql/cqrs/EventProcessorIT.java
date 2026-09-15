@@ -48,6 +48,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static dk.trustworks.essentials.spring.examples.postgresql.cqrs.ExampleTestImages.POSTGRES_IMAGE;
 
 /**
  * Integration test for the EventProcessor using the following scenarios:
@@ -63,7 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DirtiesContext
 public class EventProcessorIT {
     @Container
-    static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>("postgres:latest")
+    static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(POSTGRES_IMAGE)
             .withDatabaseName("test")
             .withPassword("test")
             .withUsername("test");

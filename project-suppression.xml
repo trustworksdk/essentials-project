@@ -373,11 +373,66 @@
    - the scanner matches purely on the apache:tomcat CPE version range. Scoped to the whole
    org.apache.tomcat.embed group, not just -core: the CPE matches every artifact in it, so naming one
    only moves the finding to the next sibling (it surfaced on tomcat-embed-websocket).
-   There is also no fix to take: the advisory names 11.0.25, which is not published (11.0.24 is current).
-   Re-check when 11.0.25 lands - if the range still covers what we resolve, keep this; the reasoning above
-   holds regardless of version, so this is not a "wait for the bump" suppression.
+   The fix has since landed and been taken: the affected range is "from 11.0.1 up to (excluding) 11.0.25"
+   and ${tomcat.version} is now 11.0.25, so this no longer matches anything. Kept rather than deleted
+   because the reasoning above is about the artifact, not the version - tomcat-embed-core will never ship
+   the examples webapp - so it stands if the CPE range is ever widened or the pin is rolled back. Delete it
+   if you want the file to hold only live suppressions.
    ]]></notes>
         <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/.*$</packageUrl>
         <vulnerabilityName>CVE-2026-66299</vulnerabilityName>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: opentelemetry-proto-*.jar, opentelemetry-semconv-*.jar
+   Wrong language, not a stale version. Every CVE the scanner lands on these two is against a different
+   OpenTelemetry *implementation* - CVE-2026-29181, CVE-2026-39882, CVE-2026-39883, CVE-2026-41178 and
+   CVE-2026-24051 are OpenTelemetry-Go, CVE-2026-40894 is OpenTelemetry .NET, CVE-2026-44967 is
+   OpenTelemetry-C++. They match only because cpe:2.3:a:opentelemetry:opentelemetry is written against the
+   project rather than any one language binding, and these jars carry no language qualifier to distinguish
+   them.
+   Scoped to these two artifacts and no wider on purpose. opentelemetry-proto is generated protobuf message
+   classes and opentelemetry-semconv is generated attribute-name constants: neither contains an exporter, a
+   propagator, or any other executable OpenTelemetry logic, so a genuine finding cannot live in them and
+   anything matched here is a false positive by construction. The real Java implementation
+   (io.opentelemetry:opentelemetry-api / -sdk / -exporter-*) is deliberately NOT covered - a CVE against
+   those would be ours to act on.
+   Both arrive runtime-scope in the essentials-spring-examples demo only, via micrometer-registry-otlp and
+   micrometer-tracing-bridge-otel; neither is part of the release.
+   ]]></notes>
+        <packageUrl regex="true">^pkg:maven/io\.opentelemetry\.(proto/opentelemetry-proto|semconv/opentelemetry-semconv)@.*$</packageUrl>
+        <cpe>cpe:/a:opentelemetry:opentelemetry</cpe>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   file name: docker-java-transport-zerodep-*.jar/META-INF/maven/**/{httpclient5,httpcore5}/pom.xml
+   Not on our classpath as a resolvable artifact - these are Apache HttpComponents copies shaded *into*
+   docker-java-transport-zerodep ("zerodep" = it vendors its dependencies), and the scanner finds them by
+   reading the embedded META-INF/maven pom.xml. Four CVEs land here: CVE-2026-71290 (9.1, TLS hostname
+   verification) and CVE-2026-64607 against httpclient5 5.5.1, CVE-2026-54399 and CVE-2026-54428 against
+   httpcore5 5.3.6.
+   Two things follow, and both are why this is a suppression rather than a bump. A dependencyManagement pin
+   on org.apache.httpcomponents.* is inert against a shaded copy - it would change the report's resolved
+   version while the vendored bytecode stayed put, which is worse than doing nothing. And there is no
+   upstream fix to take: docker-java-transport-zerodep 3.7.1 is the current release on Central, so no
+   version of Testcontainers available today carries patched copies.
+   Reachability: this transport exists to talk to the local Docker daemon over a unix socket or localhost
+   for Testcontainers. The TLS hostname check and the HTTP/1.1 and HPACK parser limits all guard against a
+   hostile remote peer, and the peer here is the developer's own dockerd. Test scope everywhere except
+   foundation-test, which carries it at compile because it *is* the test-harness module.
+   Re-check when docker-java publishes past 3.7.1: if its vendored httpclient5 moves past 5.5.1 and
+   httpcore5 past 5.3.6, delete this block rather than updating it.
+   ]]></notes>
+        <filePath regex="true">.*docker-java-transport-zerodep-.*\.jar.*(httpclient5|httpcore5).*</filePath>
+        <cpe>cpe:/a:apache:httpclient</cpe>
+    </suppress>
+    <suppress>
+        <notes><![CDATA[
+   Second half of the docker-java-transport-zerodep block above - httpcore5 matches on a different CPE
+   (apache:httpcomponents_core) than httpclient5, so it needs its own entry. Same artifact, same reasoning,
+   same re-check trigger.
+   ]]></notes>
+        <filePath regex="true">.*docker-java-transport-zerodep-.*\.jar.*(httpclient5|httpcore5).*</filePath>
+        <cpe>cpe:/a:apache:httpcomponents_core</cpe>
     </suppress>
 </suppressions>

@@ -183,6 +183,25 @@
             <version>${spring-boot.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- ArchUnit drives EssentialsConstructionErgonomicsTest. This starter is the only place in the reactor whose
+             classpath holds postgresql-queue and postgresql-distributed-fenced-lock together with the core chain —
+             pulling one complete implementation stack onto a single classpath is what a starter is for — so the
+             construction-ergonomics guard runs here rather than in a module added for the test's sake. -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>${archunit-junit5.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- For the shared architecture rules and their harness (EssentialsConstructionRules,
+             AbstractEssentialsConstructionErgonomicsTest) only. ArchUnit is optional in foundation-test's POM, hence
+             the explicit declaration above. -->
+        <dependency>
+            <groupId>dk.trustworks.essentials.components</groupId>
+            <artifactId>foundation-test</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

@@ -60,6 +60,18 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
     private final    Function<String, EventStorePollingOptimizer>                             eventStorePollingOptimizerFactory;
 
     /**
+     * Create an {@link EventStoreSubscriptionManagerBuilder} that names every argument.
+     * <p>
+     * Declared here as well as on {@link EventStoreSubscriptionManager} because a static interface method is not
+     * inherited by the implementing class, so a caller holding this type would not otherwise find it.
+     *
+     * @return the builder
+     */
+    public static EventStoreSubscriptionManagerBuilder builder() {
+        return EventStoreSubscriptionManager.builder();
+    }
+
+    /**
      * Constructs an instance of {@link DefaultEventStoreSubscriptionManager} that manages
      * subscriptions to an {@link EventStore}. This subscription manager handles event polling,
      * snapshot management, and lifecycle controls for event subscriptions.<br>
@@ -91,7 +103,9 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      *                                          );
      *                                          }
      *                                          </pre>
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultEventStoreSubscriptionManager(EventStore eventStore,
                                                 int eventStorePollingBatchSize,
                                                 Duration eventStorePollingInterval,
@@ -144,7 +158,9 @@ public class DefaultEventStoreSubscriptionManager implements EventStoreSubscript
      *                                          );
      *                                          }
      *                                          </pre>
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public DefaultEventStoreSubscriptionManager(EventStore eventStore,
                                                 int eventStorePollingBatchSize,
                                                 Duration eventStorePollingInterval,

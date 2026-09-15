@@ -60,10 +60,26 @@ public class CdcInboxRepository {
     private final Counter                                                       markDispatchedCounter;
     private final Counter                                                       deleteDispatchedCounter;
 
+    /**
+     * Create a {@link CdcInboxRepositoryBuilder} that names every argument and accepts both plain values and
+     * {@link Optional}s.
+     *
+     * @return the builder
+     */
+    public static CdcInboxRepositoryBuilder builder() {
+        return new CdcInboxRepositoryBuilder();
+    }
+
     public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory) {
         this(unitOfWorkFactory, Optional.empty());
     }
 
+    /**
+     * @param unitOfWorkFactory the {@link HandleAwareUnitOfWorkFactory} needed to access the database
+     * @param meterRegistry     optional {@link MeterRegistry} — when empty, no metrics are recorded
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                               Optional<MeterRegistry> meterRegistry) {
         this(unitOfWorkFactory, meterRegistry, CdcSql.DEFAULT_CDC_TABLE_NAME);
@@ -74,6 +90,13 @@ public class CdcInboxRepository {
         this(unitOfWorkFactory, Optional.empty(), cdcInboxTableName);
     }
 
+    /**
+     * @param unitOfWorkFactory  the {@link HandleAwareUnitOfWorkFactory} needed to access the database
+     * @param meterRegistry      optional {@link MeterRegistry} — when empty, no metrics are recorded
+     * @param cdcInboxTableName  the name of the CDC inbox table
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public CdcInboxRepository(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
                               Optional<MeterRegistry> meterRegistry,
                               String cdcInboxTableName) {

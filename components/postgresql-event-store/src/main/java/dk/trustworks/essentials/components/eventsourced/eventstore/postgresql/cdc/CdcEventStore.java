@@ -143,6 +143,27 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
      */
     private final AtomicInteger                                               backfillLiveBufferSize = new AtomicInteger(0);
 
+    /**
+     * Create a {@link CdcEventStoreBuilder} that names every argument and accepts both plain values and
+     * {@link Optional}s.
+     *
+     * @param <CONFIG> the event-stream configuration type
+     * @return the builder
+     */
+    public static <CONFIG extends AggregateEventStreamConfiguration> CdcEventStoreBuilder<CONFIG> builder() {
+        return new CdcEventStoreBuilder<>();
+    }
+
+    /**
+     * @param delegate              the {@link ConfigurableEventStore} being decorated
+     * @param unitOfWorkFactory     the unit-of-work factory
+     * @param eventStreamGapHandler the gap handler
+     * @param cdcBus                the in-memory CDC fan-out bus
+     * @param cdcProperties         the CDC configuration
+     * @param availability          the shared CDC availability tracker
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
@@ -152,6 +173,17 @@ public class CdcEventStore<CONFIG extends AggregateEventStreamConfiguration> imp
         this(delegate, unitOfWorkFactory, eventStreamGapHandler, cdcBus, cdcProperties, availability, Optional.empty());
     }
 
+    /**
+     * @param delegate              the {@link ConfigurableEventStore} being decorated
+     * @param unitOfWorkFactory     the unit-of-work factory
+     * @param eventStreamGapHandler the gap handler
+     * @param cdcBus                the in-memory CDC fan-out bus
+     * @param cdcProperties         the CDC configuration
+     * @param availability          the shared CDC availability tracker
+     * @param meterRegistry         optional {@link MeterRegistry} — when empty, no CDC event-store metrics are recorded
+     * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
+     */
+    @Deprecated(forRemoval = true, since = "0.40.x")
     public CdcEventStore(ConfigurableEventStore<CONFIG> delegate,
                          EventStoreUnitOfWorkFactory<? extends EventStoreUnitOfWork> unitOfWorkFactory,
                          EventStreamGapHandler<?> eventStreamGapHandler,
