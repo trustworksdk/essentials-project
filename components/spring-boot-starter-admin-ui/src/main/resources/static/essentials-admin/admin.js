@@ -790,6 +790,17 @@ const actions = {
            <strong>its id changes</strong> — the old one no longer addresses it.</p>`,
         run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/messages/${encodeURIComponent(id)}/resurrect`, { method: 'POST' })
     }),
+    shardResurrectKey: (key) => ({
+        title: 'Resurrect the whole key', danger: false, confirmLabel: 'Resurrect key',
+        body: `<p>Returns <strong>every</strong> dead letter of <code class="mono">${esc(key)}</code> to the ordered
+           lane, in <code>key_order</code>, in one transaction — so the key resumes where it stopped rather than
+           replaying what it already handled.</p>
+           <p>This is the way back from a key stopped behind a dead letter. Resurrecting message by message
+           works too, but only lowest <code>key_order</code> first: a higher one put back while a lower one is
+           still parked is simply parked again.</p>
+           <p>If the handler is still broken the first message fails its way back and the key stops again.</p>`,
+        run: () => api(`/shard-owned-queues/${encodeURIComponent(shardOwnedState.queue)}/ordered-keys/${encodeURIComponent(key)}/resurrect`, { method: 'POST' })
+    }),
     shardDelete: (id) => ({
         title: 'Delete message?', danger: true, confirmLabel: 'Delete message',
         body: `<p>Permanently removes <code class="mono">${esc(id)}</code>. The payload is not recoverable
@@ -1249,9 +1260,14 @@ views.shardOwnedQueues = async () => {
             : `<button class="link" data-shard-msg="${esc(m.id)}" title="View full payload">${esc(m.payload)}</button>`}</td>
       <td>${ts(m.enqueuedAt)}</td>
       <td class="num">${m.attempts}</td>
-      <td class="truncate">${m.lastError ? badge('serious', m.lastError) : nil()}</td>
+      <td class="truncate">${m.blockedByKeyOrder != null
+            ? badge('warning', `blocked behind key_order ${m.blockedByKeyOrder}`)
+            : (m.lastError ? badge('serious', m.lastError) : nil())}</td>
       <td class="actions">
         <button class="btn btn-sm" data-act="shardResurrect" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Resurrect</button>
+        ${m.key ? `<button class="btn btn-sm" data-act="shardResurrectKey" data-name="${esc(m.key)}"
+                           title="Return every dead letter of this key, in key_order"
+                           ${CAN.writeQueues ? '' : 'disabled'}>Resurrect key</button>` : ''}
         <button class="btn btn-sm btn-danger" data-act="shardDelete" data-name="${esc(m.id)}" ${CAN.writeQueues ? '' : 'disabled'}>Delete</button>
       </td>
     </tr>`;
@@ -1259,7 +1275,7 @@ views.shardOwnedQueues = async () => {
     const cols = [
         { label: 'Message id' }, { label: 'Lane' }, { label: 'Key' }, { label: 'Payload' },
         { label: 'Enqueued' }, { label: 'Attempts', num: true }, { label: 'Last error' },
-        { label: '', width: '170px', sticky: true }
+        { label: '', width: '290px', sticky: true }
     ];
 
     const ownership = status ? `
@@ -1312,6 +1328,14 @@ views.shardOwnedQueues = async () => {
                  ${tile('Dead-lettered', num(stats.deadLettered), null, stats.deadLettered > 0)}
                  ${tile('Order violations', num(stats.orderViolations),
                         'A producer numbered and committed in different orders', stats.orderViolations > 0)}
+               </div>
+               <div class="kpi-row">
+                 ${tile('Keys blocked', num(stats.keysBlockedByDeadLetter),
+                        'A key stopped behind a dead letter and delivers nothing until it is resurrected',
+                        stats.keysBlockedByDeadLetter > 0)}
+                 ${tile('Parked behind a block', num(stats.messagesPoisonedBehindDeadLetter),
+                        'Dead-lettered without ever reaching a handler — large against "Dead-lettered" means ONE message is broken, not the handler',
+                        stats.messagesPoisonedBehindDeadLetter > 0)}
                </div>
                <div class="kpi-row">
                  ${tile('Sweep recoveries', num(stats.sweepRecoveries),

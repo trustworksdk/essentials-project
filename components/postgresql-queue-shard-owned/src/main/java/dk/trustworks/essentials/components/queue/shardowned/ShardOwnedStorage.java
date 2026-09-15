@@ -1317,6 +1317,96 @@ public final class ShardOwnedStorage {
         }
     }
 
+    /**
+     * The ordered keys this shard has a dead letter for, and the lowest {@code key_order} it was
+     * recorded at.
+     * <p>
+     * This is where "a key never advances past a dead letter" is <em>derived</em> from, rather than
+     * remembered. An owner that kept the block only in memory would lose it on every rebalance and
+     * every restart, and the key would silently resume delivering past the message nobody handled —
+     * the failure this rule exists to prevent, reintroduced by the mechanism meant to enforce it.
+     * <p>
+     * The dead-letter row already carries what is needed: {@link #moveToDeadLetter} copies
+     * {@code msg_key} and {@code key_order} for anything coming from the ordered lane. So the state is
+     * one grouped read on the {@code (queue_id, shard)} index, paid at takeover and then only while a
+     * block actually exists.
+     */
+    public Map<String, Long> orderedDeadLetterBlocks(Connection connection, int shard) throws SQLException {
+        var blocks = new HashMap<String, Long>();
+        try (var statement = connection.prepareStatement(
+                "SELECT msg_key, min(key_order) FROM " + DLQ_TABLE
+                + " WHERE queue_id = ? AND shard = ? AND source_lane = 'ordered' AND msg_key IS NOT NULL"
+                + " GROUP BY msg_key")) {
+            statement.setShort(1, queueId);
+            statement.setInt(2, shard);
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    blocks.put(resultSet.getString(1), resultSet.getLong(2));
+                }
+            }
+        }
+        return blocks;
+    }
+
+    /**
+     * Move messages that are behind a dead letter on their key into the dead-letter table, unhandled.
+     * <p>
+     * One transaction for the batch, and the reason it is a batch at all is that this runs on a
+     * degraded key: while the block stands, everything that arrives for that key comes through here.
+     * Doing it per row would be a transaction per message on a path that only ever sees a backlog.
+     * <p>
+     * The rows land with {@code blocked_by_key_order} set to the {@code key_order} of the dead letter
+     * holding their key — a real column, because it is the discriminator between the two kinds of row
+     * this table now holds, and an operator who cannot tell a message that failed from one that never
+     * ran cannot tell a broken handler from a broken key. The error text says the same thing in
+     * words, for whoever is reading the table rather than the record.
+     * <p>
+     * The blocking order is looked up per row inside the insert rather than passed in, so the value on
+     * the row is the table's own answer at the moment of the write. It is the lowest {@code key_order}
+     * for that key that is dead-lettered <em>and not itself blocked</em> — the message that actually
+     * has to be dealt with, not the one immediately in front.
+     */
+    public int poisonOrderedBehindDeadLetter(Connection connection, int shard, Collection<Long> seqs,
+                                             String error) throws SQLException {
+        if (seqs.isEmpty()) {
+            return 0;
+        }
+        var autoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
+        try {
+            int moved;
+            try (var insert = connection.prepareStatement(
+                    "INSERT INTO " + DLQ_TABLE + " (queue_id, shard, source_lane, msg_key, key_order, seq,"
+                    + " payload, payload_type, attempts, last_error, blocked_by_key_order)"
+                    + " SELECT queue_id, shard, 'ordered', msg_key, key_order, seq, payload, payload_type, attempts, ?,"
+                    + "        (SELECT min(d.key_order) FROM " + DLQ_TABLE + " d"
+                    + "          WHERE d.queue_id = " + ORDERED_TABLE + ".queue_id AND d.shard = " + ORDERED_TABLE + ".shard"
+                    + "            AND d.source_lane = 'ordered' AND d.msg_key = " + ORDERED_TABLE + ".msg_key"
+                    + "            AND d.blocked_by_key_order IS NULL)"
+                    + " FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ANY(?)")) {
+                insert.setString(1, error);
+                insert.setShort(2, queueId);
+                insert.setInt(3, shard);
+                insert.setArray(4, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
+                moved = insert.executeUpdate();
+            }
+            try (var delete = connection.prepareStatement(
+                    "DELETE FROM " + ORDERED_TABLE + " WHERE queue_id = ? AND shard = ? AND seq = ANY(?)")) {
+                delete.setShort(1, queueId);
+                delete.setInt(2, shard);
+                delete.setArray(3, connection.createArrayOf("bigint", seqs.toArray(Long[]::new)));
+                delete.executeUpdate();
+            }
+            connection.commit();
+            return moved;
+        } catch (SQLException e) {
+            connection.rollback();
+            throw e;
+        } finally {
+            connection.setAutoCommit(autoCommit);
+        }
+    }
+
     public long countDeadLetters() throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
@@ -1333,14 +1423,21 @@ public final class ShardOwnedStorage {
         return deadLetters(0, Integer.MAX_VALUE);
     }
 
+    /**
+     * @param blockedByKeyOrder the {@code key_order} of the dead letter that stopped this message's
+     *                          key, or null when this message was itself tried and failed. It is the
+     *                          discriminator between the two kinds of row — {@code attempts} is not,
+     *                          since a takeover bumps it on rows that were never delivered.
+     */
     public record DeadLetter(String lane, String key, int shard, long seq, byte[] payload, int attempts, String error,
-                             int payloadType) {
+                             int payloadType, Long blockedByKeyOrder) {
     }
 
     public List<DeadLetter> deadLetters(int offset, int limit) throws SQLException {
         try (var connection = dataSource.getConnection();
              var statement = connection.prepareStatement(
-                     "SELECT source_lane, msg_key, seq, payload, attempts, last_error, shard, payload_type FROM " + DLQ_TABLE
+                     "SELECT source_lane, msg_key, seq, payload, attempts, last_error, shard, payload_type,"
+                     + " blocked_by_key_order FROM " + DLQ_TABLE
                      + " WHERE queue_id = ? ORDER BY id OFFSET ? LIMIT ?")) {
             statement.setShort(1, queueId);
             statement.setInt(2, offset);
@@ -1348,9 +1445,16 @@ public final class ShardOwnedStorage {
             try (var resultSet = statement.executeQuery()) {
                 var rows = new ArrayList<DeadLetter>();
                 while (resultSet.next()) {
+                    // Read AND tested before anything else touches the result set: wasNull() reports
+                    // on the most recent get, so asking it inside the constructor call would answer
+                    // for payload_type — which is never null, so every row would come back as
+                    // blocked and every dead letter would claim it had never been delivered.
+                    var blockedBy = resultSet.getLong(9);
+                    var blockedByKeyOrder = resultSet.wasNull() ? null : blockedBy;
                     rows.add(new DeadLetter(resultSet.getString(1), resultSet.getString(2), resultSet.getInt(7),
                                             resultSet.getLong(3), resultSet.getBytes(4), resultSet.getInt(5),
-                                            resultSet.getString(6), resultSet.getInt(8)));
+                                            resultSet.getString(6), resultSet.getInt(8),
+                                            blockedByKeyOrder));
                 }
                 return rows;
             }
@@ -1461,6 +1565,74 @@ public final class ShardOwnedStorage {
             statement.setInt(2, shard);
             statement.setLong(3, seq);
             return statement.executeUpdate() > 0;
+        }
+    }
+
+    /**
+     * Put every dead letter of one ordered key back, in one transaction.
+     * <p>
+     * A key that stops behind a dead letter accumulates them: the message that failed, and then every
+     * message that arrived for the key afterwards. Recovering that one row at a time works — the block
+     * simply lifts to the next parked value and the key stalls again — but it is O(N) and has to be
+     * walked in ascending {@code key_order}, because putting a higher one back first parks it straight
+     * away again. This does the whole key at once, which is what an operator actually means.
+     * <p>
+     * <b>One transaction is what makes the order come out right.</b> The rows become visible together,
+     * so the owner's next read holds all of them before it dispatches anything, and its per-key
+     * {@code TreeMap} hands them over in {@code key_order} regardless of the sequence values they were
+     * given. The insert is ordered by {@code key_order} anyway, so the fresh sequence values ascend
+     * with it and a batch larger than {@code readBatchSize} still arrives lowest-first.
+     * <p>
+     * Attempts are reset, as for a single resurrect: this is a human deciding the messages deserve a
+     * fresh policy. If the handler is still broken, the first one fails its way back to the
+     * dead-letter table and the block re-forms behind it.
+     *
+     * @return how many messages were put back
+     */
+    public int resurrectKey(int shard, String key) throws SQLException {
+        requireNonNull(key, "No key provided");
+        var sequence = ShardOwnedSchema.orderedSequenceName(queueId);
+        try (var connection = dataSource.getConnection()) {
+            var autoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try {
+                int restored;
+                try (var insert = connection.prepareStatement(
+                        "INSERT INTO " + ORDERED_TABLE
+                        + " (queue_id, shard, msg_key, key_order, seq, payload, payload_type, attempts)"
+                        + " SELECT queue_id, shard, msg_key, key_order, nextval('" + sequence + "'),"
+                        + "        payload, payload_type, 0"
+                        + "   FROM " + DLQ_TABLE
+                        + "  WHERE queue_id = ? AND shard = ? AND source_lane = 'ordered' AND msg_key = ?"
+                        + "  ORDER BY key_order")) {
+                    insert.setShort(1, queueId);
+                    insert.setInt(2, shard);
+                    insert.setString(3, key);
+                    restored = insert.executeUpdate();
+                }
+                if (restored == 0) {
+                    connection.rollback();
+                    return 0;
+                }
+                try (var delete = connection.prepareStatement(
+                        "DELETE FROM " + DLQ_TABLE
+                        + " WHERE queue_id = ? AND shard = ? AND source_lane = 'ordered' AND msg_key = ?")) {
+                    delete.setShort(1, queueId);
+                    delete.setInt(2, shard);
+                    delete.setString(3, key);
+                    delete.executeUpdate();
+                }
+                // Inside the transaction, so the owner is only woken for something it can actually
+                // see. The rows arrive above its cursor, since every one took a fresh sequence value.
+                ShardWakeupListener.notifyShard(connection, queueId, "ordered", shard);
+                connection.commit();
+                return restored;
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(autoCommit);
+            }
         }
     }
 

@@ -266,6 +266,11 @@ class ShardOwnedMicrometerIT {
         }
 
         @Override
+        public int resurrectKey(String key) throws java.sql.SQLException {
+            return delegate.resurrectKey(key);
+        }
+
+        @Override
         public long purge() throws java.sql.SQLException {
             return delegate.purge();
         }

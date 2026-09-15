@@ -41,7 +41,9 @@ public record ApiShardOwnedQueueStatistics(QueueName queueName,
                                            long shardsAcquired,
                                            long shardsReleased,
                                            long leasesLost,
-                                           long watermarkCapped) {
+                                           long watermarkCapped,
+                                           long keysBlockedByDeadLetter,
+                                           long messagesPoisonedBehindDeadLetter) {
 
     public static ApiShardOwnedQueueStatistics from(QueueName queueName, QueueStatistics statistics, boolean running) {
         requireNonNull(queueName, "No queueName provided");
@@ -58,6 +60,8 @@ public record ApiShardOwnedQueueStatistics(QueueName queueName,
                                                 statistics.shardsAcquired(),
                                                 statistics.shardsReleased(),
                                                 statistics.leasesLost(),
-                                                statistics.watermarkCapped());
+                                                statistics.watermarkCapped(),
+                                                statistics.keysBlockedByDeadLetter(),
+                                                statistics.messagesPoisonedBehindDeadLetter());
     }
 }

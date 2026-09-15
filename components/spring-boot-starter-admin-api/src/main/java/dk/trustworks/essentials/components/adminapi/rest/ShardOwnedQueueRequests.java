@@ -64,4 +64,8 @@ public final class ShardOwnedQueueRequests {
     /** @param purgedCount rows removed across both lanes and the dead-letter table */
     public record ShardOwnedPurgeResult(long purgedCount) {
     }
+
+    /** @param resurrectedCount dead letters returned to the ordered lane for one key, in key_order */
+    public record ShardOwnedResurrectKeyResult(int resurrectedCount) {
+    }
 }

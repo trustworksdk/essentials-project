@@ -48,6 +48,11 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * @param visibleAt    when the message becomes eligible for delivery; {@code null} for a dead letter,
  *                     which is not eligible at all
  * @param isDeadLetter whether this was read from the dead-letter table rather than from a lane
+ * @param blockedByKeyOrder for a dead letter that was never delivered, the {@code key_order} of the
+ *                     message whose failure stopped its key; {@code null} for anything else, including
+ *                     a dead letter that was itself tried and failed. An operator cannot tell those
+ *                     two apart from {@code attempts}, which a takeover bumps on rows that never ran,
+ *                     and this is the field that separates a broken handler from a broken key
  */
 public record ApiShardOwnedMessage(String id,
                                    QueueName queueName,
@@ -61,7 +66,13 @@ public record ApiShardOwnedMessage(String id,
                                    OffsetDateTime enqueuedAt,
                                    OffsetDateTime visibleAt,
                                    boolean isDeadLetter,
-                                   String lastError) {
+                                   String lastError,
+                                   Long blockedByKeyOrder) {
+
+    /** True when this dead letter was never handed to a handler — its key was already blocked. */
+    public boolean neverDelivered() {
+        return blockedByKeyOrder != null;
+    }
 
     public static ApiShardOwnedMessage from(QueueName queueName, QueuedMessage message, boolean includePayload) {
         requireNonNull(queueName, "No queueName provided");
@@ -78,6 +89,7 @@ public record ApiShardOwnedMessage(String id,
                                         atOffset(message.enqueuedAt()),
                                         atOffset(message.visibleAt()),
                                         false,
+                                        null,
                                         null);
     }
 
@@ -96,7 +108,8 @@ public record ApiShardOwnedMessage(String id,
                                         null,
                                         null,
                                         true,
-                                        deadLetter.lastError());
+                                        deadLetter.lastError(),
+                                        deadLetter.blockedByKeyOrder());
     }
 
     private static OffsetDateTime atOffset(Instant instant) {

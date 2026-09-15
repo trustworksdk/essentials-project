@@ -70,8 +70,13 @@ Three consequences follow from that single rule:
 
 ### Status
 
-**Published**, and new — no production use yet. `MessageQueue` is a frozen contract: additive in a
-minor, breaking only in a major.
+**Published**, and new — no production use yet.
+
+`MessageQueue` freezes at the release that ships it: additive in a minor, breaking only in a major
+from that point. **It is not frozen on this branch.** The dead-letter work has widened it
+deliberately — `resurrectKey`, two counters on `QueueStatistics`, and `blockedByKeyOrder` on
+`DeadLetter` — because a key advancing past a dead letter was a defect worth an incompatible change
+while an incompatible change is still free. Anything else that wants to move should move now.
 
 **Intra-service only.** Multiple instances of *one* service against one database — like the rest of
 Essentials' queues, locks and inbox/outbox. It is not a cross-service message broker.
@@ -213,6 +218,10 @@ One `consume()` serves both lanes. A **second** `consume()` on the same queue is
 consumer per lane is a mistake with two visible symptoms: unordered messages delivered to the ordered
 handler, and one process reported as two live instances.
 
+Neither symptom loses messages — the second identity is a real consumer and its share of the units is
+served — so the engine allows it rather than refusing a legitimate competing consumer. It does log a
+WARN naming the additional instance, since that is the only signal either symptom produces.
+
 ### What a handler is given
 
 ```java
@@ -246,10 +255,144 @@ That is a cost paid per lookup by the handler that wants it, rather than per mes
 
 ### Ordering guarantee
 
-Per key, within the ordered lane, and only while the key's unit has one owner — which is always,
-except for the hand-over window a rebalance opens, during which the outgoing owner drains for up to
-`shedGrace`. `ShardOwnedOrderedRebalanceIT` and `ShardOwnedMultiProcessIT` assert that no key is ever
-in two handlers while units move between instances.
+Per key, within the ordered lane. Two things hold, and they hold across processes because a key maps
+to one unit and a unit has one owner:
+
+- **A key is never in two handlers at once.** The owner refuses to dispatch a key that has something
+  in flight. That single refusal — no query, no lock, no exclusion list — *is* the FIFO mechanism.
+- **A key is handed its lowest `key_order` next**, among the messages the owner has that are
+  committed and visible.
+
+The second sentence is the whole subtlety, and yes: **an ordered message can reach a handler after a
+higher `key_order` for the same key has already been delivered.** A key advances through the
+`key_order` values that are *present*. It does not wait for a missing one, because those values are
+producer-assigned and a gap may never be filled — waiting would stall the key forever on a producer's
+bookkeeping error. The engine counts what that costs instead of claiming it cannot happen:
+`orderViolations`.
+
+#### Where out-of-order delivery comes from
+
+| Cause | What happens | What to do |
+|---|---|---|
+| **Producer numbered and committed in different orders** | Two transactions enqueue for one key; the one holding the lower `key_order` commits second. The higher one was already delivered | Enqueue a key's messages from **one** transaction, or keep one writer per key. This is the only cause that is a producer bug |
+| **`Message.delayedOrdered`** | Only rows with `visible_at <= now()` are dispatched, so an undelayed later `key_order` overtakes a delayed earlier one | A per-key delay *is* a reordering instruction — do not mix delayed and undelayed messages on one key |
+| **Dead letter** | ~~The key is released and later messages proceed without it~~ — no longer true. A key **never advances past a dead letter**: messages behind one are dead-lettered with it, unhandled, and marked `neverDelivered()`. See [Dead letters block their key](#dead-letters-block-their-key) | Watch the dead-letter count. A key that stops is reported once at WARN, and its backlog shows up there rather than as queue depth |
+| **Resurrecting a dead letter** | It returns with its original `key_order` and a fresh sequence value. Because the key was blocked behind it, nothing ran ahead of it — but a message that commits late under a *lower* order still counts a violation | Resurrect a key's dead letters lowest `key_order` first; see below |
+| **`watermarkCap` fires** | A write transaction older than the cap (60 s) is stepped over rather than waited out. Its rows are still delivered — the head sweep finds them — but late, relative to their key | Find the long-running write transaction. The cap is an escape hatch, not a knob |
+| **An instance is declared dead** | Its units are taken while its handlers may still be running. The staleness gate stops it *dispatching*, not the handler already in flight | Nothing; this is the same window at-least-once delivery comes from |
+| **At-least-once redelivery** | A message handled but not yet acknowledged when its unit moves is delivered again by the successor, after the key has moved on | Make handlers idempotent — the contract requires it anyway |
+
+Two things that look like they should reorder and do not:
+
+- **A retry never reorders.** A failing message keeps its key blocked for the whole backoff
+  (`keysAwaitingRetry`) and is put back at its key's head, so the key retries *that* message before
+  anything later. The same applies to a handler that returns while its thread is interrupted: the
+  message is requeued, not acknowledged.
+- **A voluntary hand-over never reorders.** A rebalance sheds by draining — the outgoing owner stops
+  dispatching new keys, waits out the in-flight ones, flushes its acknowledgements under the still
+  valid fence, then releases. A shed that outlasts `shedGrace` is **abandoned and the shard kept**:
+  staying unbalanced is a performance cost, releasing mid-key would be an ordering bug.
+  `ShardOwnedOrderedRebalanceIT` and `ShardOwnedMultiProcessIT` assert that no key is ever in two
+  handlers while units move between instances.
+
+Note that the exact watermark does *not* remove the first row of the table. It governs the cursor, so
+a value is never stepped over while a transaction that could still commit it is running — that is what
+stops messages being lost. A row read from *above* an unresolved gap is still handed to its key.
+
+#### Dead letters block their key
+
+A key never advances past a dead letter. Once one of its messages is parked, nothing above that
+`key_order` is delivered, and anything that arrives for the key is dead-lettered too — moved by the
+owner as it reads it, so the ordered lane never holds rows it cannot deliver.
+
+```java
+// key "account-7", orders 1..5, handler cannot apply 4
+//   1, 2, 3 delivered
+//   4       dead-lettered      attempts > 0, its own error
+//   5       dead-lettered      neverDelivered() == true
+```
+
+| | |
+|---|---|
+| **Where the block comes from** | The dead-letter table, not memory. It survives a rebalance, a restart and a redeploy |
+| **What clears it** | Resurrecting or deleting the dead letter. Both are noticed, including when done from another process |
+| **Telling the two kinds apart** | `DeadLetter.neverDelivered()`, backed by the `blocked_by_key_order` column — which also names the message recovery has to start from. Do not use `attempts`; a takeover bumps it on rows that were never delivered |
+| **Noticing it** | One WARN per key when it blocks, plus `keysBlockedByDeadLetter` and `messagesPoisonedBehindDeadLetter` on `statistics()` and the admin API. **Not** queue depth: the backlog moves out of the lane, so depth falls |
+| **What it costs** | 1.70x WAL per message and 75% of throughput while stalled, and **241 B per message in a dead-letter table shared by every queue on the database** — about 87 MB for an hour at 100 msg/s. Alert on it in minutes, not days ([measurements](../../docs/durable-queue-measurements.md) §3.11) |
+
+**Recovery is per key.** Restore the whole key in one call:
+
+```java
+var restored = queue.resurrectKey("account-7");   // every dead letter for the key, in key_order
+```
+
+One transaction, so the rows become visible together and the owner holds all of them before it
+dispatches the first — the key resumes where it stopped, in order, with no ordering discipline
+required of the caller. Over HTTP:
+`POST /shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect`.
+
+Resurrecting message by message still works and still has to go lowest `key_order` first, waiting for
+each: restoring a higher one while a lower one is still parked simply parks it again. If the handler
+is still broken, the first message fails its way back and the block re-forms — attempts were reset, so
+that costs a full retry cycle.
+
+#### Compared with postgresql-queue, per key
+
+`PostgresqlDurableQueues` decides eligibility in SQL, on every fetch:
+
+```sql
+AND NOT EXISTS (SELECT 1 FROM q2
+                WHERE q2.key = q.key AND q2.queue_name = q.queue_name
+                  AND q2.key_order < q.key_order)
+```
+
+Note what that subquery does *not* filter on — not `is_dead_letter_message`, not `is_being_delivered`,
+not `next_delivery_ts`. **Any** lower `key_order` row, in any state, blocks the key. Both of its fetch
+strategies carry the clause, so the barrier holds across processes the same way ownership does here.
+
+| Hazard | postgresql-queue | shard-owned |
+|---|---|---|
+| Producer numbered and committed in different orders | Reorders, and reports nothing | Reorders, counted as `orderViolations` |
+| Retry backoff | Key blocked | Key blocked |
+| Delayed message on a key | Key blocked behind it | **Overtaken** |
+| Dead letter | Key blocked until the message is resurrected or deleted; the messages behind it stay queued | Key blocked the same way, but the messages behind it are **dead-lettered rather than left queued**, so the lane holds nothing undeliverable |
+| Resurrecting a dead letter | Delivered first; the key was waiting for it, and its successors are still queued | Delivered first; its successors are dead letters too, so recovery walks the key in ascending `key_order` |
+| At-least-once duplicates | Yes | Yes |
+| Holds across processes | Yes, by the SQL barrier | Yes, by single ownership |
+| Cost of the guarantee | A correlated anti-join per fetch | One in-memory set test per dispatch |
+
+The two engines are equally exposed to the first row, which is the one most likely to occur in
+practice: a `NOT EXISTS` cannot see an uncommitted row either. **The delayed message is now the only
+row where this engine is weaker.** On the dead letter the two agree that a key must stop, and differ
+only in where the messages behind it wait — queued there, dead-lettered here, which is what keeps a
+stalled key from growing in front of the cursor. This engine also says so: one WARN per blocked key,
+where postgresql-queue reports nothing at all.
+
+**Where that leaves the choice.** For a key carrying state transitions that must never be applied
+with one missing — an aggregate's events, a balance, a state machine — the two engines now behave the
+same way on the case that matters: the key stops. What is left to check before adopting this one is
+the delayed-message row, and the fact that a stalled key's backlog lands in the dead-letter table
+rather than staying queued. The reasoning is in
+[docs/durable-queue-shard-owned.md](../../docs/durable-queue-shard-owned.md) §9.1.
+
+#### `key_order` is a primary key, not a hint
+
+The ordered table's primary key is `(queue_id, shard, msg_key, key_order)`, so **reusing a
+`key_order` for a key fails the enqueue** with a unique violation, taking the whole batch with it.
+Values may have gaps; they may not repeat.
+
+#### Detecting it
+
+```java
+var statistics = queue.statistics();
+if (statistics.orderViolations() > 0) {
+    alert("{} ordered message(s) delivered out of their producer's key_order", statistics.orderViolations());
+}
+```
+
+Also on the admin API's queue statistics. Two limits worth knowing before alerting on it: the count is
+**per JVM**, and the highest-delivered order it compares against lives in the owner's memory, so a
+violation that spans an ownership change is not counted. It is a producer-quality signal, not an audit.
 
 ## Transactional Enqueue (Outbox)
 
@@ -622,6 +765,7 @@ api.getDeadLetterMessages(principal, orders, 0, 100);
 api.retryMessage(principal, orders, id, Duration.ZERO);
 api.markAsDeadLetterMessage(principal, orders, id, "parked by hand");
 api.resurrectDeadLetterMessage(principal, orders, id);
+api.resurrectDeadLettersForKey(principal, orders, "account-7");   // the whole key, in key_order
 api.deleteMessage(principal, orders, id);
 api.purgeQueue(principal, orders);
 ```
@@ -721,7 +865,9 @@ that owns the queue.
 |---|---|---|
 | **Contract** | `DurableQueues` | `MessageQueue` (+ `DurableQueues` via the [adapter](../postgresql-queue-shard-owned-adapter/README.md)) |
 | **Delivery path** | `FOR UPDATE SKIP LOCKED` + `is_being_delivered = true` per message | Shard lease. No lock, no claim write |
-| **Ordering** | Per key, coordinated per consumer | Per key, as a consequence of single ownership — holds across processes |
+| **Ordering** | Per key, as a **full barrier in SQL**: a message is eligible only while no row for its key has a lower `key_order`, whatever that row's state. Holds across processes | Per key, as a consequence of single ownership. Holds across processes, but the key advances through the values *present* — see [Ordering guarantee](#ordering-guarantee) |
+| **A key behind a failure** | Never advances. A dead-lettered message blocks its key until it is resurrected or deleted, and the messages behind it stay queued | Never advances either. The messages behind it are dead-lettered rather than left queued, so nothing undeliverable sits in front of the cursor |
+| **A delayed message on a key** | Blocks the whole key until it is delivered | Is overtaken; only visible rows are dispatched |
 | **Payload** | `JSONB` | `bytea`, opaque |
 | **Table names** | Configurable → your responsibility to sanitize | Fixed constants → nothing to sanitize |
 | **Notifications** | LISTEN/NOTIFY per table | LISTEN/NOTIFY on one global channel, payload `queueId:lane:shard` |

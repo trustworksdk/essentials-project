@@ -2,7 +2,7 @@
 
 **Module:** `components/postgresql-queue-shard-owned`
 **Package:** `dk.trustworks.essentials.components.queue.shardowned`
-**Status:** **Published**, across three modules — the engine, `postgresql-queue-shard-owned-adapter` (presents it as a `DurableQueues`), and `spring-boot-starter-postgresql-queue-shard-owned`. The `maven.deploy.skip=true` gate came off when the admin console page closed the last "no admin UI" gap, which also makes `MessageQueue` a frozen contract: additive in a minor, breaking only in a major. 7 unit tests and 69 integration tests, plus 8 in the Spring Boot starter, all green. **Still no production use**, and far newer than `PostgresqlDurableQueues` — see `durable-queue-measurements.md` §4.5 for what that does and does not mean for adoption.
+**Status:** **Published**, across three modules — the engine, `postgresql-queue-shard-owned-adapter` (presents it as a `DurableQueues`), and `spring-boot-starter-postgresql-queue-shard-owned`. The `maven.deploy.skip=true` gate came off when the admin console page closed the last "no admin UI" gap, which freezes `MessageQueue` at the release that ships it: additive in a minor, breaking only in a major from there. Not frozen while this branch is unmerged — §9.1's work widened the SPI, `QueueStatistics` and `DeadLetter` on purpose, while that is still free. 7 unit tests and 69 integration tests, plus 8 in the Spring Boot starter, all green. **Still no production use**, and far newer than `PostgresqlDurableQueues` — see `durable-queue-measurements.md` §4.5 for what that does and does not mean for adoption.
 
 This document describes the engine as it currently stands: its storage, its threading, how a message travels from `enqueue` to a handler, and what it does when something fails. It is a reference for the system as built, not a record of how it came to be built that way.
 
@@ -577,6 +577,8 @@ Concurrency is per key, not per shard: many keys progress at once, and a key wit
 
 **On strictness.** A key advances through the `key_order` values that are present, one at a time. It does *not* wait for a missing `key_order` to arrive, because those values are producer-assigned and a gap may never be filled — waiting would stall the key forever on a producer's bookkeeping error. The consequence is counted rather than claimed away: a message that commits after a higher `key_order` for its key has already been delivered is an ordering violation, and `ShardOwnerMetrics.orderViolations` records it. Measured zero across every run so far.
 
+**On dead letters.** A key never advances past one. Messages behind a dead letter are dead-lettered too rather than delivered without it, and the block is derived from the dead-letter table so it survives the owner being replaced — §9.1.
+
 The ordered lane acknowledges by sequence value rather than by range, batched with `ANY`. Keys progress independently, so what has been handled is rarely a contiguous run of `seq`, and inventing a second range-delete floor for it would reproduce §5.4's hazard for no gain.
 
 ---
@@ -720,6 +722,56 @@ The database row is durability backup, not the retry mechanism: if the owner cra
 **A retry lives in two places timed by two different clocks** — the table's `visible_at` by the database's `now()`, and the in-memory schedule by `System.nanoTime()`. Either can fire first. `deliver()` drops any pending schedule entry for a sequence value it accepts, so whichever path gets there first invalidates the other. Without that, the sweep delivers and deletes the row and the stale schedule entry then delivers it a second time.
 
 Retry and dead-letter events are emitted **from the owners**, never from the SPI's delivery wrapper, because the owner is the only place that knows which attempt this was.
+
+### 9.1 A key never advances past a dead letter
+
+**The rule.** Once a message for key K is dead-lettered, K delivers nothing further. Messages behind it are dead-lettered too, so the ordered table never holds rows that cannot be delivered. `ShardOwnedDeadLetterBlocksKeyIT` pins it, and was verified to fail in all three of its tests against the engine with the block disabled.
+
+**Why it changes.** Releasing the key is the right trade for a work queue — a dead letter must not stall its key forever — and the wrong one for ordered state transitions. Applying 6, 7 and 8 after 5 could not be applied is not lateness, it is corruption. `PostgresqlDurableQueues` has never permitted it: both of its fetch strategies carry a full per-key barrier, and the subquery filters on nothing but the key and the order —
+
+```sql
+AND NOT EXISTS (SELECT 1 FROM q2
+                WHERE q2.key = q.key AND q2.queue_name = q.queue_name
+                  AND q2.key_order < q.key_order)
+```
+
+— so a dead-lettered row blocks its key there until it is resurrected or deleted. An engine offered as an alternative to that one must not be quietly weaker on the point.
+
+**The threshold.** A key is blocked at the lowest dead-lettered `key_order` recorded for it. Messages strictly below that value are still delivered, which is what `<` means in the barrier above and is also what a late commit needs.
+
+**Where the block state lives.** Derived from the dead-letter table, never from memory alone: a memory-only block clears on every rebalance and every restart, silently, which is the worst available failure shape. The DLQ row already carries what is needed — `moveToDeadLetter` copies `msg_key` and `key_order` for ordered messages — so the state is one query:
+
+```sql
+SELECT msg_key, min(key_order) FROM shard_queue_dead_letter
+WHERE queue_id = ? AND shard = ? AND source_lane = 'ordered' AND msg_key IS NOT NULL
+GROUP BY msg_key
+```
+
+Read at takeover, and refreshed **only while blocks exist**, at the sweep cadence. A shard with no dead letter pays nothing; a shard with one pays an extra query per sweep. The refresh is what notices a resurrect or a delete performed by another process — there is nothing else that would.
+
+**The poisoning happens at dispatch, not at enqueue.** `PostgresqlDurableQueues` has an enqueue-time variant written for this (`getQueueMessageSqlOptimized`, which is dead code — nothing references it) that adds an `EXISTS` to every ordered enqueue inside the caller's transaction. This engine keeps per-message queries off the producer path by decision, and does not need one: the owner already holds the blocked-key map, so it moves the row to the dead-letter table when it reads it. Three consequences follow from the placement rather than from the policy:
+
+- producers pay nothing, and no producer needs to know the policy
+- `readyByKey` does not grow per blocked key — the rows leave the table rather than accumulating in front of the cursor
+- the head sweep needs no exclusion list. Left in place, undeliverable rows would consume its `readBatchSize` on every pass and starve recovery for every other key on the shard
+
+**A resurrect must not be poisoned by a stale block.** The block lives in the owner's memory between refreshes, and the sweep cadence backs off to `maxSweepInterval` on a shard that has stopped delivering — so waiting for the refresh would make a resurrect appear to do nothing for up to thirty seconds. A row arriving at *exactly* a key's blocked `key_order` can only be the dead letter itself, resurrected: `(key, key_order)` is unique and the original row was deleted when it was parked. That **requests a re-derivation** rather than clearing the block, because clearing would be wrong whenever several of a key's messages are parked — lifting the block at 5 while 6, 7 and 8 are still dead would let 9 through. The refresh runs before dispatch in the same pass, and every queued poison candidate is re-tested against the blocks as they then stand; one whose key is no longer blocked is dropped and forgotten, so the head sweep reads it again and it is delivered. Without that re-test, a message queued for the dead-letter table microseconds before its block was lifted would be thrown away for nothing.
+
+**The dead-letter table now holds two kinds of row**, and they are distinguishable by a column, not a convention: `blocked_by_key_order` is null for a message that was tried and failed, and carries the `key_order` of the dead letter holding the key for a message that never ran. `DeadLetter.neverDelivered()` asks it. A discriminator parsed out of `last_error` would have been one bad edit from silently reclassifying every row; the error text stays prose, for whoever reads the table. The column is added by `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` on every boot, behind the bootstrap lock, so an existing installation picks it up, and `shard_queue_dead_letter_readable` projects it alongside a `never_delivered` boolean. `attempts` does **not** separate the two — a takeover bumps it on rows that were never delivered.
+
+The value written is the lowest `key_order` for that key that is dead-lettered **and not itself blocked** — resolved per row inside the insert, so it names the message an operator actually has to deal with rather than the one immediately in front of this one.
+
+**Recovery is per key, not per message.** Resurrecting one row recomputes the threshold to the next dead-lettered value, so the key stalls again — correct, but O(N) and order-sensitive, since resurrecting out of ascending `key_order` re-stalls at each step. `MessageQueue.resurrectKey(key)` does the whole key at once, and is the operation to reach for; `ShardOwnedQueuesApi.resurrectDeadLettersForKey` exposes it at `POST /shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect`. The per-message path still works and still has to be walked ascending, which `ShardOwnedDeadLetterBlocksKeyIT.resurrecting_the_dead_letters_in_ascending_order_releases_the_key` pins as the way an operator would otherwise have to work.
+
+**One transaction is what makes the replay order right**, not the `ORDER BY`. The rows become visible together, so the owner's next read holds all of them before it dispatches anything and its per-key `TreeMap` hands them over in `key_order` whatever sequence values they were given. The insert is ordered by `key_order` anyway, so the fresh sequence values ascend with it and a batch larger than `readBatchSize` still arrives lowest-first. Attempts are reset, as for a single resurrect — so if the handler is still broken the first message fails its way back and the block re-forms, at the cost of a full retry cycle.
+
+For the same reason a lifted block must not discard what it had already queued for the dead-letter table: `PoisonCandidate` carries its row, so `poisonBlocked` puts a released candidate straight back into `readyByKey` and it is dispatched on that pass. Dropping it and letting the head sweep find it again would also be correct, and up to a sweep interval later — which is the wait this operation exists to avoid.
+
+**What it does not address.** The delayed-message overtake — `Message.delayedOrdered` lets an undelayed later `key_order` pass a delayed earlier one, because only visible rows are dispatched. That is a separate difference from `PostgresqlDurableQueues`, which blocks the key behind a delayed message, and it is untouched by this.
+
+**Measured** (`ShardOwnedStalledKeyCostIT`, benchmark-gated; `docs/durable-queue-measurements.md` §3.11). A stalled key costs **1.70x the WAL per message** — 801 B against 471 B for the same workload delivered — and runs at 75% of the delivering arm's throughput, both smaller than the shape suggests because the second write is the same narrow row and the delete is the one an acknowledgement would have issued anyway. What is *not* small is the shared table: 241 B per row including its index, so a key stalled for an hour at 100 msg/s adds roughly **87 MB** to a `shard_queue_dead_letter` that every queue on the database reads past. Alert on a stall in minutes, not days. The suite also asserts the ordered lane drains to zero — if the owner could not keep up with the producer the lane would grow behind the stall and dispatch-side poisoning would have bought nothing.
+
+**What it costs when nothing is blocked**, which is the normal case: one lookup in an empty map per row accepted and per key dispatched, and no query at all — `orderedDeadLetterBlocks` is issued on takeover, and thereafter only on a shard that actually holds an ordered dead letter. `keysBlockedByDeadLetter` and `messagesPoisonedBehindDeadLetter` are on `QueueStatistics`, so they reach the administrative API and the console rather than only the debug map (`deadLetterBlockReads` stays internal). A key becoming blocked is logged once, at WARN, since the messages behind it are moved out of the lane and depth therefore *falls* rather than rises — the dead-letter count is what is left to notice.
 
 ---
 

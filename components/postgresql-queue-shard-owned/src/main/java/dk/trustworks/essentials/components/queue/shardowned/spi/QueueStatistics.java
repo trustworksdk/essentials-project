@@ -51,6 +51,15 @@ package dk.trustworks.essentials.components.queue.shardowned.spi;
  * @param watermarkCapped   times the ordered lane advanced its cursor on the wall-clock cap rather
  *                          than on proof. Each one may have skipped a message; a long write
  *                          transaction is the cause
+ * @param keysBlockedByDeadLetter times a key was recorded as stopped behind a dead letter. A key never
+ *                          advances past one, so non-zero means some key is waiting for a human to
+ *                          resurrect or delete the message holding it. Counted per recording, not as a
+ *                          current size — a takeover re-derives the blocks and legitimately counts
+ *                          them again under the new owner
+ * @param messagesPoisonedBehindDeadLetter messages dead-lettered without ever reaching a handler,
+ *                          because their key was blocked. Read against {@code deadLettered}: a queue
+ *                          dominated by these means ONE message is broken and the rest are waiting on
+ *                          a decision about it, where the reverse means the handler is
  */
 public record QueueStatistics(long delivered,
                               long handlerFailures,
@@ -62,9 +71,11 @@ public record QueueStatistics(long delivered,
                               long shardsAcquired,
                               long shardsReleased,
                               long leasesLost,
-                              long watermarkCapped) {
+                              long watermarkCapped,
+                              long keysBlockedByDeadLetter,
+                              long messagesPoisonedBehindDeadLetter) {
 
-    public static final QueueStatistics NONE = new QueueStatistics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static final QueueStatistics NONE = new QueueStatistics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
     /** Sums two lanes' counters, which is how a queue's figure is assembled from its per-lane consumers. */
     public QueueStatistics plus(QueueStatistics other) {
@@ -78,6 +89,8 @@ public record QueueStatistics(long delivered,
                                    shardsAcquired + other.shardsAcquired,
                                    shardsReleased + other.shardsReleased,
                                    leasesLost + other.leasesLost,
-                                   watermarkCapped + other.watermarkCapped);
+                                   watermarkCapped + other.watermarkCapped,
+                                   keysBlockedByDeadLetter + other.keysBlockedByDeadLetter,
+                                   messagesPoisonedBehindDeadLetter + other.messagesPoisonedBehindDeadLetter);
     }
 }

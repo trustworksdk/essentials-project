@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.queue.shardowned;
 
-import dk.trustworks.essentials.components.queue.shardowned.spi.MessageId;
+import dk.trustworks.essentials.components.queue.shardowned.spi.*;
 import org.slf4j.*;
 
 import java.sql.*;
@@ -104,6 +104,54 @@ final class OrderedShardOwner implements BatchReadableOwner {
     private final Set<Long> pendingAcks = new HashSet<>();
     /** Sequence values already seen, so a sweep or a chase cannot re-queue them. */
     private final Set<Long> seen = new HashSet<>();
+    /**
+     * Keys with a dead letter, and the lowest {@code key_order} it was recorded at. A key never
+     * advances past a dead letter: nothing above that value is delivered, and anything that arrives
+     * for it is dead-lettered too.
+     * <p>
+     * <b>Derived, not remembered.</b> Loaded from the dead-letter table on takeover and refreshed
+     * while it is non-empty, so the block survives a rebalance and a restart, and so a resurrect or a
+     * delete performed by an administrator in another process clears it. Holding it only in memory
+     * would mean every ownership change silently resumed a key past the message nobody handled —
+     * which is the failure the rule exists to prevent, reintroduced by its own enforcement.
+     */
+    private final Map<String, Long> deadLetterBlocks = new HashMap<>();
+    /**
+     * Sequence values to move to the dead-letter table on the next pass, because their key is blocked.
+     * <p>
+     * Decided where the row is met — the cursor read, the sweep, or the moment a block appears under
+     * rows already held — and applied by the pump, which is the thread with a connection. The rows
+     * leave the ordered table rather than accumulating in {@link #readyByKey}: that is what keeps a
+     * stalled key from growing without bound in front of the cursor, and what spares the head sweep
+     * from spending its batch re-reading rows it can never deliver.
+     */
+    private final List<PoisonCandidate> pendingPoison = new ArrayList<>();
+    /**
+     * Carries the key and order, not just the sequence value, because a candidate is re-tested against
+     * the blocks before it is moved. Between being queued and being written, a refresh can find that
+     * the key is no longer blocked, and a message dead-lettered on a block that has since been lifted
+     * is a message thrown away for nothing.
+     */
+    private record PoisonCandidate(ShardOwnedStorage.OrderedRow row, String key, long keyOrder) {
+        long seq() {
+            return row.seq();
+        }
+    }
+    /** Set once a WARN has been logged for a key, so a blocked key is reported on transition only. */
+    private final Set<String> reportedBlocks = new HashSet<>();
+    /**
+     * Set when a row arrives at exactly a key's blocked {@code key_order} — which can only be the
+     * dead letter itself, resurrected, since {@code (key, key_order)} is unique and the original row
+     * was deleted when it was parked.
+     * <p>
+     * It requests a re-derivation rather than clearing the block directly, because clearing would be
+     * wrong whenever several of a key's messages are dead-lettered: lifting the block at 5 while 6, 7
+     * and 8 are still parked would let 9 through. The table knows the new threshold; memory does not.
+     * Without this the block would only lift on the sweep cadence, which backs off to
+     * {@code maxSweepInterval} on a shard that has stopped delivering — so a resurrect would appear to
+     * do nothing for up to thirty seconds.
+     */
+    private boolean blockRefreshRequested;
 
     /**
      * Handlers run here, not on the pump thread.
@@ -229,6 +277,28 @@ final class OrderedShardOwner implements BatchReadableOwner {
     @Override
     public void onTakeover(Connection connection) throws SQLException {
         metrics.takeoverAttemptBumps.add(storage.bumpOrderedAttemptsOnTakeover(connection, shard));
+        // Before the first pumpOnce, so the first dispatch already knows which keys are blocked. A
+        // successor that learned this later would deliver past a dead letter in the window, which is
+        // exactly what the previous owner refused to do.
+        refreshDeadLetterBlocks(connection);
+    }
+
+    /**
+     * Re-read the blocked keys from the dead-letter table.
+     * <p>
+     * Called on takeover, and thereafter only while a block exists — a shard with no dead letter pays
+     * nothing, and a shard with one pays this on the sweep cadence. It is the only way a resurrect or
+     * a delete becomes visible here: both happen through the administrative API, in some other
+     * process, against rows this owner never reads.
+     */
+    private void refreshDeadLetterBlocks(Connection connection) throws SQLException {
+        var blocks = storage.orderedDeadLetterBlocks(connection, shard);
+        synchronized (stateLock) {
+            deadLetterBlocks.clear();
+            deadLetterBlocks.putAll(blocks);
+            reportedBlocks.retainAll(blocks.keySet());
+        }
+        metrics.deadLetterBlockReads.increment();
     }
 
     @Override
@@ -336,8 +406,19 @@ final class OrderedShardOwner implements BatchReadableOwner {
             sweptThisPass = true;
         }
 
+        if (takeBlockRefreshRequest() || (sweptThisPass && !deadLetterBlocksEmpty())) {
+            // Only while a block stands, and only on the sweep cadence. A shard with no dead letter
+            // never issues this; a shard with one is already degraded, and this is how it learns that
+            // an administrator resurrected or deleted the message holding its key.
+            refreshDeadLetterBlocks(connection);
+        }
+
         dispatchDueRetries(now);
         var delivered = dispatchReadyKeys();
+        // After dispatch, because dispatchReadyKeys is what discovers rows held from before a block
+        // appeared. Before the acknowledgement flush, so a pass never ends with rows queued for a
+        // move that the next read would meet again.
+        poisonBlocked(connection);
         if (shedding.get()) {
             // The drain used to be driven by the owner's own loop; with the loop gone it belongs
             // here, which is the only place that still runs on every iteration.
@@ -379,8 +460,46 @@ final class OrderedShardOwner implements BatchReadableOwner {
             if (!seen.add(row.seq())) {
                 return;
             }
+            var blockedAt = deadLetterBlocks.get(row.key());
+            if (blockedAt != null && row.keyOrder() == blockedAt) {
+                // The dead letter came back. Re-derive rather than assume this lifts the block.
+                blockRefreshRequested = true;
+            } else if (blockedAt != null && row.keyOrder() > blockedAt) {
+                // Straight past readyByKey. Holding it would grow the map for as long as the block
+                // stands, and it can never be dispatched from there anyway.
+                pendingPoison.add(new PoisonCandidate(row, row.key(), row.keyOrder()));
+                return;
+            }
             readyByKey.computeIfAbsent(row.key(), key -> new TreeMap<>()).put(row.keyOrder(), row);
         }
+    }
+
+    /**
+     * Whether this {@code key_order} sits behind a dead letter on its key.
+     * <p>
+     * Strictly above, so a value <em>below</em> the dead letter is still delivered — a message that
+     * commits late under a lower {@code key_order} is not behind the failure, it is in front of it,
+     * and refusing it would discard a message the key is still entitled to.
+     * <p>
+     * Caller holds {@link #stateLock}.
+     */
+    private boolean takeBlockRefreshRequest() {
+        synchronized (stateLock) {
+            var requested = blockRefreshRequested;
+            blockRefreshRequested = false;
+            return requested;
+        }
+    }
+
+    private boolean deadLetterBlocksEmpty() {
+        synchronized (stateLock) {
+            return deadLetterBlocks.isEmpty();
+        }
+    }
+
+    private boolean blockedAbove(String key, long keyOrder) {
+        var blockedAt = deadLetterBlocks.get(key);
+        return blockedAt != null && keyOrder > blockedAt;
     }
 
     /**
@@ -418,6 +537,18 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 // Per-shard cap first, then the process-wide budget the unordered lane also draws on.
                 if (!dispatch.tryAcquire()) {
                     break;
+                }
+                // The guarantee itself, not an optimisation: a key never advances past a dead letter.
+                // accept() keeps these out of readyByKey, so reaching this is either a row held from
+                // before the block appeared or one the refresh has just learned about — both of which
+                // must be moved, not delivered.
+                if (blockedAbove(key, byOrder.firstKey())) {
+                    // The lowest value held is already above the block, so everything here is.
+                    byOrder.values().forEach(row -> pendingPoison.add(
+                            new PoisonCandidate(row, key, row.keyOrder())));
+                    byOrder.clear();
+                    exhaustedKeys.add(key);
+                    continue;
                 }
                 var next = byOrder.pollFirstEntry();
                 var previous = highestDeliveredOrder.get(key);
@@ -484,6 +615,10 @@ final class OrderedShardOwner implements BatchReadableOwner {
                 synchronized (stateLock) {
                     attemptsBySeq.remove(row.seq());
                     seen.remove(row.seq());
+                    // The key stops here. Recorded in memory now and readable from the dead-letter
+                    // table for every owner after this one — the row committed above is what makes
+                    // the block outlive this process.
+                    blockKey(key, keyOrder);
                 }
                 metrics.observer().deadLettered(new MessageId(MessageId.Lane.ORDERED, shard, row.seq()),
                                                 attempts, cause);
@@ -503,6 +638,84 @@ final class OrderedShardOwner implements BatchReadableOwner {
             synchronized (stateLock) {
                 requeue(key, keyOrder, row);
             }
+        }
+    }
+
+    /**
+     * Record that a key is blocked, and queue everything already held above the block for the
+     * dead-letter table.
+     * <p>
+     * Caller holds {@link #stateLock}.
+     */
+    private void blockKey(String key, long keyOrder) {
+        var previous = deadLetterBlocks.merge(key, keyOrder, Math::min);
+        var held = readyByKey.get(key);
+        if (held != null) {
+            var above = held.tailMap(previous, false);
+            above.values().forEach(row -> pendingPoison.add(new PoisonCandidate(row, key, row.keyOrder())));
+            above.clear();
+        }
+        if (reportedBlocks.add(key)) {
+            // Once per key, because this is a state an operator has to act on: nothing for this key
+            // will be delivered again until the dead letter is resurrected or deleted. It is also the
+            // only signal — the messages behind it are moved out of the queue, so depth falls rather
+            // than rises, and a rising dead-letter count is what is left to notice.
+            log.warn("Ordered shard {}: key '{}' is blocked at key_order {} — its message was dead-lettered, so "
+                     + "nothing above that order will be delivered and anything arriving for it is dead-lettered "
+                     + "too. Resurrect or delete the dead letter to release the key",
+                     shard, key, previous);
+        }
+        metrics.keysBlockedByDeadLetter.increment();
+    }
+
+    /**
+     * Move the rows queued by {@link #blockKey} and {@link #accept} into the dead-letter table.
+     * <p>
+     * On the pump thread, which is the one holding a connection, and after the reads rather than
+     * during them: a row met by the cursor and a row met by the sweep go to the same place, and doing
+     * it in one statement per pass keeps a backlog behind a blocked key from becoming a transaction
+     * per message.
+     */
+    private void poisonBlocked(Connection connection) throws SQLException {
+        List<PoisonCandidate> batch;
+        synchronized (stateLock) {
+            if (pendingPoison.isEmpty()) {
+                return;
+            }
+            // Re-tested against the blocks as they stand NOW, which a refresh earlier in this pass may
+            // have changed. A candidate whose key is no longer blocked is put back where it would have
+            // gone in the first place — it was queued for a move on a block that has since been
+            // lifted, and dead-lettering it would throw away a message for nothing.
+            //
+            // Back into readyByKey rather than merely forgotten: the candidate still carries its row,
+            // so the key's TreeMap orders it against everything else held and it is dispatched on this
+            // pass. Dropping it and letting the head sweep find it again would be correct too, and up
+            // to a sweep interval later — which is precisely the wait a bulk resurrect exists to avoid.
+            batch = new ArrayList<>(pendingPoison.size());
+            var released = new ArrayList<PoisonCandidate>();
+            for (var candidate : pendingPoison) {
+                if (blockedAbove(candidate.key(), candidate.keyOrder())) {
+                    batch.add(candidate);
+                } else {
+                    released.add(candidate);
+                }
+            }
+            pendingPoison.removeAll(released);
+            released.forEach(candidate -> readyByKey.computeIfAbsent(candidate.key(), key -> new TreeMap<>())
+                                                    .put(candidate.keyOrder(), candidate.row()));
+            if (batch.isEmpty()) {
+                return;
+            }
+        }
+        var seqs = batch.stream().map(PoisonCandidate::seq).toList();
+        var moved = storage.poisonOrderedBehindDeadLetter(connection, shard, seqs,
+                                                          DeadLetter.BLOCKED_BEHIND_DEAD_LETTER);
+        metrics.messagesPoisonedBehindDeadLetter.add(moved);
+        synchronized (stateLock) {
+            pendingPoison.removeAll(batch);
+            // The rows are gone from the lane, so remembering their sequence values would leak for as
+            // long as this owner lives — the same reason flushAcks forgets what it acknowledged.
+            seqs.forEach(seen::remove);
         }
     }
 

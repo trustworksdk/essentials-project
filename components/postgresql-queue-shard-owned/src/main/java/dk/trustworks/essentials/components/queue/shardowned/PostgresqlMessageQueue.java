@@ -538,6 +538,25 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                 orderedConsumer.stop();
                 throw e;
             }
+            // A competing consumer is legal and occasionally wanted, but the common reason for a
+            // second consume() is the belief that one call serves the ordered lane and another the
+            // unordered one. It does not — every consume() serves both, and the lane reaches the
+            // handler as the nullable ordering key. Both symptoms of that mistake are silent: this
+            // handler receives the messages the caller meant for the other one, and the process
+            // counts as two instances everywhere ownership is reported, so each of them owns half
+            // of what a single subscription would. This is the only place that can tell.
+            //
+            // Reported on what is actually registered rather than on the subscription index: a
+            // consume() whose start() threw leaves nothing running but has already taken an index,
+            // and warning about a competing consumer that does not exist sends the reader after the
+            // wrong failure.
+            if (!consumers.isEmpty()) {
+                log.warn("Queue {} already has {} consumer(s) registered in this process; instance '{}' is being added as "
+                         + "another COMPETING consumer, so each of them owns a share of the units and counts as a separate "
+                         + "live instance. One consume() already serves BOTH lanes — the ordering key is null for an "
+                         + "unordered message — so a second one is not 'the other lane'",
+                         queueId, consumers.size() / 2, consumerInstanceId);
+            }
             consumers.add(unorderedConsumer);
             consumers.add(orderedConsumer);
             started.set(true);
@@ -786,7 +805,7 @@ public final class PostgresqlMessageQueue implements MessageQueue {
                                                                : MessageId.Lane.UNORDERED,
                                                                row.shard(), row.seq()),
                                                  row.key(), row.payload(), row.payloadType(),
-                                                 row.attempts(), row.error()))
+                                                 row.attempts(), row.error(), row.blockedByKeyOrder()))
                       .toList();
     }
 
@@ -795,6 +814,19 @@ public final class PostgresqlMessageQueue implements MessageQueue {
         requireNonNull(messageId, "No messageId provided");
         return storage.resurrect(messageId.shard(), messageId.sequence(),
                                  messageId.lane() == MessageId.Lane.ORDERED ? "ordered" : "unordered");
+    }
+
+    @Override
+    public int resurrectKey(String key) throws SQLException {
+        requireNonNull(key, "No key provided");
+        // Routed exactly as an enqueue would route it, so this addresses the same unit the key's
+        // messages live in — there is only one, which is why the whole key can be restored at once.
+        var restored = storage.resurrectKey(ShardOwnedSchema.unitForKey(key, orderedUnits()), key);
+        if (restored > 0) {
+            log.info("Queue {}: resurrected {} dead letter(s) for key '{}' — the key resumes at its lowest "
+                     + "restored key_order", queueId, restored, key);
+        }
+        return restored;
     }
 
     @Override

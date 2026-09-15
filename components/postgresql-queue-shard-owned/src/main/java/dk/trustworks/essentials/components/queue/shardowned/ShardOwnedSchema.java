@@ -230,10 +230,15 @@ public final class ShardOwnedSchema {
                                   payload_type     int         NOT NULL,
                                   attempts         smallint    NOT NULL,
                                   last_error       text,
-                                  dead_lettered_at timestamptz NOT NULL DEFAULT now()
+                                  dead_lettered_at timestamptz NOT NULL DEFAULT now(),
+                                  blocked_by_key_order bigint
                               )
                               """.formatted(DLQ_TABLE));
             statement.execute("CREATE INDEX IF NOT EXISTS %s_queue ON %s (queue_id, shard)".formatted(DLQ_TABLE, DLQ_TABLE));
+            // Added after the table shipped, so an existing installation needs it too. IF NOT EXISTS
+            // rather than a version check: this runs on every boot, behind the bootstrap lock, and a
+            // column that is already there is not an error.
+            statement.execute("ALTER TABLE %s ADD COLUMN IF NOT EXISTS blocked_by_key_order bigint".formatted(DLQ_TABLE));
 
             statement.execute("""
                               CREATE TABLE IF NOT EXISTS %s (
@@ -343,7 +348,9 @@ public final class ShardOwnedSchema {
                               + " SELECT r.queue_name, d.queue_id, d.shard, d.source_lane, d.msg_key,"
                               + "        d.key_order, d.seq, d.payload_type,"
                               + "        shard_queue_readable(d.payload) AS payload,"
-                              + "        d.attempts, d.last_error, d.dead_lettered_at"
+                              + "        d.attempts, d.last_error, d.dead_lettered_at,"
+                              + "        d.blocked_by_key_order,"
+                              + "        d.blocked_by_key_order IS NOT NULL AS never_delivered"
                               + "   FROM " + DLQ_TABLE + " d"
                               + "   LEFT JOIN " + REGISTRY_TABLE + " r ON r.queue_id = d.queue_id");
         });

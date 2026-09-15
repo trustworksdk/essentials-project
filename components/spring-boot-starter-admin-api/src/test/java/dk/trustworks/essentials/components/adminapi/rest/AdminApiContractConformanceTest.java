@@ -70,9 +70,11 @@ class AdminApiContractConformanceTest {
     /** Keeps the comparisons below from passing vacuously if either side fails to be discovered. */
     @Test
     void both_sides_of_the_comparison_are_actually_discovered() {
-        // 40 before the shard-owned queue engine was published; its ten operations bring it to 50.
-        assertThat(contractOperations()).hasSize(50);
-        assertThat(implementedOperations()).hasSize(50);
+        // 40 before the shard-owned queue engine was published; its operations bring it to 51 — ten,
+        // plus resurrecting a whole ordered key at once, which is how a key stopped behind a dead
+        // letter is recovered.
+        assertThat(contractOperations()).hasSize(51);
+        assertThat(implementedOperations()).hasSize(51);
     }
 
     @Test

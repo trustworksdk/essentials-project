@@ -395,6 +395,16 @@ final class EssentialsAdminApiSpec {
          .pathParam("messageId", new StringSchema(), "The dead-letter message id.")
          .responseMessageOperation();
 
+        b.operation(ShardOwnedQueuesApi.class, "resurrectDeadLettersForKey")
+         .operationId("shardOwnedResurrectDeadLettersForKey")
+         .tag("shard-owned-queues").post("/shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect")
+         .summary("Return every dead letter of one ordered key to its lane, in key_order. The recovery "
+                  + "operation for a key stopped behind a dead letter.")
+         .roles(QUEUE_W, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .pathParam("key", new StringSchema(), "The ordering key.")
+         .responseRef("ShardOwnedResurrectKeyResult", "How many messages were put back.");
+
         b.operation(ShardOwnedQueuesApi.class, "purgeQueue")
          .operationId("shardOwnedPurgeQueue")
          .tag("shard-owned-queues").delete("/shard-owned-queues/{queueName}/messages")

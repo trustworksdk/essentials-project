@@ -114,6 +114,23 @@ public final class ShardOwnerMetrics {
      * exposure is a measurement rather than a claim.
      */
     public final LongAdder     orderViolations      = new LongAdder();
+    /**
+     * Times a key was recorded as blocked by a dead letter. A key never advances past one, so a
+     * non-zero value means some key stopped and is waiting for the dead letter to be resurrected or
+     * deleted. Counted per recording rather than held as a current size: a takeover re-derives the
+     * blocks from the dead-letter table, so the same key legitimately registers again under its new
+     * owner.
+     */
+    public final LongAdder     keysBlockedByDeadLetter = new LongAdder();
+    /**
+     * Messages moved to the dead-letter table without ever being handed to a handler, because their
+     * key was blocked. These are the {@link dk.trustworks.essentials.components.queue.shardowned.spi.DeadLetter#neverDelivered()}
+     * rows, and their count against {@code deadLettered} is what separates one broken message from a
+     * broken handler.
+     */
+    public final LongAdder     messagesPoisonedBehindDeadLetter = new LongAdder();
+    /** Reads of the blocked-key state. Issued on takeover, and per sweep only while a block stands. */
+    public final LongAdder     deadLetterBlockReads = new LongAdder();
     /** Ordered shards this instance was asked to give up because it held more than its fair share. */
     public final LongAdder     shedsStarted         = new LongAdder();
     /** Sheds that quiesced and released, so another instance could take the shard. */
@@ -194,7 +211,9 @@ public final class ShardOwnerMetrics {
                 shardsAcquired.sum(),
                 shardsReleased.sum(),
                 leasesLost.sum(),
-                watermarkCapped.sum());
+                watermarkCapped.sum(),
+                keysBlockedByDeadLetter.sum(),
+                messagesPoisonedBehindDeadLetter.sum());
     }
 
     public Map<String, Object> snapshot() {
@@ -212,6 +231,9 @@ public final class ShardOwnerMetrics {
         snapshot.put("takeoverAttemptBumps", takeoverAttemptBumps.sum());
         snapshot.put("abandonedOnInterrupt", abandonedOnInterrupt.sum());
         snapshot.put("orderViolations", orderViolations.sum());
+        snapshot.put("keysBlockedByDeadLetter", keysBlockedByDeadLetter.sum());
+        snapshot.put("messagesPoisonedBehindDeadLetter", messagesPoisonedBehindDeadLetter.sum());
+        snapshot.put("deadLetterBlockReads", deadLetterBlockReads.sum());
         snapshot.put("retriesScheduled", retriesScheduled.sum());
         snapshot.put("retriesDispatched", retriesDispatched.sum());
         snapshot.put("deadLettered", deadLettered.sum());

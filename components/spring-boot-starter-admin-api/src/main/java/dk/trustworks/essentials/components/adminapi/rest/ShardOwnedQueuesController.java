@@ -137,6 +137,14 @@ public class ShardOwnedQueuesController {
                                                                                          MessageId.parse(messageId)));
     }
 
+    @PostMapping("/shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect")
+    public ShardOwnedResurrectKeyResult resurrectDeadLettersForKey(@PathVariable String queueName,
+                                                                   @PathVariable String key) {
+        return new ShardOwnedResurrectKeyResult(shardOwnedQueuesApi.resurrectDeadLettersForKey(principal(),
+                                                                                               QueueName.of(queueName),
+                                                                                               key));
+    }
+
     @DeleteMapping("/shard-owned-queues/{queueName}/messages")
     public ShardOwnedPurgeResult purgeQueue(@PathVariable String queueName) {
         return new ShardOwnedPurgeResult(shardOwnedQueuesApi.purgeQueue(principal(), QueueName.of(queueName)));

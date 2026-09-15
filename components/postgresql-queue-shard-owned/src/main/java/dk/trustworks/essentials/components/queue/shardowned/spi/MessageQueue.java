@@ -252,6 +252,27 @@ public interface MessageQueue extends Lifecycle, AutoCloseable {
     boolean resurrect(MessageId messageId) throws SQLException;
 
     /**
+     * Return <b>every</b> dead letter of one ordered key to its lane, in {@code key_order}, resetting
+     * their attempt counts.
+     * <p>
+     * This is the operation to reach for after a key has stopped. A key never advances past a dead
+     * letter, so the messages that arrived while it was stopped are dead letters too — and putting
+     * them back one at a time only works in ascending {@code key_order}, since a higher one restored
+     * first is parked again immediately by the block still standing below it. This restores the whole
+     * key in one transaction, which is also what makes the redelivery order right: the rows become
+     * visible together, so the owner holds all of them before it dispatches the first.
+     * <p>
+     * It restores only what is parked. Messages already delivered before the failure are not re-sent,
+     * so the key resumes exactly where it stopped. If the handler is still broken the first message
+     * fails its way back and the block re-forms behind it — with a fresh attempt count, so that costs a
+     * full retry cycle.
+     *
+     * @param key the ordering key
+     * @return how many messages were put back; zero when the key has no dead letters
+     */
+    int resurrectKey(String key) throws SQLException;
+
+    /**
      * Remove everything, both lanes and dead letters. Administrative, not a delivery operation.
      *
      * @return the number of messages removed

@@ -169,6 +169,18 @@ public class DefaultShardOwnedQueuesApi implements ShardOwnedQueuesApi {
     }
 
     @Override
+    public int resurrectDeadLettersForKey(Object principal, QueueName queueName, String key) {
+        validateQueueWriterRole(principal);
+        requireNonNull(key, "No key provided");
+        requireNonNull(queueName, "No queueName provided");
+        return call("resurrect the dead letters of key '" + key + "' on queue '" + queueName.value() + "'",
+                    () -> {
+                        var queue = queues.findQueue(queueName);
+                        return queue.isPresent() ? queue.get().resurrectKey(key) : 0;
+                    });
+    }
+
+    @Override
     public long purgeQueue(Object principal, QueueName queueName) {
         validateQueueWriterRole(principal);
         requireNonNull(queueName, "No queueName provided");

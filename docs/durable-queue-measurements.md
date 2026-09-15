@@ -541,6 +541,34 @@ the nested loop the only legal plan instead of a preference.
 Measure the **near-idle** state, not only backlog. The first shape looks excellent with work to do and
 is sixteen times worse with none — which is the state a queue spends almost all its time in.
 
+### 3.11 What a key stalled behind a dead letter costs
+
+A key never advances past a dead letter, and the messages behind it are moved to the dead-letter table
+rather than left queued (`docs/durable-queue-shard-owned.md` §9.1). That keeps undeliverable rows out
+of the cursor's way, and the price is that every message arriving for a stalled key is written twice
+and deleted once instead of written once. 2 000 ordered messages on one key, same workload both arms
+(`ShardOwnedStalledKeyCostIT`, benchmark-gated):
+
+| arm | WAL per message | throughput | dead-letter table per row |
+|---|---|---|---|
+| delivering normally | 471 B | 2 782 msg/s | — |
+| **key stalled** | **801 B** | 2 078 msg/s | **241 B** |
+
+**1.70x the WAL, and 75% of the throughput.** Both are smaller than the shape of the change suggests,
+because the second write is the same narrow row and the delete is the one the acknowledgement would
+have issued anyway on the delivering arm.
+
+The number that actually matters operationally is the third column, because
+`shard_queue_dead_letter` is **one table for every queue on the database**: at 241 B per row including
+its index, a key stalled for an hour at 100 msg/s adds roughly **87 MB** that every other queue's
+dead-letter listing and count then reads past. A stall is therefore something to alert on within
+minutes, not something to leave over a weekend — which is what the per-key WARN and
+`messagesPoisonedBehindDeadLetter` are for.
+
+The suite also asserts, rather than prints, that the ordered lane drains to zero: if the owner could
+not move rows out as fast as a producer put them in, the lane would grow behind the stall and moving
+the poisoning to dispatch would have bought nothing over leaving the messages queued.
+
 ## 4. Environment
 
 | | |

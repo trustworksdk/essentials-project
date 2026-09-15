@@ -150,6 +150,22 @@ public interface ShardOwnedQueuesApi {
     boolean resurrectDeadLetterMessage(Object principal, QueueName queueName, MessageId messageId);
 
     /**
+     * Return <b>every</b> dead letter of one ordered key to its lane, in {@code key_order}.
+     * <p>
+     * This is the recovery operation for a key that has stopped. A key never advances past a dead
+     * letter, so everything that arrived for it while it was stopped is a dead letter too, and putting
+     * those back with {@link #resurrectDeadLetterMessage} only works in ascending {@code key_order} —
+     * a higher one restored first is parked again immediately by the block still standing below it.
+     * <p>
+     * Restores only what is parked, so the key resumes where it stopped rather than replaying. If the
+     * handler is still broken, the first message fails its way back and the block re-forms behind it.
+     *
+     * @param key the ordering key, as supplied to {@code Message.ordered}
+     * @return how many messages were put back; zero if the key has no dead letters
+     */
+    int resurrectDeadLettersForKey(Object principal, QueueName queueName, String key);
+
+    /**
      * Delete everything in a queue: both lanes and its dead letters.
      * <p>
      * Irreversible, and it does not stop consumers — messages in flight when this runs are still

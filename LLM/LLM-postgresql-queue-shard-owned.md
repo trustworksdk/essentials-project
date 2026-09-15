@@ -10,7 +10,7 @@
 - **Locking**: none on the delivery path — a shard lease establishes ownership, so there is no claim write
 - **Notifications**: LISTEN/NOTIFY on one global channel, payload `queueId:lane:shard`
 - **Dependencies**: PostgreSQL driver, Micrometer (both `provided`), `shared`
-- **Status**: **Published**, and new. No production use yet. `MessageQueue` is now frozen contract — additive in minor, breaking only in a major — so widening it is no longer free.
+- **Status**: **Published**, and new. No production use yet. `MessageQueue` freezes at the release that ships it — additive in minor, breaking only in a major — but it is **not frozen on this branch**: the dead-letter work widened it on purpose (`resurrectKey`, two `QueueStatistics` counters, `DeadLetter.blockedByKeyOrder`) while that is still free.
 
 ## TOC
 - [The one idea](#the-one-idea)
@@ -32,6 +32,7 @@ Every message is assigned a shard at enqueue. Each shard has exactly one owning 
 Consequences, all measured:
 - **No claim write.** The current implementation writes `is_being_delivered = true` per message; this writes none, because a lease already says who owns it. `n_tup_upd` is zero.
 - **Ordering is a consequence of ownership**, not of a query. Same key → same shard → one owner, whose in-memory set of keys in flight is the whole FIFO guarantee. It holds across processes.
+- **A key never advances past a dead letter.** Once one of a key's messages is parked, nothing above that `key_order` is delivered and anything arriving for the key is dead-lettered too, marked `DeadLetter.neverDelivered()` (do not use `attempts` — a takeover bumps it on rows never delivered). The block is derived from the dead-letter table, so it survives a rebalance and a restart, and is cleared by resurrecting or deleting the dead letter. Recovery is `queue.resurrectKey(key)` — every dead letter for that key, in one transaction, replayed in `key_order` (`POST /shard-owned-queues/{queueName}/ordered-keys/{key}/resurrect`). Per-message resurrect still works but must be walked ascending and awaited, since restoring a higher `key_order` while a lower one is parked simply parks it again. What is *not* prevented, and is counted as `orderViolations` instead: a producer that numbers and commits in different orders. And a delayed message does not block its key — an undelayed later `key_order` overtakes it, because only visible rows are dispatched.
 - **Threads and connections are properties of the process**, not of the shard or queue count — but only if you share a `ShardRuntime` (see below).
 
 ## Getting started
@@ -413,6 +414,7 @@ api.getDeadLetterMessages(principal, orders, 0, 100);
 api.retryMessage(principal, orders, id, Duration.ZERO);
 api.markAsDeadLetterMessage(principal, orders, id, "parked by hand");
 api.resurrectDeadLetterMessage(principal, orders, id);
+api.resurrectDeadLettersForKey(principal, orders, "account-7");   // the whole key, in key_order
 api.deleteMessage(principal, orders, id);
 api.purgeQueue(principal, orders);
 ```

@@ -351,6 +351,11 @@ public final class OpenApiSpecGenerator {
                                  + "dead-letter table. Distinct from PurgeResult, which is int32.")
                     .addProperty("purgedCount", new IntegerSchema().format("int64"))
                     .addRequiredItem("purgedCount"));
+            schemas.put("ShardOwnedResurrectKeyResult", new ObjectSchema()
+                    .description("Messages returned to the ordered lane by resurrecting a whole key. Zero "
+                                 + "is a normal answer: the key had no dead letters.")
+                    .addProperty("resurrectedCount", new IntegerSchema().format("int32"))
+                    .addRequiredItem("resurrectedCount"));
             schemas.put("QueueNameResult", new ObjectSchema()
                     .description("A resolved queue name.")
                     .addProperty("queueName", new StringSchema())
