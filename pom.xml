@@ -210,6 +210,9 @@
         <module>components/spring-boot-starter-admin-ui</module>
         <module>examples/essentials-performance-lab</module>
         <module>examples/essentials-spring-examples</module>
+        <!-- Listed after components/kotlin-eventsourcing, which it is the only consumer of. Maven orders the
+             reactor by dependency, not by declaration, so this is for readers. -->
+        <module>examples/essentials-webshop-demo</module>
     </modules>
 
 

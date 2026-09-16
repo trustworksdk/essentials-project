@@ -1,0 +1,60 @@
+networks:
+  default:
+    name: essentials-webshop-demo
+
+services:
+  postgresql:
+    container_name: essentials-webshop-demo-postgresql
+    image: essentials-postgres:17.5
+    build:
+      context: ../../../../
+      dockerfile: docker/postgresql/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: essentials
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: essentials-webshop-demo
+      POSTGRES_SHARED_PRELOAD_LIBRARIES: pg_cron
+    # `wal_level=logical` and the replication slots are not used by this demo, but they are set for the same
+    # reason the trading demo sets them: without them, a data directory that *does* contain a logical
+    # replication slot refuses to start with `FATAL: logical replication slot "..." exists, but "wal_level" <
+    # "logical"`. The sibling demos in this repository use the same image, and a data directory outlives the
+    # container that created it.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_cron,pg_stat_statements", "-c", "cron.database_name=essentials-webshop-demo", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
+    volumes:
+      # Its own volume, so wiping this demo's data never touches a sibling demo's database and vice versa.
+      - webshop_postgres_data:/var/lib/postgresql/data
+
+  # The shipping context publishes ExternalOrderShipped here. Same image and topology as the
+  # essentials-spring-examples broker, so the two demos can be run from the same machine only one at a time.
+  kafka:
+    container_name: essentials-webshop-demo-kafka
+    image: apache/kafka-native:4.3.1
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      # apache/kafka-native ships the broker as a native binary, so /opt/kafka/bin/*.sh does not exist - a
+      # healthcheck calling kafka-topics.sh reports the broker unhealthy while it is serving traffic fine.
+      # `nc` is present in the image and a listening port is the honest signal here.
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+volumes:
+  webshop_postgres_data:
+    driver: local

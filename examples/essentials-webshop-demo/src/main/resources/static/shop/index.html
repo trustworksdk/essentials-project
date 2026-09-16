@@ -1,0 +1,323 @@
+<!doctype html>
+<!--
+  ~ Copyright 2021-2026 the original author or authors.
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~      https://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Essentials Webshop Demo</title>
+  <style>
+    :root {
+      --ground: #0f141c; --panel: #161d28; --rule: #26303f;
+      --ink: #e6ebf2; --dim: #8a97ab; --accent: #f2a33c; --ok: #4fa870; --warn: #c9565a;
+      --mono: "SFMono-Regular", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; background: var(--ground); color: var(--ink);
+           font: 15px/1.5 system-ui, -apple-system, sans-serif; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
+         margin: 0 0 12px; font-weight: 600; }
+    .sub { color: var(--dim); margin: 0 0 24px; max-width: 70ch; }
+    .lanes { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .lane { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; }
+    .lane.wide { grid-column: 1 / -1; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+    th { color: var(--dim); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    button { background: #22303f; color: var(--ink); border: 1px solid var(--rule); border-radius: 4px;
+             padding: 6px 10px; cursor: pointer; font-size: 13px; }
+    button:hover { border-color: var(--accent); }
+    button.primary { background: var(--accent); color: #17202c; border-color: var(--accent); font-weight: 600; }
+    input, select { background: #0e141d; color: var(--ink); border: 1px solid var(--rule); border-radius: 4px;
+                    padding: 6px 8px; font-size: 13px; width: 100%; }
+    label { display: block; font-size: 12px; color: var(--dim); margin: 8px 0 2px; }
+    .row { display: flex; gap: 8px; align-items: flex-end; }
+    .row > * { flex: 1; }
+    .row > button { flex: 0 0 auto; }
+    code, .mono { font-family: var(--mono); font-size: 12px; }
+    .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 14px; }
+    .kv dt { color: var(--dim); }
+    .kv dd { margin: 0; }
+    .empty { color: var(--dim); font-style: italic; font-size: 13px; }
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 12px;
+             font-family: var(--mono); background: #22303f; }
+    .badge.ok { background: rgba(79,168,112,.18); color: var(--ok); }
+    .badge.warn { background: rgba(201,86,90,.18); color: var(--warn); }
+    .log { font-family: var(--mono); font-size: 12px; color: var(--dim); max-height: 160px;
+           overflow-y: auto; margin-top: 8px; }
+    .log b { color: var(--ink); font-weight: 600; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<h1>Essentials Webshop Demo</h1>
+<p class="sub">
+  Every panel below is one <em>view slice</em> reading its own read model, and every button sends one
+  <em>command</em>. The screens are eventually consistent on purpose: after "place order", the payment hold and
+  the packaging list arrive a moment later, because both are subscriptions rather than steps in the request.
+  The <a href="/essentials/admin" target="_blank">admin console</a> shows the event streams and subscriptions
+  behind all of it.
+</p>
+
+<div class="lanes">
+  <section class="lane">
+    <h2>Catalog &mdash; sales</h2>
+    <div>
+      <label for="p-name">Product name</label>
+      <input id="p-name" value="Espresso machine">
+      <label for="p-price">Price</label>
+      <input id="p-price" value="1999.50">
+      <p></p>
+      <button class="primary" onclick="addProduct()">Add product</button>
+      <button onclick="refreshCatalog()">Refresh</button>
+    </div>
+    <p></p>
+    <table>
+      <thead><tr><th>Product</th><th class="num">Price</th><th></th></tr></thead>
+      <tbody id="catalog"><tr><td colspan="3" class="empty">no products yet</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="lane">
+    <h2>Basket &mdash; sales</h2>
+    <div class="kv">
+      <dt>Basket</dt><dd><span class="mono" id="basket-id"></span></dd>
+    </div>
+    <p></p>
+    <table>
+      <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Line</th><th></th></tr></thead>
+      <tbody id="basket"><tr><td colspan="4" class="empty">basket is empty</td></tr></tbody>
+      <tfoot><tr><th colspan="2">Total</th><th class="num" id="basket-total">0</th><th></th></tr></tfoot>
+    </table>
+    <p></p>
+    <button class="primary" onclick="checkOut()">Request checkout</button>
+    <button onclick="newBasket()">New basket</button>
+  </section>
+
+  <section class="lane">
+    <h2>Checkout &mdash; sales</h2>
+    <div class="kv"><dt>Order</dt><dd><span class="mono" id="order-id">&mdash;</span></dd></div>
+    <label for="c-street">Street</label>
+    <input id="c-street" value="Vestergade 1">
+    <div class="row">
+      <div>
+        <label for="c-zip">Postal code</label>
+        <input id="c-zip" value="8000">
+      </div>
+      <div>
+        <label for="c-city">City</label>
+        <input id="c-city" value="Aarhus">
+      </div>
+    </div>
+    <label for="c-shipping">Shipping method</label>
+    <select id="c-shipping">
+      <option>STANDARD</option><option>EXPRESS</option><option>PICKUP_POINT</option>
+    </select>
+    <label for="c-payment">Payment method</label>
+    <select id="c-payment">
+      <option>CREDIT_CARD</option><option>INVOICE</option>
+    </select>
+    <p></p>
+    <button onclick="addDetails()">Add shipping &amp; payment details</button>
+    <button class="primary" onclick="placeOrder()">Place order</button>
+  </section>
+
+  <section class="lane">
+    <h2>Order summary &mdash; four streams, one row</h2>
+    <dl class="kv">
+      <dt>Total</dt><dd id="s-total">&mdash;</dd>
+      <dt>Ship to</dt><dd id="s-address">&mdash;</dd>
+      <dt>Placed</dt><dd id="s-placed">&mdash;</dd>
+      <dt>Payment</dt><dd id="s-payment">&mdash;</dd>
+      <dt>Shipping</dt><dd id="s-shipping">&mdash;</dd>
+    </dl>
+    <div class="log" id="summary-log"></div>
+  </section>
+
+  <section class="lane wide">
+    <h2>Warehouse &mdash; shipping (to-do list, human trigger)</h2>
+    <table>
+      <thead><tr><th>Order</th><th>Ship to</th><th>Method</th><th></th></tr></thead>
+      <tbody id="packaging"><tr><td colspan="4" class="empty">nothing to pack</td></tr></tbody>
+    </table>
+    <p></p>
+    <button onclick="refreshWarehouse()">Refresh</button>
+    <span class="empty">Rows appear when <code>OrderPlaced</code> is projected, and leave when packaging is requested.</span>
+  </section>
+</div>
+
+<script>
+  // Ids are minted in the browser, exactly as the deciders' idempotency assumes: a retried call addresses the
+  // same basket or order instead of creating a second one.
+  const rid = (p) => p + '-' + Math.random().toString(36).slice(2, 10);
+  let basketId = rid('basket');
+  let orderId = null;
+
+  const api = async (method, path, body) => {
+    const res = await fetch(path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!res.ok && res.status !== 204 && res.status !== 404) {
+      log(method + ' ' + path + ' → ' + res.status);
+    }
+    const text = await res.text();
+    return { status: res.status, body: text ? JSON.parse(text) : null };
+  };
+
+  const log = (msg) => {
+    const el = document.getElementById('summary-log');
+    el.innerHTML = '<div><b>' + new Date().toLocaleTimeString() + '</b> ' + msg + '</div>' + el.innerHTML;
+  };
+
+  const show = (id, value) => document.getElementById(id).innerHTML = value;
+
+  function newBasket() {
+    basketId = rid('basket');
+    orderId = null;
+    show('order-id', '&mdash;');
+    refreshBasket();
+    log('new basket ' + basketId);
+  }
+
+  async function addProduct() {
+    const productId = rid('prod');
+    const price = Number(document.getElementById('p-price').value);
+    const res = await api('POST', '/api/products', {
+      id: productId, name: document.getElementById('p-name').value, price: price
+    });
+    log(res.status === 201 ? 'ProductAdded ' + productId : 'no event (already added)');
+    setTimeout(refreshCatalog, 400);
+  }
+
+  async function refreshCatalog() {
+    const { body } = await api('GET', '/api/products-for-sale');
+    const rows = (body || []).map(p => `
+      <tr><td>${p.name}<br><span class="mono">${p.productId}</span></td>
+          <td class="num">${p.price}</td>
+          <td><button onclick="addToBasket('${p.productId}', ${p.price})">Add</button></td></tr>`);
+    show('catalog', rows.join('') || '<tr><td colspan="3" class="empty">no products yet</td></tr>');
+  }
+
+  async function addToBasket(productId, price) {
+    await api('POST', '/api/shopping-baskets/' + basketId + '/items', { product: productId, price: price });
+    log('ItemAddedToShoppingBasket ' + productId);
+    setTimeout(refreshBasket, 400);
+  }
+
+  async function removeFromBasket(productId) {
+    const res = await api('DELETE', '/api/shopping-baskets/' + basketId + '/items/' + productId);
+    log(res.status === 204 ? 'ItemRemovedFromShoppingBasket ' + productId : 'no event (not in basket)');
+    setTimeout(refreshBasket, 400);
+  }
+
+  async function refreshBasket() {
+    show('basket-id', basketId);
+    const { body } = await api('GET', '/api/shopping-baskets/' + basketId);
+    const lines = (body && body.lines) || [];
+    const rows = lines.map(l => `
+      <tr><td><span class="mono">${l.productId}</span></td>
+          <td class="num">${l.quantity}</td>
+          <td class="num">${l.linePrice}</td>
+          <td><button onclick="removeFromBasket('${l.productId}')">Remove</button></td></tr>`);
+    show('basket', rows.join('') || '<tr><td colspan="4" class="empty">basket is empty</td></tr>');
+    show('basket-total', (body && body.total) || 0);
+  }
+
+  async function checkOut() {
+    const candidate = rid('order');
+    const { body } = await api('POST', '/api/shopping-baskets/' + basketId + '/checkout', { orderId: candidate });
+    orderId = (body && body.orderId) || candidate;
+    show('order-id', orderId);
+    log('CheckOutRequested → order ' + orderId + ', total ' + (body ? body.total : '?'));
+    setTimeout(refreshBasket, 400);
+    setTimeout(refreshSummary, 600);
+  }
+
+  const address = () => ({
+    street: document.getElementById('c-street').value,
+    postalCode: document.getElementById('c-zip').value,
+    city: document.getElementById('c-city').value,
+    countryCode: 'DK'
+  });
+
+  async function addDetails() {
+    if (!orderId) { log('check out first — there is no order yet'); return; }
+    await api('PUT', '/api/orders/' + orderId + '/shipping-details', {
+      shippingAddress: address(), shippingMethod: document.getElementById('c-shipping').value
+    });
+    await api('PUT', '/api/orders/' + orderId + '/payment-details', {
+      invoiceAddress: address(), paymentMethod: document.getElementById('c-payment').value
+    });
+    log('ShippingDetailsAdded + PaymentDetailsAdded');
+    setTimeout(refreshSummary, 600);
+  }
+
+  async function placeOrder() {
+    if (!orderId) { log('check out first — there is no order yet'); return; }
+    await api('POST', '/api/orders/' + orderId + '/place');
+    log('OrderPlaced — payment hold and packaging list follow asynchronously');
+    // Poll rather than assume: the automation and both projections run on their own subscriptions.
+    [700, 1500, 3000].forEach(ms => setTimeout(() => { refreshSummary(); refreshWarehouse(); }, ms));
+  }
+
+  async function refreshSummary() {
+    if (!orderId) return;
+    const { status, body } = await api('GET', '/api/orders/' + orderId + '/summary');
+    if (status === 404 || !body) { show('s-total', '<span class="empty">not projected yet</span>'); return; }
+    show('s-total', body.total === null ? '&mdash;' : body.total);
+    show('s-address', body.shippingAddress || '&mdash;');
+    show('s-placed', body.placed ? '<span class="badge ok">yes</span>' : '<span class="badge">no</span>');
+    const pay = body.paymentStatus;
+    show('s-payment', '<span class="badge ' + (pay === 'HELD' ? 'ok' : pay === 'REJECTED' ? 'warn' : '') + '">'
+      + pay + '</span>');
+    show('s-shipping', '<span class="badge ' + (body.shippingStatus.startsWith('SHIPPED') ? 'ok' : '') + '">'
+      + body.shippingStatus + '</span>');
+  }
+
+  async function refreshWarehouse() {
+    const { body } = await api('GET', '/api/shipping/orders-ready-for-packaging');
+    const rows = (body || []).map(o => `
+      <tr><td><span class="mono">${o.orderId}</span></td>
+          <td>${o.shippingAddress}</td>
+          <td>${o.shippingMethod}</td>
+          <td><button onclick="packageOrder('${o.orderId}')">Package</button>
+              <button onclick="shipOrder('${o.orderId}')">Ship</button></td></tr>`);
+    show('packaging', rows.join('') || '<tr><td colspan="4" class="empty">nothing to pack</td></tr>');
+  }
+
+  async function packageOrder(id) {
+    await api('POST', '/api/shipping/orders/' + id + '/package');
+    log('OrderPackagingRequested ' + id);
+    setTimeout(() => { refreshWarehouse(); refreshSummary(); }, 700);
+  }
+
+  async function shipOrder(id) {
+    await api('POST', '/api/shipping/orders/' + id + '/ship',
+      { trackingNumber: 'TRACK-' + Math.floor(Math.random() * 100000) });
+    log('OrderShipped ' + id + ' — also published to Kafka');
+    setTimeout(() => { refreshWarehouse(); refreshSummary(); }, 700);
+  }
+
+  refreshCatalog();
+  refreshBasket();
+  refreshWarehouse();
+</script>
+</body>
+</html>

@@ -1,0 +1,1753 @@
+<meta charset="utf-8">
+<title>From Whiteboard To Event Store</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  /* Deliberately single visual world: an exchange terminal, painted explicitly so the
+     deck looks identical on any host theme. A projected deck must not change appearance
+     because the presenting machine's OS is set to light. The [data-mode="handout"]
+     block below is an author-provided light palette for printing and bright rooms. */
+  --ground:    #0B0F17;
+  --surface:   #131A26;
+  --surface-2: #0E141F;
+  --rule:      #232D3D;
+  --rule-soft: #1A222F;
+  --ink:       #E6EBF2;
+  --ink-dim:   #8A97AB;
+  --ink-faint: #5C6879;
+  --accent:    #F2A33C;
+  --accent-dim:#8A6427;
+  --gain:      #4FA870;
+  --cost:      #C9565A;
+  --code-str:  #9FC6A6;
+  --code-kw:   #C9A2E0;
+  --code-type: #7FB6D6;
+  --code-ann:  #F2A33C;
+  --code-com:  #5C6879;
+
+  --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-body:    "Newsreader", Georgia, "Times New Roman", serif;
+  --f-mono:    "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+:root[data-mode="handout"] {
+  --ground:    #F7F6F3;
+  --surface:   #FFFFFF;
+  --surface-2: #EFEDE8;
+  --rule:      #D2CEC4;
+  --rule-soft: #E3E0D8;
+  --ink:       #16202E;
+  --ink-dim:   #5A6675;
+  --ink-faint: #8D97A4;
+  --accent:    #B06A11;
+  --accent-dim:#D9B57E;
+  --gain:      #2F6F48;
+  --cost:      #9A2F34;
+  --code-str:  #2F6F48;
+  --code-kw:   #6D3C93;
+  --code-type: #1C5D85;
+  --code-ann:  #B06A11;
+  --code-com:  #8D97A4;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--ground);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--f-body);
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ---- language switching --------------------------------------------------
+   Danish is hidden by the base rule so the deck never flashes both languages
+   before the script sets data-lang on the root element. */
+[lang="da"] { display: none; }
+html[data-lang="da"] [lang="da"] { display: revert; }
+html[data-lang="da"] [lang="en"] { display: none; }
+
+/* ---- stage --------------------------------------------------------------- */
+#stage {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+#canvas {
+  position: relative;
+  width: min(100%, 1600px);
+  aspect-ratio: 16 / 9;
+  max-height: calc(100vh - 48px);
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  container-type: size;
+  overflow: hidden;
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  gap: 2.2cqh;
+  padding: 6cqh 5cqw 9cqh;
+  animation: rise 140ms ease-out;
+  /* A slide that grows past the canvas scrolls rather than clipping silently. */
+  overflow-y: auto;
+}
+.slide.on { display: flex; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(0.8cqh); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .slide { animation: none; }
+}
+
+/* ---- type ---------------------------------------------------------------- */
+.eyebrow {
+  font-family: var(--f-mono);
+  font-size: 1.55cqh;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.eyebrow .sep { color: var(--ink-faint); margin: 0 0.6em; }
+.eyebrow .plain { color: var(--ink-faint); }
+
+h1 {
+  font-family: var(--f-display);
+  font-weight: 800;
+  font-size: 8.4cqh;
+  line-height: 0.98;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  margin: 0;
+}
+h2 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 4.6cqh;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  margin: 0;
+}
+h3 {
+  font-family: var(--f-mono);
+  font-weight: 600;
+  font-size: 1.75cqh;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin: 0;
+}
+
+p, li {
+  font-size: 2.5cqh;
+  line-height: 1.45;
+  font-weight: 300;
+  margin: 0;
+  max-width: 62ch;
+}
+p.lede { font-size: 3.1cqh; }
+p.small, li.small { font-size: 2.1cqh; }
+em { color: var(--accent); font-style: italic; }
+strong { font-weight: 400; color: var(--ink); border-bottom: 1px solid var(--accent-dim); }
+
+ul { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: 1.1cqh; }
+ul.tight { gap: 0.6cqh; }
+li::marker { color: var(--accent-dim); }
+
+code, .mono { font-family: var(--f-mono); font-size: 0.9em; }
+p code, li code, td code { color: var(--accent); }
+
+/* ---- layout helpers ------------------------------------------------------ */
+.row { display: flex; gap: 3cqw; align-items: flex-start; }
+.row > .half { flex: 1 1 0; min-width: 0; }
+.row.grow { flex: 1 1 auto; min-height: 0; }
+.col { display: flex; flex-direction: column; gap: 2cqh; min-width: 0; }
+.spread { flex: 1 1 auto; }
+.center { justify-content: center; }
+
+/* ---- code panel ---------------------------------------------------------- */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.panel > figcaption {
+  font-family: var(--f-mono);
+  font-size: 1.5cqh;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  padding: 1.1cqh 1.4cqw;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface-2);
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+}
+.panel > figcaption .path { color: var(--ink-faint); }
+.panel pre {
+  margin: 0;
+  padding: 1.6cqh 1.4cqw;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+.panel code {
+  font-family: var(--f-mono);
+  font-size: 1.72cqh;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre;
+  tab-size: 4;
+}
+.panel.sm code { font-size: 1.5cqh; }
+.panel.lg code { font-size: 1.95cqh; }
+
+.tok-com { color: var(--code-com); font-style: italic; }
+.tok-str { color: var(--code-str); }
+.tok-kw  { color: var(--code-kw); }
+.tok-typ { color: var(--code-type); }
+.tok-ann { color: var(--code-ann); }
+.tok-num { color: var(--code-str); }
+
+/* ---- newcomer gloss ------------------------------------------------------
+   Plain-language restatement for the half of the room that has never worked
+   on an event-sourced system. Used only where the concept is genuinely new,
+   not as decoration on every slide. */
+.gloss {
+  border-left: 2px solid var(--accent-dim);
+  padding-left: 1.2cqw;
+  font-size: 2.05cqh;
+  line-height: 1.4;
+  font-weight: 300;
+  color: var(--ink-dim);
+  max-width: 62ch;
+}
+.gloss b {
+  display: block;
+  font-family: var(--f-mono);
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 0;
+  margin-bottom: 0.45em;
+}
+
+/* ---- trade-off block ----------------------------------------------------- */
+.tradeoff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+.tradeoff > div { padding: 1.8cqh 1.6cqw; display: flex; flex-direction: column; gap: 0.9cqh; }
+.tradeoff > div + div { border-left: 1px solid var(--rule); }
+.tradeoff h3 { font-size: 1.55cqh; }
+.tradeoff .gain h3 { color: var(--gain); }
+.tradeoff .cost h3 { color: var(--cost); }
+.tradeoff p { font-size: 2.1cqh; max-width: none; }
+
+/* ---- data table ---------------------------------------------------------- */
+.tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 1.95cqh; }
+th, td { text-align: left; padding: 1.1cqh 1.2cqw; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+th {
+  font-family: var(--f-mono);
+  font-size: 1.45cqh;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+td { font-weight: 300; }
+tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; color: var(--accent); white-space: nowrap; }
+
+/* ---- ticker / big statement --------------------------------------------- */
+.statement {
+  font-family: var(--f-display);
+  font-weight: 500;
+  font-size: 3.4cqh;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  max-width: 46ch;
+}
+.kicker {
+  font-family: var(--f-mono);
+  font-size: 1.6cqh;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.chain { display: flex; align-items: center; gap: 1cqw; flex-wrap: wrap; font-family: var(--f-mono); font-size: 1.9cqh; }
+.chain .node { border: 1px solid var(--rule); background: var(--surface); padding: 1cqh 1.1cqw; color: var(--ink); }
+.chain .node b { display: block; font-weight: 400; font-size: 0.78em; color: var(--ink-faint); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.35em; }
+.chain .arrow { color: var(--accent); }
+
+/* ---- rail ---------------------------------------------------------------- */
+#rail {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 5.6cqh;
+  border-top: 1px solid var(--rule);
+  background: var(--ground);
+  display: flex;
+  align-items: center;
+  gap: 1.6cqw;
+  padding: 0 1.6cqw;
+  font-family: var(--f-mono);
+  font-size: 1.5cqh;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+#rail .act { color: var(--accent); text-transform: uppercase; }
+#rail .fill { flex: 1 1 auto; }
+#rail .bar { position: absolute; left: 0; top: -1px; height: 1px; background: var(--accent); }
+#rail b { font-weight: 500; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
+/* ---- controls ------------------------------------------------------------ */
+#ctrl {
+  position: absolute;
+  top: 1.6cqh; right: 1.4cqw;
+  display: flex;
+  gap: 0.6cqw;
+  z-index: 5;
+}
+#ctrl button {
+  font-family: var(--f-mono);
+  font-size: 1.45cqh;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--rule);
+  padding: 0.7cqh 0.8cqw;
+  cursor: pointer;
+}
+#ctrl button:hover { color: var(--accent); border-color: var(--accent-dim); }
+#ctrl button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#ctrl button[aria-pressed="true"] { color: var(--ground); background: var(--accent); border-color: var(--accent); }
+
+#note {
+  position: absolute;
+  left: 0; right: 0; bottom: 5.6cqh;
+  background: var(--surface);
+  border-top: 1px solid var(--accent-dim);
+  padding: 1.6cqh 1.6cqw;
+  font-size: 2cqh;
+  font-weight: 300;
+  color: var(--ink-dim);
+  display: none;
+  z-index: 4;
+}
+#note.on { display: block; }
+#note b { color: var(--accent); border: 0; font-family: var(--f-mono); font-size: 0.8em; letter-spacing: 0.1em; text-transform: uppercase; display: block; margin-bottom: 0.5em; }
+
+#help {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--ground) 94%, transparent);
+  display: none;
+  place-items: center;
+  z-index: 10;
+}
+#help.on { display: grid; }
+#help dl {
+  font-family: var(--f-mono);
+  font-size: 2cqh;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 1.2cqh 2cqw;
+  margin: 0;
+}
+#help dt { color: var(--accent); }
+#help dd { margin: 0; color: var(--ink-dim); }
+
+svg .lane { fill: var(--surface); stroke: var(--rule); }
+svg .lbl { font-family: var(--f-mono); font-size: 15px; fill: var(--ink); }
+svg .lbl-dim { font-family: var(--f-mono); font-size: 11px; fill: var(--ink-faint); letter-spacing: 1.2px; }
+svg .flow { stroke: var(--accent); fill: none; }
+svg .flow-head { fill: var(--accent); }
+</style>
+
+<div id="stage">
+<div id="canvas">
+
+<div id="ctrl">
+  <button id="langBtn" type="button" title="Language">EN / DA</button>
+  <button id="modeBtn" type="button" aria-pressed="false" title="Handout (light) mode">HANDOUT</button>
+  <button id="noteBtn" type="button" aria-pressed="false" title="Speaker note (N)">NOTE</button>
+  <button id="apxBtn" type="button" title="Appendix &mdash; on demand (A)">APPX</button>
+  <button id="helpBtn" type="button" title="Keys (?)">?</button>
+</div>
+
+<section class="slide" data-act="Title" data-min="0"
+  data-note-en="Start the clock here (T). Say the slot length out loud so the room knows there is time for questions at the end. One sentence of framing: this is the same material as Module 6, with the code that implements it."
+  data-note-da="Start uret her (T). Sig slottets laengde hoejt, saa rummet ved der er tid til spoergsmaal til sidst. En saetning som ramme: det er samme materiale som Modul 6, med koden der implementerer det.">
+  <div class="spread"></div>
+  <div class="eyebrow"><span lang="en">Trustworks Essentials</span><span lang="da">Trustworks Essentials</span><span class="sep">/</span><span class="plain">Event Modeling &middot; Event Sourcing &middot; CQRS</span></div>
+  <h1><span lang="en">From Whiteboard<br>To Event Store</span><span lang="da">Fra Whiteboard<br>Til Event Store</span></h1>
+  <p class="lede" lang="en">Module 6, with the running code underneath it &mdash; one webshop, three bounded contexts, and every pattern from the model shown as something that compiles.</p>
+  <p class="lede" lang="da">Modul 6, med den kørende kode under &mdash; én webshop, tre bounded contexts, og hvert mønster fra modellen vist som noget der kan kompilere.</p>
+  <div class="spread"></div>
+  <div class="kicker"><span lang="en">36 minutes, then questions</span><span lang="da">36 minutter, derefter spørgsmål</span></div>
+</section>
+
+<!-- =================================================================== 01 -->
+<section class="slide" data-act="0 &mdash; Hook" data-min="1.5"
+  data-note-en="Ask the room: who has been asked why a price is what it is, and could not answer? Do not defend event sourcing yet - just let the question sit. The row on the right is what most systems keep."
+  data-note-da="Spoerg rummet: hvem er blevet spurgt hvorfor en pris er som den er, og kunne ikke svare? Forsvar ikke event sourcing endnu - lad spoergsmaalet staa. Raekken til hoejre er hvad de fleste systemer gemmer.">
+  <div class="eyebrow"><span lang="en">The problem</span><span lang="da">Problemet</span></div>
+  <h2><span lang="en">&ldquo;Why is this product 1,999.50?&rdquo;</span><span lang="da">&ldquo;Hvorfor koster dette produkt 1.999,50?&rdquo;</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="half col center">
+      <ul class="tight">
+        <li lang="en">Since when?</li><li lang="da">Siden hvornår?</li>
+        <li lang="en">What was it before?</li><li lang="da">Hvad var den før?</li>
+        <li lang="en">Who changed it, and was that a campaign?</li><li lang="da">Hvem ændrede den, og var det en kampagne?</li>
+        <li lang="en">What did the customer who ordered on the 3rd actually pay?</li><li lang="da">Hvad betalte kunden der bestilte den 3. egentlig?</li>
+      </ul>
+      <p lang="en"><strong>An <code>UPDATE</code> answered none of these, and it never will.</strong></p>
+      <p lang="da"><strong>Et <code>UPDATE</code> besvarede ingen af dem, og gør det aldrig.</strong></p>
+    </div>
+    <figure class="panel half">
+      <figcaption><span>the audit trail you actually have</span><span class="path">products</span></figcaption>
+      <pre><code class="plain">product_id  name               price
+----------  -----------------  --------
+PRD-7f3a    Espresso machine   1999.50
+
+-- and that is the entire history</code></pre>
+    </figure>
+  </div>
+</section>
+
+<!-- =================================================================== 02 -->
+<section class="slide" data-act="0 &mdash; Hook" data-min="0.5"
+  data-note-en="One breath per line. This is the map, not content. If you are behind at Act 4, cut slide 19 (collaborative domains) and slide 22 (IT-Ops), not the demo."
+  data-note-da="Et aandedrag pr. linje. Dette er kortet, ikke indhold. Er du bagud ved Akt 4, skaer slide 19 (kollaborative domaener) og slide 22 (IT-Ops), ikke demoen.">
+  <div class="eyebrow"><span lang="en">Where we are going</span><span lang="da">Hvor vi skal hen</span></div>
+  <h2><span lang="en">Six acts</span><span lang="da">Seks akter</span></h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th><span lang="en">Act</span><span lang="da">Akt</span></th>
+        <th><span lang="en">Subject</span><span lang="da">Emne</span></th>
+        <th><span lang="en">Min</span><span lang="da">Min</span></th>
+      </tr></thead>
+      <tbody>
+        <tr><td class="num">1</td><td><span lang="en">From conversation to model &mdash; storming, building blocks, slices</span><span lang="da">Fra samtale til model &mdash; storming, byggeklodser, slices</span></td><td class="num">7</td></tr>
+        <tr><td class="num">2</td><td><span lang="en">Event sourcing: the write side</span><span lang="da">Event sourcing: skrivesiden</span></td><td class="num">9</td></tr>
+        <tr><td class="num">3</td><td><span lang="en">View projections: the read side</span><span lang="da">View-projektioner: læsesiden</span></td><td class="num">5.5</td></tr>
+        <tr><td class="num">4</td><td><span lang="en">CQRS, briefly</span><span lang="da">CQRS, kort</span></td><td class="num">4</td></tr>
+        <tr><td class="num">5</td><td><span lang="en">Automations, integrations, the dual write</span><span lang="da">Automatiseringer, integrationer, dual write</span></td><td class="num">5.5</td></tr>
+        <tr><td class="num">6</td><td><span lang="en">Demo, limits, and how to start</span><span lang="da">Demo, grænser, og hvordan man starter</span></td><td class="num">3</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small" lang="en">Every code panel is real code from <code>examples/essentials-webshop-demo</code> &mdash; Kotlin, running against PostgreSQL and Kafka.</p>
+  <p class="small" lang="da">Hvert kodepanel er rigtig kode fra <code>examples/essentials-webshop-demo</code> &mdash; Kotlin, kørende mod PostgreSQL og Kafka.</p>
+</section>
+
+<!-- =================================================================== 03 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1.5"
+  data-note-en="Event storming in one slide, because the workshop mechanics are in the appendix (press A). The point to land: the events are discovered by talking, in past tense, before anyone opens an IDE. Invite people with questions and people with answers."
+  data-note-da="Event storming paa én slide, fordi workshop-mekanikken ligger i appendiks (tryk A). Pointen: eventene opdages ved at tale, i datid, foer nogen aabner en IDE. Inviter folk med spoergsmaal og folk med svar.">
+  <div class="eyebrow"><span lang="en">How events are discovered</span><span lang="da">Hvordan events opdages</span></div>
+  <h2><span lang="en">Nobody guesses the events. You ask.</span><span lang="da">Ingen gætter eventene. Man spørger.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <p lang="en"><strong>Event storming</strong> puts the people with questions and the people with answers in one room, with unlimited wall space and one rule: write what <em>has happened</em>, in the past tense, on an orange sticky.</p>
+      <p lang="da"><strong>Event storming</strong> sætter folk med spørgsmål og folk med svar i samme rum, med uendelig vægplads og én regel: skriv hvad der <em>er sket</em>, i datid, på en orange seddel.</p>
+      <p lang="en">Then the disagreements surface by themselves. Two people mean different things by &ldquo;order&rdquo;, and the boundary between <code>sales</code> and <code>shipping</code> draws itself.</p>
+      <p lang="da">Så dukker uenighederne op af sig selv. To personer mener noget forskelligt med &ldquo;ordre&rdquo;, og grænsen mellem <code>sales</code> og <code>shipping</code> tegner sig selv.</p>
+      <div class="gloss">
+        <b><span lang="en">Why past tense matters</span><span lang="da">Hvorfor datid betyder noget</span></b>
+        <span lang="en">&ldquo;Place order&rdquo; is a wish &mdash; it can still be refused. <code>OrderPlaced</code> is a fact: it happened, and no later code gets to change that. The whole architecture follows from taking that distinction seriously.</span>
+        <span lang="da">&ldquo;Afgiv ordre&rdquo; er et ønske &mdash; det kan stadig afvises. <code>OrderPlaced</code> er et faktum: det skete, og ingen senere kode kan ændre det. Hele arkitekturen følger af at tage den forskel alvorligt.</span>
+      </div>
+    </div>
+    <div class="col" style="flex:0.85 1 0">
+      <div class="chain" style="flex-direction:column; align-items:stretch">
+        <div class="node"><b><span lang="en">Orange</span><span lang="da">Orange</span></b>ItemAddedToShoppingBasket</div>
+        <div class="node"><b><span lang="en">Orange</span><span lang="da">Orange</span></b>CheckOutRequested</div>
+        <div class="node"><b><span lang="en">Orange</span><span lang="da">Orange</span></b>OrderPlaced</div>
+        <div class="node"><b><span lang="en">Orange</span><span lang="da">Orange</span></b>CreditCardHoldRejected</div>
+      </div>
+      <p class="small" lang="en">Four of the twelve events in the demo. The fourth one is the interesting one: somebody in the room knew that cards get declined, and that it is a business fact rather than an error.</p>
+      <p class="small" lang="da">Fire af demoens tolv events. Det fjerde er det interessante: nogen i rummet vidste at kort bliver afvist, og at det er et forretningsfaktum, ikke en fejl.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 04 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1.5"
+  data-note-en="Point at each box in order, and name the four sticky colours as you go. The order is the point: the command is a request, the decider is the decision, the event is the fact, the view is the answer. Replay is the dashed line - the same events rebuild whatever you need."
+  data-note-da="Peg paa hver kasse i raekkefoelge, og navngiv de fire seddelfarver undervejs. Raekkefoelgen er pointen: kommandoen er en anmodning, decideren er beslutningen, eventet er faktum, viewet er svaret. Replay er den stiplede linje - de samme events genopbygger hvad du har brug for.">
+  <div class="eyebrow"><span lang="en">Event modeling</span><span lang="da">Event modeling</span></div>
+  <h2><span lang="en">Four building blocks, and one timeline</span><span lang="da">Fire byggeklodser, og én tidslinje</span></h2>
+  <div class="row grow center" style="align-items:center">
+    <svg viewBox="0 0 1180 300" width="100%" role="img" aria-label="Event model: trigger, command, event, view">
+      <rect class="lane" x="4"    y="70" width="230" height="90"/>
+      <rect class="lane" x="320"  y="70" width="230" height="90"/>
+      <rect class="lane" x="636"  y="70" width="230" height="90"/>
+      <rect class="lane" x="944"  y="70" width="232" height="90"/>
+
+      <text class="lbl-dim" x="18"   y="58">TRIGGER &mdash; UI, API, JOB</text>
+      <text class="lbl-dim" x="334"  y="58">COMMAND (BLUE)</text>
+      <text class="lbl-dim" x="650"  y="58">EVENT (ORANGE)</text>
+      <text class="lbl-dim" x="958"  y="58">VIEW (GREEN)</text>
+
+      <text class="lbl" x="18"   y="112">&ldquo;Place order&rdquo;</text>
+      <text class="lbl" x="334"  y="112">PlaceOrder</text>
+      <text class="lbl" x="650"  y="112">OrderPlaced</text>
+      <text class="lbl" x="958"  y="112">order_summary</text>
+
+      <text class="lbl-dim" x="18"   y="140">SOMEBODY WANTS SOMETHING</text>
+      <text class="lbl-dim" x="334"  y="140">AN INTENTION, STILL REFUSABLE</text>
+      <text class="lbl-dim" x="650"  y="140">A FACT, KEPT FOREVER</text>
+      <text class="lbl-dim" x="958"  y="140">THE ANSWER, READY TO READ</text>
+
+      <path class="flow" d="M238 115 H312"/><path class="flow-head" d="M312 110 l12 5 -12 5 z"/>
+      <path class="flow" d="M554 115 H628"/><path class="flow-head" d="M628 110 l12 5 -12 5 z"/>
+      <path class="flow" d="M870 115 H936"/><path class="flow-head" d="M936 110 l12 5 -12 5 z"/>
+
+      <path class="flow" d="M752 168 V218 H119 V164" stroke-dasharray="4 5"/>
+      <path class="flow-head" d="M114 164 l5 -12 5 12 z"/>
+      <text class="lbl-dim" x="300" y="238">REPLAY: THE SAME EVENTS REBUILD EVERY VIEW, AND EVERY DECISION</text>
+    </svg>
+  </div>
+  <div class="row" style="align-items:flex-start">
+    <div class="gloss" style="flex:1 1 0">
+      <b><span lang="en">The two words to know</span><span lang="da">De to ord man skal kende</span></b>
+      <span lang="en"><strong>Event-sourced</strong> means we store the decisions instead of the result: the row is not the truth, the list of events is, and current state is what you get by replaying them. A <strong>stream</strong> is one thing's list &mdash; one basket, one order &mdash; and it is also the unit a transaction covers.</span>
+      <span lang="da"><strong>Event-sourced</strong> betyder at vi gemmer beslutningerne i stedet for resultatet: rækken er ikke sandheden, listen af events er, og nuværende tilstand er hvad man får ved at replaye dem. En <strong>stream</strong> er én tings liste &mdash; én kurv, én ordre &mdash; og den er også enheden en transaktion dækker.</span>
+    </div>
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en">Drawn on a wall with the business, left to right in time. <em>Then</em> we open the IDE.</p>
+      <p lang="da">Tegnet på en væg sammen med forretningen, fra venstre mod højre i tid. <em>Derefter</em> åbner vi IDE'en.</p>
+      <p class="small" lang="en">The demo's model is twelve events across three contexts. It fits on one wall.</p>
+      <p class="small" lang="da">Demoens model er tolv events på tværs af tre kontekster. Den kan være på én væg.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 05 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1.5"
+  data-note-en="Three patterns, and they are the only three. Say the number: every one of the sixteen slices in the demo is one of these. The automation pattern is the one people have not met before - an event lands, it becomes a piece of work, something picks the work up."
+  data-note-da="Tre moenstre, og der er kun de tre. Sig tallet: hver af demoens seksten slices er ét af dem. Automation-moenstret er det folk ikke har moedt foer - et event lander, det bliver et stykke arbejde, noget tager arbejdet op.">
+  <div class="eyebrow"><span lang="en">The power of patterns</span><span lang="da">Mønstrenes styrke</span></div>
+  <h2><span lang="en">Three patterns, repeated everywhere</span><span lang="da">Tre mønstre, gentaget overalt</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <h3><span lang="en">Command</span><span lang="da">Command</span></h3>
+      <div class="chain"><span class="node">Trigger</span><span class="arrow">&rarr;</span><span class="node">Command</span><span class="arrow">&rarr;</span><span class="node">Event</span></div>
+      <p class="small" lang="en">Somebody wants something, and the system decides. <code>RequestCheckOut</code> &rarr; <code>CheckOutRequested</code>.</p>
+      <p class="small" lang="da">Nogen vil noget, og systemet beslutter. <code>RequestCheckOut</code> &rarr; <code>CheckOutRequested</code>.</p>
+      <h3><span lang="en">View</span><span lang="da">View</span></h3>
+      <div class="chain"><span class="node">Event(s)</span><span class="arrow">&rarr;</span><span class="node">View</span></div>
+      <p class="small" lang="en">Events become an answer shaped for one screen. <code>ProductAdded</code> &rarr; <code>products_for_sale</code>.</p>
+      <p class="small" lang="da">Events bliver et svar formet til én skærm. <code>ProductAdded</code> &rarr; <code>products_for_sale</code>.</p>
+    </div>
+    <div class="col" style="flex:1.05 1 0">
+      <h3><span lang="en">Automation</span><span lang="da">Automation</span></h3>
+      <div class="chain" style="flex-direction:column; align-items:stretch">
+        <div class="node"><b>EVENT</b>OrderPlaced</div>
+        <div class="node"><b><span lang="en">TO-DO STATE</span><span lang="da">TO-DO TILSTAND</span></b>orders_awaiting_hold</div>
+        <div class="node"><b><span lang="en">TRIGGER</span><span lang="da">TRIGGER</span></b><span lang="en">the policy, or a person</span><span lang="da">policyen, eller et menneske</span></div>
+        <div class="node"><b>COMMAND</b>PlaceHoldOnCreditCard</div>
+        <div class="node"><b>EVENT</b>CreditCardHoldPlaced</div>
+      </div>
+      <p class="small" lang="en"><strong>The same shape whether a machine or a human closes the loop.</strong> In the demo, payment drains its list automatically; the warehouse screen is a list a person drains.</p>
+      <p class="small" lang="da"><strong>Samme form, uanset om en maskine eller et menneske lukker sløjfen.</strong> I demoen tømmer payment sin liste automatisk; lagerskærmen er en liste et menneske tømmer.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 06 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1.5"
+  data-note-en="The model's boxes become directories. Say the number out loud: sixteen slices, three contexts, and not one folder called service or repository. Then point at the swimlanes: the three contexts are the three lanes on the wall, and each owns its own streams."
+  data-note-da="Modellens kasser bliver mapper. Sig tallet hoejt: seksten slices, tre kontekster, og ikke én mappe der heder service eller repository. Peg derefter paa swimlanes: de tre kontekster er de tre baner paa vaeggen, og hver ejer sine egne streams.">
+  <div class="eyebrow"><span lang="en">Slices and swimlanes</span><span lang="da">Slices og swimlanes</span></div>
+  <h2><span lang="en">The model, as directories</span><span lang="da">Modellen, som mapper</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.15 1 0">
+      <figcaption><span>one lane, its slices</span><span class="path">examples/essentials-webshop-demo/&hellip;/webshop/</span></figcaption>
+      <pre><code class="plain">sales/                          shipping/
+  events/                         events/
+  types/                          types/
+  routing/                        routing/
+  config/                         config/
+  use_cases/                      use_cases/
+    add_product/                    package_order/
+    change_product_price/           ship_order/
+    add_item_to_shopping_basket/  views/
+    remove_item_from_basket/        orders_ready_for_packaging/
+    request_checkout/             external_systems/
+    add_shipping_details/           order_management/outgoing/
+    add_payment_details/
+    place_order/                  payment/
+  views/                            use_cases/
+    products_for_sale/                place_hold_on_credit_card/
+    shopping_basket/                automations/
+    order_summary/                    hold_funds_on_order_placed/
+                                    external_systems/payment_gateway/</code></pre>
+    </figure>
+    <div class="col" style="flex:0.85 1 0">
+      <p lang="en"><strong>A slice is one unit of business value</strong>, end to end: the command, the decision, the endpoint, the test. Small enough to finish, complete enough to demo.</p>
+      <p lang="da"><strong>En slice er én enhed af forretningsværdi</strong>, ende til ende: kommandoen, beslutningen, endpointet, testen. Lille nok at blive færdig med, komplet nok at demonstrere.</p>
+      <p lang="en">The three top-level folders are the swimlanes from the wall. Each owns its own event streams; they share <em>events</em> and one identifier, nothing else.</p>
+      <p lang="da">De tre øverste mapper er swimlanes fra væggen. Hver ejer sine egne event streams; de deler <em>events</em> og én identifikator, intet andet.</p>
+      <p class="small" lang="en">No <code>services/</code>, no <code>repositories/</code>, no <code>controllers/</code>. Adding a use case adds a directory &mdash; it does not grow an existing class.</p>
+      <p class="small" lang="da">Ingen <code>services/</code>, ingen <code>repositories/</code>, ingen <code>controllers/</code>. En ny use case tilføjer en mappe &mdash; den udvider ikke en eksisterende klasse.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 07 -->
+<section class="slide" data-act="1 &mdash; Modeling" data-min="1"
+  data-note-en="Read the Given/When/Then aloud from the model, then point at the test and say: that is the same sentence. Emphasise what is absent - no database, no Spring, no mocks - and that thirty of these run in a third of a second."
+  data-note-da="Laes Given/When/Then hoejt fra modellen, peg derefter paa testen og sig: det er samme saetning. Fremhaev hvad der mangler - ingen database, ingen Spring, ingen mocks - og at tredive af dem koerer paa en tredjedel af et sekund.">
+  <div class="eyebrow"><span lang="en">Testing comes out of the model</span><span lang="da">Test kommer ud af modellen</span></div>
+  <h2><span lang="en">The acceptance criteria, as written on the wall</span><span lang="da">Acceptkriterierne, som skrevet på væggen</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:0.85 1 0">
+      <div class="chain" style="flex-direction:column; align-items:stretch">
+        <div class="node"><b>GIVEN</b><span lang="en">a product was added at 125.95</span><span lang="da">et produkt blev tilføjet til 125,95</span></div>
+        <div class="node"><b>WHEN</b><span lang="en">the price is changed to 100.00</span><span lang="da">prisen ændres til 100,00</span></div>
+        <div class="node"><b>THEN</b><span lang="en">ProductPriceChanged(100.00)</span><span lang="da">ProductPriceChanged(100,00)</span></div>
+      </div>
+      <p lang="en">Written with the business, before the implementation. It is not a translation of the code &mdash; the code is a translation of it.</p>
+      <p lang="da">Skrevet sammen med forretningen, før implementeringen. Det er ikke en oversættelse af koden &mdash; koden er en oversættelse af det.</p>
+      <p class="small" lang="en">30 tests like this, 0.3 seconds, no Docker.</p>
+      <p class="small" lang="da">30 tests som denne, 0,3 sekunder, ingen Docker.</p>
+    </div>
+    <figure class="panel" style="flex:1.15 1 0">
+      <figcaption><span>the same sentence, in Kotlin</span><span class="path">change_product_price/ChangeProductPriceDeciderTest.kt</span></figcaption>
+      <pre><code class="kotlin">@Test
+fun `Changing the price`() {
+    val productId = ProductId.random()
+
+    scenario
+        .given(ProductAdded(productId, "Test product", Amount.of("125.95")))
+        .when_(ChangeProductPrice(productId, Amount.of("100.00")))
+        .then_(ProductPriceChanged(productId, Amount.of("100.00")))
+}</code></pre>
+    </figure>
+  </div>
+</section>
+<section class="slide" data-act="2 &mdash; Write side" data-min="1"
+  data-note-en="Two naming rules, and they carry weight. Imperative for a request that can be refused, past tense for a fact that cannot. Point out that the event carries the price: whatever a reader needs must be in the event, because the reader cannot ask."
+  data-note-da="To navngivningsregler, og de baerer vaegt. Imperativ for en anmodning der kan afvises, datid for et faktum der ikke kan. Peg paa at eventet baerer prisen: hvad en laeser har brug for skal staa i eventet, for laeseren kan ikke spoerge.">
+  <div class="eyebrow"><span lang="en">Commands and events</span><span lang="da">Commands og events</span></div>
+  <h2><span lang="en">Imperative, then past tense</span><span lang="da">Imperativ, derefter datid</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>a request &mdash; can still be refused</span><span class="path">use_cases/change_product_price/ChangeProductPrice.kt</span></figcaption>
+      <pre><code class="kotlin">data class AddProduct(
+    override val id: ProductId,
+    val name: String,
+    val price: Amount
+) : ProductCommand
+
+data class ChangeProductPrice(
+    override val id: ProductId,
+    val price: Amount
+) : ProductCommand</code></pre>
+    </figure>
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>a fact &mdash; kept forever</span><span class="path">sales/events/ProductEvent.kt</span></figcaption>
+      <pre><code class="kotlin">sealed interface ProductEvent {
+    val id: ProductId
+}
+
+data class ProductAdded(
+    override val id: ProductId,
+    val name: String,
+    override val price: Amount
+) : ProductEvent, HasProductPrice
+
+data class ProductPriceChanged(
+    override val id: ProductId,
+    override val price: Amount
+) : ProductEvent, HasProductPrice</code></pre>
+    </figure>
+  </div>
+  <div class="gloss">
+    <b><span lang="en">The naming is not cosmetic</span><span lang="da">Navngivningen er ikke kosmetisk</span></b>
+    <span lang="en">An event has to carry everything its readers need, because a reader cannot ask a question of the past. When <code>ItemRemovedFromShoppingBasket</code> did not carry the price of the unit removed, the basket view and the checkout total each had to guess &mdash; and both got it wrong when two units went in at different prices.</span>
+    <span lang="da">Et event skal bære alt hvad dets læsere har brug for, for en læser kan ikke stille fortiden et spørgsmål. Da <code>ItemRemovedFromShoppingBasket</code> ikke bar prisen på den fjernede enhed, måtte kurv-viewet og checkout-totalen hver gætte &mdash; og begge tog fejl når to enheder var tilføjet til forskellige priser.</span>
+  </div>
+</section>
+
+<!-- =================================================================== 09 -->
+<section class="slide" data-act="2 &mdash; Write side" data-min="2.5"
+  data-note-en="The central slide of the talk. Walk the three outcomes: an event, no event, an exception. Then say what is missing: no repository, no database, no aggregate class, no mocks - it is a function from a command and a list to at most one event. The compareTo line is worth a beat: money compared by value, not by representation."
+  data-note-da="Talkens centrale slide. Gennemgaa de tre udfald: et event, intet event, en exception. Sig derefter hvad der mangler: ingen repository, ingen database, ingen aggregate-klasse, ingen mocks - det er en funktion fra en kommando og en liste til hoejst ét event. compareTo-linjen er vaerd et ophold: penge sammenlignes paa vaerdi, ikke paa repraesentation.">
+  <div class="eyebrow"><span lang="en">The decider pattern</span><span lang="da">Decider-mønstret</span></div>
+  <h2><span lang="en">Command + past events = event</span><span lang="da">Command + tidligere events = event</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel" style="flex:1.3 1 0">
+      <figcaption><span>the whole class</span><span class="path">change_product_price/ChangeProductPriceDecider.kt</span></figcaption>
+      <pre><code class="kotlin">@Service
+class ChangeProductPriceDecider : Decider&lt;ChangeProductPrice, ProductEvent&gt; {
+
+    override fun handle(cmd: ChangeProductPrice,
+                        events: List&lt;ProductEvent&gt;): ProductPriceChanged? {
+        if (events.isEmpty()) {
+            throw ProductHasNotBeenAddedException(cmd.id)
+        }
+        val currentPrice = events.last { it is HasProductPrice } as HasProductPrice
+
+        // Amount is a BigDecimal type, and BigDecimal.equals is scale-sensitive:
+        // 100.00 does not equal 100.0. Compare values, not representations.
+        val isPriceTheSame = currentPrice.price.compareTo(cmd.price) == 0
+
+        return if (isPriceTheSame) null
+               else ProductPriceChanged(cmd.id, cmd.price)
+    }
+
+    override fun canHandle(cmd: Any): Boolean = cmd is ChangeProductPrice
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.72 1 0">
+      <h3><span lang="en">Three outcomes</span><span lang="da">Tre udfald</span></h3>
+      <ul class="tight">
+        <li lang="en"><strong>An event</strong> &mdash; the price is different, so the change is recorded.</li>
+        <li lang="da"><strong>Et event</strong> &mdash; prisen er anderledes, så ændringen bliver registreret.</li>
+        <li lang="en"><strong>No event</strong> &mdash; it is already that price. Nothing happened, so nothing is recorded.</li>
+        <li lang="da"><strong>Intet event</strong> &mdash; den er allerede den pris. Intet skete, så intet registreres.</li>
+        <li lang="en"><strong>An exception</strong> &mdash; there is no such product. Refused.</li>
+        <li lang="da"><strong>En exception</strong> &mdash; produktet findes ikke. Afvist.</li>
+      </ul>
+      <p class="small" lang="en">&ldquo;Already done&rdquo; returning <em>no event</em> rather than an error is what makes every command in the system safe to retry.</p>
+      <p class="small" lang="da">At &ldquo;allerede gjort&rdquo; giver <em>intet event</em> frem for en fejl, er hvad der gør hver kommando i systemet sikker at gentage.</p>
+      <p class="small" lang="en">Loading the stream, appending the event and owning the transaction all happen outside this class.</p>
+      <p class="small" lang="da">At loade streamen, tilføje eventet og eje transaktionen sker alt sammen uden for denne klasse.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 10 -->
+<section class="slide" data-act="2 &mdash; Write side" data-min="1.5"
+  data-note-en="Three tests for the three outcomes, and the scale test is the fourth because it is a real trap. Say the runtime: thirty tests, 0.3 seconds, and nothing to start. This is what people mean when they say event sourcing makes business rules testable."
+  data-note-da="Tre tests til de tre udfald, og skala-testen er den fjerde fordi det er en aegte faelde. Sig koerselstiden: tredive tests, 0,3 sekunder, og intet at starte. Det er hvad folk mener naar de siger event sourcing goer forretningsregler testbare.">
+  <div class="eyebrow"><span lang="en">Tests built in</span><span lang="da">Test indbygget</span></div>
+  <h2><span lang="en">No event store. No Spring. No mocks.</span><span lang="da">Ingen event store. Ingen Spring. Ingen mocks.</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>no-op, and rejection</span><span class="path">ChangeProductPriceDeciderTest.kt</span></figcaption>
+      <pre><code class="kotlin">@Test
+fun `Changing the price to the existing price results in no change`() {
+    scenario
+        .given(ProductAdded(productId, "Test product", price))
+        .when_(ChangeProductPrice(productId, price))
+        .thenExpectNoEvent()
+}
+
+@Test
+fun `Changing the price on an empty event stream fails`() {
+    scenario
+        .given()
+        .when_(ChangeProductPrice(productId, price))
+        .thenFailsWithException(ProductHasNotBeenAddedException(productId))
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.9 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the trap worth a test</span><span class="path">same file</span></figcaption>
+        <pre><code class="kotlin">@Test
+fun `the same value at a different scale is no change`() {
+    scenario
+        .given(ProductAdded(productId, "p", Amount.of("100.00")))
+        .when_(ChangeProductPrice(productId, Amount.of("100.0")))
+        .thenExpectNoEvent()
+}</code></pre>
+      </figure>
+      <p lang="en"><strong>A decider is a function, so its tests are function tests.</strong> Nothing is started, nothing is stubbed, and a failure points at a business rule rather than at wiring.</p>
+      <p lang="da"><strong>En decider er en funktion, så dens tests er funktionstests.</strong> Intet startes, intet stubbes, og en fejl peger på en forretningsregel frem for på wiring.</p>
+      <p class="small" lang="en">The same <code>GivenWhenThenScenario</code> is what the model's Given/When/Then turns into, one line per sticky note.</p>
+      <p class="small" lang="da">Samme <code>GivenWhenThenScenario</code> er hvad modellens Given/When/Then bliver til, én linje pr. seddel.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 11 -->
+<section class="slide" data-act="2 &mdash; Write side" data-min="1.5"
+  data-note-en="Point at the two order columns and say which is which: event_order is position within one basket, global_order is position across everything. Then the two calls: fetch to decide, append to record. Note there is no UPDATE and no DELETE anywhere on this slide - that is the whole storage model."
+  data-note-da="Peg paa de to order-kolonner og sig hvad der er hvad: event_order er position i én kurv, global_order er position paa tvaers af alt. Derefter de to kald: fetch for at beslutte, append for at registrere. Bemaerk at der ikke er et UPDATE eller DELETE nogen steder paa denne slide - det er hele lagringsmodellen.">
+  <div class="eyebrow"><span lang="en">The event store</span><span lang="da">Event store'en</span></div>
+  <h2><span lang="en">One table, append only</span><span lang="da">Én tabel, kun tilføjelser</span></h2>
+  <figure class="panel sm">
+    <figcaption><span>the ShoppingBaskets stream table</span><span class="path">essentials-webshop-demo &middot; PostgreSQL</span></figcaption>
+    <pre><code class="plain">aggregate_id  global_order  event_order  timestamp         event_type                  event_payload
+------------  ------------  -----------  ----------------  --------------------------  -------------
+basket-14300            99           10  2026-01-06 07:39  CheckOutRequested           {…}
+basket-14237           100            0  2026-01-06 07:39  ItemAddedToShoppingBasket   {"id":"basket-14237","product":"prod-a","price":1999.50}
+basket-14237           101            1  2026-01-06 07:40  ItemAddedToShoppingBasket   {…}
+basket-14237           102            2  2026-01-06 07:41  ItemAddedToShoppingBasket   {…}
+basket-14237           103            3  2026-01-06 07:45  ItemRemovedFromShoppingBasket {…}
+basket-14237           104            4  2026-01-06 07:50  CheckOutRequested           {"id":"basket-14237","orderId":"order-88","total":3999.00}</code></pre>
+  </figure>
+  <div class="row" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>what the framework does around a decider</span><span class="path">DeciderCommandHandlerAdapter</span></figcaption>
+      <pre><code class="kotlin">// 1. resolve the stream id from the command
+// 2. load that stream
+val events = eventStore.fetchStream(SHOPPING_BASKETS, basketId)
+// 3. decide
+val event = decider.handle(cmd, events)
+// 4. append, in the same transaction
+eventStore.appendToStream(SHOPPING_BASKETS, basketId, event)</code></pre>
+    </figure>
+    <div class="col" style="flex:0.85 1 0">
+      <div class="gloss">
+        <b><span lang="en">Two orderings, neither is a clock</span><span lang="da">To ordninger, ingen af dem er et ur</span></b>
+        <span lang="en"><code>event_order</code> is the position inside <em>one</em> basket &mdash; that is what a projection compares to stay idempotent. <code>global_order</code> is the position across every stream &mdash; that is what a subscription resumes from. <strong>The timestamp is documentation.</strong> Never order by it.</span>
+        <span lang="da"><code>event_order</code> er positionen inde i <em>én</em> kurv &mdash; det er hvad en projektion sammenligner for at være idempotent. <code>global_order</code> er positionen på tværs af alle streams &mdash; det er hvad et subscription genoptager fra. <strong>Tidsstemplet er dokumentation.</strong> Sortér aldrig efter det.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 12 -->
+<section class="slide" data-act="2 &mdash; Write side" data-min="1.5"
+  data-note-en="This is the answer to the question everyone asks: what if the decision needs state? You fold the stream. Point out that the fold is thrown away after the decision, so it can be exactly the question you need - and that the checkout slice folds the same events into a total instead."
+  data-note-da="Dette er svaret paa det spoergsmaal alle stiller: hvad hvis beslutningen kraever tilstand? Man folder streamen. Peg paa at foldningen smides vaek efter beslutningen, saa den kan vaere praecis det spoergsmaal man har brug for - og at checkout-slicen folder de samme events til en total i stedet.">
+  <div class="eyebrow"><span lang="en">The evolver pattern</span><span lang="da">Evolver-mønstret</span></div>
+  <h2><span lang="en">State, without an aggregate class</span><span lang="da">Tilstand, uden en aggregate-klasse</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.1 1 0">
+      <figcaption><span>the fold</span><span class="path">remove_item_from_shopping_basket/BasketLinesEvolver.kt</span></figcaption>
+      <pre><code class="kotlin">fun basketLinesEvolver() =
+  Evolver&lt;ShoppingBasketEvent, Map&lt;ProductId, List&lt;Amount&gt;&gt;&gt; { event, state -&gt;
+    val current = state ?: emptyMap()
+    when (event) {
+        is ItemAddedToShoppingBasket -&gt;
+            current + (event.product to
+                ((current[event.product] ?: emptyList()) + event.price))
+
+        is ItemRemovedFromShoppingBasket -&gt; {
+            val remaining = (current[event.product] ?: emptyList()).dropLast(1)
+            if (remaining.isEmpty()) current - event.product
+            else current + (event.product to remaining)
+        }
+
+        is CheckOutRequested -&gt; current
+    }
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.9 1 0">
+      <figure class="panel sm">
+        <figcaption><span>used by the decision</span><span class="path">RemoveItemFromShoppingBasketDecider.kt</span></figcaption>
+        <pre><code class="kotlin">val lines = Evolver.applyEvents(basketLinesEvolver(), emptyMap(), events)
+val unitPrices = lines[cmd.product] ?: emptyList()
+
+return unitPrices.lastOrNull()
+    ?.let { ItemRemovedFromShoppingBasket(cmd.id, cmd.product, it) }</code></pre>
+      </figure>
+      <p lang="en"><strong>The fold lives for one decision and is then thrown away</strong>, so it can be exactly the question this slice needs answered &mdash; and nothing else.</p>
+      <p lang="da"><strong>Foldningen lever for én beslutning og smides så væk</strong>, så den kan være præcis det spørgsmål denne slice skal have svar på &mdash; og intet andet.</p>
+      <p class="small" lang="en">The checkout slice folds the same events into a running total. Two small folds, neither knowing about the other, instead of one <code>ShoppingBasketState</code> that grows a field per slice.</p>
+      <p class="small" lang="da">Checkout-slicen folder de samme events til en løbende total. To små foldninger, ingen af dem kender den anden, frem for én <code>ShoppingBasketState</code> der får et felt pr. slice.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 13 -->
+<section class="slide" data-act="2 &mdash; Write side" data-min="1"
+  data-note-en="This is the slide the source module skips, and it is where Essentials earns its keep. One bean per aggregate type, @Service on the decider, and nothing else. Then the honest part: the Kotlin module is experimental and one decision yields at most one event - say why that is a feature and where it bites."
+  data-note-da="Dette er den slide kildemodulet springer over, og her tjener Essentials sit brug. Én bean pr. aggregate type, @Service paa decideren, og intet andet. Derefter den aerlige del: Kotlin-modulet er eksperimentelt og én beslutning giver hoejst ét event - sig hvorfor det er en feature og hvor det bider.">
+  <div class="eyebrow"><span lang="en">What the framework wires</span><span lang="da">Hvad frameworket wirer</span></div>
+  <h2><span lang="en">Two beans, and a command bus</span><span lang="da">To beans, og en command bus</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.2 1 0">
+      <figcaption><span>per aggregate type, once</span><span class="path">sales/config/SalesAggregateTypes.kt</span></figcaption>
+      <pre><code class="kotlin">@Bean
+fun productsAggregateTypeConfiguration() = AggregateTypeConfiguration(
+    aggregateType = PRODUCTS,
+    aggregateIdType = ProductId::class.java,
+    aggregateIdSerializer = AggregateIdSerializer.serializerFor(ProductId::class.java),
+    // any Decider whose command implements ProductCommand handles this type
+    deciderSupportsAggregateTypeChecker =
+        HandlesCommandsThatInheritsFromCommandType(ProductCommand::class),
+    commandAggregateIdResolver = { cmd -&gt; (cmd as ProductCommand).id },
+    eventAggregateIdResolver = { e -&gt; (e as ProductEvent).id }
+)</code></pre>
+    </figure>
+    <div class="col" style="flex:0.85 1 0">
+      <p lang="en">One more bean for the whole application &mdash; <code>DeciderAndAggregateTypeConfigurator</code> &mdash; collects every configuration and every decider, registers the streams, and subscribes each decider to the command bus.</p>
+      <p lang="da">Én bean mere for hele applikationen &mdash; <code>DeciderAndAggregateTypeConfigurator</code> &mdash; samler hver konfiguration og hver decider, registrerer streams, og tilmelder hver decider til command bus'en.</p>
+      <p lang="en"><strong>After that, a new use case is a directory with <code>@Service</code> on the decider.</strong> No handler registration to forget, and the command bus owns the transaction, so no <code>@Transactional</code> either.</p>
+      <p lang="da"><strong>Derefter er en ny use case en mappe med <code>@Service</code> på decideren.</strong> Ingen handler-registrering at glemme, og command bus'en ejer transaktionen, så heller ingen <code>@Transactional</code>.</p>
+      <div class="tradeoff">
+        <div class="gain">
+          <h3><span lang="en">What you get</span><span lang="da">Hvad du får</span></h3>
+          <p lang="en">One event per decision forces a name from the business &mdash; <code>CheckOutRequested</code>, not <code>BasketClosed</code> + <code>OrderCreated</code> + <code>TotalCalculated</code>.</p>
+          <p lang="da">Ét event pr. beslutning tvinger et navn fra forretningen &mdash; <code>CheckOutRequested</code>, ikke <code>BasketClosed</code> + <code>OrderCreated</code> + <code>TotalCalculated</code>.</p>
+        </div>
+        <div class="cost">
+          <h3><span lang="en">What it costs</span><span lang="da">Hvad det koster</span></h3>
+          <p lang="en"><code>kotlin-eventsourcing</code> is marked experimental, and a decision that genuinely needs two events needs the Java <code>EventStreamDecider</code> instead.</p>
+          <p lang="da"><code>kotlin-eventsourcing</code> er markeret eksperimentel, og en beslutning der reelt kræver to events skal bruge Java'ens <code>EventStreamDecider</code>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="slide" data-act="3 &mdash; Read side" data-min="1"
+  data-note-en="Greg Young's line is the whole argument, so read it out. Then the practical version: the event store is built to append and to stream, and it is a bad place to ask 'which products are for sale, sorted by name'. A read model is a cache you can always rebuild, which is what makes it safe to have many."
+  data-note-da="Greg Youngs linje er hele argumentet, saa laes den hoejt. Derefter den praktiske version: event store'en er bygget til at tilfoeje og streame, og den er et daarligt sted at spoerge 'hvilke produkter er til salg, sorteret efter navn'. En read model er en cache man altid kan genopbygge, og det er hvad der goer det sikkert at have mange.">
+  <div class="eyebrow"><span lang="en">Why project at all</span><span lang="da">Hvorfor projicere overhovedet</span></div>
+  <h2><span lang="en">The event store is not a query engine</span><span lang="da">Event store'en er ikke en forespørgselsmotor</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <p class="statement" lang="en">&ldquo;A single model isn't appropriate for transactional, query, and reporting concerns.&rdquo;</p>
+      <p class="statement" lang="da">&ldquo;En enkelt model passer ikke til transaktionelle, forespørgsels- og rapporteringsbehov.&rdquo;</p>
+      <div class="kicker">Greg Young</div>
+      <p lang="en">The store is optimised for two things: appending a fact, and streaming a stream. &ldquo;All products for sale, by name&rdquo; is neither.</p>
+      <p lang="da">Store'en er optimeret til to ting: at tilføje et faktum, og at streame en stream. &ldquo;Alle produkter til salg, efter navn&rdquo; er ingen af dem.</p>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>what a read model makes possible</span><span class="path">products_for_sale_view</span></figcaption>
+        <pre><code class="plain">select * from products_for_sale_view
+order by name</code></pre>
+      </figure>
+      <ul class="tight">
+        <li lang="en">A view is <strong>shaped for one screen</strong> &mdash; no joins, no unions.</li>
+        <li lang="da">Et view er <strong>formet til én skærm</strong> &mdash; ingen joins, ingen unions.</li>
+        <li lang="en">A new question is a <strong>new view</strong>, built by replaying what you already have.</li>
+        <li lang="da">Et nyt spørgsmål er et <strong>nyt view</strong>, bygget ved at replaye hvad man allerede har.</li>
+        <li lang="en">Wiping one is <strong>safe</strong>: it was never the record, only a cache of it.</li>
+        <li lang="da">At slette et er <strong>sikkert</strong>: det var aldrig kilden, kun en cache af den.</li>
+      </ul>
+      <p class="small" lang="en">The demo has five views. Three of them did not exist when the model was drawn.</p>
+      <p class="small" lang="da">Demoen har fem views. Tre af dem fandtes ikke da modellen blev tegnet.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 15 -->
+<section class="slide" data-act="3 &mdash; Read side" data-min="1.5"
+  data-note-en="Walk the handler, then the entity. The version comparison is the beat to slow down on: an increment applied twice is wrong, so this code has to be able to recognise an event it has already seen. Mention that the JPA entity is a plain data class and the no-arg constructor comes from the Kotlin jpa compiler plugin."
+  data-note-da="Gennemgaa handleren, derefter entiteten. Version-sammenligningen er det sted man saenker tempoet: en inkrementering anvendt to gange er forkert, saa denne kode skal kunne genkende et event den allerede har set. Naevn at JPA-entiteten er en almindelig data class, og at no-arg-konstruktoeren kommer fra Kotlins jpa compiler-plugin.">
+  <div class="eyebrow"><span lang="en">The projection</span><span lang="da">Projektionen</span></div>
+  <h2><span lang="en">Events in, read model out</span><span lang="da">Events ind, read model ud</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.25 1 0">
+      <figcaption><span>the projection</span><span class="path">views/products_for_sale/ProductsForSaleViewProjection.kt</span></figcaption>
+      <pre><code class="kotlin">@Service
+class ProductsForSaleViewProjection(
+    dependencies: ViewEventProcessorDependencies,
+    private val repository: ProductsForSaleViewRepository
+) : ViewEventProcessor(dependencies) {
+
+    override fun getProcessorName() = "ProductsForSaleViewProjection"
+
+    override fun reactsToEventsRelatedToAggregateTypes() =
+        listOf(SalesAggregateTypes.PRODUCTS)
+
+    @MessageHandler
+    fun on(e: ProductAdded, message: OrderedMessage) {
+        if (repository.existsById(e.id.toString())) return   // replay or redelivery
+        repository.save(ProductForSaleView(e.id.toString(), e.name, e.price,
+                                           message.order, OffsetDateTime.now()))
+    }
+
+    @MessageHandler
+    fun on(e: ProductPriceChanged, message: OrderedMessage) {
+        val existing = repository.findById(e.id.toString()).orElse(null) ?: return
+        if (existing.version &gt;= message.order) return        // already applied
+        existing.price = e.price
+        existing.version = message.order
+        repository.save(existing)
+    }
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.78 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the read model</span><span class="path">ProductForSaleView.kt</span></figcaption>
+        <pre><code class="kotlin">@Entity
+@Table(name = "products_for_sale_view")
+data class ProductForSaleView(
+    @Id val id: String,
+    var name: String,
+    @Convert(converter = AmountAttributeConverter::class)
+    var price: Amount,
+    var version: Long,
+    var lastUpdated: OffsetDateTime
+)
+
+interface ProductsForSaleViewRepository :
+    JpaRepository&lt;ProductForSaleView, String&gt;</code></pre>
+      </figure>
+      <p class="small" lang="en"><code>version</code> is the event's <code>EventOrder</code> &mdash; the position of the last event applied to this row.</p>
+      <p class="small" lang="da"><code>version</code> er eventets <code>EventOrder</code> &mdash; positionen på det sidste event anvendt på denne række.</p>
+      <p class="small" lang="en">A view slice never produces events. It reads, and it writes its own table.</p>
+      <p class="small" lang="da">En view-slice producerer aldrig events. Den læser, og skriver sin egen tabel.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 16 -->
+<section class="slide" data-act="3 &mdash; Read side" data-min="1.5"
+  data-note-en="The three hard parts of projections, and who solves each. Be precise: the framework gives order, a resume point and a lock. Idempotence it cannot give you, because only your code knows what applying an event twice means to your table. The right-hand column is the practical advice: prefer assignment over increment and the problem disappears."
+  data-note-da="De tre svaere dele ved projektioner, og hvem der loeser hver. Vaer praecis: frameworket giver raekkefoelge, et resume-punkt og en laas. Idempotens kan det ikke give dig, for kun din kode ved hvad det betyder for din tabel at anvende et event to gange. Hoejre kolonne er det praktiske raad: foretraek tildeling frem for inkrementering, saa forsvinder problemet.">
+  <div class="eyebrow"><span lang="en">The three hard parts</span><span lang="da">De tre svære dele</span></div>
+  <h2><span lang="en">In order. Never missed. Idempotent.</span><span lang="da">I rækkefølge. Aldrig mistet. Idempotent.</span></h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th><span lang="en">Requirement</span><span lang="da">Krav</span></th>
+        <th><span lang="en">Who solves it</span><span lang="da">Hvem løser det</span></th>
+        <th><span lang="en">How</span><span lang="da">Hvordan</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><span lang="en">Events arrive in order</span><span lang="da">Events ankommer i rækkefølge</span></td>
+          <td><span lang="en">The framework</span><span lang="da">Frameworket</span></td>
+          <td><span lang="en">Per stream, by <code>EventOrder</code> &mdash; but <strong>not</strong> across two aggregate types</span><span lang="da">Pr. stream, efter <code>EventOrder</code> &mdash; men <strong>ikke</strong> på tværs af to aggregate-typer</span></td>
+        </tr>
+        <tr>
+          <td><span lang="en">No event is missed</span><span lang="da">Intet event mistes</span></td>
+          <td><span lang="en">The framework</span><span lang="da">Frameworket</span></td>
+          <td><span lang="en">A stored resume point per subscriber, plus a fenced lock so one instance projects</span><span lang="da">Et gemt resume-punkt pr. subscriber, plus en fenced lock så én instans projicerer</span></td>
+        </tr>
+        <tr>
+          <td><span lang="en">Duplicates are harmless</span><span lang="da">Dubletter er harmløse</span></td>
+          <td><span lang="en"><strong>Your code</strong></span><span lang="da"><strong>Din kode</strong></span></td>
+          <td><span lang="en">Only you know what applying an event twice means to your table</span><span lang="da">Kun du ved hvad det betyder for din tabel at anvende et event to gange</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="row" style="align-items:flex-start">
+    <div class="gloss" style="flex:1 1 0">
+      <b><span lang="en">The rule that makes it easy</span><span lang="da">Reglen der gør det let</span></b>
+      <span lang="en">&ldquo;Set the price to X&rdquo; applied twice is still X &mdash; no version check needed. &ldquo;Add one to the quantity&rdquo; applied twice is wrong. <strong>Write projections as assignments where you can</strong>, and compare <code>EventOrder</code> only where you genuinely cannot.</span>
+      <span lang="da">&ldquo;Sæt prisen til X&rdquo; anvendt to gange er stadig X &mdash; intet version-check nødvendigt. &ldquo;Læg én til antallet&rdquo; anvendt to gange er forkert. <strong>Skriv projektioner som tildelinger hvor du kan</strong>, og sammenlign <code>EventOrder</code> kun hvor du reelt ikke kan.</span>
+    </div>
+    <div class="col" style="flex:0.85 1 0">
+      <p class="small" lang="en">Essentials also offers <code>EventOutOfOrderException</code> for a projection that would rather fail loudly than apply a gap. The demo does not use it &mdash; it tolerates and re-checks instead, because two of its projections read <em>two</em> contexts' streams and there is no order between them.</p>
+      <p class="small" lang="da">Essentials tilbyder også <code>EventOutOfOrderException</code> til en projektion der hellere vil fejle højt end anvende et hul. Demoen bruger den ikke &mdash; den tolererer og tjekker igen, fordi to af dens projektioner læser <em>to</em> kontekster' streams, og der er ingen rækkefølge mellem dem.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 17 -->
+<section class="slide" data-act="3 &mdash; Read side" data-min="1.5"
+  data-note-en="The whole loop in one picture, and the numbers are the running order. Trace one price change with a finger: command in, stream loaded, event appended, subscription picks it up, view updated, query answered. Then say the quiet part: the two halves are connected by the log, not by a call."
+  data-note-da="Hele sloejfen i ét billede, og tallene er koerselsraekkefoelgen. Foelg én prisaendring med fingeren: kommando ind, stream loadet, event tilfoejet, subscription tager det op, view opdateret, forespoergsel besvaret. Sig derefter det stille: de to halvdele er forbundet af loggen, ikke af et kald.">
+  <div class="eyebrow"><span lang="en">CQRS with event sourcing</span><span lang="da">CQRS med event sourcing</span></div>
+  <h2><span lang="en">The whole loop</span><span lang="da">Hele sløjfen</span></h2>
+  <div class="row grow center" style="align-items:center">
+    <svg viewBox="0 0 1180 330" width="100%" role="img" aria-label="Command bus, decider, event store, subscription, view, query">
+      <rect class="lane" x="8"   y="40" width="200" height="72"/>
+      <rect class="lane" x="268" y="40" width="230" height="72"/>
+      <rect class="lane" x="558" y="40" width="200" height="72"/>
+      <rect class="lane" x="558" y="190" width="200" height="72"/>
+      <rect class="lane" x="818" y="190" width="230" height="72"/>
+      <rect class="lane" x="818" y="40" width="230" height="72"/>
+
+      <text class="lbl-dim" x="22"  y="30">1 &mdash; COMMAND BUS</text>
+      <text class="lbl-dim" x="282" y="30">2 &mdash; DECIDER</text>
+      <text class="lbl-dim" x="572" y="30">3 &mdash; EVENT STORE</text>
+      <text class="lbl-dim" x="572" y="180">4 &mdash; SUBSCRIPTION</text>
+      <text class="lbl-dim" x="832" y="180">5 &mdash; VIEW PROJECTION</text>
+      <text class="lbl-dim" x="832" y="30">6 &mdash; QUERY</text>
+
+      <text class="lbl" x="22"  y="82">ChangeProductPrice</text>
+      <text class="lbl" x="282" y="82">ChangeProductPriceDecider</text>
+      <text class="lbl" x="572" y="82">Products stream</text>
+      <text class="lbl" x="572" y="232">resume point + lock</text>
+      <text class="lbl" x="832" y="232">products_for_sale_view</text>
+      <text class="lbl" x="832" y="82">select * from &hellip;</text>
+
+      <path class="flow" d="M212 76 H260"/><path class="flow-head" d="M260 71 l12 5 -12 5 z"/>
+      <path class="flow" d="M502 76 H550"/><path class="flow-head" d="M550 71 l12 5 -12 5 z"/>
+      <path class="flow" d="M658 116 V186"/><path class="flow-head" d="M653 186 l5 12 5 -12 z"/>
+      <path class="flow" d="M762 226 H810"/><path class="flow-head" d="M810 221 l12 5 -12 5 z"/>
+      <path class="flow" d="M932 186 V116"/><path class="flow-head" d="M927 116 l5 -12 5 12 z"/>
+
+      <path class="flow" d="M388 116 V150 H620 V116" stroke-dasharray="4 5"/>
+      <path class="flow-head" d="M615 116 l5 -12 5 12 z"/>
+      <text class="lbl-dim" x="398" y="168">FETCH THE STREAM TO DECIDE</text>
+
+      <text class="lbl-dim" x="500" y="300">THE WRITE SIDE AND THE READ SIDE ARE CONNECTED BY THE LOG, NOT BY A CALL</text>
+    </svg>
+  </div>
+  <p class="small" lang="en">Steps 1&ndash;3 are one transaction. Steps 4&ndash;5 happen milliseconds later, on their own schedule, and can be replayed from scratch at any time.</p>
+  <p class="small" lang="da">Trin 1&ndash;3 er én transaktion. Trin 4&ndash;5 sker millisekunder senere, på deres egen tidsplan, og kan replayes fra bunden når som helst.</p>
+</section>
+
+<!-- =================================================================== 18 -->
+<section class="slide" data-act="4 &mdash; CQRS" data-min="1.5"
+  data-note-en="Compress seventeen slides of the source module into one. CQS is the property-level idea everyone already uses: setters change, getters read. CQRS is the same split one level up - two objects where there was one. The last line is the payoff: a query returns data, so why route it through the domain at all?"
+  data-note-da="Komprimer sytten slides fra kildemodulet til én. CQS er ideen paa property-niveau som alle allerede bruger: settere aendrer, gettere laeser. CQRS er samme opdeling et niveau op - to objekter hvor der foer var ét. Sidste linje er pointen: en forespoergsel returnerer data, saa hvorfor sende den gennem domaenet?">
+  <div class="eyebrow"><span lang="en">From CQS to CQRS</span><span lang="da">Fra CQS til CQRS</span></div>
+  <h2><span lang="en">&ldquo;Two objects where there was previously only one&rdquo;</span><span lang="da">&ldquo;To objekter hvor der før kun var ét&rdquo;</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>one service, two jobs</span><span class="path">before</span></figcaption>
+      <pre><code class="java">public class ProductService {
+    // commands - change something
+    void addProduct(AddProduct cmd);
+    void changePrice(ProductId id, Amount price);
+
+    // queries - answer something
+    Product getProduct(ProductId id);
+    List&lt;Product&gt; getProductsForSale();
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the split</span><span class="path">after</span></figcaption>
+        <pre><code class="kotlin">// write: one decider per use case, no return value but the event
+class ChangeProductPriceDecider : Decider&lt;…&gt;
+
+// read: one view per question, no domain logic at all
+class ProductsForSaleAPI(repository: ProductsForSaleViewRepository)</code></pre>
+      </figure>
+      <ul class="tight">
+        <li lang="en">Commands and queries <strong>serve different use cases</strong>, and want different models.</li>
+        <li lang="da">Commands og queries <strong>tjener forskellige use cases</strong>, og ønsker forskellige modeller.</li>
+        <li lang="en">A query result is <strong>data, not behaviour</strong> &mdash; so why go through the domain layer?</li>
+        <li lang="da">Et forespørgselsresultat er <strong>data, ikke adfærd</strong> &mdash; så hvorfor gå gennem domænelaget?</li>
+        <li lang="en">The eager-versus-lazy fetching argument disappears: <strong>the read model already has the shape</strong>.</li>
+        <li lang="da">Diskussionen om eager kontra lazy fetching forsvinder: <strong>read modellen har allerede formen</strong>.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 19 -->
+<section class="slide" data-act="4 &mdash; CQRS" data-min="1.5"
+  data-note-en="Tell it as a story: two people open the same order, one goes for coffee, the other saves, the first saves and gets an optimistic locking error. Then the real point - the data on their screen was already stale before they touched it. Ask the room why the user should be interrupted by a technical constraint."
+  data-note-da="Fortael det som en historie: to personer aabner samme ordre, én henter kaffe, den anden gemmer, den foerste gemmer og faar en optimistic locking-fejl. Derefter den egentlige pointe - dataene paa deres skaerm var allerede gamle foer de roerte dem. Spoerg rummet hvorfor brugeren skal afbrydes af en teknisk begraensning.">
+  <div class="eyebrow"><span lang="en">Collaborative domains</span><span lang="da">Kollaborative domæner</span></div>
+  <h2><span lang="en">You are already working with stale data</span><span lang="da">Du arbejder allerede med gamle data</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <div class="chain" style="flex-direction:column; align-items:stretch">
+        <div class="node"><b>1</b><span lang="en">Anna opens the order</span><span lang="da">Anna åbner ordren</span></div>
+        <div class="node"><b>2</b><span lang="en">Bo opens the same order</span><span lang="da">Bo åbner samme ordre</span></div>
+        <div class="node"><b>3</b><span lang="en">Anna goes for coffee</span><span lang="da">Anna henter kaffe</span></div>
+        <div class="node"><b>4</b><span lang="en">Bo saves</span><span lang="da">Bo gemmer</span></div>
+        <div class="node"><b>5</b><span lang="en">Anna saves &rarr; <em>optimistic locking exception</em></span><span lang="da">Anna gemmer &rarr; <em>optimistic locking exception</em></span></div>
+      </div>
+      <p class="small" lang="en">Why should the user be interrupted by a technical constraint?</p>
+      <p class="small" lang="da">Hvorfor skal brugeren afbrydes af en teknisk begrænsning?</p>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the honest arithmetic</span><span class="path">one screen, one decision</span></figcaption>
+        <pre><code class="plain">  20 ms   browser → server
+   1 ms   server → database
+ 100 ms   query, render, ship the page
+ 100 ms   paint
+─────────
+ 120 ms   the data is already this old
+        + thinking time (1,000–1,500 ms)</code></pre>
+      </figure>
+      <p lang="en"><strong>Consistency was never instantaneous.</strong> The question is not whether to accept staleness &mdash; you already did &mdash; but whether to use it deliberately.</p>
+      <p lang="da"><strong>Konsistens var aldrig øjeblikkelig.</strong> Spørgsmålet er ikke om man skal acceptere forældede data &mdash; det gjorde man allerede &mdash; men om man vil bruge det bevidst.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 20 -->
+<section class="slide" data-act="4 &mdash; CQRS" data-min="1"
+  data-note-en="Say the trade-off out loud, both halves. The gain is real: reads scale separately and a new question costs a view, not a schema migration. The cost is real too, and it lands in the UI - the demo's shop page polls after placing an order, and that is a design decision somebody has to make with the business."
+  data-note-da="Sig trade-offet hoejt, begge halvdele. Gevinsten er reel: laesninger skalerer separat og et nyt spoergsmaal koster et view, ikke en schema-migrering. Omkostningen er ogsaa reel, og den lander i UI'et - demoens shop-side poller efter en ordre er afgivet, og det er en designbeslutning nogen skal traeffe med forretningen.">
+  <div class="eyebrow"><span lang="en">The trade</span><span lang="da">Handlen</span></div>
+  <h2><span lang="en">Use the staleness on purpose</span><span lang="da">Brug forældelsen bevidst</span></h2>
+  <div class="tradeoff grow">
+    <div class="gain">
+      <h3><span lang="en">What you gain</span><span lang="da">Hvad du får</span></h3>
+      <p lang="en">Reads stop competing with writes. The write side holds one small stream in a transaction; the read side serves whatever shape the screen wants.</p>
+      <p lang="da">Læsninger konkurrerer ikke længere med skrivninger. Skrivesiden holder én lille stream i en transaktion; læsesiden serverer den form skærmen ønsker.</p>
+      <p lang="en">A new question becomes a new view, built by replay. No migration, no change to the write side, no risk to what is already recorded.</p>
+      <p lang="da">Et nyt spørgsmål bliver et nyt view, bygget ved replay. Ingen migrering, ingen ændring af skrivesiden, ingen risiko for det allerede registrerede.</p>
+      <p class="small" lang="en">And the optimistic-locking dialog goes away, because two people editing different parts of one order are appending different facts.</p>
+      <p class="small" lang="da">Og optimistic-locking-dialogen forsvinder, fordi to personer der redigerer forskellige dele af én ordre tilføjer forskellige fakta.</p>
+    </div>
+    <div class="cost">
+      <h3><span lang="en">What it costs</span><span lang="da">Hvad det koster</span></h3>
+      <p lang="en">The screen can be a few hundred milliseconds behind the fact, and that lands in the UI &mdash; not in the infrastructure where it would be invisible.</p>
+      <p lang="da">Skærmen kan være et par hundrede millisekunder bagud i forhold til faktum, og det lander i UI'et &mdash; ikke i infrastrukturen hvor det ville være usynligt.</p>
+      <p lang="en">In the demo: after <em>place order</em>, the payment status and the packaging list arrive a moment later. The shop page polls; it does not pretend.</p>
+      <p lang="da">I demoen: efter <em>afgiv ordre</em> ankommer betalingsstatus og pakkelisten et øjeblik senere. Shop-siden poller; den lader ikke som om.</p>
+      <p class="small" lang="en">Somebody has to decide, with the business, which screens may lag and which may not. That conversation is the work.</p>
+      <p class="small" lang="da">Nogen skal beslutte, sammen med forretningen, hvilke skærme der må halte og hvilke ikke. Den samtale er arbejdet.</p>
+    </div>
+  </div>
+</section>
+<section class="slide" data-act="5 &mdash; Automations" data-min="1.5"
+  data-note-en="The most important sentence on this slide: sales did not ask payment to do this. Then the design detail that cost us a rewrite - the policy owns its own state, so it never waits for another processor. Tell that story briefly; it is the most useful thing in the talk for anyone about to build one."
+  data-note-da="Den vigtigste saetning paa denne slide: sales bad ikke payment om at goere dette. Derefter designdetaljen der kostede os en omskrivning - policyen ejer sin egen tilstand, saa den venter aldrig paa en anden processor. Fortael den historie kort; det er det mest nyttige i oplaegget for nogen der skal bygge en.">
+  <div class="eyebrow"><span lang="en">The automation pattern, running</span><span lang="da">Automation-mønstret, kørende</span></div>
+  <h2><span lang="en">Nobody told <code>payment</code> to do this</span><span lang="da">Ingen bad <code>payment</code> om at gøre dette</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.3 1 0">
+      <figcaption><span>the policy</span><span class="path">payment/automations/hold_funds_on_order_placed/HoldFundsOnOrderPlacedPolicy.kt</span></figcaption>
+      <pre><code class="kotlin">@Service
+class HoldFundsOnOrderPlacedPolicy(…) : EventProcessor(dependencies) {
+
+    override fun reactsToEventsRelatedToAggregateTypes() =
+        listOf(SHOPPING_BASKETS, ORDERS, CREDIT_CARD_HOLDS)
+
+    @MessageHandler
+    fun on(e: CheckOutRequested,  m: OrderedMessage) = updateThenAct(e.orderId) { it.total = e.total }
+    @MessageHandler
+    fun on(e: PaymentDetailsAdded, m: OrderedMessage) = updateThenAct(e.id) { it.paymentMethod = e.paymentMethod.name }
+    @MessageHandler
+    fun on(e: OrderPlaced,        m: OrderedMessage) = updateThenAct(e.id) { it.placed = true }
+
+    private fun updateThenAct(orderId: OrderId, change: (OrderAwaitingHold) -&gt; Unit) {
+        val row = awaitingHold.findById(orderId.toString())
+            .orElseGet { OrderAwaitingHold(id = orderId.toString()) }
+        change(row)
+        awaitingHold.save(row)
+
+        if (!row.needsHold(CARD)) return
+        placeHold(orderId, row)          // gateway, then a command
+    }
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en"><code>sales</code> recorded <code>OrderPlaced</code> and knows nothing more. <code>payment</code> decided on its own that a placed card order needs an authorization. <strong>Delete the whole context and <code>sales</code> does not change.</strong></p>
+      <p lang="da"><code>sales</code> registrerede <code>OrderPlaced</code> og ved intet mere. <code>payment</code> besluttede selv at en afgivet kortordre kræver en autorisation. <strong>Slet hele konteksten og <code>sales</code> ændrer sig ikke.</strong></p>
+      <div class="gloss">
+        <b><span lang="en">The mistake we made first</span><span lang="da">Fejlen vi lavede først</span></b>
+        <span lang="en">The work-item row started out in a <em>separate</em> view slice, read by the policy on its own subscription. It worked most of the time &mdash; which is the problem. Two subscriptions have no order relative to each other, so the policy kept running before the row existed and leaned on redelivery. On a slower machine the retries ran out, the message became a dead letter, and <strong>the order silently never got charged</strong>. Owning the state removed the race instead of tuning it.</span>
+        <span lang="da">Arbejdsopgave-rækken startede i en <em>separat</em> view-slice, læst af policyen på sit eget subscription. Det virkede det meste af tiden &mdash; og det er problemet. To subscriptions har ingen rækkefølge i forhold til hinanden, så policyen kørte igen og igen før rækken fandtes, og lænede sig på genudsendelse. På en langsommere maskine løb forsøgene ud, beskeden blev en dead letter, og <strong>ordren blev stille og roligt aldrig trukket</strong>. At eje tilstanden fjernede kapløbet frem for at justere det.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 22 -->
+<section class="slide" data-act="5 &mdash; Automations" data-min="1"
+  data-note-en="One place in the whole application makes a synchronous call, and this is it. The reason is worth saying plainly: an authorisation is a question to a third party, so there is nothing to record until they answer. Keep it out of the decider so the decider stays replayable - replaying a decider must never re-charge a card."
+  data-note-da="Ét sted i hele applikationen laver et synkront kald, og det er her. Grunden er vaerd at sige ligeud: en autorisation er et spoergsmaal til tredjepart, saa der er intet at registrere foer de svarer. Hold det ude af decideren saa decideren bliver replaybar - at replaye en decider maa aldrig traekke kortet igen.">
+  <div class="eyebrow"><span lang="en">IT-Ops integration</span><span lang="da">IT-Ops-integration</span></div>
+  <h2><span lang="en">The one synchronous call, behind a port</span><span lang="da">Det ene synkrone kald, bag en port</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1 1 0">
+      <figcaption><span>the port, and what it answers</span><span class="path">payment/external_systems/payment_gateway/PaymentGateway.kt</span></figcaption>
+      <pre><code class="kotlin">interface PaymentGateway {
+    fun placeHold(orderId: OrderId, amount: Amount): HoldResult
+}
+
+sealed interface HoldResult {
+    data class Authorized(val authorizationCode: String) : HoldResult
+    data class Declined(val reason: String) : HoldResult
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the answer becomes a command</span><span class="path">HoldFundsOnOrderPlacedPolicy.kt</span></figcaption>
+        <pre><code class="kotlin">val command = when (val result = paymentGateway.placeHold(orderId, total)) {
+    is HoldResult.Authorized -&gt;
+        PlaceHoldOnCreditCard(orderId, total, authorizationCode = result.authorizationCode)
+
+    is HoldResult.Declined -&gt;
+        PlaceHoldOnCreditCard(orderId, total, declineReason = result.reason)
+}
+paymentCommandBus.send(command)</code></pre>
+      </figure>
+      <p lang="en"><strong>The call happens in the automation, never in the decider.</strong> A decider must stay a pure function so it can be replayed and retried &mdash; and replaying must never charge a card a second time.</p>
+      <p lang="da"><strong>Kaldet sker i automatiseringen, aldrig i decideren.</strong> En decider skal blive en ren funktion så den kan replayes og gentages &mdash; og et replay må aldrig trække kortet igen.</p>
+      <p class="small" lang="en">A decline is recorded as a fact, not logged as an error: it is why the order is stuck, and it is what customer service needs to see.</p>
+      <p class="small" lang="da">En afvisning registreres som et faktum, ikke logges som en fejl: det er derfor ordren står stille, og det er hvad kundeservice skal kunne se.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 23 -->
+<section class="slide" data-act="5 &mdash; Automations" data-min="1.5"
+  data-note-en="Set the trap first: two systems, no shared transaction. Let the room sit with the fact that neither order of the two writes is safe. Then the answer, which is almost anticlimactic: write only the event store, and let a subscription do the rest. The cost line is the honest half - at least once, so consumers must be idempotent."
+  data-note-da="Stil faelden op foerst: to systemer, ingen faelles transaktion. Lad rummet sidde med at ingen af de to skriverekkefoelger er sikre. Derefter svaret, som naesten er antiklimaks: skriv kun event store'en, og lad et subscription goere resten. Omkostningslinjen er den aerlige halvdel - mindst én gang, saa forbrugere skal vaere idempotente.">
+  <div class="eyebrow"><span lang="en">The dual write problem</span><span lang="da">Dual write-problemet</span></div>
+  <h2><span lang="en">Save the order, tell the world &mdash; and crash in between</span><span lang="da">Gem ordren, fortæl verden &mdash; og gå ned imellem</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <div class="chain" style="flex-direction:column; align-items:stretch">
+        <div class="node"><b><span lang="en">Option A</span><span lang="da">Mulighed A</span></b><span lang="en">database first, then the broker &rarr; crash, and nobody outside ever hears</span><span lang="da">database først, så brokeren &rarr; nedbrud, og ingen udenfor hører det nogensinde</span></div>
+        <div class="node"><b><span lang="en">Option B</span><span lang="da">Mulighed B</span></b><span lang="en">broker first, then the database &rarr; crash, and the world believes something that never happened</span><span lang="da">broker først, så databasen &rarr; nedbrud, og verden tror på noget der aldrig skete</span></div>
+        <div class="node"><b><span lang="en">Option C</span><span lang="da">Mulighed C</span></b><span lang="en">a distributed transaction across both &mdash; no</span><span lang="da">en distribueret transaktion på tværs af begge &mdash; nej</span></div>
+      </div>
+      <p lang="en"><strong>There is no ordering of the two writes that is safe.</strong> The problem is having two writes.</p>
+      <p lang="da"><strong>Der findes ingen rækkefølge af de to skrivninger der er sikker.</strong> Problemet er at have to skrivninger.</p>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the answer</span><span class="path">ship_order &rarr; OrderShippedKafkaPublisher</span></figcaption>
+        <pre><code class="plain">ShipOrder
+  └─ decider appends OrderShipped        ← one local transaction, nothing else in it
+       └─ subscription reads the committed stream
+            └─ publisher sends ExternalOrderShipped to Kafka
+                 └─ resume point advances only on success</code></pre>
+      </figure>
+      <div class="tradeoff">
+        <div class="gain">
+          <h3><span lang="en">Gain</span><span lang="da">Gevinst</span></h3>
+          <p lang="en">One local transaction. A broker outage or a restart continues where it left off; nothing is lost.</p>
+          <p lang="da">Én lokal transaktion. Broker-nedbrud eller genstart fortsætter hvor den slap; intet mistes.</p>
+        </div>
+        <div class="cost">
+          <h3><span lang="en">Cost</span><span lang="da">Omkostning</span></h3>
+          <p lang="en">At least once, and a moment later. Consumers must be idempotent &mdash; which is why the external event carries the event order.</p>
+          <p lang="da">Mindst én gang, og et øjeblik senere. Forbrugere skal være idempotente &mdash; derfor bærer det eksterne event event-rækkefølgen.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 24 -->
+<section class="slide" data-act="5 &mdash; Automations" data-min="1.5"
+  data-note-en="Two things to point at. First, the translation: internal types become plain strings on the way out, in this one class and nowhere else. Second, the retry policy, and specifically stopRedeliveryOn - some failures will fail identically forever, and retrying them twenty times only delays everything behind them."
+  data-note-da="To ting at pege paa. Foerst oversaettelsen: interne typer bliver almindelige strenge paa vejen ud, i denne ene klasse og intet andet sted. Dernaest retry-policyen, og specifikt stopRedeliveryOn - nogle fejl vil fejle identisk for evigt, og at gentage dem tyve gange forsinker kun alt bag dem.">
+  <div class="eyebrow"><span lang="en">Publishing outward</span><span lang="da">Publicering udad</span></div>
+  <h2><span lang="en">An external event is a different class</span><span lang="da">Et eksternt event er en anden klasse</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <figure class="panel sm" style="flex:1.25 1 0">
+      <figcaption><span>the publisher</span><span class="path">external_systems/order_management/outgoing/OrderShippedKafkaPublisher.kt</span></figcaption>
+      <pre><code class="kotlin">@Service
+class OrderShippedKafkaPublisher(…) : EventProcessor(dependencies) {
+
+    override fun reactsToEventsRelatedToAggregateTypes() = listOf(SHIPPING_ORDERS)
+
+    override fun getInboxRedeliveryPolicy(): RedeliveryPolicy =
+        RedeliveryPolicy.exponentialBackoff()
+            .setInitialRedeliveryDelay(Duration.ofMillis(200))
+            .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofSeconds(3))
+            .setMaximumNumberOfRedeliveries(20)
+            .setDeliveryErrorHandler(
+                MessageDeliveryErrorHandler.stopRedeliveryOn(IllegalArgumentException::class.java))
+            .build()
+
+    @MessageHandler
+    fun handle(e: OrderShipped, eventMessage: OrderedMessage) {
+        val externalEvent = ExternalOrderShipped(
+            orderId = e.id.toString(),                       // the translation:
+            trackingNumber = e.trackingNumber.toString(),     // typed inside, plain outside
+            eventOrder = eventMessage.order)                  // so consumers can dedupe
+        kafkaTemplate.send(ProducerRecord(topic, externalEvent.orderId, externalEvent))
+    }
+}</code></pre>
+    </figure>
+    <div class="col" style="flex:0.75 1 0">
+      <p lang="en"><strong>Two classes, on purpose.</strong> <code>OrderShipped</code> is free to change with the domain; <code>ExternalOrderShipped</code> is a published contract with consumers nobody here controls, so it carries plain types and grows only additively.</p>
+      <p lang="da"><strong>To klasser, med vilje.</strong> <code>OrderShipped</code> må ændre sig med domænet; <code>ExternalOrderShipped</code> er en publiceret kontrakt med forbrugere ingen her kontrollerer, så den bærer simple typer og vokser kun ved tilføjelse.</p>
+      <p lang="en"><code>stopRedeliveryOn</code> is the part people forget: <strong>some failures are permanent.</strong> A malformed message will be rejected identically every time, and retrying it twenty times only delays everything behind it.</p>
+      <p lang="da"><code>stopRedeliveryOn</code> er den del folk glemmer: <strong>nogle fejl er permanente.</strong> En ugyldig besked afvises identisk hver gang, og tyve gentagelser forsinker kun alt bag den.</p>
+      <p class="small" lang="en">And somebody has to watch the dead letter queue. It is a standing operational commitment: a dead letter is logged, nothing fails, and the business outcome simply never happens.</p>
+      <p class="small" lang="da">Og nogen skal holde øje med dead letter-køen. Det er en løbende driftsforpligtelse: en dead letter logges, intet fejler, og forretningsresultatet udebliver bare.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 25 -->
+<section class="slide" data-act="6 &mdash; Demo" data-min="1.5"
+  data-note-en="Switch to the browser. Run the three beats in demo-script.md: buy something and watch the summary fill in, then the warehouse list, then the admin console's streams and subscriptions. If the network or Docker misbehaves, the runbook has a screenshot fallback for each beat - use it rather than debugging in front of the room."
+  data-note-da="Skift til browseren. Koer de tre beats fra demo-script.md: koeb noget og se resuméet fyldes ud, derefter lagerlisten, derefter admin-konsollens streams og subscriptions. Driller netvaerk eller Docker, har runbooken en screenshot-fallback til hver beat - brug den frem for at debugge foran rummet.">
+  <div class="eyebrow"><span lang="en">Live</span><span lang="da">Live</span></div>
+  <h2><span lang="en">The running app</span><span lang="da">Den kørende app</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <h3><span lang="en">Three beats</span><span lang="da">Tre beats</span></h3>
+      <ul class="tight">
+        <li lang="en"><strong>Buy something.</strong> Basket, checkout, details, place. The summary fills in &mdash; total first, then the payment hold, then packaging. Each arrives on its own subscription.</li>
+        <li lang="da"><strong>Køb noget.</strong> Kurv, checkout, detaljer, afgiv. Resuméet fyldes ud &mdash; total først, så betalingsreservationen, så pakning. Hver ankommer på sit eget subscription.</li>
+        <li lang="en"><strong>Be the warehouse.</strong> The packaging list has the order on it because <code>shipping</code> projected <code>sales</code>' events. Pack it, ship it, and watch the external event leave for Kafka.</li>
+        <li lang="da"><strong>Vær lageret.</strong> Pakkelisten har ordren fordi <code>shipping</code> projicerede <code>sales</code>' events. Pak den, send den, og se det eksterne event forlade systemet mod Kafka.</li>
+        <li lang="en"><strong>Look behind it.</strong> The admin console: the streams, the subscriptions and their resume points, the queues. Reset a projection and watch it rebuild.</li>
+        <li lang="da"><strong>Se bagved.</strong> Admin-konsollen: streams, subscriptions og deres resume-punkter, køerne. Nulstil en projektion og se den genopbygge sig selv.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.85 1 0">
+      <figure class="panel sm">
+        <figcaption><span>from a cold machine</span><span class="path">demo-script.md</span></figcaption>
+        <pre><code class="plain">mvn spring-boot:run -pl :essentials-webshop-demo \
+    -Dspring-boot.run.profiles=compose
+
+http://localhost:8080/shop/index.html
+http://localhost:8080/essentials/admin</code></pre>
+      </figure>
+      <p lang="en">Decline a card by putting an order above 10,000 through it: <code>CreditCardHoldRejected</code> is recorded, and the summary says <code>REJECTED</code>.</p>
+      <p lang="da">Få et kort afvist ved at sende en ordre over 10.000 igennem: <code>CreditCardHoldRejected</code> registreres, og resuméet siger <code>REJECTED</code>.</p>
+      <p class="small" lang="en">Stop the Kafka container and ship an order anyway. The order ships &mdash; the write only needed the database &mdash; and the external event goes out when the broker returns.</p>
+      <p class="small" lang="da">Stop Kafka-containeren og send en ordre alligevel. Ordren sendes &mdash; skrivningen havde kun brug for databasen &mdash; og det eksterne event går ud når brokeren er tilbage.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 26 -->
+<section class="slide" data-act="6 &mdash; Limits" data-min="1"
+  data-note-en="Do not skip this slide, even when short of time. Credibility comes from the limits, and the room contains people who will have to maintain whatever they choose. The last line is the one to say slowly: if the events are not facts the business recognises, none of this pays off."
+  data-note-da="Spring ikke denne slide over, selv med lidt tid. Troværdighed kommer fra graenserne, og rummet indeholder folk der skal vedligeholde hvad de vaelger. Sidste linje siges langsomt: er eventene ikke fakta forretningen genkender, betaler intet af dette sig.">
+  <div class="eyebrow"><span lang="en">Honesty</span><span lang="da">Ærlighed</span></div>
+  <h2><span lang="en">Where this does <em>not</em> fit</span><span lang="da">Hvor dette <em>ikke</em> passer</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <ul class="tight">
+        <li lang="en"><strong>CRUD that is genuinely CRUD.</strong> A settings table nobody audits does not need a log of its own history.</li>
+        <li lang="da"><strong>CRUD der reelt er CRUD.</strong> En indstillingstabel ingen reviderer behøver ikke en log over sin egen historie.</li>
+        <li lang="en"><strong>When the read must be current.</strong> A screen that cannot tolerate 200 ms of lag needs a synchronous read of the stream, or a different design.</li>
+        <li lang="da"><strong>Når læsningen skal være aktuel.</strong> En skærm der ikke tåler 200 ms forsinkelse kræver en synkron læsning af streamen, eller et andet design.</li>
+        <li lang="en"><strong>Data you must be able to delete.</strong> An append-only log and &ldquo;erase this person&rdquo; are in genuine tension &mdash; solvable, but it is a design topic, not a footnote.</li>
+        <li lang="da"><strong>Data du skal kunne slette.</strong> En append-only log og &ldquo;slet denne person&rdquo; står i reel modsætning &mdash; løsbart, men et designemne, ikke en fodnote.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:1 1 0">
+      <ul class="tight">
+        <li lang="en"><strong>Unbounded streams.</strong> A stream that grows forever gets slower to load. Snapshots and closing books exist for that, and both are extra machinery to understand.</li>
+        <li lang="da"><strong>Ubegrænsede streams.</strong> En stream der vokser evigt bliver langsommere at loade. Snapshots og closing books findes til det, og begge er ekstra maskineri at forstå.</li>
+        <li lang="en"><strong>A team that does not want it.</strong> Every reader has to learn that the table is not the truth. That is a real cost, paid once per person.</li>
+        <li lang="da"><strong>Et team der ikke vil det.</strong> Hver læser skal lære at tabellen ikke er sandheden. Det er en reel omkostning, betalt én gang pr. person.</li>
+      </ul>
+      <p lang="en"><strong>And the one that actually decides it:</strong> if the events are not facts the business recognises and names, you get the machinery without the benefit.</p>
+      <p lang="da"><strong>Og den der reelt afgør det:</strong> er eventene ikke fakta forretningen genkender og navngiver, får man maskineriet uden gevinsten.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== 27 -->
+<section class="slide" data-act="6 &mdash; Start" data-min="0.5"
+  data-note-en="Close on one concrete action, not a summary. The thing to model first is whatever they keep having to explain to somebody - that is where the history is worth keeping. Then point at the repository and the two commands, and stop talking."
+  data-note-da="Slut paa én konkret handling, ikke et resumé. Det de skal modellere foerst er det de hele tiden skal forklare nogen - dér er historien vaerd at gemme. Peg derefter paa repositoryet og de to kommandoer, og hold saa op med at tale.">
+  <div class="eyebrow"><span lang="en">Monday</span><span lang="da">Mandag</span></div>
+  <h2><span lang="en">Model the thing you keep having to explain</span><span lang="da">Modellér det du hele tiden skal forklare</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <p lang="en">Not the biggest aggregate, and not the whole system. <strong>The one where somebody keeps asking &ldquo;why does it say that?&rdquo;</strong> &mdash; a price, a status, a balance, an entitlement. That is where the history is worth keeping, and where the first slice pays for itself.</p>
+      <p lang="da">Ikke det største aggregate, og ikke hele systemet. <strong>Det ene hvor nogen hele tiden spørger &ldquo;hvorfor står der det?&rdquo;</strong> &mdash; en pris, en status, en saldo, en rettighed. Dér er historien værd at gemme, og dér betaler den første slice sig selv.</p>
+      <p lang="en">Draw it on a wall with the person who asks the question. Four boxes, left to right. Then one slice: command, decider, event, view, test.</p>
+      <p lang="da">Tegn det på en væg med den person der stiller spørgsmålet. Fire kasser, fra venstre mod højre. Derefter én slice: command, decider, event, view, test.</p>
+    </div>
+    <div class="col" style="flex:0.9 1 0">
+      <figure class="panel sm">
+        <figcaption><span>the scaffolding</span><span class="path">the essentials plugin</span></figcaption>
+        <pre><code class="plain">/essentials:init          a new project, wired
+/essentials:add-slice     one more slice, any kind</code></pre>
+      </figure>
+      <figure class="panel sm">
+        <figcaption><span>everything in this talk</span><span class="path">essentials-project</span></figcaption>
+        <pre><code class="plain">examples/essentials-webshop-demo    this app, Kotlin
+examples/essentials-trading-demo    the aggregate style
+LLM/LLM-kotlin-eventsourcing.md     Decider, Evolver, tests
+presentation/module6/               this deck and its notes</code></pre>
+      </figure>
+      <p class="small" lang="en">Questions.</p>
+      <p class="small" lang="da">Spørgsmål.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== A1 -->
+<section class="slide" data-act="Appendix &mdash; on demand" data-min="0"
+  data-note-en="Use this if somebody asks how to actually run a storming workshop. Four practical rules, and the one that matters most is the first: the people with answers have to be in the room, or you are writing fiction."
+  data-note-da="Brug denne hvis nogen spoerger hvordan man faktisk afholder en storming-workshop. Fire praktiske regler, og den vigtigste er den foerste: folk med svarene skal vaere i rummet, ellers skriver man fiktion.">
+  <div class="eyebrow"><span lang="en">Appendix</span><span lang="da">Appendiks</span></div>
+  <h2><span lang="en">Running an event storming workshop</span><span lang="da">At afholde en event storming-workshop</span></h2>
+  <div class="row grow" style="align-items:stretch">
+    <div class="col" style="flex:1 1 0">
+      <ul class="tight">
+        <li lang="en"><strong>Invite people with questions and people with answers.</strong> Curiosity plus knowledge. Without the second group you are writing fiction.</li>
+        <li lang="da"><strong>Inviter folk med spørgsmål og folk med svar.</strong> Nysgerrighed plus viden. Uden den anden gruppe skriver man fiktion.</li>
+        <li lang="en"><strong>Unlimited modelling space.</strong> A long wall and a roll of paper. Running out of room ends the exploration early, and nobody notices that it did.</li>
+        <li lang="da"><strong>Uendelig modelleringsplads.</strong> En lang væg og en rulle papir. At løbe tør for plads afslutter udforskningen for tidligt, og ingen bemærker det.</li>
+        <li lang="en"><strong>Orange stickies first, in the past tense</strong>, and only then the commands and the people who issue them.</li>
+        <li lang="da"><strong>Orange sedler først, i datid</strong>, og først derefter kommandoerne og de folk der udsteder dem.</li>
+        <li lang="en"><strong>Let the conflicts surface.</strong> Two people meaning different things by one word is the most valuable thing that happens all day &mdash; it is a context boundary, found early.</li>
+        <li lang="da"><strong>Lad konflikterne komme frem.</strong> To personer der mener noget forskelligt med ét ord er det mest værdifulde der sker hele dagen &mdash; det er en kontekstgrænse, fundet tidligt.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.8 1 0">
+      <p lang="en">Invented by Alberto Brandolini. Event modeling &mdash; the timeline version used in this talk &mdash; is Adam Dymitruk's, and <code>eventmodeling.org</code> is the reference.</p>
+      <p lang="da">Opfundet af Alberto Brandolini. Event modeling &mdash; tidslinje-versionen brugt i dette oplæg &mdash; er Adam Dymitruks, og <code>eventmodeling.org</code> er referencen.</p>
+      <div class="gloss">
+        <b><span lang="en">Why it is worth the day</span><span lang="da">Hvorfor det er dagen værd</span></b>
+        <span lang="en">The output is not a diagram. It is a shared vocabulary, a set of boundaries, and a list of slices you can estimate &mdash; because each one has clear inputs, clear outputs and no hidden dependencies.</span>
+        <span lang="da">Resultatet er ikke et diagram. Det er et fælles ordforråd, et sæt grænser, og en liste af slices man kan estimere &mdash; fordi hver har klare input, klare output og ingen skjulte afhængigheder.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== A2 -->
+<section class="slide" data-act="Appendix &mdash; on demand" data-min="0"
+  data-note-en="The four things that actually went wrong while building the demo. Good material for the 'is this hard?' question - none of them is conceptual, all four are the kind of thing you hit once and then know forever."
+  data-note-da="De fire ting der faktisk gik galt under bygningen af demoen. Godt materiale til 'er dette svaert?'-spoergsmaalet - ingen af dem er begrebsmaessige, alle fire er den slags man rammer én gang og derefter ved for altid.">
+  <div class="eyebrow"><span lang="en">Appendix</span><span lang="da">Appendiks</span></div>
+  <h2><span lang="en">Four things that bit us building this</span><span lang="da">Fire ting der bed os undervejs</span></h2>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr>
+        <th><span lang="en">Symptom</span><span lang="da">Symptom</span></th>
+        <th><span lang="en">Actual cause</span><span lang="da">Egentlig årsag</span></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><code>Parameter specified as non-null is null: … parameter id</code><span lang="en"> on every request and every event read back</span><span lang="da"> på hver request og hvert event læst tilbage</span></td>
+          <td><span lang="en">Kotlin emits no Java parameter-name metadata by default, so Jackson 3's creator bound everything to null. One compiler flag: <code>-java-parameters</code>.</span><span lang="da">Kotlin udsender ikke Java-parameternavne som standard, så Jackson 3's creator bandt alt til null. Ét compiler-flag: <code>-java-parameters</code>.</span></td>
+        </tr>
+        <tr>
+          <td><span lang="en">An order that never got charged, with nothing in the logs but one ERROR line</span><span lang="da">En ordre der aldrig blev trukket, med intet i loggen ud over én ERROR-linje</span></td>
+          <td><span lang="en">The automation read a sibling projection, lost the race, exhausted its retries and dead-lettered. <strong>A dead letter is silent.</strong> Fixed by giving the policy its own state.</span><span lang="da">Automatiseringen læste en sideordnet projektion, tabte kapløbet, brugte sine forsøg og endte som dead letter. <strong>En dead letter er tavs.</strong> Løst ved at give policyen sin egen tilstand.</span></td>
+        </tr>
+        <tr>
+          <td><code>FATAL: terminating connection due to unexpected postmaster exit</code><span lang="en"> mid-test-class</span><span lang="da"> midt i en testklasse</span></td>
+          <td><span lang="en">Testcontainers does not see a <code>@Container</code> on a Kotlin <code>companion object</code> as static, so it stopped the database after the first test method.</span><span lang="da">Testcontainers ser ikke en <code>@Container</code> på et Kotlin <code>companion object</code> som statisk, så den stoppede databasen efter første testmetode.</span></td>
+        </tr>
+        <tr>
+          <td><span lang="en">A price of <code>1999.50</code> that came back as <code>1999.5</code> and failed an equality assertion</span><span lang="da">En pris på <code>1999,50</code> der kom tilbage som <code>1999,5</code> og fejlede en lighedsassertion</span></td>
+          <td><span lang="en">The JPA converter for <code>Amount</code> round-trips through a double, and <code>BigDecimal.equals</code> is scale-sensitive. Compare money with <code>compareTo</code> &mdash; in the decider too.</span><span lang="da">JPA-konverteren for <code>Amount</code> går gennem en double, og <code>BigDecimal.equals</code> er skala-sensitiv. Sammenlign penge med <code>compareTo</code> &mdash; også i decideren.</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="small" lang="en">None of these is about event sourcing. They are the ordinary cost of a new stack, and they are all written down in the module's <code>CLAUDE.md</code> so the next person pays once.</p>
+  <p class="small" lang="da">Ingen af disse handler om event sourcing. De er den almindelige pris for en ny stak, og de står alle i modulets <code>CLAUDE.md</code> så den næste kun betaler én gang.</p>
+</section>
+<div id="note"></div>
+
+<div id="help">
+  <dl>
+    <dt>&rarr; &darr; Space</dt><dd><span lang="en">next slide</span><span lang="da">næste slide</span></dd>
+    <dt>&larr; &uarr;</dt><dd><span lang="en">previous slide</span><span lang="da">forrige slide</span></dd>
+    <dt>Home / End</dt><dd><span lang="en">first / last</span><span lang="da">første / sidste</span></dd>
+    <dt>N</dt><dd><span lang="en">speaker note</span><span lang="da">talernote</span></dd>
+    <dt>L</dt><dd><span lang="en">English / Dansk</span><span lang="da">English / Dansk</span></dd>
+    <dt>H</dt><dd><span lang="en">handout (light) mode</span><span lang="da">handout (lys) tilstand</span></dd>
+    <dt>T</dt><dd><span lang="en">start / reset the talk timer</span><span lang="da">start / nulstil taler-uret</span></dd>
+    <dt>A</dt><dd><span lang="en">jump to the appendix</span><span lang="da">spring til appendiks</span></dd>
+    <dt>?</dt><dd><span lang="en">this list</span><span lang="da">denne liste</span></dd>
+  </dl>
+</div>
+
+<div id="rail">
+  <span class="bar" id="bar"></span>
+  <span class="act" id="railAct"></span>
+  <span class="fill"></span>
+  <span id="railTimer"></span>
+  <span id="railBudget"></span>
+  <span><b id="railNum">1</b> / <b id="railTot">1</b></span>
+</div>
+
+</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var root   = document.documentElement;
+  var slides = Array.prototype.slice.call(document.querySelectorAll(".slide"));
+  var note   = document.getElementById("note");
+  var help   = document.getElementById("help");
+  var bar    = document.getElementById("bar");
+  var idx    = 0;
+  var notesOn = false;
+  var timerStart = null;
+
+  /* ---- syntax highlighting -------------------------------------------- */
+  var TOKENS = new RegExp([
+    "(\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*|#[^\\n]*)",                     // 1 comment
+    "(\"(?:[^\"\\\\\\n]|\\\\.)*\"|'(?:[^'\\\\\\n]|\\\\.)*')",              // 2 string
+    "(@[A-Za-z_][A-Za-z0-9_]*)",                                            // 3 annotation
+    "\\b(public|private|protected|class|record|interface|implements|extends|" +
+      "return|new|void|static|final|if|else|import|package|var|this|null|" +
+      "true|false|boolean|long|int|throws|try|catch|for|super|enum|" +
+      "abstract|instanceof|" +
+      /* Kotlin: this deck's panels are Kotlin, and without these every `fun` and
+         `override` would render as plain text next to highlighted Java keywords. */
+      "fun|val|override|data|object|sealed|companion|when|is|in|as|by|" +
+      "internal|open|suspend|typealias|throw)\\b",                          // 4 keyword
+    "\\b([A-Z][A-Za-z0-9_]*)\\b",                                           // 5 type
+    "\\b(\\d+)\\b"                                                          // 6 number
+  ].join("|"), "g");
+
+  var CLASSES = { 1: "tok-com", 2: "tok-str", 3: "tok-ann", 4: "tok-kw", 5: "tok-typ", 6: "tok-num" };
+
+  function highlight(el) {
+    var src = el.textContent;
+    var out = "";
+    var last = 0;
+    var m;
+    TOKENS.lastIndex = 0;
+    while ((m = TOKENS.exec(src)) !== null) {
+      var group = 0;
+      for (var g = 1; g <= 6; g++) { if (m[g] !== undefined) { group = g; break; } }
+      if (!group) { continue; }
+      out += escapeHtml(src.slice(last, m.index));
+      out += '<span class="' + CLASSES[group] + '">' + escapeHtml(m[0]) + "</span>";
+      last = m.index + m[0].length;
+    }
+    out += escapeHtml(src.slice(last));
+    el.innerHTML = out;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  Array.prototype.forEach.call(
+    document.querySelectorAll("code.java, code.kotlin, code.yaml"),
+    highlight
+  );
+
+  /* ---- navigation ------------------------------------------------------ */
+  /* Appendix slides sit after the close and are shown only on demand, so they must
+     not skew the presenter's sense of position. They are counted separately and the
+     progress bar treats the closing slide as the end. */
+  function isAppendix(s) { return (s.dataset.act || "").indexOf("Appendix") === 0; }
+
+  var flow     = slides.filter(function (s) { return !isAppendix(s); });
+  var appendix = slides.filter(isAppendix);
+
+  function show(n) {
+    idx = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function (s, i) { s.classList.toggle("on", i === idx); });
+    var s = slides[idx];
+    document.getElementById("railAct").innerHTML = s.dataset.act || "";
+
+    if (isAppendix(s)) {
+      document.getElementById("railNum").textContent = "A" + (appendix.indexOf(s) + 1);
+      document.getElementById("railTot").textContent = "A" + appendix.length;
+      bar.style.width = "100%";
+    } else {
+      document.getElementById("railNum").textContent = String(flow.indexOf(s) + 1);
+      document.getElementById("railTot").textContent = String(flow.length);
+      bar.style.width = ((flow.indexOf(s) + 1) / flow.length * 100) + "%";
+    }
+
+    var min = s.dataset.min;
+    document.getElementById("railBudget").textContent =
+      (min && min !== "0") ? "budget " + min + " min" : "";
+    renderNote();
+    try { location.hash = "s" + (idx + 1); } catch (e) { /* ignore */ }
+  }
+
+  function renderNote() {
+    var s = slides[idx];
+    var lang = root.getAttribute("data-lang") === "da" ? "da" : "en";
+    var text = s.dataset["note" + (lang === "da" ? "Da" : "En")] || "";
+    note.innerHTML = "<b>" + (lang === "da" ? "Talernote" : "Speaker note") + "</b>" + escapeHtml(text);
+    note.classList.toggle("on", notesOn && !!text);
+  }
+
+  /* ---- toggles --------------------------------------------------------- */
+  function setLang(lang) {
+    root.setAttribute("data-lang", lang);
+    try { localStorage.setItem("deck-lang", lang); } catch (e) { /* ignore */ }
+    renderNote();
+  }
+
+  function toggleLang() {
+    setLang(root.getAttribute("data-lang") === "da" ? "en" : "da");
+  }
+
+  function setMode(mode) {
+    if (mode === "handout") { root.setAttribute("data-mode", "handout"); }
+    else { root.removeAttribute("data-mode"); }
+    document.getElementById("modeBtn").setAttribute("aria-pressed", mode === "handout" ? "true" : "false");
+    try { localStorage.setItem("deck-mode", mode); } catch (e) { /* ignore */ }
+  }
+
+  function toggleMode() {
+    setMode(root.getAttribute("data-mode") === "handout" ? "dark" : "handout");
+  }
+
+  function toggleNotes() {
+    notesOn = !notesOn;
+    document.getElementById("noteBtn").setAttribute("aria-pressed", notesOn ? "true" : "false");
+    renderNote();
+  }
+
+  function tickTimer() {
+    var el = document.getElementById("railTimer");
+    if (timerStart === null) { el.textContent = ""; return; }
+    var secs = Math.floor((performance.now() - timerStart) / 1000);
+    var mm = String(Math.floor(secs / 60)).padStart(2, "0");
+    var ss = String(secs % 60).padStart(2, "0");
+    el.textContent = mm + ":" + ss + " / 36:00";
+  }
+  setInterval(tickTimer, 1000);
+
+  /* ---- wiring ---------------------------------------------------------- */
+  document.getElementById("langBtn").addEventListener("click", toggleLang);
+  document.getElementById("modeBtn").addEventListener("click", toggleMode);
+  document.getElementById("noteBtn").addEventListener("click", toggleNotes);
+  document.getElementById("apxBtn").addEventListener("click", function () {
+    if (appendix.length) { show(slides.indexOf(appendix[0])); }
+  });
+  document.getElementById("helpBtn").addEventListener("click", function () {
+    help.classList.toggle("on");
+  });
+  help.addEventListener("click", function () { help.classList.remove("on"); });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) { return; }
+    switch (e.key) {
+      case "ArrowRight": case "ArrowDown": case " ": case "PageDown":
+        show(idx + 1); e.preventDefault(); break;
+      case "ArrowLeft": case "ArrowUp": case "PageUp":
+        show(idx - 1); e.preventDefault(); break;
+      case "Home": show(0); e.preventDefault(); break;
+      /* End goes to the closing slide, not past it into the appendix. */
+      case "End":  show(slides.indexOf(flow[flow.length - 1])); e.preventDefault(); break;
+      case "n": case "N": toggleNotes(); break;
+      case "l": case "L": toggleLang(); break;
+      case "h": case "H": toggleMode(); break;
+      case "t": case "T":
+        timerStart = (timerStart === null) ? performance.now() : null;
+        tickTimer(); break;
+      case "a": case "A":
+        if (appendix.length) { show(slides.indexOf(appendix[0])); }
+        break;
+      case "?": help.classList.toggle("on"); break;
+      case "Escape": help.classList.remove("on"); break;
+    }
+  });
+
+  /* ---- restore state --------------------------------------------------- */
+  try {
+    setLang(localStorage.getItem("deck-lang") === "da" ? "da" : "en");
+    setMode(localStorage.getItem("deck-mode") === "handout" ? "handout" : "dark");
+  } catch (e) {
+    setLang("en");
+    setMode("dark");
+  }
+
+  var start = /^#s(\d+)$/.exec(location.hash || "");
+  show(start ? parseInt(start[1], 10) - 1 : 0);
+})();
+</script>

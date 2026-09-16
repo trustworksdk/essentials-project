@@ -1,0 +1,62 @@
+spring:
+  docker:
+    compose:
+      enabled: true
+      file: classpath:compose.yml
+  datasource:
+    url: jdbc:postgresql://localhost:5432/essentials-webshop-demo
+    username: essentials
+    password: password
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    # The read models are JPA entities and nothing else owns their schema, so Hibernate creates it on start.
+    # `create-drop` would wipe the views on every restart while the event streams survived, leaving the two out
+    # of step until a replay; `update` keeps a restart cheap. The event store's own tables are created by the
+    # framework, never by Hibernate.
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  kafka:
+    bootstrap-servers: localhost:9092
+
+essentials:
+  immutable-jackson-module-enabled: true
+  scheduler:
+    enabled: true
+    number-of-threads: 2
+  reactive:
+    event-bus-backpressure-buffer-size: 1024
+    overflow-max-retries: 20
+    queued-task-cap-factor: 1.5
+  multi-table-change-listener:
+    filter-duplicate-notifications: true
+    polling-interval: 100ms
+  durable-queues:
+    shared-queue-table-name: durable_queues
+    polling-delay-interval-increment-factor: 0.5
+    max-polling-interval: 2s
+    transactional-mode: singleoperationtransaction
+    verbose-tracing: false
+  fenced-lock-manager:
+    fenced-locks-table-name: fenced_locks
+    lock-confirmation-interval: 5s
+    lock-time-out: 12s
+    release-acquired-locks-in-case-of-i-o-exceptions-during-lock-confirmation: false
+  event-store:
+    identifier-column-type: text
+    json-column-type: jsonb
+    use-event-stream-gap-handler: true
+    subscription-manager:
+      event-store-polling-batch-size: 5
+      snapshot-resume-points-every: 2s
+      # The demo talks about projection lag out loud, so it is polled fast enough that the shop page feels
+      # immediate without hiding the fact that it is eventually consistent.
+      event-store-polling-interval: 200
+
+webshop-demo:
+  shipping:
+    # The topic the shipping context publishes ExternalOrderShipped to. Auto-created by the compose broker.
+    external-events-topic: shipping-events

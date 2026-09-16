@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: essentials-webshop-demo
+
+logging:
+  level:
+    root: INFO
+    org.springframework: INFO
+    dk.trustworks.essentials: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-components: always
+      show-details: always
