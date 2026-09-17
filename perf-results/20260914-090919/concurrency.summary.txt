@@ -1,0 +1,12 @@
+===== DRAIN TIME BY parallelConsumers, 4000 messages, 2ms handler, 8 shards =====
+parallelConsumers    drain ms (median)      IQR       msg/s
+1                           10393       0,5%         385
+2                            5262       1,0%         760
+4                            2657       2,0%        1505
+8                            1715       2,7%        2332
+16                           1411       3,9%        2835
+32                           1207       0,0%        3314
+64                           1109       0,8%        3607
+128                          1109       0,8%        3607
+A flat region means more concurrency is buying nothing; pick the knee, not the peak.
+=============================================================================
