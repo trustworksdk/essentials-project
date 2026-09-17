@@ -1,10 +1,24 @@
-# Speaker Notes — From Whiteboard To Event Store
+# Speaker Notes — Module 6, Concepts And Answers
 
-Module 6 (*Simplifying with Event Modeling, Event Sourcing and CQRS*) rebuilt around a running
-application. 28 slides, 36 minutes of content, then questions. Two appendix slides, on demand.
+The concepts of *Simplifying with Event Modeling, Event Sourcing and CQRS*, each followed by the
+Essentials code that implements it. 32 slides, 36 minutes, then questions.
 
-Every slide carries its own note in the deck — press `N` to show it on screen. This file is the run of
-show, the reasoning behind the structure, and the material that was cut.
+Every slide carries its own note in the deck — press `N`. This file is the run of show, why the pairs are
+the pairs, and what was left out.
+
+## The shape
+
+Fourteen pairs. A **grey** slide states the concept in the module's own terms, with its own diagrams where
+they exist; the **orange** slide that follows shows the Essentials answer as real code from
+`examples/essentials-webshop-demo`. The rail at the bottom of the deck shows `n/13`, so both you and the
+room always know where you are in the sequence.
+
+Why that structure: the concepts are teachable in a minute each, and what the room has not seen is the
+code. The value of the hour is in the second slide of every pair, so never spend more than about a minute
+on a grey one.
+
+The format is **not** explained on a slide beyond one line on the roadmap. It explains itself the first
+time a grey slide is followed by an orange one, and a slide spent describing a slide is a slide wasted.
 
 ## Deck controls
 
@@ -12,272 +26,169 @@ show, the reasoning behind the structure, and the material that was cut.
 |---|---|
 | `→` `↓` Space | next slide |
 | `←` `↑` | previous |
-| `Home` / `End` | first / last (End stops at the closing slide, not the appendix) |
-| `N` | speaker note for the current slide |
+| `Home` / `End` | first / last |
+| `N` | speaker note for this slide |
 | `L` | English / Dansk |
 | `H` | handout mode — light palette, for print and bright rooms |
 | `T` | start / reset the talk timer (counts against 36:00) |
-| `A` | jump to the appendix |
 | `?` | the key list |
 
-The deck is one self-contained HTML file. It needs no server and no network, except for the two web
-fonts — on a machine with no connection it falls back to system fonts and still lays out correctly.
+The deck needs no server. It does need its `images/` directory beside it — six diagrams extracted from
+the module's own pptx (see `images/README.md`). The two web fonts degrade to system fonts offline.
 
 ## Run of show
 
-| Act | Slides | Min | Cumulative |
-|---|---|---|---|
-| 0 — the hook | 1–2 | 2 | 2 |
-| 1 — from conversation to model | 3–7 | 7 | 9 |
-| 2 — event sourcing, the write side | 8–13 | 9 | 18 |
-| 3 — view projections, the read side | 14–17 | 5.5 | 23.5 |
-| 4 — CQRS, briefly | 18–20 | 4 | 27.5 |
-| 5 — automations, integrations, the dual write | 21–24 | 5.5 | 33 |
-| 6 — demo, limits, how to start | 25–27 | 3 | 36 |
+| # | Pair | Concept, from the module | The answer | Min |
+|---|---|---|---|---|
+| 1 | An event is a fact | slide 2 — non-prescriptive, past tense, publisher does not know its subscribers | `sealed interface ProductEvent`, `events/` as the exported contract | 2.5 |
+| 2 | Discovering and modeling | slides 3–16 — storming finds them, modeling puts them on a timeline | one slice = the model's four boxes as four files | 2.75 |
+| 3 | The three patterns | slide 12 — command, view, automation | three directory names, three framework base types | 2.5 |
+| 4 | Slices and capabilities | slides 17–18 — units of value, and the swimlanes they live in | the three lanes as top-level directories; `events/` + `types/` are all that cross | 2.5 |
+| 5 | Tests come from the model | slides 14, 20 — Given/When/Then, written before the code | `GivenWhenThenScenario`; 30 tests, 0.3 s, no Docker | 2.25 |
+| 6 | Command + state = event | slides 24–25 — the formula, and "aggregates used less and less" | the formula *is* `handle(cmd, events)`; the whole decider | 2.75 |
+| 7 | The decider | slide 26 — the pattern, defined, with the module's Kotlin | one bean per aggregate type, `@Service` on the decider, nothing else | 2.25 |
+| 8 | Event store and replay | slides 27–33 — the basket, animated over six slides | `fetchStream` / `appendToStream`, and the two orderings | 2.5 |
+| 9 | State inside a decision | slides 68–69 — the Evolver pattern, the module's own code | `Evolver.applyEvents`, one fold per question | 2.25 |
+| 10 | Why view projections | slides 39, 61 — Greg Young, and the three advantages | `ViewEventProcessor` plus a JPA table | 2.25 |
+| 11 | Order, delivery, idempotence | slide 61's three considerations, and the strict handler on 66 | two are the framework's, the third is yours | 2.25 |
+| 12 | CQRS and stale data | slides 42–58 — CQS, CQRS, collaborative domains, the 120 ms | the query never touches the domain, and the screen polls | 2.5 |
+| 13 | Composite UI and automations | slides 73–74 — one screen from many views, and a to-do list | one row from four streams; a policy that owns its state | 2.75 |
+| — | Bonus: the dual write | slides 86–88 — the problem, and the module's own diagram | one local transaction, then a subscription publishes | 2.5 |
 
-**If you are behind at slide 18**, cut slide 19 (collaborative domains) and slide 22 (the gateway
-port). Both are supporting material; the demo and the limits slide are not.
+Plus the title, the roadmap ("four questions, in the order you hit them"), "left out on purpose", and the close: 2 minutes.
 
-**If you are ahead**, slow down on slide 9 (the decider) and slide 16 (the three hard parts). Those are
-the two slides people ask about afterwards.
+**If you are behind at pair 8**, drop pair 11 (order/delivery/idempotence) and pair 12's concept slide.
+Both are supporting material. Do not drop pair 13 or the dual write — they are where Essentials does the
+most work for you.
 
-## Act 0 — the hook (slides 1–2)
+**If you are ahead**, the two slides that reward extra time are pair 6's answer (the decider) and pair
+13's answer (the automation, and the mistake in its gloss).
 
-Open with the question, not with a definition. *Why is this product 1,999.50?* — then the four
-follow-ups, then the row on the right that answers none of them.
+## The pairs, and what to say
 
-Ask for a show of hands: who has been asked something like this and could not answer? Most rooms give
-you half the hands. Do not defend event sourcing yet; the whole talk is the answer to that question, and
-saying so now spends the tension early.
+**1 — An event is a fact.** Read the module's quote. Then the answer slide's three points: the sealed
+family makes an evolver's `when` exhaustive, `events/` is one of only two packages another context may
+import, and — the one nobody warns you about — under Jackson 3 the *constructor parameter name* is the
+JSON contract, so renaming a field breaks every stored event.
 
-Slide 2 is the map. One breath per line, and say out loud that every code panel is real code from an
-application in this repository — it changes how the room reads the rest.
+**2 — Discovering and modeling.** This is the module's own event model, legend and all. Walk the legend
+left to right: UI/API/job, blue command, orange event, green view, then the four Given/When/Then patterns
+at the bottom. Storming finds the orange stickies; modeling puts them in time. The answer slide turns
+those four boxes into four files in one directory, and the number to say out loud is sixteen — sixteen
+slices, no `services/`, no `repositories/`.
 
-## Act 1 — from conversation to model (slides 3–7)
+**3 — The three patterns.** Say "three" and mean it: everything in the system is one of these. The
+automation pattern is the unfamiliar one. The answer slide's table is the point — each pattern has its own
+framework base type, and the type brings exactly the machinery that pattern needs: a `Decider` is a pure
+function, a `ViewEventProcessor` brings an ordered replayable subscription, an `EventProcessor` adds an
+Inbox because an automation may call the outside world.
 
-**Slide 3, event storming.** The workshop mechanics are in the appendix (`A`); this slide is only the
-idea. The point to land: nobody guesses the events, you ask the people who know, and you write what *has
-happened* in the past tense. The fourth sticky note — `CreditCardHoldRejected` — is the one to dwell on:
-somebody in the room knew that cards get declined, and that a decline is a business fact rather than an
-error. That single insight is what keeps it out of a log file later.
+**4 — Slices and capabilities.** Two ideas at two scales. The three wireframes are the module's own Web
+App lane. On the answer slide, say what crosses a boundary and what cannot, then the `shipping` example:
+it learns that an order exists by subscribing, never calls `sales`, and would keep working if `sales` were
+down for an hour.
 
-**Slide 4, the building blocks.** Point at each box in order and name the sticky colour. Trigger, command
-(blue), event (orange), view (green). The order *is* the content: a request, a decision, a fact, an
-answer. Then the dashed line: replay. The same events rebuild every view and every decision, which is
-why a view can be thrown away.
+**5 — Tests come from the model.** Read the module's Given/When/Then, then the test, and let the room
+notice they are the same sentence. Numbers: 30 tests, 0.3 seconds, nothing started. The fourth test in the
+gloss is the one that earns its keep — money compared with `equals` is scale-sensitive, so `100.00` and
+`100.0` are different objects and the same price looks like a change.
 
-The gloss defines the two words newcomers need — *event-sourced* and *stream*. Read it if the room is
-mixed; skip it if they all build event-sourced systems already.
+**6 — Command + state = event.** The module's formula, then the method signature that *is* the formula.
+Walk the three outcomes: an event, no event, an exception. Then say what is missing — no aggregate class,
+no repository, no database, no mocks. That is what "aggregates used less and less" means in practice.
 
-**Slide 5, the three patterns.** Say the number: three patterns, and every one of the sixteen slices in
-the demo is one of them. Command, view, automation. The automation pattern is the one people have not met
-— an event lands, it becomes a piece of work, something picks the work up — and the key observation is
-that the shape is identical whether a machine or a human closes the loop. In the demo, payment drains its
-list automatically and the warehouse screen is drained by a person.
+**7 — The decider.** The module defines the pattern; the answer slide shows the wiring it does not. One
+`AggregateTypeConfiguration` bean per aggregate type, one configurator for the whole application, and
+`@Service` on the decider. Then the honest half: `kotlin-eventsourcing` is experimental, and one decision
+yields at most one event — mostly a gift, because it forces `CheckOutRequested` rather than three
+technical events, but a decision that genuinely needs two must use the Java `EventStreamDecider`.
 
-**Slide 6, the model as directories.** This is the slide that makes the method concrete. The three
-top-level folders are the swimlanes from the wall. Sixteen slices, and not one folder called `services`,
-`repositories` or `controllers`. A new use case adds a directory rather than growing an existing class,
-which is the practical difference people feel in month six.
+**8 — Event store and replay.** The module animates the basket over six slides; the concept slide
+compresses that to one table with the resulting basket in the margin. Point at the two order columns and
+name them precisely: `EventOrder` is position within one stream and is what a projection compares;
+`GlobalEventOrder` is position across everything and is what a subscription resumes from. Then the rule
+people break: **the timestamp is documentation — never order by it.**
 
-**Slide 7, testing.** Read the Given/When/Then aloud from the boxes, then point at the Kotlin and say:
-that is the same sentence. Emphasise what is *absent* — no database, no Spring, no mocks — and give the
-number: 30 tests, 0.3 seconds.
+**9 — State inside a decision.** This answers the question the room is holding: with no aggregate, where
+does state live? In a fold, computed inside the decision and thrown away. The demo's fold tracks prices
+per unit rather than quantities, and the reason is worth 20 seconds: the removal event has to carry the
+price of the unit that left, or the basket view and the checkout total each guess differently when two
+units went in at different prices.
 
-## Act 2 — event sourcing, the write side (slides 8–13)
+**10 — Why view projections.** Read Greg Young's line. Then the answer: a processor and a table. Say what
+`ViewEventProcessor` brings — in-order delivery per stream, a stored resume point, a fenced lock — and
+that wiping the table is safe because replay rebuilds it.
 
-**Slide 8, naming.** Imperative for a request that can still be refused, past tense for a fact that
-cannot. Then the gloss, which is the real lesson: an event must carry everything its readers need,
-because a reader cannot ask a question of the past. The concrete case is worth telling — when
-`ItemRemovedFromShoppingBasket` did not carry the price of the unit removed, the basket view and the
-checkout total each had to guess which unit left, and both got it wrong when two units went in at
-different prices.
+**11 — Order, delivery, idempotence.** The module lists three considerations; the answer slide assigns
+them. Two are the framework's. The third is yours, because only your code knows what applying an event
+twice means to your table. The practical rule in the gloss removes most of the work: assignment is
+idempotent, increment is not. Mention that the demo does *not* use `EventOutOfOrderException`, because two
+of its projections read two contexts' streams where no order exists between them.
 
-**Slide 9, the decider.** The central slide. Walk the three outcomes: an event, no event, an exception.
-Then say what is missing: no repository, no database, no aggregate class. It is a function from a command
-and a list of events to at most one event.
+**12 — CQRS and stale data.** Seventeen of the module's slides in one pair. Tell the Anna-and-Bo story,
+read the 120 ms arithmetic, and ask why the user should be interrupted by a technical constraint. The
+answer slide is a nine-line controller and both halves of the trade — and the cost is real: the demo's
+shop page polls after placing an order rather than pretending.
 
-Pause on the `compareTo` line. `Amount` wraps `BigDecimal`, and `BigDecimal.equals` is scale-sensitive —
-`100.00` does not equal `100.0`. An idempotency check that compares representations instead of values
-appends a change event that changes nothing. It is a two-line lesson that saves somebody a day.
+**13 — Composite UI and automations.** The module's colour-boxed order confirmation is the best slide in
+its deck; every box is a different view. The answer is one projection over four streams from three
+contexts, plus the policy. Then tell the story in the gloss: the work-item row first lived in a separate
+view slice — the module's drawing taken literally — and it dead-lettered under load because two
+subscriptions have no order relative to each other. Letting the policy own its state removed the race.
 
-**Slide 10, the tests.** Three tests for the three outcomes, plus the scale test. The fourth is there
-precisely because it is a trap somebody will otherwise hit in production.
+**Bonus — the dual write.** Set the trap: two systems, no shared transaction, neither order safe. The
+module's own hand-drawn diagram already names the Essentials components, so show it and then show the
+publisher. Point at `stopRedeliveryOn` — some failures are permanent — and close on the operational
+commitment: somebody has to watch the dead letter queue, because a dead letter is one log line and the
+business outcome simply never happens.
 
-**Slide 11, the event store.** Point at the two order columns and say which is which. `event_order` is
-the position inside one basket — that is what a projection compares to stay idempotent. `global_order` is
-the position across every stream — that is what a subscription resumes from. Then say the thing people get
-wrong: **the timestamp is documentation; never order by it.**
+## No live demo, deliberately
 
-Also worth noting out loud: there is no `UPDATE` and no `DELETE` anywhere on this slide. That is the
-entire storage model.
+Fourteen pairs fill the 36 minutes, so there is no demo segment on the deck. The close tells the room how
+to run it themselves, and `demo-script.md` is still the runbook if you get a longer slot or the room asks
+to see it — three beats, each with a fallback.
 
-**Slide 12, the evolver.** This answers the question every experienced developer is holding: what if the
-decision needs state? You fold the stream. The fold lives for one decision and is then thrown away, so it
-can be exactly the question this slice needs answered. The checkout slice folds the *same* events into a
-running total — two small folds, neither knowing about the other, instead of one `ShoppingBasketState`
-that grows a field per slice.
-
-**Slide 13, the wiring.** The source module skips this, and it is where the framework earns its keep. One
-bean per aggregate type, `@Service` on the decider, and one configurator bean for the whole application.
-No handler registration to forget, and the command bus owns the transaction, so no `@Transactional` on a
-handler either.
-
-Then the honest half, on the slide as a trade-off box: `kotlin-eventsourcing` is marked experimental, and
-a decision yields at most **one** event. That constraint is mostly a gift — it forces `CheckOutRequested`
-instead of `BasketClosed` + `OrderCreated` + `TotalCalculated` — but a decision that genuinely needs two
-events has to use the Java `EventStreamDecider` instead. Say both halves.
-
-## Act 3 — view projections, the read side (slides 14–17)
-
-**Slide 14, why project.** Read Greg Young's line out loud; it is the whole argument. Then the practical
-version: the store appends and streams, and "all products for sale, by name" is neither of those things.
-A view is a cache you can always rebuild, which is what makes it safe to have many of them.
-
-**Slide 15, the projection.** Walk the handler, then the entity. Slow down on the version comparison:
-"set the price to X" applied twice is still X, but "add one to the quantity" applied twice is wrong, so
-this code has to be able to recognise an event it has already seen.
-
-**Slide 16, the three hard parts.** The table is the argument. Order and delivery are the framework's job
-— per-stream ordering, a stored resume point, a fenced lock so one instance projects. Idempotence is
-*yours*, because only your code knows what applying an event twice means to your table. The gloss is the
-practical advice: write projections as assignments where you can, and compare `EventOrder` only where you
-genuinely cannot.
-
-One caveat to state plainly, because two of the demo's projections depend on it: ordering is guaranteed
-**per stream**, not across two aggregate types. A projection reading two contexts' events must tolerate
-either arriving first.
-
-**Slide 17, the loop.** Trace one price change with a finger, following the numbers. Then say the quiet
-part: the write side and the read side are connected by the log, not by a call. Steps 1–3 are one
-transaction; steps 4–5 happen milliseconds later on their own schedule, and can be replayed from scratch
-whenever you like.
-
-## Act 4 — CQRS, briefly (slides 18–20)
-
-Seventeen slides of the source module are compressed into three here. If someone wants the full
-treatment, the original Module 6 deck is still the reference.
-
-**Slide 18, CQS to CQRS.** CQS is the property-level idea everyone already uses: setters change things,
-getters answer things. CQRS is the same split one level up — "two objects where there was previously only
-one", which is Greg Young's own definition. The payoff line: a query result is data, not behaviour, so
-why route it through the domain layer at all? And with a read model, the eager-versus-lazy fetching
-argument simply disappears.
-
-**Slide 19, collaborative domains.** Tell it as a story: Anna opens the order, Bo opens the same order,
-Anna goes for coffee, Bo saves, Anna saves and gets an optimistic locking error. Ask the room why the
-*user* should be interrupted by a technical constraint.
-
-Then the arithmetic on the right, which is the real point: the data on their screen was already 120
-milliseconds old before they touched it, plus a second or two of thinking time. **Consistency was never
-instantaneous.** The question is not whether to accept staleness — you already did — but whether to use it
-deliberately.
-
-**Slide 20, the trade.** Both halves, out loud. The gain is real: reads stop competing with writes, and a
-new question costs a view rather than a schema migration. The cost is real too, and it lands in the UI —
-which is better than landing in the infrastructure where it would be invisible. In the demo, the shop page
-polls after placing an order. Somebody has to decide, with the business, which screens may lag. That
-conversation *is* the work.
-
-## Act 5 — automations, integrations, the dual write (slides 21–24)
-
-**Slide 21, the automation.** The most important sentence: `sales` did not ask `payment` to do this. It
-recorded a fact; `payment` decided on its own what that fact means for it. Delete the whole payment
-context and `sales` does not change.
-
-Then tell the story in the gloss, briefly, because it is the most useful thing in the talk for anybody
-about to build one of these. The work-item row started out in a *separate* view slice that the policy read
-on its own subscription. It worked most of the time — which is the problem. Two subscriptions have no
-order relative to each other, so the policy kept running before the row existed and leaned on redelivery
-to recover. On a slower machine the retries ran out, the message became a dead letter, and the order
-silently never got charged. Giving the policy its own state removed the race instead of tuning it.
-
-**Slide 22, the gateway.** One place in the whole application makes a synchronous call. The reason is
-worth saying plainly: an authorization is a question to a third party, and there is nothing to record
-until they answer. It stays out of the decider so the decider stays replayable — replaying a decision must
-never charge a card a second time. And a decline is recorded as a fact, not logged as an error: it is why
-the order is stuck, and it is what customer service needs to see.
-
-**Slide 23, the dual write.** Set the trap first. Two systems, no shared transaction, and neither order of
-the two writes is safe: database-then-broker loses the message, broker-then-database announces something
-that never happened, and a distributed transaction across both is not an answer. Let that sit for a beat.
-
-The answer is almost anticlimactic: have only one write. The decider appends to the event store in one
-local transaction, and a subscription publishes afterwards from the committed stream. The cost is stated
-on the slide — at least once, and a moment later — which is why the external event carries the event
-order so consumers can deduplicate.
-
-**Slide 24, the publisher.** Two things to point at. The translation: internal types become plain strings
-on the way out, in this one class and nowhere else, so the published contract can be stable while the
-domain keeps moving. And `stopRedeliveryOn`: some failures are permanent, and retrying a malformed message
-twenty times only delays everything behind it.
-
-Close the act on the operational commitment: somebody has to watch the dead letter queue. A dead letter is
-logged, nothing fails, and the business outcome simply never happens.
-
-## Act 6 — demo, limits, close (slides 25–27)
-
-**Slide 25, the demo.** Switch to the browser and follow `demo-script.md`. Three beats: buy something and
-watch the summary fill in piece by piece; be the warehouse and pack the order; then look behind it in the
-admin console. Every beat has a fallback in the runbook — use it rather than debugging in front of the
-room.
-
-**Slide 26, the limits.** Do not skip this slide, even when short of time. Credibility comes from the
-limits, and the room contains people who will have to maintain whatever they choose. Say the last line
-slowly: if the events are not facts the business recognises and names, you get the machinery without the
-benefit.
-
-**Slide 27, the close.** One concrete action, not a summary. Model the thing somebody keeps having to
-explain — a price, a status, a balance, an entitlement. Draw it on a wall with the person who keeps asking.
-Then one slice. Point at the two plugin commands and the repository paths, and stop talking.
-
-## Appendix (press `A`)
-
-**A1 — running a storming workshop.** Four practical rules. Use it if somebody asks how to actually run
-one. The first rule is the one that matters: without the people who have answers in the room, you are
-writing fiction.
-
-**A2 — four things that bit us building this.** The `-java-parameters` flag, the silent dead letter, the
-Testcontainers lifecycle, and `BigDecimal` scale. Good material for the "is this hard?" question: none of
-them is conceptual, and all four are written down in the module's `CLAUDE.md` so the next person pays
-once.
+If you do demo, take it from pair 13: place an order on the shop page and watch the summary fill in field
+by field as each subscription catches up. That is the one thing a slide cannot show.
 
 ## Questions you should expect
 
-**"How is this different from an audit log?"** An audit log is written *next to* the state, so the two can
-disagree, and nothing breaks when the log is wrong. Here the events *are* the state — there is nothing else
-to disagree with.
+**"How is this different from an audit log?"** An audit log is written next to the state, so the two can
+disagree and nothing breaks when the log is wrong. Here the events *are* the state.
 
-**"What about GDPR / the right to be forgotten?"** Real tension, and slide 26 says so. The usual answers
-are crypto-shredding (the events keep a key, deleting the key makes the payload unreadable) or keeping
-personal data outside the stream and referencing it. Both are design decisions to take before the first
-line of code, not afterwards.
+**"What about GDPR?"** Real tension. The usual answers are crypto-shredding — the event keeps a key,
+deleting the key makes the payload unreadable — or keeping personal data outside the stream and
+referencing it. Both are decisions to take before the first line of code.
 
-**"Does it not get slow, replaying everything?"** Loading one stream is loading one small list of rows, not
-the whole store. Streams that grow forever are the real problem, and Essentials has snapshots and closing
-books for that — see the trading demo. Both are extra machinery, which is a cost worth naming.
+**"Does replaying everything not get slow?"** Loading one stream is loading one small list of rows.
+Streams that grow forever are the real problem, and that is what snapshots and closing books are for — see
+`essentials-trading-demo`. Both are extra machinery, which is a cost worth naming.
 
-**"How do we change an event's shape later?"** Additively, and carefully: Essentials stores the concrete
-class name and provides no upcasting, so renaming an event type makes existing data unreadable. The demo's
-`CLAUDE.md` says this in as many words. New optional fields are free; renames are a migration.
+**"How do we change an event's shape later?"** Additively, and carefully. Essentials stores the concrete
+class name and provides no upcasting, so renaming an event type makes existing data unreadable. New
+optional fields are free; renames are a migration.
 
-**"Do we need Kafka?"** No. Kafka is in the demo only to show the dual-write answer for events that must
-leave the application. Everything else — commands, projections, automations — runs on PostgreSQL alone.
+**"Do we need Kafka?"** No. It is in the demo only to show the dual-write answer for events that must
+leave the application. Commands, projections and automations run on PostgreSQL alone.
 
-**"Why Kotlin here and Java in the other demo?"** Because `kotlin-eventsourcing` is the module this code
-exercises, and it is the module the original Module 6 snippets were written against. The Java equivalent
-is `EventStreamDecider` in `eventsourced-aggregates`; the trading demo shows the aggregate style instead.
+**"Why Kotlin?"** Because `kotlin-eventsourcing` is the module this code exercises, and the module's own
+snippets were written against it. The Java equivalent is `EventStreamDecider`; `essentials-trading-demo`
+shows the aggregate style instead.
 
-**"Is `kotlin-eventsourcing` production-ready?"** It is marked work-in-progress, and the API may move. Say
+**"Is `kotlin-eventsourcing` production-ready?"** It is marked work-in-progress and the API may move. Say
 that plainly. The patterns are not experimental; the Kotlin wrapper around them is newer than the Java one.
+
+**"Aggregates are used less and less — do we still need them?"** Sometimes. A decider is the right default
+for a slice-shaped use case. An aggregate earns its place when many slices share one invariant-heavy
+consistency boundary, and that is the style the trading demo shows.
 
 ## Rehearsal checklist
 
-- [ ] the code panels still match the app — the deck quotes `change_product_price`, `remove_item_from_shopping_basket`,
-      `products_for_sale`, `order_summary`, `hold_funds_on_order_placed`, `payment_gateway` and
-      `order_management/outgoing`; skim those seven directories after any refactor of the demo
+- [ ] the code panels still match the app — the deck quotes `change_product_price`,
+      `remove_item_from_shopping_basket`, `products_for_sale`, `order_summary`,
+      `hold_funds_on_order_placed`, `payment_gateway` and `order_management/outgoing`; skim those seven
+      directories after any refactor of the demo
 - [ ] `mvn verify -pl :essentials-webshop-demo` green, and once with `-Pjackson2 … -am`
-- [ ] `docker compose -f examples/essentials-webshop-demo/src/main/resources/compose.yml down -v`, then
-      run the demo from cold once, timing it
-- [ ] deck opened offline, both languages, handout mode checked on the projector
-- [ ] timer started with `T` on the title slide during the real talk
+- [ ] deck opened offline with `images/` beside it, both languages, handout mode checked on the projector
+- [ ] the six extracted diagrams still match the pptx, if the module itself has been edited
+- [ ] timer started with `T` on the title slide

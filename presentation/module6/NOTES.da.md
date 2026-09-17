@@ -1,271 +1,172 @@
-# Talernoter — Fra Whiteboard Til Event Store
+# Talernoter — Modul 6, Begreber Og Svar
 
-Modul 6 (*Simplifying with Event Modeling, Event Sourcing and CQRS*) genopbygget omkring en kørende
-applikation. 28 slides, 36 minutters indhold, derefter spørgsmål. To appendiks-slides, efter behov.
+Begreberne fra *Simplifying with Event Modeling, Event Sourcing and CQRS*, hvert efterfulgt af den
+Essentials-kode der implementerer det. 32 slides, 36 minutter, derefter spørgsmål.
 
-Hver slide har sin egen note i selve decket — tryk `N` for at vise den på skærmen. Denne fil er
-kørselsplanen, begrundelsen for strukturen, og det materiale der blev skåret væk.
+Hver slide har sin egen note i decket — tryk `N`. Denne fil er kørselsplanen, hvorfor parrene er parrene,
+og hvad der blev udeladt. Den engelske `NOTES.md` er den fulde version; denne er tættere.
 
-Den engelske udgave, `NOTES.md`, er den fulde version. Denne er tættere, og indeholder det samme.
+## Formen
 
-## Betjening af decket
+Fjorten par. En **grå** slide siger begrebet med modulets egne ord og dets egne diagrammer hvor de findes;
+den **orange** slide bagefter viser Essentials-svaret som rigtig kode fra `examples/essentials-webshop-demo`.
+Skinnen nederst viser `n/13`, så både du og rummet ved hvor I er.
+
+Hvorfor den struktur: begreberne kan undervises på et minut hver, og hvad rummet ikke har set er koden.
+Timens værdi ligger i den anden slide i hvert par, så brug aldrig mere end cirka ét minut på en grå.
+
+Formatet forklares **ikke** på en slide ud over én linje på kortet. Det forklarer sig selv første gang en
+grå slide følges af en orange.
+
+## Betjening
 
 | Tast | Gør |
 |---|---|
 | `→` `↓` Mellemrum | næste slide |
 | `←` `↑` | forrige |
-| `Home` / `End` | første / sidste (End stopper på afslutningssliden, ikke i appendiks) |
+| `Home` / `End` | første / sidste |
 | `N` | talernote til denne slide |
 | `L` | English / Dansk |
 | `H` | handout-tilstand — lys palet, til print og lyse lokaler |
 | `T` | start / nulstil taler-uret (tæller mod 36:00) |
-| `A` | spring til appendiks |
 | `?` | tastelisten |
 
-Decket er én selvstændig HTML-fil. Den kræver ingen server og intet netværk, bortset fra de to webfonte
-— på en maskine uden forbindelse falder den tilbage til systemfonte og layoutet holder.
+Decket kræver ingen server, men det kræver sin `images/`-mappe ved siden af — seks diagrammer hentet fra
+modulets egen pptx (se `images/README.md`).
 
 ## Kørselsplan
 
-| Akt | Slides | Min | Akkumuleret |
-|---|---|---|---|
-| 0 — kroget | 1–2 | 2 | 2 |
-| 1 — fra samtale til model | 3–7 | 7 | 9 |
-| 2 — event sourcing, skrivesiden | 8–13 | 9 | 18 |
-| 3 — view-projektioner, læsesiden | 14–17 | 5,5 | 23,5 |
-| 4 — CQRS, kort | 18–20 | 4 | 27,5 |
-| 5 — automatiseringer, integrationer, dual write | 21–24 | 5,5 | 33 |
-| 6 — demo, grænser, hvordan man starter | 25–27 | 3 | 36 |
+| # | Par | Begrebet, fra modulet | Svaret | Min |
+|---|---|---|---|---|
+| 1 | Et event er et faktum | slide 2 — ikke-foreskrivende, datid, publisher kender ikke sine subscribers | `sealed interface ProductEvent`, `events/` som eksporteret kontrakt | 2,5 |
+| 2 | At opdage og modellere | slides 3–16 — storming finder dem, modeling sætter dem på en tidslinje | én slice = modellens fire kasser som fire filer | 2,75 |
+| 3 | De tre mønstre | slide 12 — command, view, automation | tre mappenavne, tre basistyper i frameworket | 2,5 |
+| 4 | Slices og capabilities | slides 17–18 — værdienheder, og de baner de bor i | de tre baner som øverste mapper; kun `events/` + `types/` krydser | 2,5 |
+| 5 | Test kommer fra modellen | slides 14, 20 — Given/When/Then, skrevet før koden | `GivenWhenThenScenario`; 30 tests, 0,3 s, ingen Docker | 2,25 |
+| 6 | Command + tilstand = event | slides 24–25 — formlen, og "aggregates bruges mindre og mindre" | formlen *er* `handle(cmd, events)`; hele decideren | 2,75 |
+| 7 | Decideren | slide 26 — mønstret, defineret, med modulets Kotlin | én bean pr. aggregate type, `@Service` på decideren, intet andet | 2,25 |
+| 8 | Event store og replay | slides 27–33 — kurven, animeret over seks slides | `fetchStream` / `appendToStream`, og de to ordninger | 2,5 |
+| 9 | Tilstand i en beslutning | slides 68–69 — Evolver-mønstret, modulets egen kode | `Evolver.applyEvents`, én foldning pr. spørgsmål | 2,25 |
+| 10 | Hvorfor view-projektioner | slides 39, 61 — Greg Young, og de tre fordele | `ViewEventProcessor` plus en JPA-tabel | 2,25 |
+| 11 | Rækkefølge, levering, idempotens | slide 61's tre overvejelser, og den strikse handler på 66 | to er frameworkets, den tredje er din | 2,25 |
+| 12 | CQRS og gamle data | slides 42–58 — CQS, CQRS, kollaborative domæner, de 120 ms | forespørgslen rører aldrig domænet, og skærmen poller | 2,5 |
+| 13 | Composite UI og automatiseringer | slides 73–74 — én skærm fra mange views, og en to-do-liste | én række fra fire streams; en policy der ejer sin tilstand | 2,75 |
+| — | Bonus: dual write | slides 86–88 — problemet, og modulets eget diagram | én lokal transaktion, så publicerer et subscription | 2,5 |
 
-**Er du bagud ved slide 18**, skær slide 19 (kollaborative domæner) og slide 22 (gateway-porten). Begge
-er støttemateriale; demoen og grænse-sliden er ikke.
+Plus titlen, kortet ("fire spørgsmål, i den rækkefølge man møder dem"), "udeladt med vilje" og afslutningen: 2 minutter.
 
-**Er du foran**, brug mere tid på slide 9 (decideren) og slide 16 (de tre svære dele). Det er de to
-slides folk spørger om bagefter.
+**Er du bagud ved par 8**, drop par 11 (rækkefølge/levering/idempotens) og par 12's begrebsslide. Begge er
+støttemateriale. Drop ikke par 13 eller dual write — dér gør Essentials mest arbejde for dig.
 
-## Akt 0 — kroget (slides 1–2)
+**Er du foran**, er de to slides der belønner ekstra tid par 6's svar (decideren) og par 13's svar
+(automatiseringen, og fejlen i dens gloss).
 
-Åbn med spørgsmålet, ikke med en definition. *Hvorfor koster dette produkt 1.999,50?* — derefter de fire
-opfølgende spørgsmål, derefter rækken til højre, der ikke besvarer nogen af dem.
+## Parrene, og hvad du siger
 
-Bed om håndsoprækning: hvem er blevet spurgt om noget lignende og kunne ikke svare? De fleste lokaler
-giver dig halvdelen af hænderne. Forsvar ikke event sourcing endnu; hele oplægget er svaret på det
-spørgsmål.
+**1 — Et event er et faktum.** Læs modulets citat. Derefter svarsliden: den sealed familie gør en evolvers
+`when` udtømmende, `events/` er én af kun to pakker en anden kontekst må importere, og — den ingen advarer
+om — under Jackson 3 er *konstruktør-parameterens navn* JSON-kontrakten, så at omdøbe et felt ødelægger
+hvert gemt event.
 
-Slide 2 er kortet. Et åndedrag pr. linje, og sig højt at hvert kodepanel er rigtig kode fra en
-applikation i dette repository — det ændrer hvordan rummet læser resten.
+**2 — At opdage og modellere.** Dette er modulets eget event model, med legende. Gennemgå legenden fra
+venstre: UI/API/job, blå command, orange event, grøn view, derefter de fire Given/When/Then-mønstre
+nederst. Storming finder de orange sedler; modeling sætter dem i tid. Svarsliden gør de fire kasser til
+fire filer i én mappe, og tallet der skal siges højt er seksten.
 
-## Akt 1 — fra samtale til model (slides 3–7)
+**3 — De tre mønstre.** Sig "tre" og mén det: alt i systemet er ét af dem. Automation-mønstret er det
+ukendte. Svarslidens tabel er pointen — hvert mønster har sin egen basistype i frameworket, og typen
+bringer præcis det maskineri mønstret har brug for.
 
-**Slide 3, event storming.** Workshop-mekanikken ligger i appendiks (`A`); denne slide er kun idéen.
-Pointen: ingen gætter eventene, man spørger dem der ved det, og man skriver hvad der *er sket*, i datid.
-Den fjerde seddel — `CreditCardHoldRejected` — er den at dvæle ved: nogen i rummet vidste at kort bliver
-afvist, og at en afvisning er et forretningsfaktum og ikke en fejl. Netop den indsigt er hvad der holder
-det ude af en logfil senere.
+**4 — Slices og capabilities.** To idéer på to skalaer. De tre wireframes er modulets egen Web App-bane.
+På svarsliden: sig hvad der krydser en grænse og hvad der ikke kan, derefter `shipping`-eksemplet — den
+lærer at en ordre findes ved at subscribe, kalder aldrig `sales`, og ville køre videre hvis `sales` var
+nede i en time.
 
-**Slide 4, byggeklodserne.** Peg på hver kasse i rækkefølge og navngiv seddelfarven. Trigger, command
-(blå), event (orange), view (grøn). Rækkefølgen *er* indholdet: en anmodning, en beslutning, et faktum,
-et svar. Derefter den stiplede linje: replay. De samme events genopbygger hvert view og hver beslutning.
+**5 — Test kommer fra modellen.** Læs modulets Given/When/Then, derefter testen, og lad rummet bemærke at
+det er samme sætning. Tal: 30 tests, 0,3 sekunder, intet startet. Den fjerde test i glossen er den der
+tjener sig hjem — penge sammenlignet med `equals` er skala-sensitivt.
 
-Glossen definerer de to ord nybegyndere har brug for — *event-sourced* og *stream*. Læs den hvis rummet
-er blandet; spring den hvis alle allerede bygger event-sourcede systemer.
+**6 — Command + tilstand = event.** Modulets formel, derefter metodesignaturen der *er* formlen. Gennemgå
+de tre udfald. Sig så hvad der mangler — ingen aggregate-klasse, ingen repository, ingen database, ingen
+mocks. Det er hvad "aggregates bruges mindre og mindre" betyder i praksis.
 
-**Slide 5, de tre mønstre.** Sig tallet: tre mønstre, og hver af demoens seksten slices er ét af dem.
-Command, view, automation. Automation-mønstret er det folk ikke har mødt — et event lander, det bliver et
-stykke arbejde, noget tager arbejdet op — og den vigtige observation er at formen er identisk, uanset om
-en maskine eller et menneske lukker sløjfen.
+**7 — Decideren.** Modulet definerer mønstret; svarsliden viser wiringen det ikke viser. Én
+`AggregateTypeConfiguration` pr. aggregate type, én configurator for hele applikationen, og `@Service` på
+decideren. Derefter den ærlige halvdel: `kotlin-eventsourcing` er eksperimentel, og én beslutning giver
+højst ét event.
 
-**Slide 6, modellen som mapper.** Den slide der gør metoden konkret. De tre øverste mapper er swimlanes
-fra væggen. Seksten slices, og ikke én mappe der heder `services`, `repositories` eller `controllers`. En
-ny use case tilføjer en mappe frem for at udvide en eksisterende klasse — det er den praktiske forskel
-folk mærker i måned seks.
+**8 — Event store og replay.** Modulet animerer kurven over seks slides; begrebssliden komprimerer det til
+én tabel med den resulterende kurv i marginen. Peg på de to order-kolonner og navngiv dem præcist. Sig
+derefter reglen folk bryder: **tidsstemplet er dokumentation — sortér aldrig efter det.**
 
-**Slide 7, test.** Læs Given/When/Then højt fra kasserne, peg derefter på Kotlin-koden og sig: det er
-samme sætning. Fremhæv hvad der *mangler* — ingen database, ingen Spring, ingen mocks — og giv tallet:
-30 tests, 0,3 sekunder.
+**9 — Tilstand i en beslutning.** Dette besvarer det spørgsmål rummet sidder med: uden et aggregate, hvor
+bor tilstanden? I en foldning, beregnet inde i beslutningen og smidt væk. Demoens foldning følger priser
+pr. enhed frem for antal, og grunden er 20 sekunder værd.
 
-## Akt 2 — event sourcing, skrivesiden (slides 8–13)
+**10 — Hvorfor view-projektioner.** Læs Greg Youngs linje. Derefter svaret: en processor og en tabel. Sig
+hvad `ViewEventProcessor` bringer, og at det er sikkert at slette tabellen, fordi replay genopbygger den.
 
-**Slide 8, navngivning.** Imperativ for en anmodning der stadig kan afvises, datid for et faktum der ikke
-kan. Derefter glossen, som er den egentlige lektion: et event skal bære alt hvad dets læsere har brug
-for, for en læser kan ikke stille fortiden et spørgsmål. Den konkrete sag er værd at fortælle — da
-`ItemRemovedFromShoppingBasket` ikke bar prisen på den fjernede enhed, måtte kurv-viewet og
-checkout-totalen hver gætte hvilken enhed der forsvandt, og begge tog fejl når to enheder var tilføjet til
-forskellige priser.
+**11 — Rækkefølge, levering, idempotens.** Modulet lister tre overvejelser; svarsliden fordeler dem. To er
+frameworkets. Den tredje er din, for kun din kode ved hvad det betyder at anvende et event to gange på din
+tabel. Den praktiske regel i glossen fjerner det meste af arbejdet: tildeling er idempotent, inkrementering
+er ikke.
 
-**Slide 9, decideren.** Den centrale slide. Gennemgå de tre udfald: et event, intet event, en exception.
-Sig derefter hvad der mangler: ingen repository, ingen database, ingen aggregate-klasse. Det er en
-funktion fra en kommando og en liste af events til højst ét event.
+**12 — CQRS og gamle data.** Sytten af modulets slides i ét par. Fortæl historien om Anna og Bo, læs
+120 ms-regnestykket, og spørg hvorfor brugeren skal afbrydes af en teknisk begrænsning. Svarsliden er en
+controller på ni linjer og begge halvdele af handlen.
 
-Hold en pause ved `compareTo`-linjen. `Amount` pakker `BigDecimal`, og `BigDecimal.equals` er
-skala-sensitiv — `100.00` er ikke lig `100.0`. Et idempotens-check der sammenligner repræsentationer
-frem for værdier tilføjer et ændringsevent der ikke ændrer noget. To linjer der sparer nogen en dag.
+**13 — Composite UI og automatiseringer.** Modulets farvekodede ordrebekræftelse er den bedste slide i dets
+deck; hver kasse er et forskelligt view. Svaret er én projektion over fire streams fra tre kontekster, plus
+policyen. Fortæl derefter historien i glossen: arbejdsopgave-rækken boede først i en separat view-slice —
+modulets tegning taget bogstaveligt — og den endte som dead letter under belastning.
 
-**Slide 10, testene.** Tre tests til de tre udfald, plus skala-testen. Den fjerde er der netop fordi det
-er en fælde nogen ellers rammer i produktion.
+**Bonus — dual write.** Stil fælden op: to systemer, ingen fælles transaktion, ingen rækkefølge sikker.
+Modulets eget håndtegnede diagram navngiver allerede Essentials-komponenterne, så vis det og vis derefter
+publisheren. Peg på `stopRedeliveryOn`, og afslut på driftsforpligtelsen: nogen skal holde øje med dead
+letter-køen.
 
-**Slide 11, event store'en.** Peg på de to order-kolonner og sig hvad der er hvad. `event_order` er
-positionen inde i én kurv — det er hvad en projektion sammenligner for at være idempotent.
-`global_order` er positionen på tværs af alle streams — det er hvad et subscription genoptager fra. Sig
-derefter det folk tager fejl af: **tidsstemplet er dokumentation; sortér aldrig efter det.**
+## Ingen live demo, med vilje
 
-Også værd at sige højt: der er intet `UPDATE` og intet `DELETE` nogen steder på sliden. Det er hele
-lagringsmodellen.
+Fjorten par fylder de 36 minutter, så der er intet demo-segment i decket. Afslutningen fortæller rummet
+hvordan de selv kører den, og `demo-script.md` er stadig runbooken hvis du får et længere slot eller rummet
+beder om at se det.
 
-**Slide 12, evolveren.** Dette besvarer det spørgsmål enhver erfaren udvikler sidder med: hvad hvis
-beslutningen kræver tilstand? Man folder streamen. Foldningen lever for én beslutning og smides så væk,
-så den kan være præcis det spørgsmål denne slice skal have svar på. Checkout-slicen folder de *samme*
-events til en løbende total — to små foldninger frem for én `ShoppingBasketState` der får et felt pr.
-slice.
-
-**Slide 13, wiringen.** Kildemodulet springer den over, og her tjener frameworket sit brug. Én bean pr.
-aggregate-type, `@Service` på decideren, og én configurator-bean for hele applikationen. Ingen
-handler-registrering at glemme, og command bus'en ejer transaktionen, så heller ingen `@Transactional`.
-
-Derefter den ærlige halvdel, som står på sliden som en trade-off: `kotlin-eventsourcing` er markeret
-eksperimentel, og en beslutning giver højst **ét** event. Den begrænsning er mest en gave — den tvinger
-`CheckOutRequested` frem for `BasketClosed` + `OrderCreated` + `TotalCalculated` — men en beslutning der
-reelt kræver to events skal bruge Java'ens `EventStreamDecider`. Sig begge halvdele.
-
-## Akt 3 — view-projektioner, læsesiden (slides 14–17)
-
-**Slide 14, hvorfor projicere.** Læs Greg Youngs linje højt; det er hele argumentet. Derefter den
-praktiske version: store'en tilføjer og streamer, og "alle produkter til salg, efter navn" er ingen af de
-to ting. Et view er en cache man altid kan genopbygge, og det er hvad der gør det sikkert at have mange.
-
-**Slide 15, projektionen.** Gennemgå handleren, derefter entiteten. Sænk tempoet ved
-version-sammenligningen: "sæt prisen til X" anvendt to gange er stadig X, men "læg én til antallet"
-anvendt to gange er forkert, så denne kode skal kunne genkende et event den allerede har set.
-
-**Slide 16, de tre svære dele.** Tabellen er argumentet. Rækkefølge og levering er frameworkets opgave —
-per-stream rækkefølge, et gemt resume-punkt, en fenced lock så én instans projicerer. Idempotens er
-*din*, fordi kun din kode ved hvad det betyder for din tabel at anvende et event to gange. Glossen er
-det praktiske råd: skriv projektioner som tildelinger hvor du kan.
-
-Ét forbehold at sige ligeud, fordi to af demoens projektioner afhænger af det: rækkefølge er garanteret
-**pr. stream**, ikke på tværs af to aggregate-typer.
-
-**Slide 17, sløjfen.** Følg én prisændring med fingeren, efter tallene. Sig derefter det stille: skrive-
-og læsesiden er forbundet af loggen, ikke af et kald. Trin 1–3 er én transaktion; trin 4–5 sker
-millisekunder senere på deres egen tidsplan.
-
-## Akt 4 — CQRS, kort (slides 18–20)
-
-Sytten slides fra kildemodulet er komprimeret til tre. Vil nogen have den fulde behandling, er det
-originale Modul 6-deck stadig referencen.
-
-**Slide 18, CQS til CQRS.** CQS er idéen på property-niveau som alle allerede bruger: settere ændrer,
-gettere svarer. CQRS er samme opdeling et niveau op — "to objekter hvor der før kun var ét", som er Greg
-Youngs egen definition. Pointen: et forespørgselsresultat er data, ikke adfærd, så hvorfor sende det
-gennem domænelaget? Og med en read model forsvinder diskussionen om eager kontra lazy fetching.
-
-**Slide 19, kollaborative domæner.** Fortæl det som en historie: Anna åbner ordren, Bo åbner samme ordre,
-Anna henter kaffe, Bo gemmer, Anna gemmer og får en optimistic locking-fejl. Spørg rummet hvorfor
-*brugeren* skal afbrydes af en teknisk begrænsning.
-
-Derefter regnestykket til højre, som er den egentlige pointe: dataene på deres skærm var allerede 120
-millisekunder gamle før de rørte dem, plus et par sekunders betænkningstid. **Konsistens var aldrig
-øjeblikkelig.**
-
-**Slide 20, handlen.** Begge halvdele, højt. Gevinsten er reel: læsninger konkurrerer ikke længere med
-skrivninger, og et nyt spørgsmål koster et view frem for en schema-migrering. Omkostningen er også reel,
-og den lander i UI'et — hvilket er bedre end i infrastrukturen hvor den ville være usynlig. Nogen skal
-beslutte, sammen med forretningen, hvilke skærme der må halte. Den samtale *er* arbejdet.
-
-## Akt 5 — automatiseringer, integrationer, dual write (slides 21–24)
-
-**Slide 21, automatiseringen.** Den vigtigste sætning: `sales` bad ikke `payment` om dette. Den
-registrerede et faktum; `payment` besluttede selv hvad det faktum betyder for den. Slet hele
-payment-konteksten og `sales` ændrer sig ikke.
-
-Fortæl derefter historien i glossen, kort, fordi det er det mest nyttige i oplægget for nogen der skal
-bygge en. Arbejdsopgave-rækken startede i en *separat* view-slice som policyen læste på sit eget
-subscription. Det virkede det meste af tiden — og det er problemet. To subscriptions har ingen rækkefølge
-i forhold til hinanden, så policyen kørte igen og igen før rækken fandtes, og lænede sig på genudsendelse.
-På en langsommere maskine løb forsøgene ud, beskeden blev en dead letter, og ordren blev stille og roligt
-aldrig trukket. At give policyen sin egen tilstand fjernede kapløbet frem for at justere det.
-
-**Slide 22, gatewayen.** Ét sted i hele applikationen laver et synkront kald. Grunden er værd at sige
-ligeud: en autorisation er et spørgsmål til tredjepart, og der er intet at registrere før de svarer. Det
-holdes ude af decideren så decideren kan replayes — et replay må aldrig trække kortet igen. Og en
-afvisning registreres som et faktum, ikke som en fejl i loggen.
-
-**Slide 23, dual write.** Stil fælden op først. To systemer, ingen fælles transaktion, og ingen af de to
-rækkefølger er sikre: database-så-broker mister beskeden, broker-så-database annoncerer noget der aldrig
-skete, og en distribueret transaktion på tværs af begge er ikke et svar. Lad det stå et øjeblik.
-
-Svaret er næsten antiklimaks: hav kun én skrivning. Decideren tilføjer til event store'en i én lokal
-transaktion, og et subscription publicerer bagefter fra den committede stream. Omkostningen står på
-sliden — mindst én gang, og et øjeblik senere — og derfor bærer det eksterne event event-rækkefølgen.
-
-**Slide 24, publisheren.** To ting at pege på. Oversættelsen: interne typer bliver almindelige strenge på
-vejen ud, i denne ene klasse og intet andet sted. Og `stopRedeliveryOn`: nogle fejl er permanente, og at
-gentage en ugyldig besked tyve gange forsinker kun alt bag den.
-
-Afslut akten på driftsforpligtelsen: nogen skal holde øje med dead letter-køen. En dead letter logges,
-intet fejler, og forretningsresultatet udebliver bare.
-
-## Akt 6 — demo, grænser, afslutning (slides 25–27)
-
-**Slide 25, demoen.** Skift til browseren og følg `demo-script.md`. Tre beats: køb noget og se resuméet
-fyldes ud stykke for stykke; vær lageret og pak ordren; se derefter bagved i admin-konsollen. Hver beat
-har en fallback i runbooken — brug den frem for at debugge foran rummet.
-
-**Slide 26, grænserne.** Spring ikke denne slide over, selv med lidt tid. Troværdighed kommer fra
-grænserne, og rummet indeholder folk der skal vedligeholde hvad de vælger. Sig sidste linje langsomt: er
-eventene ikke fakta forretningen genkender og navngiver, får man maskineriet uden gevinsten.
-
-**Slide 27, afslutningen.** Én konkret handling, ikke et resumé. Modellér det nogen hele tiden skal
-forklare — en pris, en status, en saldo, en rettighed. Tegn det på en væg med den der hele tiden spørger.
-Derefter én slice. Peg på de to plugin-kommandoer og stier i repositoryet, og hold så op med at tale.
-
-## Appendiks (tryk `A`)
-
-**A1 — at afholde en storming-workshop.** Fire praktiske regler. Brug den hvis nogen spørger hvordan man
-faktisk gør. Den første regel er den der betyder noget: uden folk med svarene i rummet skriver man
-fiktion.
-
-**A2 — fire ting der bed os undervejs.** `-java-parameters`-flaget, den tavse dead letter,
-Testcontainers-livscyklussen, og `BigDecimal`-skala. Godt materiale til "er dette svært?"-spørgsmålet:
-ingen af dem er begrebsmæssige, og alle fire står i modulets `CLAUDE.md` så den næste kun betaler én gang.
+Demonstrerer du, så tag det fra par 13: afgiv en ordre på shop-siden og se resuméet fyldes ud felt for felt
+mens hvert subscription indhenter. Det er den ene ting en slide ikke kan vise.
 
 ## Spørgsmål du bør forvente
 
-**"Hvordan er det forskelligt fra en audit-log?"** En audit-log skrives *ved siden af* tilstanden, så de
-to kan være uenige, og intet går i stykker når loggen er forkert. Her *er* eventene tilstanden — der er
-intet andet at være uenig med.
+**"Hvordan er det forskelligt fra en audit-log?"** En audit-log skrives ved siden af tilstanden, så de to
+kan være uenige. Her *er* eventene tilstanden.
 
-**"Hvad med GDPR og retten til at blive glemt?"** Reel modsætning, og slide 26 siger det. De gængse svar
-er crypto-shredding (eventet gemmer en nøgle, og sletning af nøglen gør payloaden ulæselig) eller at holde
-persondata uden for streamen og referere til dem. Begge er designbeslutninger man tager før den første
-linje kode.
+**"Hvad med GDPR?"** Reel modsætning. De gængse svar er crypto-shredding eller at holde persondata uden
+for streamen. Begge er beslutninger man tager før den første linje kode.
 
-**"Bliver det ikke langsomt at replaye alt?"** At loade én stream er at loade én lille liste rækker, ikke
-hele store'en. Streams der vokser evigt er det egentlige problem, og Essentials har snapshots og closing
-books til det — se trading-demoen. Begge er ekstra maskineri, hvilket er en omkostning værd at nævne.
+**"Bliver det ikke langsomt at replaye alt?"** At loade én stream er at loade én lille liste rækker.
+Streams der vokser evigt er det egentlige problem — det er hvad snapshots og closing books er til.
 
 **"Hvordan ændrer vi et events form senere?"** Ved tilføjelse, og forsigtigt: Essentials gemmer det
-konkrete klassenavn og tilbyder ingen upcasting, så at omdøbe en event-type gør eksisterende data
-ulæselige. Nye valgfrie felter er gratis; omdøbninger er en migrering.
+konkrete klassenavn og tilbyder ingen upcasting. Nye valgfrie felter er gratis; omdøbninger er en migrering.
 
-**"Skal vi bruge Kafka?"** Nej. Kafka er kun i demoen for at vise dual write-svaret for events der skal
-forlade applikationen. Alt andet — kommandoer, projektioner, automatiseringer — kører på PostgreSQL alene.
+**"Skal vi bruge Kafka?"** Nej. Det er kun i demoen for at vise dual write-svaret. Kommandoer,
+projektioner og automatiseringer kører på PostgreSQL alene.
 
-**"Hvorfor Kotlin her og Java i den anden demo?"** Fordi `kotlin-eventsourcing` er det modul denne kode
-bruger, og det modul de originale Modul 6-snippets blev skrevet mod. Java-ækvivalenten er
-`EventStreamDecider` i `eventsourced-aggregates`; trading-demoen viser aggregate-stilen i stedet.
+**"Hvorfor Kotlin?"** Fordi `kotlin-eventsourcing` er det modul denne kode bruger, og modulets egne
+snippets blev skrevet mod det.
 
 **"Er `kotlin-eventsourcing` produktionsklar?"** Det er markeret work-in-progress, og API'et kan flytte
-sig. Sig det ligeud. Mønstrene er ikke eksperimentelle; Kotlin-indpakningen omkring dem er nyere end
-Java'ens.
+sig. Sig det ligeud.
+
+**"Aggregates bruges mindre og mindre — har vi stadig brug for dem?"** Nogle gange. En decider er den
+rigtige standard for en slice-formet use case. Et aggregate tjener sin plads når mange slices deler én
+invariant-tung konsistensgrænse — den stil viser trading-demoen.
 
 ## Tjekliste før oplægget
 
 - [ ] kodepanelerne passer stadig til appen — decket citerer `change_product_price`,
-      `remove_item_from_shopping_basket`, `products_for_sale`, `order_summary`, `hold_funds_on_order_placed`,
-      `payment_gateway` og `order_management/outgoing`; skim de syv mapper efter enhver refaktorering af demoen
+      `remove_item_from_shopping_basket`, `products_for_sale`, `order_summary`,
+      `hold_funds_on_order_placed`, `payment_gateway` og `order_management/outgoing`
 - [ ] `mvn verify -pl :essentials-webshop-demo` grøn, og én gang med `-Pjackson2 … -am`
-- [ ] `docker compose -f examples/essentials-webshop-demo/src/main/resources/compose.yml down -v`,
-      derefter kør demoen koldt én gang og tag tid
-- [ ] decket åbnet offline, i begge sprog, og handout-tilstand tjekket på projektoren
-- [ ] uret startet med `T` på titelsliden under det rigtige oplæg
+- [ ] decket åbnet offline med `images/` ved siden af, i begge sprog, handout-tilstand tjekket
+- [ ] de seks hentede diagrammer passer stadig til pptx'en, hvis modulet selv er blevet redigeret
+- [ ] uret startet med `T` på titelsliden

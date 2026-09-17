@@ -5,7 +5,7 @@
 
 **Audience:** colleagues and course attendees, mixed experience, mostly new to event sourcing.
 
-**Slot:** 45 minutes — 36 minutes of content across 28 slides, then 8–9 minutes of questions.
+**Slot:** 45 minutes — 36 minutes of content across 32 slides (14 concept/answer pairs), then questions.
 
 **Relationship to the source deck:** this is not a one-to-one port. The pptx teaches the concepts; this deck
 follows its structure and shows, concept by concept, how Trustworks Essentials answers it in running code. Every
@@ -16,7 +16,8 @@ removed to fit a slide, nothing else changed, and nothing invented.
 
 | Path | What it is |
 |---|---|
-| `presentation/module6/deck.html` | One self-contained bilingual (EN/DA) HTML deck, 28 slides |
+| `presentation/module6/deck.html` | Bilingual (EN/DA) HTML deck, 32 slides, needs `images/` beside it |
+| `presentation/module6/images/` | Six diagrams extracted from the module's own pptx |
 | `presentation/module6/NOTES.md`, `NOTES.da.md` | Speaker notes, run of show, expected questions |
 | `presentation/module6/demo-script.md` | Live-demo runbook with exact commands and fallbacks |
 | `examples/essentials-webshop-demo/` | The pptx's sales system, implemented as an Essentials application |
@@ -28,7 +29,7 @@ vocabulary — so the two decks look like one family and the keyboard controls b
 
 ## Status — built
 
-All of it. 28 slides plus 2 appendix slides, 36 minutes of budget, bilingual; the application boots,
+All of it. 32 slides in 14 concept/answer pairs, 36 minutes of budget, bilingual; the application boots,
 passes 30 unit tests and 3 integration tests under **both** Jackson flavours, and has been driven end to
 end against real PostgreSQL and Kafka.
 
@@ -40,7 +41,9 @@ Five things came out differently from the plan, and each is recorded where it ma
 | `slice.yaml` per slice, per-slice `CLAUDE.md` | Neither | Cut on request, to keep the module simple. The directory layout still follows the slice law, and the module `CLAUDE.md` says so |
 | `payment` = 1 command + 1 view + 1 automation | 1 command + 1 automation that owns its state + 1 gateway port | The split version raced its own projection and dead-lettered under `-Pjackson2`. See below |
 | Kotlin semantic types per `code-style.md` | Java-style `CharSequenceType` subclasses | A Kotlin `value class` needs `jackson-module-kotlin` on the framework's persistence mapper, which a Jackson 3 application cannot add without replacing the serializer bean. Deviation agreed explicitly and documented in the module `CLAUDE.md` |
-| Snapshots / closing books mentioned in Act 3 | Moved to the limits slide and the runbook's retired segment | The trading demo already shows them properly, and they are not in this event model |
+| Snapshots / closing books mentioned in Act 3 | Named on the "left out on purpose" slide | The trading demo already shows them properly, and they are not in this event model |
+| Six acts of our own narrative | Fourteen concept/answer pairs following the module's own sequence | The first build retold the module in different words, which spends the hour on the half the room already knows. Rebuilt on request |
+| Live demo as Act 4 | Cut; `demo-script.md` kept as a standalone runbook | Fourteen pairs fill 36 minutes. A real loss, and the trade the slot forces |
 
 ### The four defects found by building it
 
@@ -58,9 +61,12 @@ applies to any Kotlin consumer of Essentials.
    its own work-item state and re-checks completeness on every event — not a longer retry.
 3. **`@Container` on a Kotlin `companion object` is not a shared container.** Testcontainers 2.0.5 stops
    it after the first test method, and the rest of the class talks to a destroyed database.
-4. **Money through the JPA converter loses scale.** `AmountAttributeConverter` round-trips through a
-   `double`, and `BigDecimal.equals` is scale-sensitive, so `1999.50` comes back as `1999.5`. Compare with
-   `compareTo` — the decider does, and so does the integration test.
+4. **Money in a read model was stored as a floating-point double.** `AmountAttributeConverter` extends a base
+   declared `AttributeConverter<T, Double>`, so `1999.50` came back as `1999.5` — and, worse, `sum()` over a
+   money column was float arithmetic. The demo now uses its own `MoneyAttributeConverter` mapping to `numeric`,
+   and `WebshopFlowIT` asserts exact scale so a revert fails. The framework-side fix is written up in
+   `docs/bigdecimal-attribute-converter-improvements.md`. Separately, and unrelated to JPA:
+   `BigDecimal.equals` is scale-sensitive, so incoming money is compared with `compareTo` in the decider.
 
 ## Decisions taken
 
@@ -136,35 +142,67 @@ slide in Act 2, because that is where "Essentials answers this" is most concrete
 - Both Jackson flavours: `mvn verify -pl :essentials-webshop-demo` and `mvn -Pjackson2 verify -pl :essentials-webshop-demo -am`.
 - 30 unit tests in 0.3 s; the IT class in about 9 s.
 
-## Deck structure
+## Deck structure — rebuilt
 
-36 minutes of content. Act and minute budgets are carried in `data-act` and `data-min` on each slide, and the
-on-screen timer reads them, so the budget in this table and the budget in the deck cannot drift.
+The first build of this deck compressed the module into a six-act narrative of its own. That was the wrong
+shape: the room has already seen Module 6, so a deck that retells it in different words spends its time on
+the half they know. **Rebuilt as fourteen concept/answer pairs**, which is the structure the brief actually
+asked for — introduce each concept as the module teaches it, then show the Essentials code that implements
+it.
 
-| Act | Subject | pptx source | Slides | Min |
-|---|---|---|---|---|
-| 0 | The hook and the map | 2, 24 | 3 | 2 |
-| 1 | From conversation to model | 3–20 | 5 | 7 |
-| 2 | Event sourcing: the write side | 24–36, 68–69 | 6 | 9 |
-| 3 | View projections: the read side | 38–39, 61–67 | 4 | 5.5 |
-| 4 | CQRS, briefly | 40–58 | 3 | 4 |
-| 5 | Automations, integrations, dual write | 12, 74–75, 86–88 | 4 | 5.5 |
-| 6 | Demo, limits, and how to start | — | 3 | 3 |
+32 slides, 36 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
+on-screen timer reads them, so this table and the deck cannot drift.
 
-### Slide list
+| Slides | Content | Min |
+|---|---|---|
+| 1–2 | Title, and the roadmap: four questions in the order you hit them | 0.5 |
+| 3–4 | **1** An event is a fact → sealed family, `events/` as contract | 2.5 |
+| 5–6 | **2** Discovering and modeling → one slice = the model's four boxes | 2.75 |
+| 7–8 | **3** The three patterns → three directory names, three base types | 2.5 |
+| 9–10 | **4** Slices and capabilities → three lanes as directories | 2.5 |
+| 11–12 | **5** Tests come from the model → `GivenWhenThenScenario` | 2.25 |
+| 13–14 | **6** Command + state = event → the formula is the signature | 2.75 |
+| 15–16 | **7** The decider → one bean per aggregate type | 2.25 |
+| 17–18 | **8** Event store and replay → two orderings, neither a clock | 2.5 |
+| 19–20 | **9** State inside a decision → `Evolver.applyEvents` | 2.25 |
+| 21–22 | **10** Why view projections → a processor and a table | 2.25 |
+| 23–24 | **11** Order, delivery, idempotence → two theirs, one yours | 2.25 |
+| 25–26 | **12** CQRS and stale data → the query never touches the domain | 2.5 |
+| 27–28 | **13** Composite UI and automations → one row, four streams | 2.75 |
+| 29–30 | **Bonus** The dual write → one local transaction, then publish | 2.5 |
+| 31–32 | Left out on purpose, and the close | 1 |
 
-The deck itself is the authority — each `<section class="slide">` carries its act and its minute budget, and
-`NOTES.md` walks the slides in order with what to say on each. What the built deck changed from the plan drafted
-here:
+### Two structural consequences
 
-- **Act 0 is 2 minutes, not 2.5.** The hook slide took the extra half minute's worth of content.
-- **Act 2 is 9 minutes, not 8.5**, because the decider slide is worth 2.5 on its own.
-- **Slide 6 shows the directory tree without `slice.yaml`**, since the manifests were cut.
-- **Slide 21 carries the automation's own state**, not a separate to-do view, and its gloss tells the story of
-  why — the split version was the one real design defect found while building this.
-- **The appendix is two slides, not three.** Workshop mechanics, and the four defects found building the demo.
-  The hotel-booking exercise from pptx slides 78–84 was dropped: it is a second model with no code behind it,
-  and this deck's argument is that the code is the point.
+**A grey/orange rhythm rather than acts.** `data-side="concept"` slides carry the module's own words and
+diagrams with a muted eyebrow; `data-side="answer"` slides carry code with the accent colour. The rail
+reads `n/13`. The pairing is not explained beyond one line on the roadmap: the first grey-then-orange
+transition teaches it, and a slide spent describing the slide format is a slide wasted. An earlier version of
+slide 2 did exactly that — it described grey and orange slides before the room had seen either, next to an
+unlabelled table of thirteen numbers — and it was replaced with a roadmap grouping the concepts under the
+four questions they answer.
+
+**No live demo.** Fourteen pairs fill 36 minutes. The close tells the room how to run the app themselves,
+and `demo-script.md` remains the runbook for a longer slot. That is a real loss — watching the order
+summary fill in field by field is the one thing a slide cannot show — and it is the trade the 45-minute
+slot forces.
+
+### Visuals: what could and could not be reused
+
+The concept slides use the module's own artwork, extracted from the pptx into `images/` (see
+`images/README.md`). Six files were usable:
+
+| Used | What |
+|---|---|
+| `event-model-legend.jpg` | a complete event model with the full legend — carries pairs 2, 3 and 5 |
+| `wireframe-products/basket/checkout.png` | the module's Web App lane, three screens |
+| `composite-ui.png` | the order confirmation, colour-boxed per view — the best slide in the source deck |
+| `dual-write.png` | the module's own hand-drawn EventStore → Outbox → Kafka diagram |
+
+**What could not be extracted:** the swimlane timelines on slides 18, 22 and 70–72 — the webshop event
+model itself — are drawn with PowerPoint shapes, not embedded images, so only the wireframes inside them
+came out. No renderer is available in this container to rasterise the slides. Those timelines are
+therefore redrawn as inline SVG or restated as `.chain` node lists, using the module's own event names.
 
 ## Build sequence — completed
 
@@ -188,9 +226,10 @@ here:
   the application because the upstream module declares it `provided`.
 - **`kotlin-eventsourcing` is experimental and one decision yields at most one event.** `place_order` must be
   modelled as a single `OrderPlaced` rather than a sequence, which is the right modelling answer anyway but needs
-  saying on slide 14 rather than discovering mid-demo.
-- **Compression loss.** Seventeen CQRS slides become three. The cut material — CQS code examples, the latency
-  arithmetic on slide 56 — should live in the notes so a question can be answered from them.
+  saying on pair 7's answer slide rather than discovering mid-demo.
+- **Compression loss.** Seventeen CQRS slides become one pair, and the latency arithmetic survives only as a
+  bullet on its concept slide. Everything cut is named on the "left out on purpose" slide and in the notes, so a
+  question can be answered from them rather than deflected.
 - **Demo surface.** PostgreSQL, Kafka and a projection that is eventually consistent, all in a 3-minute segment.
   The runbook needs a scripted fallback per step, and the shop page must await projections rather than assume.
 - **Build hygiene.** Apache licence headers on every new file, and the OWASP dependency check runs over examples.

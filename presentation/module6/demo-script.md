@@ -1,8 +1,12 @@
-# Live Demo Runbook — From Whiteboard To Event Store
+# Live Demo Runbook — Module 6, Concepts And Answers
 
-Act 6, slide 25. Budget **1.5 minutes on the slide, about 3 minutes in the browser**. Three beats, each
-with a fallback. If a beat fails, take the fallback and keep moving — debugging in front of the room
-costs more than the beat is worth.
+**Not part of the 36-minute deck.** Fourteen concept/answer pairs fill the slot, so there is no demo
+segment on a slide. This is the runbook for a longer slot, for the room that asks to see it, and for
+rehearsing the app before the talk.
+
+Three beats, about 3 minutes in the browser, each with a fallback. If a beat fails, take the fallback and
+keep moving — debugging in front of the room costs more than the beat is worth. Take it from pair 13
+(composite UI and automations), which is where a live screen shows what a slide cannot.
 
 ## Before the talk
 
@@ -78,8 +82,8 @@ docker run --rm --network host apache/kafka:4.3.1 \
 Say: *one local transaction wrote the event; a subscription published it afterwards. That is the dual
 write, answered.*
 
-**Fallback:** skip the consumer command and point at slide 23 instead. The Kafka image pull is the
-slowest thing in this runbook — pull it before the talk.
+**Fallback:** skip the consumer command and point at the dual-write pair instead (slides 29–30). The Kafka
+image pull is the slowest thing in this runbook — pull it before the talk.
 
 ## Beat 3 — look behind it (about 45 seconds)
 
@@ -123,5 +127,5 @@ port 5432, so only one can run at a time.
 ## Retired segment
 
 **Snapshots and closing books** were considered for this demo and deliberately left out: they are
-secondary mechanisms, and the trading demo already shows them properly. If somebody asks, answer from
-slide 26 (unbounded streams) and offer `examples/essentials-trading-demo` afterwards.
+secondary mechanisms, and the trading demo already shows them properly. If somebody asks, answer from the
+"left out on purpose" slide (31) and offer `examples/essentials-trading-demo` afterwards.
