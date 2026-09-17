@@ -144,10 +144,11 @@ class WebshopFlowIT {
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             val summary = orderSummaries.findById(orderId.toString())
             assertThat(summary).isPresent
-            // Compared by value, not by representation: the JPA converter for Amount round-trips through a
-            // double, so the stored figure comes back as 3999.0 where 3999.00 went in - and BigDecimal.equals
-            // is scale-sensitive. The same trap the change_product_price decider guards against.
-            assertThat(summary.get().total!!.compareTo(Amount.of("3999.00"))).isZero()
+            // Exact equality on purpose, scale included: this is the regression test for
+            // MoneyAttributeConverter. The framework's AmountAttributeConverter stores an Amount as a
+            // floating-point double, and under it this assertion failed with "but was: 3999.0". A numeric
+            // column round-trips the scale, so money read back from a view equals money put in.
+            assertThat(summary.get().total).isEqualTo(Amount.of("3999.00"))
         }
 
         commandBus.send<Any?, AddShippingDetailsToOrder>(

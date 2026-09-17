@@ -38,9 +38,14 @@ external_systems/<slice>/`, plus `events/ types/ routing/ config/` as context's 
   implement `*ValueType<SELF>`). Reason: Kotlin `value class` needs `jackson-module-kotlin` on the *persistence*
   mapper to write a scalar, and under Jackson 3 the starter ignores `Module` beans by design — app would need own
   `JSONEventSerializer` + per-flavour source sets. `CharSequenceType` needs none.
-- **`Amount` column needs explicit `@Convert`** — `AmountAttributeConverter` is `autoApply=true` but sits in
-  `types-springdata-jpa` jar, outside scanned packages. Converts via **double**: `1999.50` → `1999.5`. Compare
-  money with `compareTo`, never `equals`.
+- **Money uses `config/MoneyAttributeConverter.kt`, not the framework's converter.**
+  `AmountAttributeConverter` extends a base declared `AttributeConverter<T, Double>` → `double precision`
+  column, `1999.50` back as `1999.5`, `sum()` in float. Ours maps to `numeric`; every money field names it plus
+  `@Column(precision = 19, scale = 2)`. `autoApply` off on purpose — theirs is `autoApply=true`, two would be
+  ambiguous. `WebshopFlowIT` asserts exact scale, so a revert fails the build. Framework fix:
+  `docs/bigdecimal-attribute-converter-improvements.md`.
+- **`BigDecimal.equals` is scale-sensitive anyway** (`100.00 != 100.0`). Compare *incoming* money with
+  `compareTo`, as `ChangeProductPriceDecider` does — that comparison reads event JSON, never JPA.
 - **No field named `log` or `commandBus` in a processor subclass** — both exist on framework base classes; Kotlin
   property hides Java field. `log` = compile error (KT-56386), `commandBus` = warning. Use `logger`,
   `paymentCommandBus`.
@@ -49,9 +54,16 @@ external_systems/<slice>/`, plus `events/ types/ routing/ config/` as context's 
   subscription) worked most of the time: two subscriptions have no relative order, policy ran before row existed,
   leaned on redelivery. Under `-Pjackson2` retries ran out → dead letter → order never charged. Every handler ends
   by re-asking "row complete now?", so whichever event lands last triggers authorization.
-- **Dead letter is silent** — logged ERROR, nothing fails, business outcome never happens. `CentralizedMessageFetcher`
-  also treats `IllegalArgumentException` anywhere in cause chain as *permanent* → no retries. So Kotlin `require(...)`
-  in a message handler = dead letter on first delivery. Deciders may use `require`; handlers must not.
+- **Dead letter is silent** — one ERROR line, a dead-letter row, a queue count. Nothing throws (no caller is
+  waiting), no test fails, health stays green, business outcome never happens.
+- **`IllegalArgumentException` = permanent, zero retries** — `CentralizedMessageFetcher.isPermanentError` (and
+  `DefaultDurableQueueConsumer`'s identical copy) tests the outermost exception and the *deepest* root cause
+  against a hard-coded list, OR-ed after your `RedeliveryPolicy`, so `alwaysRetry()` cannot opt out. Kotlin
+  `require(...)` throws it — and so do `FailFast.requireNonNull`/`requireTrue`, this repo's guard idiom. Anything
+  reachable from a `@MessageHandler`, deciders sent via the command bus included, therefore dead-letters on first
+  delivery. `check(...)`/`IllegalStateException` retries. Use `IllegalArgumentException` only for "this message can
+  never be processed"; if the condition may become true later, throw something else, as
+  `WorkItemNotReadyException` does.
 - **`@Testcontainers`/`@Container` broken from Kotlin `companion object`** (Testcontainers 2.0.5). `@Container` and
   `@field:Container` alike: container stopped after first test method, rest of class hits destroyed DB
   (`FATAL: terminating connection due to unexpected postmaster exit`). `WebshopFlowIT` starts it in companion init;

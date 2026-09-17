@@ -30,7 +30,7 @@ import org.springframework.context.annotation.Bean
  * `payment/config`. What lives here is the application-level infrastructure that belongs to no context.
  */
 @SpringBootApplication
-class WebshopDemoApplication {
+open class WebshopDemoApplication {
 
     /**
      * Demo-only security: every caller is authenticated as the same principal and authorized for everything, which
@@ -40,11 +40,11 @@ class WebshopDemoApplication {
      * Never do this in a real application: it authorizes destructive admin operations for anonymous callers.
      */
     @Bean
-    fun essentialsAuthenticatedUser(): EssentialsAuthenticatedUser =
+    open fun essentialsAuthenticatedUser(): EssentialsAuthenticatedUser =
         EssentialsAuthenticatedUser.AllAccessAuthenticatedUser()
 
     @Bean
-    fun essentialsSecurityProvider(): EssentialsSecurityProvider =
+    open fun essentialsSecurityProvider(): EssentialsSecurityProvider =
         EssentialsSecurityProvider.AllAccessSecurityProvider()
 }
 

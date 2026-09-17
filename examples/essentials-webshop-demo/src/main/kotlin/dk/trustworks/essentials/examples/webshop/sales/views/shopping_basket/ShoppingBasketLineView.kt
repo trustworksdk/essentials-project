@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.examples.webshop.sales.views.shopping_basket
 
 import dk.trustworks.essentials.types.Amount
-import dk.trustworks.essentials.types.springdata.jpa.converters.AmountAttributeConverter
+import dk.trustworks.essentials.examples.webshop.config.MoneyAttributeConverter
 import jakarta.persistence.Column
 import jakarta.persistence.Convert
 import jakarta.persistence.Entity
@@ -47,7 +47,8 @@ data class ShoppingBasketLineView(
 
     var quantity: Int,
 
-    @Convert(converter = AmountAttributeConverter::class)
+    @Convert(converter = MoneyAttributeConverter::class)
+    @Column(precision = 19, scale = 2)
     var linePrice: Amount,
 
     var lastEventOrder: Long

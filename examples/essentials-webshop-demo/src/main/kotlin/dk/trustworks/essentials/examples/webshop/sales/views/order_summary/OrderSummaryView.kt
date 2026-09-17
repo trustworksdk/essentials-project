@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.examples.webshop.sales.views.order_summary
 
 import dk.trustworks.essentials.types.Amount
-import dk.trustworks.essentials.types.springdata.jpa.converters.AmountAttributeConverter
+import dk.trustworks.essentials.examples.webshop.config.MoneyAttributeConverter
 import jakarta.persistence.Column
 import jakarta.persistence.Convert
 import jakarta.persistence.Entity
@@ -45,7 +45,8 @@ data class OrderSummaryView(
     @Column(name = "basket_id")
     var basketId: String? = null,
 
-    @Convert(converter = AmountAttributeConverter::class)
+    @Convert(converter = MoneyAttributeConverter::class)
+    @Column(precision = 19, scale = 2)
     var total: Amount? = null,
 
     var shippingAddress: String? = null,

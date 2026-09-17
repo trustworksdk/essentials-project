@@ -17,7 +17,7 @@
 package dk.trustworks.essentials.examples.webshop.payment.automations.hold_funds_on_order_placed
 
 import dk.trustworks.essentials.types.Amount
-import dk.trustworks.essentials.types.springdata.jpa.converters.AmountAttributeConverter
+import dk.trustworks.essentials.examples.webshop.config.MoneyAttributeConverter
 import jakarta.persistence.Column
 import jakarta.persistence.Convert
 import jakarta.persistence.Entity
@@ -50,7 +50,8 @@ data class OrderAwaitingHold(
     @Column(name = "order_id")
     val id: String,
 
-    @Convert(converter = AmountAttributeConverter::class)
+    @Convert(converter = MoneyAttributeConverter::class)
+    @Column(precision = 19, scale = 2)
     var total: Amount? = null,
 
     var paymentMethod: String? = null,
