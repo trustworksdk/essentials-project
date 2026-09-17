@@ -38,6 +38,12 @@ CLAUDE.local.md
 .mcp.json
 .devcontainer/scripts/local-init.sh
 .claude/reports
+
+# Presentation source files — large binaries, kept out of history. The Module 6 deck that
+# examples/essentials-webshop-demo/CLAUDE.md refers to lives here locally; the rendered deck is
+# presentation/module6/deck.html, which is committed.
+docs/presentation/*.pptx
+
 # >>> devcontainer-stack (managed) >>>
 # graphify: ignore the rebuildable cache,  graph.json / wiki.
 graphify-out
