@@ -16,6 +16,7 @@
 
 package dk.trustworks.essentials.examples.webshop.sales.use_cases.change_product_price
 
+import dk.trustworks.essentials.examples.webshop.config.DomainRefusal
 import dk.trustworks.essentials.examples.webshop.sales.types.ProductId
 
 /**
@@ -28,4 +29,4 @@ import dk.trustworks.essentials.examples.webshop.sales.types.ProductId
  * class and its message - so the message is what the test actually asserts on.
  */
 class ProductHasNotBeenAddedException(val productId: ProductId) :
-    RuntimeException("Product '$productId' has not been added")
+    RuntimeException("Product '$productId' has not been added"), DomainRefusal

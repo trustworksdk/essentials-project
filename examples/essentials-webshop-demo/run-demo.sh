@@ -7,7 +7,13 @@
 # is reused, and its data is kept — that accumulated data is what makes the next run a meaningful
 # check that the persisted format still reads back.
 #
-#   ./run-demo.sh                 start in the foreground (Ctrl-C to stop)
+# Stopping the application — Ctrl-C, or --stop — runs Spring Boot's compose *stop* command, which
+# stops the containers and keeps both them and their volume. It does NOT run `down`, and it does
+# not remove data. Use --fresh when you want the opposite.
+#
+#   ./run-demo.sh                 start in the foreground (Ctrl-C to stop; data is kept)
+#   ./run-demo.sh --fresh         start, and throw the data away on stop (compose down -v)
+#   ./run-demo.sh --wipe          remove the containers and the volume now, without starting
 #   ./run-demo.sh --background    start detached, wait for readiness, report the log location
 #   ./run-demo.sh --stop          stop a detached run
 #   ./run-demo.sh --install       install the reactor modules the demo depends on, then start
@@ -31,21 +37,33 @@ fi
 
 background=false
 install_deps=false
+fresh=false
 maven_flags=(-DskipDependencyCheck=true)
+COMPOSE_PROJECT=essentials-webshop-demo
 
 for arg in "$@"; do
     case "$arg" in
         --background) background=true ;;
         --install)    install_deps=true ;;
+        --fresh)      fresh=true ;;
         --offline)    maven_flags+=(-o) ;;
+        --wipe)
+            # The project name comes from the `name:` key in compose.yml, so this reaches the stack the
+            # application started whichever copy of the file compose is pointed at. Without that key the
+            # project would be named after the directory the file was run from — `target/classes` — and this
+            # command would cheerfully report success against a project that does not exist.
+            docker compose -p "$COMPOSE_PROJECT" down -v || true
+            echo "Removed the ${COMPOSE_PROJECT} containers and their volume. The next run starts empty."
+            exit 0
+            ;;
         --stop)
             # Matched on the module coordinate rather than on "spring-boot:run", which would also kill a
             # sibling demo (the trading demo, say) running from the same reactor.
             pkill -f "spring-boot:run.*${MODULE}" || pkill -f "${MODULE}.*spring-boot:run" || true
             sleep 3
             pkill -f "WebshopDemoApplication" || true
-            echo "Stopped. The PostgreSQL and Kafka containers were left running:"
-            echo "  docker compose -f ${REPO_ROOT}/examples/essentials-webshop-demo/src/main/resources/compose.yml down"
+            echo "Stopped. The containers were stopped but kept, and so was their data."
+            echo "  ./run-demo.sh --wipe    remove the containers and the volume"
             exit 0
             ;;
         *)
@@ -62,7 +80,16 @@ if [[ "$install_deps" == true ]]; then
     mvn -q "${maven_flags[@]}" -pl "$MODULE" -am -DskipTests install
 fi
 
-run_args=("${maven_flags[@]}" -pl "$MODULE" -Dspring-boot.run.profiles=compose spring-boot:run)
+profiles=compose
+if [[ "$fresh" == true ]]; then
+    # `compose-fresh` sets spring.docker.compose.stop.command=down with `-v`, so a *graceful* shutdown takes
+    # the volume with it. A kill -9 skips the JVM shutdown hook and therefore skips this too; --wipe is the
+    # way to clean up after one of those.
+    profiles=compose,compose-fresh
+    echo "Running with --fresh: the database is thrown away when the application stops."
+fi
+
+run_args=("${maven_flags[@]}" -pl "$MODULE" -Dspring-boot.run.profiles="$profiles" spring-boot:run)
 
 if [[ "$background" == false ]]; then
     exec mvn "${run_args[@]}"

@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.examples.webshop.shipping.use_cases.ship_order
+package dk.trustworks.essentials.examples.webshop.sales.use_cases.cancel_order
 
 import dk.trustworks.essentials.examples.webshop.config.DomainRefusal
 import dk.trustworks.essentials.examples.webshop.sales.types.OrderId
 
-/** Shipping an order the warehouse has not been asked to pack is refused, not deferred. */
-class OrderHasNotBeenPackagedException(val orderId: OrderId) :
-    RuntimeException("Order '$orderId' has not been packaged yet"), DomainRefusal
+/** Raised by this slice alone, so it lives here rather than in the context's shared `types/`. */
+class OrderCannotBeCancelledException(val orderId: OrderId, val because: String) :
+    RuntimeException("Order '$orderId' cannot be cancelled: $because"), DomainRefusal

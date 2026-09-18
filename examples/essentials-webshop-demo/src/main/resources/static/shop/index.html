@@ -42,6 +42,7 @@
     button { background: #22303f; color: var(--ink); border: 1px solid var(--rule); border-radius: 4px;
              padding: 6px 10px; cursor: pointer; font-size: 13px; }
     button:hover { border-color: var(--accent); }
+    button:disabled { opacity: .45; cursor: default; border-color: var(--rule); }
     button.primary { background: var(--accent); color: #17202c; border-color: var(--accent); font-weight: 600; }
     input, select { background: #0e141d; color: var(--ink); border: 1px solid var(--rule); border-radius: 4px;
                     padding: 6px 8px; font-size: 13px; width: 100%; }
@@ -88,8 +89,8 @@
     </div>
     <p></p>
     <table>
-      <thead><tr><th>Product</th><th class="num">Price</th><th></th></tr></thead>
-      <tbody id="catalog"><tr><td colspan="3" class="empty">no products yet</td></tr></tbody>
+      <thead><tr><th>Product</th><th class="num">Price</th><th>Basket</th></tr></thead>
+      <tbody id="catalog"><tr><td colspan="3" class="empty">no products yet &mdash; add one above</td></tr></tbody>
     </table>
   </section>
 
@@ -101,11 +102,12 @@
     <p></p>
     <table>
       <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Line</th><th></th></tr></thead>
-      <tbody id="basket"><tr><td colspan="4" class="empty">basket is empty</td></tr></tbody>
+      <tbody id="basket"><tr><td colspan="4" class="empty">basket is empty &mdash; use "Add to basket" in the catalog</td></tr></tbody>
       <tfoot><tr><th colspan="2">Total</th><th class="num" id="basket-total">0</th><th></th></tr></tfoot>
     </table>
     <p></p>
     <button class="primary" onclick="checkOut()">Request checkout</button>
+    <button onclick="refreshBasket()">Refresh</button>
     <button onclick="newBasket()">New basket</button>
   </section>
 
@@ -135,6 +137,7 @@
     <p></p>
     <button onclick="addDetails()">Add shipping &amp; payment details</button>
     <button class="primary" onclick="placeOrder()">Place order</button>
+    <button onclick="clearOrder()">Clear</button>
   </section>
 
   <section class="lane">
@@ -146,18 +149,60 @@
       <dt>Payment</dt><dd id="s-payment">&mdash;</dd>
       <dt>Shipping</dt><dd id="s-shipping">&mdash;</dd>
     </dl>
+    <p class="empty" id="s-reason" hidden></p>
+    <div id="s-actions" hidden>
+      <button onclick="cancelOrder()">Cancel order</button>
+      <span class="empty">The card was refused, so this order will never be paid for.</span>
+    </div>
+    <p class="empty">Event log &mdash; newest first</p>
     <div class="log" id="summary-log"></div>
+  </section>
+
+  <section class="lane wide">
+    <h2>Order history &mdash; sales</h2>
+    <table>
+      <thead><tr><th>Order</th><th class="num">Total</th><th>Payment</th><th>Shipping</th><th></th></tr></thead>
+      <tbody id="orders"><tr><td colspan="5" class="empty">no orders yet</td></tr></tbody>
+    </table>
+    <p></p>
+    <button id="orders-prev" onclick="ordersPage(-1)">&larr; Newer</button>
+    <button id="orders-next" onclick="ordersPage(1)">Older &rarr;</button>
+    <span class="mono" id="orders-range">&mdash;</span>
+    <button onclick="refreshOrders()">Refresh</button>
+    <span class="empty">The same read model the summary above reads, queried without an id &mdash; one page at a
+      time, because the projection outlives the browser and a demo machine accumulates orders. Pick a row to
+      load that order into the summary panel.</span>
   </section>
 
   <section class="lane wide">
     <h2>Warehouse &mdash; shipping (to-do list, human trigger)</h2>
     <table>
-      <thead><tr><th>Order</th><th>Ship to</th><th>Method</th><th></th></tr></thead>
-      <tbody id="packaging"><tr><td colspan="4" class="empty">nothing to pack</td></tr></tbody>
+      <thead><tr><th>Order</th><th>Ship to</th><th>Method</th><th>State</th><th></th></tr></thead>
+      <tbody id="packaging"><tr><td colspan="5" class="empty">nothing to pack</td></tr></tbody>
     </table>
     <p></p>
     <button onclick="refreshWarehouse()">Refresh</button>
-    <span class="empty">Rows appear when <code>OrderPlaced</code> is projected, and leave when packaging is requested.</span>
+    <span class="empty">Rows appear when <code>OrderPlaced</code> is projected, carry the order through packing and
+      dispatch, and leave on <code>OrderShipped</code> or <code>OrderCancelled</code>. Packing a card order asks the
+      gateway for the money, so the row waits in <code>AWAITING_PAYMENT</code> until <code>FundsCaptured</code>
+      arrives on the webhook &mdash; a hold is a promise, and the parcel waits for the money rather than the
+      promise. A refusal, before or after packing, leaves the row visible with no button: this read model is the
+      guard, because a decider cannot see another context's stream.</span>
+  </section>
+
+  <section class="lane wide">
+    <h2>Captures awaiting outcome &mdash; payment (the unknowns)</h2>
+    <table>
+      <thead><tr><th>Order</th><th>Idempotency key</th><th class="num">Amount</th><th class="num">Waiting</th></tr></thead>
+      <tbody id="captures"><tr><td colspan="4" class="empty">nothing outstanding</td></tr></tbody>
+    </table>
+    <p></p>
+    <button onclick="refreshCaptures()">Refresh</button>
+    <span class="empty">A row here is money in an unknown state: we asked the gateway to charge the card and have
+      no answer yet. Rows normally vanish within a second or two. One that stays is what a lost callback looks
+      like &mdash; the reconciler asks the gateway directly once it has waited long enough, because a timeout is
+      not a failure, it is an unknown, and the only way to resolve an unknown is to ask. Price something at
+      <code>&hellip;.13</code> to drop a callback on purpose.</span>
   </section>
 </div>
 
@@ -174,11 +219,33 @@
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined
     });
-    if (!res.ok && res.status !== 204 && res.status !== 404) {
-      log(method + ' ' + path + ' → ' + res.status);
-    }
     const text = await res.text();
-    return { status: res.status, body: text ? JSON.parse(text) : null };
+    // Not every endpoint answers in JSON - `POST /api/products` replies `text/plain` with the product id - and
+    // parsing that as JSON throws inside this helper, which rejects the caller's promise before it can log or
+    // refresh anything. The button then looks like it did nothing at all. Ask what the body actually is.
+    const isJson = (res.headers.get('content-type') || '').includes('json');
+    const payload = text ? (isJson ? JSON.parse(text) : text) : null;
+    // `ok` is the only thing the callers below are allowed to believe. A 409 is the domain refusing - the
+    // decider looked at its stream and said no - and it carries the reason; anything else non-2xx is a defect.
+    return { status: res.status, ok: res.ok, body: res.ok ? payload : null, error: res.ok ? null : payload };
+  };
+
+  /**
+   * Report a refused command instead of announcing the event it did not record.
+   *
+   * This screen used to log "ItemAddedToShoppingBasket" the moment the request came back, whatever it came back
+   * as - so adding to a basket that had already been checked out printed a fact that never happened, while the
+   * basket panel stayed empty and correct. A screen that lies about the write is worse than one that says
+   * nothing, because the read model looks broken instead.
+   */
+  const refused = (res, what) => {
+    if (res.ok) return false;
+    const detail = typeof res.error === 'string'
+      ? res.error
+      : (res.error && (res.error.message || res.error.error));
+    const why = detail || ('HTTP ' + res.status);
+    log('<b>refused</b> ' + what + ' &mdash; ' + why);
+    return true;
   };
 
   const log = (msg) => {
@@ -188,43 +255,79 @@
 
   const show = (id, value) => document.getElementById(id).innerHTML = value;
 
+  // Money is exact everywhere except here. The column is `numeric(19,2)`, the event JSON carries "1999.50", and
+  // the response body says 1999.50 - then `JSON.parse` hands JavaScript a binary double, and a double has no
+  // notion of trailing zeroes, so it renders as 1999.5. The scale is a presentation concern by the time it
+  // reaches this file; it is restored on the way out, and never relied upon on the way in (see addProduct).
+  const money = (v) => (v === null || v === undefined || v === '') ? '&mdash;' : Number(v).toFixed(2);
+
+  // A command returns once its event is appended, but every panel reads a projection that catches up on its own
+  // subscription, so one refresh at one fixed delay is a guess that is sometimes too early. Refresh a few times
+  // over the next couple of seconds instead: the first pass usually already has the row, the later passes are
+  // what makes the asynchronous ones (payment hold, packaging list) show up without touching "Refresh".
+  const CATCH_UP_DELAYS = [250, 800, 1800];
+
+  const refreshAfterCommand = (panels, delays = CATCH_UP_DELAYS) =>
+    delays.forEach(ms => setTimeout(() => panels.forEach(panel => panel()), ms));
+
   function newBasket() {
     basketId = rid('basket');
-    orderId = null;
-    show('order-id', '&mdash;');
+    clearOrder();
     refreshBasket();
     log('new basket ' + basketId);
   }
 
+  /**
+   * Forget which order this browser is looking at, and blank the panels that were showing it.
+   *
+   * Nothing is written and nothing is deleted: the order still exists, its events are still in the stream, and
+   * the history panel below still lists it. This clears the *screen*, which is the only thing the browser owns.
+   */
+  function clearOrder() {
+    orderId = null;
+    show('order-id', '&mdash;');
+    ['s-total', 's-address', 's-placed', 's-payment', 's-shipping'].forEach(id => show(id, '&mdash;'));
+    document.getElementById('s-reason').hidden = true;
+    document.getElementById('s-actions').hidden = true;
+  }
+
   async function addProduct() {
     const productId = rid('prod');
-    const price = Number(document.getElementById('p-price').value);
+    // Sent as the string the user typed rather than as a JSON number: `Amount` deserializes from either, and a
+    // string is the one that puts "1999.50" into the event stream instead of a double's idea of it.
+    const price = document.getElementById('p-price').value.trim();
     const res = await api('POST', '/api/products', {
       id: productId, name: document.getElementById('p-name').value, price: price
     });
+    if (refused(res, 'add product')) return;
     log(res.status === 201 ? 'ProductAdded ' + productId : 'no event (already added)');
-    setTimeout(refreshCatalog, 400);
+    refreshAfterCommand([refreshCatalog]);
   }
 
   async function refreshCatalog() {
     const { body } = await api('GET', '/api/products-for-sale');
     const rows = (body || []).map(p => `
       <tr><td>${p.name}<br><span class="mono">${p.productId}</span></td>
-          <td class="num">${p.price}</td>
-          <td><button onclick="addToBasket('${p.productId}', ${p.price})">Add</button></td></tr>`);
-    show('catalog', rows.join('') || '<tr><td colspan="3" class="empty">no products yet</td></tr>');
+          <td class="num">${money(p.price)}</td>
+          <td><button onclick="addToBasket('${p.productId}', '${money(p.price)}')">Add to basket</button></td></tr>`);
+    show('catalog', rows.join('') || '<tr><td colspan="3" class="empty">no products yet &mdash; add one above</td></tr>');
   }
 
   async function addToBasket(productId, price) {
-    await api('POST', '/api/shopping-baskets/' + basketId + '/items', { product: productId, price: price });
+    const res = await api('POST', '/api/shopping-baskets/' + basketId + '/items',
+      { product: productId, price: price });
+    // The usual refusal here is a basket that has already been checked out: it is an order now, and a closed
+    // basket takes no more items. "New basket" is the way on.
+    if (refused(res, 'add to basket')) return;
     log('ItemAddedToShoppingBasket ' + productId);
-    setTimeout(refreshBasket, 400);
+    refreshAfterCommand([refreshBasket]);
   }
 
   async function removeFromBasket(productId) {
     const res = await api('DELETE', '/api/shopping-baskets/' + basketId + '/items/' + productId);
+    if (refused(res, 'remove from basket')) return;
     log(res.status === 204 ? 'ItemRemovedFromShoppingBasket ' + productId : 'no event (not in basket)');
-    setTimeout(refreshBasket, 400);
+    refreshAfterCommand([refreshBasket]);
   }
 
   async function refreshBasket() {
@@ -234,20 +337,23 @@
     const rows = lines.map(l => `
       <tr><td><span class="mono">${l.productId}</span></td>
           <td class="num">${l.quantity}</td>
-          <td class="num">${l.linePrice}</td>
+          <td class="num">${money(l.linePrice)}</td>
           <td><button onclick="removeFromBasket('${l.productId}')">Remove</button></td></tr>`);
-    show('basket', rows.join('') || '<tr><td colspan="4" class="empty">basket is empty</td></tr>');
-    show('basket-total', (body && body.total) || 0);
+    show('basket', rows.join('')
+      || '<tr><td colspan="4" class="empty">basket is empty &mdash; use "Add to basket" in the catalog</td></tr>');
+    show('basket-total', money((body && body.total) || 0));
   }
 
   async function checkOut() {
     const candidate = rid('order');
-    const { body } = await api('POST', '/api/shopping-baskets/' + basketId + '/checkout', { orderId: candidate });
+    const res = await api('POST', '/api/shopping-baskets/' + basketId + '/checkout', { orderId: candidate });
+    if (refused(res, 'check out')) return;
+    const body = res.body;
     orderId = (body && body.orderId) || candidate;
+    ordersPageNo = 0;   // the order just minted is the newest one, and that is page one
     show('order-id', orderId);
-    log('CheckOutRequested → order ' + orderId + ', total ' + (body ? body.total : '?'));
-    setTimeout(refreshBasket, 400);
-    setTimeout(refreshSummary, 600);
+    log('CheckOutRequested → order ' + orderId + ', total ' + (body ? money(body.total) : '?'));
+    refreshAfterCommand([refreshBasket, refreshSummary, refreshOrders]);
   }
 
   const address = () => ({
@@ -259,65 +365,170 @@
 
   async function addDetails() {
     if (!orderId) { log('check out first — there is no order yet'); return; }
-    await api('PUT', '/api/orders/' + orderId + '/shipping-details', {
+    const shipping = await api('PUT', '/api/orders/' + orderId + '/shipping-details', {
       shippingAddress: address(), shippingMethod: document.getElementById('c-shipping').value
     });
-    await api('PUT', '/api/orders/' + orderId + '/payment-details', {
+    if (refused(shipping, 'add shipping details')) return;
+    const payment = await api('PUT', '/api/orders/' + orderId + '/payment-details', {
       invoiceAddress: address(), paymentMethod: document.getElementById('c-payment').value
     });
+    if (refused(payment, 'add payment details')) return;
     log('ShippingDetailsAdded + PaymentDetailsAdded');
-    setTimeout(refreshSummary, 600);
+    refreshAfterCommand([refreshSummary, refreshOrders]);
   }
 
   async function placeOrder() {
     if (!orderId) { log('check out first — there is no order yet'); return; }
-    await api('POST', '/api/orders/' + orderId + '/place');
+    const res = await api('POST', '/api/orders/' + orderId + '/place');
+    if (refused(res, 'place order')) return;
     log('OrderPlaced — payment hold and packaging list follow asynchronously');
-    // Poll rather than assume: the automation and both projections run on their own subscriptions.
-    [700, 1500, 3000].forEach(ms => setTimeout(() => { refreshSummary(); refreshWarehouse(); }, ms));
+    // Poll rather than assume: the automation and both projections run on their own subscriptions, and the
+    // credit-card hold goes through a gateway, so this one gets a longer tail than the rest.
+    refreshAfterCommand([refreshSummary, refreshWarehouse, refreshOrders], [250, 800, 1800, 3200]);
   }
 
   async function refreshSummary() {
     if (!orderId) return;
     const { status, body } = await api('GET', '/api/orders/' + orderId + '/summary');
     if (status === 404 || !body) { show('s-total', '<span class="empty">not projected yet</span>'); return; }
-    show('s-total', body.total === null ? '&mdash;' : body.total);
+    show('s-total', money(body.total));
     show('s-address', body.shippingAddress || '&mdash;');
-    show('s-placed', body.placed ? '<span class="badge ok">yes</span>' : '<span class="badge">no</span>');
+    show('s-placed', body.cancelled
+      ? '<span class="badge warn">cancelled</span>'
+      : body.placed ? '<span class="badge ok">yes</span>' : '<span class="badge">no</span>');
     const pay = body.paymentStatus;
-    show('s-payment', '<span class="badge ' + (pay === 'HELD' ? 'ok' : pay === 'REJECTED' ? 'warn' : '') + '">'
-      + pay + '</span>');
+    const payClass = (pay === 'CAPTURED') ? 'ok'
+      : (pay === 'HELD') ? 'ok'
+      : (pay === 'REJECTED' || pay === 'CAPTURE_FAILED') ? 'warn' : '';
+    show('s-payment', '<span class="badge ' + payClass + '">' + pay + '</span>');
     show('s-shipping', '<span class="badge ' + (body.shippingStatus.startsWith('SHIPPED') ? 'ok' : '') + '">'
       + body.shippingStatus + '</span>');
+
+    // The gateway's own words, carried on CreditCardHoldRejected and projected onto this row. Without it the
+    // screen says REJECTED and the reason lives only in the server log.
+    const reason = body.cancelled ? 'Cancelled: ' + body.cancellationReason : body.paymentDeclineReason;
+    document.getElementById('s-reason').innerHTML = reason || '';
+    document.getElementById('s-reason').hidden = !reason;
+
+    // Cancelling is offered on the screen, not enforced in the decider: CancelOrderDecider sees the `Orders`
+    // stream alone and cannot tell whether the card was refused. The read model knows, so the read model asks.
+    document.getElementById('s-actions').hidden = !(pay === 'REJECTED' && !body.cancelled);
+  }
+
+  async function cancelOrder() {
+    if (!orderId) return;
+    const res = await api('POST', '/api/orders/' + orderId + '/cancel',
+      { reason: 'Payment was declined by the card issuer' });
+    if (refused(res, 'cancel order')) return;
+    log(res.status === 200 ? 'OrderCancelled ' + orderId : 'no event (already cancelled)');
+    refreshAfterCommand([refreshSummary, refreshWarehouse, refreshOrders]);
+  }
+
+  // Which page of the history the browser is looking at. The server clamps both numbers, so this is a
+  // convenience, not a guarantee - the page after the last one comes back as an empty page, not an error.
+  let ordersPageNo = 0;
+  const ORDERS_PAGE_SIZE = 10;
+
+  function ordersPage(delta) {
+    ordersPageNo = Math.max(0, ordersPageNo + delta);
+    refreshOrders();
+  }
+
+  async function refreshOrders() {
+    const { body } = await api('GET', '/api/orders?page=' + ordersPageNo + '&size=' + ORDERS_PAGE_SIZE);
+    const orders = (body && body.orders) || [];
+    // Deleting the last order on a page - or landing past the end after a refresh - should not leave the panel
+    // showing nothing with no way back. Step back one page and ask again.
+    if (orders.length === 0 && ordersPageNo > 0) {
+      ordersPageNo = Math.max(0, (body && body.totalPages ? body.totalPages : 1) - 1);
+      return refreshOrders();
+    }
+    const total = (body && body.totalOrders) || 0;
+    const from = total === 0 ? 0 : ordersPageNo * ORDERS_PAGE_SIZE + 1;
+    const to = Math.min(from + orders.length - 1, total);
+    show('orders-range', total === 0 ? 'no orders' : from + '&ndash;' + to + ' of ' + total);
+    document.getElementById('orders-prev').disabled = ordersPageNo === 0;
+    document.getElementById('orders-next').disabled = to >= total;
+
+    const rows = orders.map(o => {
+      const pay = o.cancelled ? 'badge warn' : o.paymentStatus === 'HELD' ? 'badge ok'
+        : o.paymentStatus === 'REJECTED' ? 'badge warn' : 'badge';
+      const ship = o.shippingStatus.startsWith('SHIPPED') ? 'badge ok' : 'badge';
+      return `
+      <tr><td><span class="mono">${o.orderId}</span>${o.cancelled ? ' <span class="badge warn">cancelled</span>' : ''}</td>
+          <td class="num">${money(o.total)}</td>
+          <td><span class="${pay}">${o.paymentStatus}</span></td>
+          <td><span class="${ship}">${o.shippingStatus}</span></td>
+          <td><button onclick="selectOrder('${o.orderId}')">Show</button></td></tr>`;
+    });
+    show('orders', rows.join('') || '<tr><td colspan="5" class="empty">no orders yet</td></tr>');
+  }
+
+  function selectOrder(id) {
+    orderId = id;
+    show('order-id', id);
+    log('showing order ' + id);
+    refreshSummary();
+  }
+
+  async function refreshCaptures() {
+    const { body } = await api('GET', '/api/payment/captures-awaiting-outcome');
+    const rows = (body || []).map(c => `
+      <tr><td><span class="mono">${c.orderId}</span></td>
+          <td><span class="mono">${c.idempotencyKey}</span></td>
+          <td class="num">${money(c.amount)}</td>
+          <td class="num">${c.waitingSeconds}s</td></tr>`);
+    show('captures', rows.join('') || '<tr><td colspan="4" class="empty">nothing outstanding</td></tr>');
   }
 
   async function refreshWarehouse() {
     const { body } = await api('GET', '/api/shipping/orders-ready-for-packaging');
-    const rows = (body || []).map(o => `
+    // One button per row, because the row is at exactly one point in its work: pack it, or dispatch what was
+    // packed. Offering both was what let "Ship" be pressed on an unpacked order, which ShipOrderDecider refuses.
+    const rows = (body || []).map(o => {
+      const action =
+        o.status === 'BLOCKED' ? `<span class="empty">${o.paymentDeclineReason}</span>`
+        : o.status === 'AWAITING_PAYMENT' ? `<span class="empty">waiting for the gateway to settle</span>`
+        : o.status === 'READY_TO_DISPATCH' ? `<button onclick="shipOrder('${o.orderId}')">Ship</button>`
+        : `<button onclick="packageOrder('${o.orderId}')">Package</button>`;
+      const badge = o.status === 'BLOCKED' ? 'badge warn'
+        : o.status === 'READY_TO_DISPATCH' ? 'badge ok' : 'badge';
+      return `
       <tr><td><span class="mono">${o.orderId}</span></td>
           <td>${o.shippingAddress}</td>
           <td>${o.shippingMethod}</td>
-          <td><button onclick="packageOrder('${o.orderId}')">Package</button>
-              <button onclick="shipOrder('${o.orderId}')">Ship</button></td></tr>`);
-    show('packaging', rows.join('') || '<tr><td colspan="4" class="empty">nothing to pack</td></tr>');
+          <td><span class="${badge}">${o.status}</span></td>
+          <td>${action}</td></tr>`;
+    });
+    show('packaging', rows.join('') || '<tr><td colspan="5" class="empty">nothing to pack</td></tr>');
   }
 
   async function packageOrder(id) {
-    await api('POST', '/api/shipping/orders/' + id + '/package');
+    const res = await api('POST', '/api/shipping/orders/' + id + '/package');
+    if (refused(res, 'package order')) return;
     log('OrderPackagingRequested ' + id);
-    setTimeout(() => { refreshWarehouse(); refreshSummary(); }, 700);
+    // Packing a card order is what starts the charge, so the pending-captures panel and the summary both have
+    // something to say a moment later - and the webhook lands after that, hence the longer tail here.
+    refreshAfterCommand([refreshWarehouse, refreshSummary, refreshOrders, refreshCaptures],
+      [250, 800, 1800, 3200, 5000]);
   }
 
   async function shipOrder(id) {
-    await api('POST', '/api/shipping/orders/' + id + '/ship',
+    const res = await api('POST', '/api/shipping/orders/' + id + '/ship',
       { trackingNumber: 'TRACK-' + Math.floor(Math.random() * 100000) });
+    if (refused(res, 'ship order')) return;
     log('OrderShipped ' + id + ' — also published to Kafka');
-    setTimeout(() => { refreshWarehouse(); refreshSummary(); }, 700);
+    // Packing a card order is what starts the charge, so the pending-captures panel and the summary both have
+    // something to say a moment later - and the webhook lands after that, hence the longer tail here.
+    refreshAfterCommand([refreshWarehouse, refreshSummary, refreshOrders, refreshCaptures],
+      [250, 800, 1800, 3200, 5000]);
   }
 
   refreshCatalog();
   refreshBasket();
+  refreshOrders();
   refreshWarehouse();
+  refreshCaptures();
 </script>
 </body>
 </html>

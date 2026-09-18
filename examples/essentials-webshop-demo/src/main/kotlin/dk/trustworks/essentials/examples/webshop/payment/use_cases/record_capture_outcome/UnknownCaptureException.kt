@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.examples.webshop.shipping.use_cases.ship_order
+package dk.trustworks.essentials.examples.webshop.payment.use_cases.record_capture_outcome
 
-import dk.trustworks.essentials.examples.webshop.config.DomainRefusal
+import dk.trustworks.essentials.examples.webshop.payment.types.IdempotencyKey
 import dk.trustworks.essentials.examples.webshop.sales.types.OrderId
 
-/** Shipping an order the warehouse has not been asked to pack is refused, not deferred. */
-class OrderHasNotBeenPackagedException(val orderId: OrderId) :
-    RuntimeException("Order '$orderId' has not been packaged yet"), DomainRefusal
+/**
+ * An outcome arrived for a key this order never asked with. Waiting will not make it match, so this one is
+ * permanent on purpose - it belongs in a dead letter where someone can look at it, not in a retry loop.
+ */
+class UnknownCaptureException(val orderId: OrderId, val idempotencyKey: IdempotencyKey) :
+    IllegalArgumentException("Order '$orderId' has no capture with idempotency key '$idempotencyKey'")

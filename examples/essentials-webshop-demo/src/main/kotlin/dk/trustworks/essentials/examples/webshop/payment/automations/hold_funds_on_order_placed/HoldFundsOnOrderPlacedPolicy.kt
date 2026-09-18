@@ -75,6 +75,12 @@ class HoldFundsOnOrderPlacedPolicy(
 
     override fun getProcessorName(): String = "HoldFundsOnOrderPlacedPolicy"
 
+    /**
+     * Same reasoning as `CaptureFundsWhenPackagedPolicy`: a new subscription for a policy that calls a
+     * payment gateway starts at the latest event, or deploying it authorizes every order in history.
+     */
+    override fun isStartSubscriptionFromLatestEvent(): Boolean = true
+
     override fun reactsToEventsRelatedToAggregateTypes(): List<AggregateType> =
         listOf(
             SalesAggregateTypes.SHOPPING_BASKETS,
@@ -117,6 +123,7 @@ class HoldFundsOnOrderPlacedPolicy(
             // An invoice order needs no authorization. Recording that as an outcome closes the work item
             // instead of leaving it open forever.
             row.outcome = "NOT_REQUIRED"
+            logger.info("Order '{}' pays by {} - no card hold is needed", orderId, row.paymentMethod)
         }
         awaitingHold.save(row)
 
@@ -130,11 +137,17 @@ class HoldFundsOnOrderPlacedPolicy(
         val total = row.total!!
         logger.debug("Order '{}' is complete work: asking the gateway to hold {}", orderId, total)
         val command = when (val result = paymentGateway.placeHold(orderId, total)) {
-            is HoldResult.Authorized ->
+            is HoldResult.Authorized -> {
+                logger.info("Hold of {} authorized for order '{}' ({})", total, orderId, result.authorizationCode)
                 PlaceHoldOnCreditCard(orderId, total, authorizationCode = result.authorizationCode)
+            }
 
-            is HoldResult.Declined ->
+            is HoldResult.Declined -> {
+                // The one outcome nothing else will shout about: no exception is thrown, no test fails, and the
+                // order simply stops being fulfillable. Worth a line of its own in the server log.
+                logger.info("Hold of {} DECLINED for order '{}': {}", total, orderId, result.reason)
                 PlaceHoldOnCreditCard(orderId, total, declineReason = result.reason)
+            }
         }
         paymentCommandBus.send<Any?, PlaceHoldOnCreditCard>(command)
     }

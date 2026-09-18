@@ -22,11 +22,43 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 class OrdersReadyForPackagingAPI(private val repository: OrderReadyForPackagingViewRepository) {
 
-    data class PackagingWorkItem(val orderId: String, val shippingAddress: String, val shippingMethod: String)
+    data class PackagingWorkItem(
+        val orderId: String,
+        val shippingAddress: String,
+        val shippingMethod: String,
+        val status: String,
+        val paymentDeclineReason: String?
+    )
 
-    /** What the warehouse screen renders. One query, no joins, no calls to `sales`. */
+    /**
+     * What the warehouse screen renders. One query, no joins, no calls to `sales` or `payment`.
+     *
+     * The status is derived here rather than stored, because it is a presentation of four independent facts and
+     * not a fifth fact in its own right. The ordering encodes the business rules:
+     *
+     * - a refusal - of the authorization, or of the settlement afterwards - outranks everything, so a card
+     *   declined after the parcel was packed sends the row back to `BLOCKED` and takes the dispatch button with
+     *   it, which is the outcome the warehouse wants and a stored status would have had to remember to produce;
+     * - packed but unsettled is `AWAITING_PAYMENT`, not dispatchable - a hold is a promise, and the parcel
+     *   waits for the money rather than for the promise;
+     * - packed and settled is `READY_TO_DISPATCH`, and only then does anything offer to ship it.
+     */
     @GetMapping("/api/shipping/orders-ready-for-packaging")
     fun ordersReadyForPackaging(): List<PackagingWorkItem> =
         repository.findByReadyToPackTrue()
-            .map { PackagingWorkItem(it.id, it.shippingAddress, it.shippingMethod) }
+            .map {
+                PackagingWorkItem(
+                    orderId = it.id,
+                    shippingAddress = it.shippingAddress,
+                    shippingMethod = it.shippingMethod,
+                    status = when {
+                        it.paymentDeclineReason != null -> "BLOCKED"
+                        it.captureFailureReason != null -> "BLOCKED"
+                        it.packaged && it.paymentSettled -> "READY_TO_DISPATCH"
+                        it.packaged -> "AWAITING_PAYMENT"
+                        else -> "READY_TO_PACK"
+                    },
+                    paymentDeclineReason = it.paymentDeclineReason ?: it.captureFailureReason
+                )
+            }
 }

@@ -7,6 +7,13 @@ logging:
     root: INFO
     org.springframework: INFO
     dk.trustworks.essentials: INFO
+    # The demo's own classes log the outcomes worth watching during a talk and nothing else: a command refused,
+    # a hold authorized or declined, an order blocked or cancelled, an event published to Kafka. Set this to
+    # DEBUG to also see the payment automation deciding whether its work item is complete yet.
+    dk.trustworks.essentials.examples.webshop: INFO
+    # Creating the producer logs its entire effective configuration - one event, about a hundred lines, right in
+    # the middle of the one moment the demo wants the console readable. Warnings still come through.
+    org.apache.kafka.common.config.AbstractConfig: WARN
 
 management:
   endpoints:

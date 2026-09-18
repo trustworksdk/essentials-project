@@ -14,11 +14,19 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.examples.webshop.shipping.use_cases.ship_order
+package dk.trustworks.essentials.examples.webshop.sales.use_cases.cancel_order
 
-import dk.trustworks.essentials.examples.webshop.config.DomainRefusal
+import dk.trustworks.essentials.examples.webshop.sales.routing.OrderCommand
 import dk.trustworks.essentials.examples.webshop.sales.types.OrderId
 
-/** Shipping an order the warehouse has not been asked to pack is refused, not deferred. */
-class OrderHasNotBeenPackagedException(val orderId: OrderId) :
-    RuntimeException("Order '$orderId' has not been packaged yet"), DomainRefusal
+/**
+ * Call off a placed order, and say why.
+ *
+ * [reason] is carried by the command rather than derived by the decider, for the same reason the payment
+ * automation carries the gateway's answer: the decider is a pure function of its own stream, and "the card was
+ * declined" is a fact from another context that it has no way to look up.
+ */
+data class CancelOrder(
+    override val id: OrderId,
+    val reason: String
+) : OrderCommand

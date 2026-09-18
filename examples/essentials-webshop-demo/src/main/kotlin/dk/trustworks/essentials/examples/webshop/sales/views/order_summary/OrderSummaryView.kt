@@ -23,6 +23,10 @@ import jakarta.persistence.Convert
 import jakarta.persistence.Entity
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import org.hibernate.annotations.ColumnDefault
+import java.time.OffsetDateTime
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
 
 /**
@@ -59,7 +63,47 @@ data class OrderSummaryView(
 
     var paymentStatus: String = "NOT_REQUIRED",
 
-    var shippingStatus: String = "NOT_STARTED"
+    /**
+     * The gateway's own words, carried here from `CreditCardHoldRejected`, because "REJECTED" on its own sends
+     * whoever reads this screen to the server log to find out why.
+     */
+    var paymentDeclineReason: String? = null,
+
+    var shippingStatus: String = "NOT_STARTED",
+
+    /**
+     * `@ColumnDefault` is load-bearing, not decoration. `ddl-auto: update` adds a new non-null column with
+     * `alter table ... add column cancelled boolean not null`, which PostgreSQL refuses on a table that already
+     * has rows - and Hibernate logs that refusal as a WARN and starts anyway, so the column is simply missing
+     * and every read of this view fails with a 500 at runtime. A default makes the statement valid, and it is
+     * invisible to a test suite, which always builds the schema from nothing.
+     */
+    @ColumnDefault("false")
+    var cancelled: Boolean = false,
+
+    var cancellationReason: String? = null,
+
+    /**
+     * When this row was last written, which is what the order-history panel sorts on.
+     *
+     * It is a *display* property and nothing else. Ordering of events is `EventOrder` and `GlobalEventOrder`,
+     * never a timestamp, and nothing in this application decides anything from this column - it exists so a
+     * human looking at a list of orders sees the one they just touched at the top.
+     *
+     * `@ColumnDefault` for the same reason as [cancelled]: a new non-null column cannot be added to a table
+     * that already has rows without one.
+     */
+    @ColumnDefault("now()")
+    var lastUpdated: OffsetDateTime = OffsetDateTime.now()
 )
 
-interface OrderSummaryViewRepository : JpaRepository<OrderSummaryView, String>
+interface OrderSummaryViewRepository : JpaRepository<OrderSummaryView, String> {
+    /**
+     * One page of orders, most recently touched first.
+     *
+     * Paging belongs in the query rather than in the caller, because the alternative is loading every order the
+     * demo has ever recorded in order to show ten of them - a read model is cheap to query precisely because it
+     * is queried precisely.
+     */
+    fun findAllByOrderByLastUpdatedDesc(pageable: Pageable): Page<OrderSummaryView>
+}

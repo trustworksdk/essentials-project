@@ -1,3 +1,10 @@
+# The compose *project* name. Without it the project is named after the directory the file is run from, which
+# for this application is `target/classes` - Spring Boot starts compose from `classpath:compose.yml`. That gives
+# a project called `classes`, a volume called `classes_webshop_postgres_data`, and a reset command that appears
+# to work while wiping nothing, because `docker compose -f src/main/resources/compose.yml down -v` resolves to a
+# *different* project (`resources`) than the one the application actually started.
+name: essentials-webshop-demo
+
 networks:
   default:
     name: essentials-webshop-demo

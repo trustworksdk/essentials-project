@@ -229,6 +229,17 @@
             <version>${spring-boot.version}</version>
             <scope>test</scope>
         </dependency>
+        <!--
+            MockMvc's auto-configuration. Spring Boot 4 split the web test slices out of
+            spring-boot-starter-test, so @AutoConfigureMockMvc is not on the classpath without this - it is what
+            lets WebshopFlowIT assert that a refused command answers 409 with its reason rather than a 500.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-test-junit5</artifactId>

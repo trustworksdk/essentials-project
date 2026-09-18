@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
-package dk.trustworks.essentials.examples.webshop.shipping.use_cases.ship_order
+package dk.trustworks.essentials.examples.webshop.payment.use_cases.request_funds_capture
 
-import dk.trustworks.essentials.examples.webshop.config.DomainRefusal
 import dk.trustworks.essentials.examples.webshop.sales.types.OrderId
 
-/** Shipping an order the warehouse has not been asked to pack is refused, not deferred. */
-class OrderHasNotBeenPackagedException(val orderId: OrderId) :
-    RuntimeException("Order '$orderId' has not been packaged yet"), DomainRefusal
+/**
+ * Asking to capture funds that were never authorized is a defect, not a timing problem - this slice is only
+ * ever reached for an order whose hold was placed, so it does not become true by waiting and must not be
+ * retried into a dead letter.
+ */
+class NoHoldToCaptureException(val orderId: OrderId) :
+    RuntimeException("Order '$orderId' has no credit-card hold to capture")

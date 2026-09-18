@@ -25,8 +25,12 @@ import dk.trustworks.essentials.components.foundation.messaging.queue.OrderedMes
 import dk.trustworks.essentials.examples.webshop.payment.config.PaymentAggregateTypes
 import dk.trustworks.essentials.examples.webshop.payment.events.CreditCardHoldPlaced
 import dk.trustworks.essentials.examples.webshop.payment.events.CreditCardHoldRejected
+import dk.trustworks.essentials.examples.webshop.payment.events.FundsCaptureFailed
+import dk.trustworks.essentials.examples.webshop.payment.events.FundsCaptureRequested
+import dk.trustworks.essentials.examples.webshop.payment.events.FundsCaptured
 import dk.trustworks.essentials.examples.webshop.sales.config.SalesAggregateTypes
 import dk.trustworks.essentials.examples.webshop.sales.events.CheckOutRequested
+import dk.trustworks.essentials.examples.webshop.sales.events.OrderCancelled
 import dk.trustworks.essentials.examples.webshop.sales.events.OrderPlaced
 import dk.trustworks.essentials.examples.webshop.sales.events.PaymentDetailsAdded
 import dk.trustworks.essentials.examples.webshop.sales.events.ShippingDetailsAdded
@@ -34,6 +38,7 @@ import dk.trustworks.essentials.examples.webshop.shipping.config.ShippingAggrega
 import dk.trustworks.essentials.examples.webshop.shipping.events.OrderPackagingRequested
 import dk.trustworks.essentials.examples.webshop.shipping.events.OrderShipped
 import org.springframework.stereotype.Service
+import java.time.OffsetDateTime
 
 /**
  * The confirmation screen, assembled from four event streams across three bounded contexts.
@@ -91,12 +96,51 @@ class OrderSummaryProjection(
 
     @MessageHandler
     fun on(e: CreditCardHoldPlaced, message: OrderedMessage) {
-        update(e.id.toString()) { it.paymentStatus = "HELD" }
+        update(e.id.toString()) {
+            it.paymentStatus = "HELD"
+            // Clearing the reason keeps this handler an assignment of the whole payment outcome rather than half
+            // of it, so a later authorization after an earlier decline leaves no stale explanation behind.
+            it.paymentDeclineReason = null
+        }
     }
 
     @MessageHandler
     fun on(e: CreditCardHoldRejected, message: OrderedMessage) {
-        update(e.id.toString()) { it.paymentStatus = "REJECTED" }
+        update(e.id.toString()) {
+            it.paymentStatus = "REJECTED"
+            it.paymentDeclineReason = e.reason
+        }
+    }
+
+    @MessageHandler
+    fun on(e: FundsCaptureRequested, message: OrderedMessage) {
+        // "We have asked and do not know yet" is a state the customer-facing screen has to be able to show. A
+        // screen that only knows HELD and CAPTURED has to pretend one of them during the wait.
+        update(e.id.toString()) { it.paymentStatus = "CAPTURE_PENDING" }
+    }
+
+    @MessageHandler
+    fun on(e: FundsCaptured, message: OrderedMessage) {
+        update(e.id.toString()) {
+            it.paymentStatus = "CAPTURED"
+            it.paymentDeclineReason = null
+        }
+    }
+
+    @MessageHandler
+    fun on(e: FundsCaptureFailed, message: OrderedMessage) {
+        update(e.id.toString()) {
+            it.paymentStatus = "CAPTURE_FAILED"
+            it.paymentDeclineReason = e.reason
+        }
+    }
+
+    @MessageHandler
+    fun on(e: OrderCancelled, message: OrderedMessage) {
+        update(e.id.toString()) {
+            it.cancelled = true
+            it.cancellationReason = e.reason
+        }
     }
 
     @MessageHandler
@@ -117,6 +161,7 @@ class OrderSummaryProjection(
     private fun update(orderId: String, change: (OrderSummaryView) -> Unit) {
         val row = repository.findById(orderId).orElseGet { OrderSummaryView(id = orderId) }
         change(row)
+        row.lastUpdated = OffsetDateTime.now()
         repository.save(row)
     }
 
