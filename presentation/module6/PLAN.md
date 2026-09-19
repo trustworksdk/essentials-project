@@ -5,7 +5,8 @@
 
 **Audience:** colleagues and course attendees, mixed experience, mostly new to event sourcing.
 
-**Slot:** 45 minutes — 36 minutes of content across 32 slides (14 concept/answer pairs), then questions.
+**Slot:** 45 minutes — 38 minutes of content across 33 slides (14 concept/answer pairs, plus one map of
+the application), then questions.
 
 **Relationship to the source deck:** this is not a one-to-one port. The pptx teaches the concepts; this deck
 follows its structure and shows, concept by concept, how Trustworks Essentials answers it in running code. Every
@@ -16,7 +17,7 @@ removed to fit a slide, nothing else changed, and nothing invented.
 
 | Path | What it is |
 |---|---|
-| `presentation/module6/deck.html` | Bilingual (EN/DA) HTML deck, 32 slides, needs `images/` beside it |
+| `presentation/module6/deck.html` | Bilingual (EN/DA) HTML deck, 33 slides, needs `images/` beside it |
 | `presentation/module6/images/` | Six diagrams extracted from the module's own pptx |
 | `presentation/module6/NOTES.md`, `NOTES.da.md` | Speaker notes, run of show, expected questions |
 | `presentation/module6/demo-script.md` | Live-demo runbook with exact commands and fallbacks |
@@ -29,7 +30,8 @@ vocabulary — so the two decks look like one family and the keyboard controls b
 
 ## Status — built
 
-All of it. 32 slides in 14 concept/answer pairs, 36 minutes of budget, bilingual; the application boots,
+All of it. 33 slides — 14 concept/answer pairs plus one map of the application — 38 minutes of budget,
+bilingual; the application boots,
 passes 30 unit tests and 3 integration tests under **both** Jackson flavours, and has been driven end to
 end against real PostgreSQL and Kafka.
 
@@ -43,7 +45,7 @@ Five things came out differently from the plan, and each is recorded where it ma
 | Kotlin semantic types per `code-style.md` | Java-style `CharSequenceType` subclasses | A Kotlin `value class` needs `jackson-module-kotlin` on the framework's persistence mapper, which a Jackson 3 application cannot add without replacing the serializer bean. Deviation agreed explicitly and documented in the module `CLAUDE.md` |
 | Snapshots / closing books mentioned in Act 3 | Named on the "left out on purpose" slide | The trading demo already shows them properly, and they are not in this event model |
 | Six acts of our own narrative | Fourteen concept/answer pairs following the module's own sequence | The first build retold the module in different words, which spends the hour on the half the room already knows. Rebuilt on request |
-| Live demo as Act 4 | Cut; `demo-script.md` kept as a standalone runbook | Fourteen pairs fill 36 minutes. A real loss, and the trade the slot forces |
+| Live demo as Act 4 | Cut; `demo-script.md` kept as a standalone runbook | Fourteen pairs fill the slot. A real loss, and the trade the slot forces |
 
 ### The four defects found by building it
 
@@ -94,11 +96,17 @@ slices expose.
 
 | BC | Aggregate streams | Command slices | View slices | Automations / integrations |
 |---|---|---|---|---|
-| `sales` | `Products`, `ShoppingBaskets`, `Orders` | `add_product`, `change_product_price`, `add_item_to_shopping_basket`, `remove_item_from_shopping_basket`, `request_checkout`, `add_shipping_details_to_order`, `add_payment_details_to_order`, `place_order` | `products_for_sale`, `shopping_basket`, `order_summary` | — |
+| `sales` | `Products`, `ShoppingBaskets`, `Orders` | `add_product`, `change_product_price`, `add_item_to_shopping_basket`, `remove_item_from_shopping_basket`, `request_checkout`, `add_shipping_details_to_order`, `add_payment_details_to_order`, `place_order`, `cancel_order` | `products_for_sale`, `shopping_basket`, `order_summary` | — |
 | `shipping` | `ShippingOrders` | `package_order`, `ship_order` | `orders_ready_for_packaging` (to-do list, human trigger) | `external_systems/order_management/outgoing` (Kafka publisher) |
-| `payment` | `CreditCardHolds` | `place_hold_on_credit_card` | — | `automations/hold_funds_on_order_placed` (owns its work-item state), `external_systems/payment_gateway` (in-memory request/response port) |
+| `payment` | `CreditCardHolds` | `place_hold_on_credit_card`, `request_funds_capture`, `record_capture_outcome` | `captures_awaiting_outcome` | `automations/hold_funds_on_order_placed` (owns its work-item state), `automations/capture_funds_when_packaged`, `automations/reconcile_unanswered_captures` (on a clock), `external_systems/payment_gateway` (request/response port, async capture) |
 
-Sixteen slices. Packaging stayed a **human** trigger rather than an automation, so the deck can show both ends of
+**24 slices** — 14 command, 5 view, 3 automation, 2 anti-corruption boundary. The plan said sixteen; the
+asynchronous-capture work that followed (see `examples/essentials-webshop-demo/docs/payment-async-capture.md`)
+added `payment`'s second and third command slices, its view, and two more automations, and `sales` gained
+`cancel_order`. The deck's counts were corrected against the tree, not against this table — run
+`ls` over the three lanes before quoting a number.
+
+Packaging stayed a **human** trigger rather than an automation, so the deck can show both ends of
 the same pattern: `payment` drains its list automatically, the warehouse screen is drained by a person.
 
 ### Event catalogue
@@ -150,27 +158,28 @@ the half they know. **Rebuilt as fourteen concept/answer pairs**, which is the s
 asked for — introduce each concept as the module teaches it, then show the Essentials code that implements
 it.
 
-32 slides, 36 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
+33 slides, 38 minutes. Act and minute budgets live in `data-act` and `data-min` on each slide and the
 on-screen timer reads them, so this table and the deck cannot drift.
 
 | Slides | Content | Min |
 |---|---|---|
 | 1–2 | Title, and the roadmap: four questions in the order you hit them | 0.5 |
-| 3–4 | **1** An event is a fact → sealed family, `events/` as contract | 2.5 |
-| 5–6 | **2** Discovering and modeling → one slice = the model's four boxes | 2.75 |
-| 7–8 | **3** The three patterns → three directory names, three base types | 2.5 |
-| 9–10 | **4** Slices and capabilities → three lanes as directories | 2.5 |
-| 11–12 | **5** Tests come from the model → `GivenWhenThenScenario` | 2.25 |
-| 13–14 | **6** Command + state = event → the formula is the signature | 2.75 |
-| 15–16 | **7** The decider → one bean per aggregate type | 2.25 |
-| 17–18 | **8** Event store and replay → two orderings, neither a clock | 2.5 |
-| 19–20 | **9** State inside a decision → `Evolver.applyEvents` | 2.25 |
-| 21–22 | **10** Why view projections → a processor and a table | 2.25 |
-| 23–24 | **11** Order, delivery, idempotence → two theirs, one yours | 2.25 |
-| 25–26 | **12** CQRS and stale data → the query never touches the domain | 2.5 |
-| 27–28 | **13** Composite UI and automations → one row, four streams | 2.75 |
-| 29–30 | **Bonus** The dual write → one local transaction, then publish | 2.5 |
-| 31–32 | Left out on purpose, and the close | 1 |
+| 3 | The map of the app: buttons → streams → read models → panels | 2 |
+| 4–5 | **1** An event is a fact → sealed family, `events/` as contract | 2.5 |
+| 6–7 | **2** Discovering and modeling → one slice = the model's four boxes | 2.75 |
+| 8–9 | **3** The three patterns → three directory names, three base types | 2.5 |
+| 10–11 | **4** Slices and capabilities → three lanes as directories | 2.5 |
+| 12–13 | **5** Tests come from the model → `GivenWhenThenScenario` | 2.25 |
+| 14–15 | **6** Command + state = event → the formula is the signature | 2.75 |
+| 16–17 | **7** The decider → one bean per aggregate type | 2.25 |
+| 18–19 | **8** Event store and replay → two orderings, neither a clock | 2.5 |
+| 20–21 | **9** State inside a decision → `Evolver.applyEvents` | 2.25 |
+| 22–23 | **10** Why view projections → a processor and a table | 2.25 |
+| 24–25 | **11** Order, delivery, idempotence → two theirs, one yours | 2.25 |
+| 26–27 | **12** CQRS and stale data → the query never touches the domain | 2.5 |
+| 28–29 | **13** Composite UI and automations → one row, four streams | 2.75 |
+| 30–31 | **Bonus** The dual write → one local transaction, then publish | 2.5 |
+| 32–33 | Left out on purpose, and the close | 1 |
 
 ### Two structural consequences
 
@@ -182,7 +191,16 @@ slide 2 did exactly that — it described grey and orange slides before the room
 unlabelled table of thirteen numbers — and it was replaced with a roadmap grouping the concepts under the
 four questions they answer.
 
-**No live demo.** Fourteen pairs fill 36 minutes. The close tells the room how to run the app themselves,
+That roadmap was then rewritten once more. Grouping under four questions was right; running the concept
+names together inside each group, separated by middots, was not. At four and five names to a cell it read
+as one sentence rather than a list, and in Danish — longer names, no capitals to break them up — it was
+close to unparseable ("Én skærm fra mange views · arbejde ingen bad om · dual write, og Kafka"). Each
+concept now has **its own line, numbered with the same number the rail shows**, and the names are written
+as plain descriptions rather than labels: the bonus is "saving to our own database *and* telling another
+system, without a transaction that covers both" rather than "the dual write, and Kafka". A name on the
+roadmap that only makes sense after you have seen the slide it names is not a roadmap.
+
+**No live demo.** Fourteen pairs and the map fill 38 minutes. The close tells the room how to run the app themselves,
 and `demo-script.md` remains the runbook for a longer slot. That is a real loss — watching the order
 summary fill in field by field is the one thing a slide cannot show — and it is the trade the 45-minute
 slot forces.
@@ -204,6 +222,18 @@ model itself — are drawn with PowerPoint shapes, not embedded images, so only 
 came out. No renderer is available in this container to rasterise the slides. Those timelines are
 therefore redrawn as inline SVG or restated as `.chain` node lists, using the module's own event names.
 
+**Added after the first rehearsal: the map of the app (slide 3).** The concept half of each pair was
+landing, but the answer half kept having to re-establish where in the application its excerpt came from —
+thirteen small orientations instead of one. The slide is the first diagram from
+`examples/essentials-webshop-demo/docs/ui-flow.md`: buttons → event streams → read models → panels, with
+the five cross-context projection arrows in the accent colour, because `order_summary` folding four
+streams across three bounded contexts is the picture pair 13 needs the room to already recognise. Written
+as hand-drawn inline SVG rather than an image, so it repaints in handout mode and stays legible when
+projected; `ui-flow.md` remains the Mermaid original, and nothing regenerates one from the other, so both
+`NOTES.md` rehearsal checklists carry a line about keeping them in step. It also answers the endpoint
+question structurally — one `GET` per panel, stated once as a column heading — which is what the slide
+replaces.
+
 ## Build sequence — completed
 
 | Phase | Work | Done when |
@@ -212,7 +242,7 @@ therefore redrawn as inline SVG or restated as `.chain` node lists, using the mo
 | B | `sales` context: events, types, all eight command slices, four view slices, unit tests | `mvn test -pl :essentials-webshop-demo` green |
 | C | `shipping` and `payment`: slices, both automations, payment-gateway port, Kafka publisher, integration tests | `mvn verify -pl :essentials-webshop-demo -am` green, and again under `-Pjackson2` |
 | D | Shop page, README, module and per-slice `CLAUDE.md`, every `slice.yaml`, licence headers | `/essentials:slice-check` clean, `graphify update .` run |
-| E | `deck.html`, `NOTES.md`, `NOTES.da.md`, `demo-script.md`, `flow.sh` | Deck opens offline, both languages complete, budgets sum to 36 |
+| E | `deck.html`, `NOTES.md`, `NOTES.da.md`, `demo-script.md`, `flow.sh` | Deck opens offline, both languages complete, budgets sum to the deck total |
 | F | Rehearsal pass: demo run end to end from a cold `docker compose up`, code panels read against the app | Nothing in the deck is stale, demo has a fallback for every step |
 
 ## Risks, as they played out

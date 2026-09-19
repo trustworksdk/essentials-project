@@ -287,18 +287,35 @@ td { font-weight: 300; }
 tr:last-child td { border-bottom: 0; }
 td.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; color: var(--accent); white-space: nowrap; }
 
-/* ---- term list in a table cell ------------------------------------------
-   The roadmap's right-hand column is a list of concept names, not prose. Mono
-   separates it from the question in the left column and makes the row scannable
-   rather than readable-as-a-sentence. */
-td.terms {
-  font-family: var(--f-mono);
-  font-size: 1.95cqh;
-  line-height: 1.5;
-  color: var(--ink);
+/* ---- the roadmap's concept list ------------------------------------------
+   One concept per line, numbered with the same n/13 the rail shows, so the name
+   here and the eyebrow on that concept's own slide are the same string.
+
+   The first version ran the names together separated by middots. Four to a cell,
+   it read as one long sentence rather than a list — and in Danish, where the names
+   are longer and carry no capitals to break them up, it was close to unparseable. */
+ul.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5cqh; }
+ul.steps li {
+  font-size: 2.1cqh;
+  line-height: 1.3;
+  font-weight: 300;
+  max-width: none;
+  display: flex;
+  gap: 0.9cqw;
 }
-/* The separator carries the whole gap: the markup has no literal spaces left. */
-td.terms .sep { color: var(--accent-dim); margin: 0 0.5em; }
+ul.steps li .n {
+  font-family: var(--f-mono);
+  font-size: 0.8em;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  min-width: 3.4em;
+  text-align: right;
+  padding-top: 0.18em;
+}
+/* The bonus is not one of the thirteen, and the rail does not number it either. */
+ul.steps li.bonus .n { color: var(--ink-faint); }
 
 /* ---- ticker / big statement --------------------------------------------- */
 .statement {
@@ -436,6 +453,65 @@ svg .lbl { font-family: var(--f-mono); font-size: 15px; fill: var(--ink); }
 svg .lbl-dim { font-family: var(--f-mono); font-size: 11px; fill: var(--ink-faint); letter-spacing: 1.2px; }
 svg .flow { stroke: var(--accent); fill: none; }
 svg .flow-head { fill: var(--accent); }
+
+/* ---- flow diagram --------------------------------------------------------
+   The orientation slide's map of the application. Hand-drawn as SVG because the
+   deck has no build step and no JavaScript dependencies: it is the same picture
+   as examples/essentials-webshop-demo/docs/ui-flow.md, which is Mermaid there
+   and cannot render here. Keep the two in step when the app's slices change.
+
+   Colour is the bounded context that owns the box, and the three stay the same
+   colours the later slides use. The indirection through --accent / --cost / --gain
+   is deliberate: var() resolves at use, so handout mode repaints the diagram with
+   no second set of declarations. */
+:root { --bc-sales: var(--accent); --bc-pay: var(--cost); --bc-ship: var(--gain); }
+
+figure.dgm { margin: 0; display: flex; flex-direction: column; gap: 1.2cqh; min-height: 0; }
+/* The 3:1 viewBox would be ~53cqh tall at full slide width, which pushes the prose
+   under the fold on a 16:9 projector. The cap letterboxes it sideways instead —
+   preserveAspectRatio keeps the drawing centred and nothing is clipped. */
+figure.dgm svg { display: block; width: 100%; height: auto; max-height: 48cqh; }
+figure.dgm figcaption {
+  font-family: var(--f-mono);
+  font-size: 1.4cqh;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  text-align: center;
+}
+/* The legend is the only place the three context colours are named, so it carries
+   the colour itself rather than a swatch the printer might drop. */
+figure.dgm figcaption .bc { border-bottom: 2px solid currentColor; padding-bottom: 1px; }
+figure.dgm figcaption .bc.sales { color: var(--bc-sales); }
+figure.dgm figcaption .bc.pay   { color: var(--bc-pay); }
+figure.dgm figcaption .bc.ship  { color: var(--bc-ship); }
+
+svg .dgm-col { font-family: var(--f-mono); font-size: 13px; fill: var(--ink-faint); letter-spacing: 1.6px; }
+svg .dgm-box { fill: var(--surface); stroke: var(--rule); stroke-width: 1.5; }
+svg .dgm-box.dash { fill: none; stroke-dasharray: 5 4; }
+svg .dgm-t   { font-family: var(--f-mono); font-size: 16px; fill: var(--ink); }
+svg .dgm-t.sm { font-size: 13.5px; }
+svg .dgm-s   { font-family: var(--f-mono); font-size: 12.5px; fill: var(--ink-faint); }
+svg .bc-sales { stroke: var(--bc-sales); }
+svg .bc-pay   { stroke: var(--bc-pay); }
+svg .bc-ship  { stroke: var(--bc-ship); }
+svg .dgm-edge { stroke: var(--ink-faint); stroke-width: 1.4; fill: none; }
+svg .dgm-hi   { stroke: var(--accent); stroke-width: 1.7; fill: none; }
+svg .ah-dim   { fill: var(--ink-faint); }
+svg .ah-hi    { fill: var(--accent); }
+
+/* The lane diagram adds: a nested block inside a card, a small all-caps label for
+   it, a lane name painted in the lane's own colour, and the refused-call marker. */
+svg .dgm-sub  { fill: var(--surface-2); stroke: var(--rule-soft); stroke-width: 1; }
+svg .dgm-sub.priv { fill: none; stroke-dasharray: 4 3; }
+svg .dgm-lbl  { font-family: var(--f-mono); font-size: 10.5px; fill: var(--ink-faint); letter-spacing: 1.4px; }
+svg .dgm-lane { font-family: var(--f-mono); font-size: 18px; fill: var(--ink); }
+svg .fl-sales { fill: var(--bc-sales); }
+svg .fl-pay   { fill: var(--bc-pay); }
+svg .fl-ship  { fill: var(--bc-ship); }
+/* Red, dashed and crossed: the one connection the architecture does not have. */
+svg .dgm-no   { stroke: var(--cost); stroke-width: 1.4; stroke-dasharray: 3 3; fill: none; }
+svg .dgm-x    { stroke: var(--cost); stroke-width: 1.4; fill: var(--surface-2); }
+svg .dgm-xm   { stroke: var(--cost); stroke-width: 2; }
 </style>
 
 <div id="stage">
@@ -458,44 +534,221 @@ svg .flow-head { fill: var(--accent); }
   <p class="lede" lang="en">Thirteen concepts from event modeling, event sourcing and CQRS &mdash; and, next to each one, the code that implements it. One webshop, running.</p>
   <p class="lede" lang="da">Tretten begreber fra event modeling, event sourcing og CQRS &mdash; og ved siden af hvert af dem koden der implementerer det. Én webshop, der kører.</p>
   <div class="spread"></div>
-  <div class="kicker"><span lang="en">36 minutes, then questions</span><span lang="da">36 minutter, derefter spørgsmål</span></div>
+  <div class="kicker"><span lang="en">38 minutes, then questions</span><span lang="da">38 minutter, derefter spørgsmål</span></div>
 </section>
 
 <!-- =================================================================== 01 -->
 <section class="slide" data-act="Where we are going" data-min="0.5"
-  data-note-en="Thirty seconds, one breath per row. This is the map: four questions in the order you actually hit them when building something. Say the last line out loud - every concept gets a slide, and then the code that implements it - and do not explain the format beyond that. It explains itself on slide 3."
-  data-note-da="Tredive sekunder, ét aandedrag pr. raekke. Dette er kortet: fire spoergsmaal i den raekkefoelge man faktisk moeder dem. Sig sidste linje hoejt - hvert begreb faar en slide, og derefter koden der implementerer det.">
+  data-note-en="Thirty seconds, and do NOT read the fourteen lines - they are there so the room can read ahead, not so you can narrate them. Read the four questions in the left column only, one breath each, in the order you actually hit them when building something. The numbers are the same numbers the rail shows, so anyone who loses the thread can find their place. Then say the last line out loud - every concept gets a slide, and then the code that implements it - and do not explain the format beyond that. It explains itself on slide 4, after the map of the app."
+  data-note-da="Tredive sekunder, og laes IKKE de fjorten linjer op - de staar der saa rummet kan laese forud, ikke saa du kan referere dem. Laes kun de fire spoergsmaal i venstre kolonne, ét aandedrag hver, i den raekkefoelge man faktisk moeder dem. Tallene er de samme som skinnen viser, saa den der taber traaden kan finde sin plads. Sig derefter sidste linje hoejt - hvert begreb faar en slide, og derefter koden der implementerer det.">
   <div class="eyebrow"><span lang="en">Where we are going</span><span lang="da">Hvor vi skal hen</span></div>
   <h2><span lang="en">Four questions, in the order you hit them</span><span lang="da">Fire spørgsmål, i den rækkefølge man møder dem</span></h2>
   <div class="tbl-wrap grow">
     <table>
       <thead><tr>
-        <th><span lang="en">Question</span><span lang="da">Spørgsmål</span></th>
-        <th><span lang="en">The concepts</span><span lang="da">Begreberne</span></th>
+        <th style="width:26%"><span lang="en">The question</span><span lang="da">Spørgsmålet</span></th>
+        <th><span lang="en">The concepts that answer it</span><span lang="da">Begreberne der besvarer det</span></th>
       </tr></thead>
       <tbody>
         <tr>
           <td><span lang="en"><strong>How do we agree what the system does?</strong></span><span lang="da"><strong>Hvordan bliver vi enige om hvad systemet gør?</strong></span></td>
-          <td class="terms"><span lang="en">An event is a fact<span class="sep">&middot;</span>discovering and modeling them<span class="sep">&middot;</span>the three patterns<span class="sep">&middot;</span>slices and capabilities<span class="sep">&middot;</span>tests that come off the model</span><span lang="da">Et event er et faktum<span class="sep">&middot;</span>at opdage og modellere dem<span class="sep">&middot;</span>de tre mønstre<span class="sep">&middot;</span>slices og capabilities<span class="sep">&middot;</span>test der kommer fra modellen</span></td>
+          <td>
+            <ul class="steps">
+              <li><span class="n">1</span><span lang="en">An event is a fact &mdash; something that has already happened</span><span lang="da">Et event er et faktum &mdash; noget der allerede er sket</span></li>
+              <li><span class="n">2</span><span lang="en">Finding the events, and putting them on a timeline</span><span lang="da">At finde eventene, og sætte dem på en tidslinje</span></li>
+              <li><span class="n">3</span><span lang="en">The three patterns that everything else is built from</span><span lang="da">De tre mønstre som alt andet er bygget af</span></li>
+              <li><span class="n">4</span><span lang="en">Slices, and the capabilities they live in</span><span lang="da">Slices, og de capabilities de bor i</span></li>
+              <li><span class="n">5</span><span lang="en">Tests written straight off the model, before the code</span><span lang="da">Test skrevet direkte af modellen, før koden</span></li>
+            </ul>
+          </td>
         </tr>
         <tr>
           <td><span lang="en"><strong>How does a write happen?</strong></span><span lang="da"><strong>Hvordan sker en skrivning?</strong></span></td>
-          <td class="terms"><span lang="en">Command + state = event<span class="sep">&middot;</span>the decider<span class="sep">&middot;</span>the event store and replay<span class="sep">&middot;</span>state inside a decision</span><span lang="da">Command + tilstand = event<span class="sep">&middot;</span>decideren<span class="sep">&middot;</span>event store og replay<span class="sep">&middot;</span>tilstand inde i en beslutning</span></td>
+          <td>
+            <ul class="steps">
+              <li><span class="n">6</span><span lang="en">A command plus the past events decides the next event</span><span lang="da">En kommando plus de tidligere events afgør det næste event</span></li>
+              <li><span class="n">7</span><span lang="en">The decider &mdash; the one place a rule gets to say no</span><span lang="da">Decideren &mdash; det ene sted en regel får lov at sige nej</span></li>
+              <li><span class="n">8</span><span lang="en">The event store, and reading state back by replaying it</span><span lang="da">Event store'en, og at læse tilstand tilbage ved at replaye den</span></li>
+              <li><span class="n">9</span><span lang="en">Where state lives when there is no aggregate object</span><span lang="da">Hvor tilstanden bor når der ikke er et aggregate-objekt</span></li>
+            </ul>
+          </td>
         </tr>
         <tr>
           <td><span lang="en"><strong>How does anyone read it back?</strong></span><span lang="da"><strong>Hvordan læser nogen det tilbage?</strong></span></td>
-          <td class="terms"><span lang="en">Why view projections<span class="sep">&middot;</span>in order, never missed, idempotent<span class="sep">&middot;</span>CQRS, and data that is always a little old</span><span lang="da">Hvorfor view-projektioner<span class="sep">&middot;</span>i rækkefølge, aldrig mistet, idempotent<span class="sep">&middot;</span>CQRS, og data der altid er lidt gamle</span></td>
+          <td>
+            <ul class="steps">
+              <li><span class="n">10</span><span lang="en">Why reading gets its own table, built from the events</span><span lang="da">Hvorfor læsning får sin egen tabel, bygget af eventene</span></li>
+              <li><span class="n">11</span><span lang="en">In order, never missed, and safe to apply twice</span><span lang="da">I rækkefølge, aldrig mistet, og sikkert at anvende to gange</span></li>
+              <li><span class="n">12</span><span lang="en">CQRS &mdash; and screens that are always a little behind</span><span lang="da">CQRS &mdash; og skærme der altid er lidt bagud</span></li>
+            </ul>
+          </td>
         </tr>
         <tr>
           <td><span lang="en"><strong>How does it reach the rest of the world?</strong></span><span lang="da"><strong>Hvordan når det ud til resten af verden?</strong></span></td>
-          <td class="terms"><span lang="en">One screen from many views<span class="sep">&middot;</span>work nobody asked for<span class="sep">&middot;</span>the dual write, and Kafka</span><span lang="da">Én skærm fra mange views<span class="sep">&middot;</span>arbejde ingen bad om<span class="sep">&middot;</span>dual write, og Kafka</span></td>
+          <td>
+            <ul class="steps">
+              <li><span class="n">13</span><span lang="en">One screen assembled from many views &mdash; and work the system does without being asked</span><span lang="da">Én skærm sat sammen af mange views &mdash; og arbejde systemet udfører uden at være blevet bedt om det</span></li>
+              <li class="bonus"><span class="n"><span lang="en">Bonus</span><span lang="da">Bonus</span></span><span lang="en">Saving to our own database <em>and</em> telling another system &mdash; without a transaction that covers both</span><span lang="da">At gemme i vores egen database <em>og</em> fortælle et andet system om det &mdash; uden en transaktion der dækker begge</span></li>
+            </ul>
+          </td>
         </tr>
       </tbody>
     </table>
   </div>
   <div class="row" style="align-items:flex-start">
-    <p lang="en" style="flex:1 1 0"><strong>Each concept gets a slide, and then the code that implements it.</strong> The code is all from one running webshop &mdash; catalogue, basket, checkout, order, shipping, payment &mdash; on PostgreSQL and Kafka.</p>
-    <p lang="da" style="flex:1 1 0"><strong>Hvert begreb får en slide, og derefter koden der implementerer det.</strong> Koden er hele vejen fra én kørende webshop &mdash; katalog, kurv, checkout, ordre, forsendelse, betaling &mdash; på PostgreSQL og Kafka.</p>
+    <p class="small" lang="en" style="flex:1 1 0"><strong>Each concept gets a slide, and then the code that implements it.</strong> The numbers are the ones on the rail at the bottom of every slide. The code is all from one running webshop &mdash; catalogue, basket, checkout, order, shipping, payment &mdash; on PostgreSQL and Kafka.</p>
+    <p class="small" lang="da" style="flex:1 1 0"><strong>Hvert begreb får en slide, og derefter koden der implementerer det.</strong> Tallene er dem der står på skinnen nederst på hver slide. Koden er hele vejen fra én kørende webshop &mdash; katalog, kurv, checkout, ordre, forsendelse, betaling &mdash; på PostgreSQL og Kafka.</p>
+  </div>
+</section>
+
+<!-- =================================================================== 01b — orientation
+     Not a concept/answer pair: the map of the application every later code panel is
+     cut from. Same picture as examples/essentials-webshop-demo/docs/ui-flow.md. -->
+<section class="slide" data-act="The app behind every panel" data-min="2"
+  data-note-en="Two minutes, and it pays for itself thirteen times. Do not read the boxes out. Trace ONE path with a finger instead: press Package in the warehouse, that is one command, it appends OrderPackagingRequested to one stream, a projection turns that stream into a table, and a panel renders the table. Then say the sentence that matters: there is no arrow pointing back. Nothing on the left knows a screen exists. Finally point at the orange arrows - order summary is one row folded from four streams across three bounded contexts, and that is the slide the room will remember at pair 13. If somebody asks about endpoints, the answer is one GET per panel and it is in the notes, not on the wall."
+  data-note-da="To minutter, og de tjener sig ind tretten gange. Laes ikke kasserne op. Foelg én vej med fingeren: tryk Package i lageret, det er én kommando, den skriver ét event til én stream, en projektion goer den stream til en tabel, og et panel viser tabellen. Sig derefter saetningen der betyder noget: der er ingen pil tilbage. Intet i venstre side ved at der findes en skaerm. Peg til sidst paa de orange pile - ordreoversigten er én raekke foldet af fire streams paa tvaers af tre bounded contexts, og det er den slide rummet husker ved par 13.">
+  <div class="eyebrow"><span lang="en">The app behind every code panel</span><span lang="da">Appen bag hvert kodepanel</span></div>
+  <h2><span lang="en">One webshop, read strictly <em>left to right</em></span><span lang="da">Én webshop, læst strengt <em>fra venstre mod højre</em></span></h2>
+
+  <figure class="dgm">
+    <svg viewBox="0 0 1200 400" role="img"
+         aria-label="Buttons write events to five event streams; projections turn those streams into five read models; six panels each render one read model, and the checkout panel only writes. Order summary is fed by four streams and the warehouse work list by three.">
+      <defs>
+        <marker id="ah" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto">
+          <path d="M0 0 L8 4 L0 8 Z" class="ah-dim"/>
+        </marker>
+        <marker id="ahh" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto">
+          <path d="M0 0 L8 4 L0 8 Z" class="ah-hi"/>
+        </marker>
+      </defs>
+
+      <!-- column headings ------------------------------------------------- -->
+      <g lang="en">
+        <text class="dgm-col" x="108"  y="14" text-anchor="middle">BUTTONS &middot; ONE COMMAND</text>
+        <text class="dgm-col" x="388"  y="14" text-anchor="middle">EVENT STREAMS</text>
+        <text class="dgm-col" x="724"  y="14" text-anchor="middle">READ MODELS</text>
+        <text class="dgm-col" x="1074" y="14" text-anchor="middle">PANELS &middot; ONE GET</text>
+      </g>
+      <g lang="da">
+        <text class="dgm-col" x="108"  y="14" text-anchor="middle">KNAPPER &middot; ÉN KOMMANDO</text>
+        <text class="dgm-col" x="388"  y="14" text-anchor="middle">EVENT STREAMS</text>
+        <text class="dgm-col" x="724"  y="14" text-anchor="middle">L&AElig;SEMODELLER</text>
+        <text class="dgm-col" x="1074" y="14" text-anchor="middle">PANELER &middot; ÉT GET</text>
+      </g>
+
+      <!-- edges, drawn first so the boxes sit on top of them --------------- -->
+      <!-- buttons write one stream -->
+      <path class="dgm-edge" marker-end="url(#ah)" d="M214 63 H296"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M214 133 H296"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M214 203 H296"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M214 273 H296"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M214 343 H296"/>
+      <!-- one stream, one read model -->
+      <path class="dgm-edge" marker-end="url(#ah)" d="M474 63 H588"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M474 133 H588"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M474 203 H588"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M474 273 H588"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M474 343 H588"/>
+      <!-- and the five that cross a bounded context: the point of the slide -->
+      <path class="dgm-hi" marker-end="url(#ahh)" d="M474 133 C 534 133 528 203 588 203"/>
+      <path class="dgm-hi" marker-end="url(#ahh)" d="M474 273 C 534 273 528 203 588 203"/>
+      <path class="dgm-hi" marker-end="url(#ahh)" d="M474 343 C 540 343 522 203 588 203"/>
+      <path class="dgm-hi" marker-end="url(#ahh)" d="M474 203 C 534 203 528 273 588 273"/>
+      <path class="dgm-hi" marker-end="url(#ahh)" d="M474 343 C 534 343 528 273 588 273"/>
+      <!-- one read model, one panel -->
+      <path class="dgm-edge" marker-end="url(#ah)" d="M854 63 H944"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M854 133 H944"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M854 203 C 894 203 900 188 944 188"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M854 203 C 894 203 900 220 944 220"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M854 273 H944"/>
+      <path class="dgm-edge" marker-end="url(#ah)" d="M854 343 H944"/>
+
+      <!-- column 1: buttons ------------------------------------------------ -->
+      <rect class="dgm-box bc-sales" x="2"  y="36"  width="212" height="54"/>
+      <rect class="dgm-box bc-sales" x="2"  y="106" width="212" height="54"/>
+      <rect class="dgm-box bc-sales" x="2"  y="176" width="212" height="54"/>
+      <rect class="dgm-box bc-ship"  x="2"  y="246" width="212" height="54"/>
+      <rect class="dgm-box bc-pay dash" x="2" y="316" width="212" height="54"/>
+      <g lang="en">
+        <text class="dgm-t" x="14" y="63">Catalog</text>
+        <text class="dgm-t" x="14" y="133">Basket</text>
+        <text class="dgm-t sm" x="14" y="197">Checkout &middot; Summary</text>
+        <text class="dgm-t" x="14" y="273">Warehouse</text>
+        <text class="dgm-t sm" x="14" y="341">no button &mdash; a policy</text>
+      </g>
+      <g lang="da">
+        <text class="dgm-t" x="14" y="63">Katalog</text>
+        <text class="dgm-t" x="14" y="133">Kurv</text>
+        <text class="dgm-t sm" x="14" y="197">Checkout &middot; Oversigt</text>
+        <text class="dgm-t" x="14" y="273">Lager</text>
+        <text class="dgm-t sm" x="14" y="341">ingen knap &mdash; en policy</text>
+      </g>
+      <text class="dgm-s" x="14" y="81">AddProduct &middot; AddToBasket</text>
+      <text class="dgm-s" x="14" y="151">Remove &middot; RequestCheckOut</text>
+      <text class="dgm-s" x="14" y="212">AddDetails &middot; PlaceOrder</text>
+      <text class="dgm-s" x="14" y="226">CancelOrder</text>
+      <text class="dgm-s" x="14" y="291">PackageOrder &middot; ShipOrder</text>
+      <text class="dgm-s" x="14" y="359">PlaceHoldOnCreditCard</text>
+
+      <!-- column 2: streams ------------------------------------------------ -->
+      <rect class="dgm-box bc-sales" x="296" y="42"  width="178" height="42"/>
+      <rect class="dgm-box bc-sales" x="296" y="112" width="178" height="42"/>
+      <rect class="dgm-box bc-sales" x="296" y="182" width="178" height="42"/>
+      <rect class="dgm-box bc-ship"  x="296" y="252" width="178" height="42"/>
+      <rect class="dgm-box bc-pay"   x="296" y="322" width="178" height="42"/>
+      <text class="dgm-t sm" x="310" y="68">Products</text>
+      <text class="dgm-t sm" x="310" y="138">ShoppingBaskets</text>
+      <text class="dgm-t sm" x="310" y="208">Orders</text>
+      <text class="dgm-t sm" x="310" y="278">ShippingOrders</text>
+      <text class="dgm-t sm" x="310" y="348">CreditCardHolds</text>
+
+      <!-- column 3: read models -------------------------------------------- -->
+      <rect class="dgm-box bc-sales" x="588" y="42"  width="266" height="42"/>
+      <rect class="dgm-box bc-sales" x="588" y="112" width="266" height="42"/>
+      <rect class="dgm-box bc-sales" x="588" y="182" width="266" height="42"/>
+      <rect class="dgm-box bc-ship"  x="588" y="252" width="266" height="42"/>
+      <rect class="dgm-box bc-pay"   x="588" y="322" width="266" height="42"/>
+      <text class="dgm-t sm" x="602" y="68">products_for_sale</text>
+      <text class="dgm-t sm" x="602" y="138">shopping_basket</text>
+      <text class="dgm-t sm" x="602" y="208">order_summary</text>
+      <text class="dgm-t sm" x="602" y="278">orders_ready_for_packaging</text>
+      <text class="dgm-t sm" x="602" y="348">captures_awaiting_outcome</text>
+
+      <!-- column 4: panels -------------------------------------------------- -->
+      <rect class="dgm-box bc-sales" x="944" y="42"  width="254" height="42"/>
+      <rect class="dgm-box bc-sales" x="944" y="112" width="254" height="42"/>
+      <rect class="dgm-box bc-sales" x="944" y="172" width="254" height="32"/>
+      <rect class="dgm-box bc-sales" x="944" y="204" width="254" height="32"/>
+      <rect class="dgm-box bc-ship"  x="944" y="252" width="254" height="42"/>
+      <rect class="dgm-box bc-pay"   x="944" y="322" width="254" height="42"/>
+      <g lang="en">
+        <text class="dgm-t sm" x="958" y="68">Catalog</text>
+        <text class="dgm-t sm" x="958" y="138">Basket</text>
+        <text class="dgm-t sm" x="958" y="193">Order summary</text>
+        <text class="dgm-t sm" x="958" y="225">Order history</text>
+        <text class="dgm-t sm" x="958" y="278">Warehouse</text>
+        <text class="dgm-t sm" x="958" y="348">Captures awaiting outcome</text>
+      </g>
+      <g lang="da">
+        <text class="dgm-t sm" x="958" y="68">Katalog</text>
+        <text class="dgm-t sm" x="958" y="138">Kurv</text>
+        <text class="dgm-t sm" x="958" y="193">Ordreoversigt</text>
+        <text class="dgm-t sm" x="958" y="225">Ordrehistorik</text>
+        <text class="dgm-t sm" x="958" y="278">Lager</text>
+        <text class="dgm-t sm" x="958" y="348">Afventende h&aelig;vninger</text>
+      </g>
+    </svg>
+    <figcaption>
+      <span lang="en">Colour is the bounded context that owns the box &mdash; <span class="bc sales">sales</span>, <span class="bc pay">payment</span>, <span class="bc ship">shipping</span></span>
+      <span lang="da">Farven er den bounded context der ejer kassen &mdash; <span class="bc sales">sales</span>, <span class="bc pay">payment</span>, <span class="bc ship">shipping</span></span>
+    </figcaption>
+  </figure>
+
+  <div class="row" style="align-items:flex-start">
+    <p class="small" lang="en" style="flex:1 1 0"><strong>There is no arrow back.</strong> A button sends one command and one event is appended; a projection turns streams into a table; a panel renders that table. Nothing on the write side holds a reference to a screen, which is why the right-hand column can be rebuilt, replaced or added to without touching the left.</p>
+    <p class="small" lang="da" style="flex:1 1 0"><strong>Der er ingen pil tilbage.</strong> En knap sender én kommando og ét event tilføjes; en projektion gør streams til en tabel; et panel viser den tabel. Skrivesiden har ingen reference til en skærm, og derfor kan højre kolonne genopbygges, udskiftes eller udvides uden at røre venstre.</p>
+    <p class="small" lang="en" style="flex:1 1 0">The <em>orange arrows</em> are the ones worth the two minutes: <strong><code>order_summary</code> is one row folded from four streams across all three contexts</strong>, and the warehouse's work list from three. <code>Checkout</code> is the exception &mdash; it only writes, so no read model points at it.</p>
+    <p class="small" lang="da" style="flex:1 1 0">De <em>orange pile</em> er dem der er de to minutter værd: <strong><code>order_summary</code> er én række foldet af fire streams på tværs af alle tre kontekster</strong>, og lagerets arbejdsliste af tre. <code>Checkout</code> er undtagelsen &mdash; den skriver kun, så ingen læsemodel peger på den.</p>
   </div>
 </section>
 
@@ -590,8 +843,8 @@ data class ProductPriceChanged(
 
 <!-- =================================================================== 05 — C2 answer -->
 <section class="slide" data-side="answer" data-act="2/13 &mdash; Discovering and modeling" data-min="1.75"
-  data-note-en="The four boxes from the legend become four files in one directory. Point at each: the command is also the request body, the decider is the decision, the event is the fact, the view is somebody else's directory. Say the number - sixteen of these, and not one folder called service or repository."
-  data-note-da="De fire kasser fra legenden bliver fire filer i én mappe. Peg paa hver: kommandoen er ogsaa request body, decideren er beslutningen, eventet er faktum, viewet er en anden mappe. Sig tallet - seksten af dem, og ikke én mappe der heder service eller repository.">
+  data-note-en="The four boxes from the legend become four files in one directory. Point at each: the command is also the request body, the decider is the decision, the event is the fact, the view is somebody else's directory. Say the number - twenty-four of these, and not one folder called service or repository."
+  data-note-da="De fire kasser fra legenden bliver fire filer i én mappe. Peg paa hver: kommandoen er ogsaa request body, decideren er beslutningen, eventet er faktum, viewet er en anden mappe. Sig tallet - fireogtyve af dem, og ikke én mappe der heder service eller repository.">
   <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
   <h2><span lang="en">The model's boxes become <em>one directory per slice</em></span><span lang="da">Modellens kasser bliver <em>én mappe pr. slice</em></span></h2>
   <div class="row grow" style="align-items:stretch">
@@ -613,8 +866,8 @@ sales/views/products_for_sale/     ← the view (green), its own slice</code></p
       </div>
       <p lang="en"><strong>One slice is one unit of business value</strong>, end to end and independently implementable &mdash; that is the definition, on disk.</p>
       <p lang="da"><strong>Én slice er én enhed af forretningsværdi</strong>, ende til ende og uafhængigt implementerbar &mdash; det er definitionen, på disken.</p>
-      <p lang="en">Sixteen of them in the demo. There is no <code>services/</code>, no <code>repositories/</code>, no <code>controllers/</code>: a new use case adds a directory instead of growing an existing class.</p>
-      <p lang="da">Seksten af dem i demoen. Der er ingen <code>services/</code>, ingen <code>repositories/</code>, ingen <code>controllers/</code>: en ny use case tilføjer en mappe frem for at udvide en eksisterende klasse.</p>
+      <p lang="en">Twenty-four of them in the demo. There is no <code>services/</code>, no <code>repositories/</code>, no <code>controllers/</code>: a new use case adds a directory instead of growing an existing class.</p>
+      <p lang="da">Fireogtyve af dem i demoen. Der er ingen <code>services/</code>, ingen <code>repositories/</code>, ingen <code>controllers/</code>: en ny use case tilføjer en mappe frem for at udvide en eksisterende klasse.</p>
       <p class="small" lang="en">The command record <em>is</em> the HTTP request body, so there is no DTO and no mapper to keep in step with it.</p>
       <p class="small" lang="da">Command-recorden <em>er</em> HTTP request body, så der er ingen DTO og ingen mapper at holde i trit.</p>
     </div>
@@ -672,19 +925,19 @@ sales/views/products_for_sale/     ← the view (green), its own slice</code></p
           <td><span lang="en">Command</span><span lang="da">Command</span></td>
           <td><code>&lt;bc&gt;/use_cases/&lt;slice&gt;/</code></td>
           <td><code>Decider&lt;CMD, EVENT&gt;</code></td>
-          <td class="num">11</td>
+          <td class="num">14</td>
         </tr>
         <tr>
           <td><span lang="en">View</span><span lang="da">View</span></td>
           <td><code>&lt;bc&gt;/views/&lt;slice&gt;/</code></td>
           <td><code>ViewEventProcessor</code></td>
-          <td class="num">4</td>
+          <td class="num">5</td>
         </tr>
         <tr>
           <td><span lang="en">Automation</span><span lang="da">Automation</span></td>
           <td><code>&lt;bc&gt;/automations/&lt;slice&gt;/</code></td>
           <td><code>EventProcessor</code></td>
-          <td class="num">1</td>
+          <td class="num">3</td>
         </tr>
         <tr>
           <td><span lang="en">Anti-corruption boundary</span><span lang="da">Anti-corruption-grænse</span></td>
@@ -736,40 +989,126 @@ sales/views/products_for_sale/     ← the view (green), its own slice</code></p
 
 <!-- =================================================================== 09 — C4 answer -->
 <section class="slide" data-side="answer" data-act="4/13 &mdash; Slices and capabilities" data-min="1.5"
-  data-note-en="The swimlanes are the top-level directories. Say what crosses a boundary and what cannot: events and types cross, everything under use_cases is private. Then the shipping example, which is the one that makes it concrete - it learns about orders by subscribing, and would keep working if sales were down for an hour."
-  data-note-da="Svoemmebanerne er de oeverste mapper. Sig hvad der krydser en graense og hvad der ikke kan: events og types krydser, alt under use_cases er privat. Derefter shipping-eksemplet - den laerer om ordrer ved at subscribe, og ville koere videre hvis sales var nede en time.">
+  data-note-en="The swimlanes are the top-level directories - three cards, and each one is a folder you can open. Point at the solid block: events and types, the only two packages another lane may import. Then the dashed block: private, and the compiler enforces it. Then the two red crosses, which are the slide. There is no arrow between the cards. The only path from one lane to another runs down into the store and back up, which is why shipping would keep working if sales were down for an hour. If somebody asks how shipping knows the event class at all, that is the good question: it imports the class at compile time and receives the value at runtime, and those are two different crossings."
+  data-note-da="Svoemmebanerne er de oeverste mapper - tre kort, og hvert af dem er en mappe du kan aabne. Peg paa den fyldte blok: events og types, de eneste to pakker en anden bane maa importere. Derefter den stiplede blok: privat, og compileren haandhaever det. Derefter de to roede kryds, som ER sliden. Der er ingen pil mellem kortene. Den eneste vej fra én bane til en anden gaar ned i store'en og op igen, og derfor ville shipping koere videre hvis sales var nede en time. Spoerger nogen hvordan shipping overhovedet kender event-klassen, er det det gode spoergsmaal: den importerer klassen paa compile-tidspunktet og modtager vaerdien paa koerselstidspunktet - to forskellige krydsninger.">
   <div class="eyebrow"><span lang="en">With Essentials</span><span lang="da">Med Essentials</span></div>
   <h2><span lang="en">The swimlanes are <em>the top-level directories</em></span><span lang="da">Svømmebanerne er <em>de øverste mapper</em></span></h2>
-  <div class="row grow" style="align-items:stretch">
-    <figure class="panel sm" style="flex:1.1 1 0">
-      <figcaption><span>three lanes, sixteen slices</span><span class="path">&hellip;/examples/essentials-webshop-demo/&hellip;/webshop/</span></figcaption>
-      <pre><code class="plain">sales/                        shipping/                  payment/
-  events/      ← exported       events/      ← exported    events/
-  types/       ← exported       types/                     routing/
-  routing/                      routing/                   config/
-  config/                       config/                    use_cases/
-  use_cases/   ← private        use_cases/                   place_hold_on_credit_card/
-    add_product/                  package_order/           automations/
-    change_product_price/         ship_order/                hold_funds_on_order_placed/
-    add_item_to_shopping_basket/ views/                    external_systems/
-    remove_item_from_basket/       orders_ready_for_        payment_gateway/
-    request_checkout/               packaging/
-    add_shipping_details/       external_systems/
-    add_payment_details/          order_management/
-    place_order/                    outgoing/   → Kafka
-  views/
-    products_for_sale/
-    shopping_basket/
-    order_summary/</code></pre>
-    </figure>
-    <div class="col" style="flex:0.85 1 0">
-      <p lang="en"><strong>Two packages cross a boundary: <code>events/</code> and <code>types/</code>.</strong> Everything under <code>use_cases/</code> is private to its lane, and the compiler is what says so.</p>
-      <p lang="da"><strong>To pakker krydser en grænse: <code>events/</code> og <code>types/</code>.</strong> Alt under <code>use_cases/</code> er privat for sin bane, og compileren er den der siger det.</p>
-      <p lang="en">So <code>shipping</code> learns that an order exists by <strong>subscribing to <code>sales</code>' events</strong>. It never calls <code>sales</code>, holds no reference to its write side, and would keep working if <code>sales</code> were down for an hour &mdash; the events are already in the store.</p>
-      <p lang="da">Så <code>shipping</code> lærer at en ordre findes ved at <strong>subscribe til <code>sales</code>' events</strong>. Den kalder aldrig <code>sales</code>, har ingen reference til dens skriveside, og ville køre videre hvis <code>sales</code> var nede i en time.</p>
-      <p class="small" lang="en">Each lane owns its own event streams: <code>Products</code>, <code>ShoppingBaskets</code>, <code>Orders</code> in sales, <code>ShippingOrders</code> in shipping, <code>CreditCardHolds</code> in payment. One shared identifier, five separate consistency boundaries.</p>
-      <p class="small" lang="da">Hver bane ejer sine egne event streams: <code>Products</code>, <code>ShoppingBaskets</code>, <code>Orders</code> i sales, <code>ShippingOrders</code> i shipping, <code>CreditCardHolds</code> i payment. Én fælles identifikator, fem separate konsistensgrænser.</p>
-    </div>
+  <figure class="dgm">
+    <svg viewBox="0 0 1200 400" role="img"
+         aria-label="Three lane cards side by side: sales, shipping and payment. Each has an exported block holding events and types, and a private block holding its use cases, views, automations and external systems. No arrow runs between the cards; each one appends to and subscribes from a single event store drawn underneath, which holds the five streams the lanes own.">
+      <defs>
+        <marker id="ah2" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto">
+          <path d="M0 0 L8 4 L0 8 Z" class="ah-dim"/>
+        </marker>
+        <marker id="ahh2" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto">
+          <path d="M0 0 L8 4 L0 8 Z" class="ah-hi"/>
+        </marker>
+      </defs>
+
+      <!-- the three lane cards --------------------------------------------- -->
+      <rect class="dgm-box bc-sales" x="4"   y="16" width="368" height="234"/>
+      <rect class="dgm-box bc-ship"  x="416" y="16" width="368" height="234"/>
+      <rect class="dgm-box bc-pay"   x="828" y="16" width="368" height="234"/>
+      <path class="dgm-edge" d="M4 50 H372"/>
+      <path class="dgm-edge" d="M416 50 H784"/>
+      <path class="dgm-edge" d="M828 50 H1196"/>
+
+      <text class="dgm-lane fl-sales" x="18"   y="40">sales/</text>
+      <text class="dgm-lane fl-ship"  x="430"  y="40">shipping/</text>
+      <text class="dgm-lane fl-pay"   x="842"  y="40">payment/</text>
+      <text class="dgm-lbl" x="358"  y="40" text-anchor="end">12 SLICES</text>
+      <text class="dgm-lbl" x="770"  y="40" text-anchor="end">4 SLICES</text>
+      <text class="dgm-lbl" x="1182" y="40" text-anchor="end">8 SLICES</text>
+
+      <!-- exported: the only two packages another lane may import ----------- -->
+      <rect class="dgm-sub" x="16"  y="58" width="344" height="54"/>
+      <rect class="dgm-sub" x="428" y="58" width="344" height="54"/>
+      <rect class="dgm-sub" x="840" y="58" width="344" height="54"/>
+      <text class="dgm-t sm" x="30"   y="100">events/&#160;&#160; types/</text>
+      <text class="dgm-t sm" x="442"  y="100">events/&#160;&#160; types/</text>
+      <text class="dgm-t sm" x="854"  y="100">events/&#160;&#160; types/</text>
+
+      <!-- private: everything else ----------------------------------------- -->
+      <rect class="dgm-sub priv" x="16"  y="120" width="344" height="116"/>
+      <rect class="dgm-sub priv" x="428" y="120" width="344" height="116"/>
+      <rect class="dgm-sub priv" x="840" y="120" width="344" height="116"/>
+      <text class="dgm-s" x="30"  y="162">use_cases/&#160;&#160; 9</text>
+      <text class="dgm-s" x="30"  y="180">views/&#160;&#160; 3</text>
+      <text class="dgm-s" x="30"  y="198">routing/&#160;&#160; config/</text>
+      <text class="dgm-s" x="442" y="162">use_cases/&#160;&#160; 2</text>
+      <text class="dgm-s" x="442" y="180">views/&#160;&#160; 1</text>
+      <text class="dgm-s" x="442" y="198">external_systems/&#160;&#160; 1</text>
+      <text class="dgm-s" x="442" y="216">routing/&#160;&#160; config/</text>
+      <text class="dgm-s" x="854" y="162">use_cases/&#160;&#160; 3</text>
+      <text class="dgm-s" x="854" y="180">views/&#160;&#160; 1</text>
+      <text class="dgm-s" x="854" y="198">automations/&#160;&#160; 3</text>
+      <text class="dgm-s" x="854" y="216">external_systems/&#160;&#160; 1</text>
+
+      <!-- the connection that does not exist -------------------------------- -->
+      <path class="dgm-no" d="M372 150 H381"/>
+      <path class="dgm-no" d="M407 150 H416"/>
+      <circle class="dgm-x" cx="394" cy="150" r="12"/>
+      <path class="dgm-xm" d="M389 145 L399 155 M399 145 L389 155"/>
+      <path class="dgm-no" d="M784 150 H793"/>
+      <path class="dgm-no" d="M819 150 H828"/>
+      <circle class="dgm-x" cx="806" cy="150" r="12"/>
+      <path class="dgm-xm" d="M801 145 L811 155 M811 145 L801 155"/>
+
+      <!-- the only path between lanes --------------------------------------- -->
+      <path class="dgm-edge" marker-end="url(#ah2)"  d="M164 252 V 294"/>
+      <path class="dgm-hi"   marker-end="url(#ahh2)" d="M212 294 V 252"/>
+      <path class="dgm-edge" marker-end="url(#ah2)"  d="M576 252 V 294"/>
+      <path class="dgm-hi"   marker-end="url(#ahh2)" d="M624 294 V 252"/>
+      <path class="dgm-edge" marker-end="url(#ah2)"  d="M988 252 V 294"/>
+      <path class="dgm-hi"   marker-end="url(#ahh2)" d="M1036 294 V 252"/>
+
+      <rect class="dgm-box" x="4" y="300" width="1192" height="74"/>
+      <rect class="dgm-box bc-sales" x="24"  y="334" width="89"  height="30"/>
+      <rect class="dgm-box bc-sales" x="123" y="334" width="146" height="30"/>
+      <rect class="dgm-box bc-sales" x="279" y="334" width="73"  height="30"/>
+      <rect class="dgm-box bc-ship"  x="532" y="334" width="137" height="30"/>
+      <rect class="dgm-box bc-pay"   x="939" y="334" width="146" height="30"/>
+      <text class="dgm-t sm" x="36"  y="354">Products</text>
+      <text class="dgm-t sm" x="135" y="354">ShoppingBaskets</text>
+      <text class="dgm-t sm" x="291" y="354">Orders</text>
+      <text class="dgm-t sm" x="544" y="354">ShippingOrders</text>
+      <text class="dgm-t sm" x="951" y="354">CreditCardHolds</text>
+
+      <!-- everything that needs translating, and nothing that does not ------ -->
+      <g lang="en">
+        <text class="dgm-lbl" x="30"  y="76">EXPORTED &middot; ANY LANE MAY IMPORT</text>
+        <text class="dgm-lbl" x="442" y="76">EXPORTED &middot; ANY LANE MAY IMPORT</text>
+        <text class="dgm-lbl" x="854" y="76">EXPORTED &middot; ANY LANE MAY IMPORT</text>
+        <text class="dgm-lbl" x="30"  y="138">PRIVATE TO THIS LANE</text>
+        <text class="dgm-lbl" x="442" y="138">PRIVATE TO THIS LANE</text>
+        <text class="dgm-lbl" x="854" y="138">PRIVATE TO THIS LANE</text>
+        <text class="dgm-s" x="156" y="277" text-anchor="end">appends</text>
+        <text class="dgm-s" x="220" y="277">subscribes</text>
+        <text class="dgm-lbl" x="18" y="322">THE EVENT STORE &middot; ONE TABLE, AND EACH LANE OWNS ITS OWN STREAMS</text>
+      </g>
+      <g lang="da">
+        <text class="dgm-lbl" x="30"  y="76">EKSPORTERET &middot; ENHVER BANE M&Aring; IMPORTERE</text>
+        <text class="dgm-lbl" x="442" y="76">EKSPORTERET &middot; ENHVER BANE M&Aring; IMPORTERE</text>
+        <text class="dgm-lbl" x="854" y="76">EKSPORTERET &middot; ENHVER BANE M&Aring; IMPORTERE</text>
+        <text class="dgm-lbl" x="30"  y="138">PRIVAT FOR DENNE BANE</text>
+        <text class="dgm-lbl" x="442" y="138">PRIVAT FOR DENNE BANE</text>
+        <text class="dgm-lbl" x="854" y="138">PRIVAT FOR DENNE BANE</text>
+        <text class="dgm-s" x="156" y="277" text-anchor="end">tilf&oslash;jer</text>
+        <text class="dgm-s" x="220" y="277">abonnerer</text>
+        <text class="dgm-lbl" x="18" y="322">EVENT STORE &middot; ÉN TABEL, OG HVER BANE EJER SINE EGNE STREAMS</text>
+      </g>
+    </svg>
+    <figcaption>
+      <span lang="en">The red cross is the point: <strong>there is no arrow between the cards.</strong> 24 slices, three lanes, one store</span>
+      <span lang="da">Det r&oslash;de kryds er pointen: <strong>der er ingen pil mellem kortene.</strong> 24 slices, tre baner, én store</span>
+    </figcaption>
+  </figure>
+
+  <div class="row" style="align-items:flex-start">
+    <p class="small" lang="en" style="flex:1 1 0"><strong>Two packages cross a boundary: <code>events/</code> and <code>types/</code>.</strong> Everything in the dashed block is private to its lane, and the compiler is what says so &mdash; not a review comment and not a diagram on a wiki.</p>
+    <p class="small" lang="da" style="flex:1 1 0"><strong>To pakker krydser en grænse: <code>events/</code> og <code>types/</code>.</strong> Alt i den stiplede blok er privat for sin bane, og compileren er den der siger det &mdash; ikke en review-kommentar og ikke et diagram på en wiki.</p>
+    <p class="small" lang="en" style="flex:1 1 0">Two different crossings, and the slide draws both: <code>shipping</code> <em>imports</em> <code>sales</code>' event classes at compile time, and <em>receives</em> the events themselves at runtime from the store. What it never does is <strong>call</strong> <code>sales</code> &mdash; so it would keep working if <code>sales</code> were down for an hour.</p>
+    <p class="small" lang="da" style="flex:1 1 0">To forskellige krydsninger, og sliden tegner begge: <code>shipping</code> <em>importerer</em> <code>sales</code>' event-klasser på compile-tidspunktet, og <em>modtager</em> selve eventene på kørselstidspunktet fra store'en. Det den aldrig gør, er at <strong>kalde</strong> <code>sales</code> &mdash; så den ville køre videre hvis <code>sales</code> var nede i en time.</p>
   </div>
 </section>
 <section class="slide" data-side="concept" data-act="5/13 &mdash; Tests come from the model" data-min="1"
@@ -1540,7 +1879,7 @@ class OrderShippedKafkaPublisher(…) : EventProcessor(dependencies) {
       </ul>
       <figure class="panel sm">
         <figcaption><span>all of it, in the repository</span><span class="path">essentials-project</span></figcaption>
-        <pre><code class="plain">examples/essentials-webshop-demo    this app, Kotlin, 16 slices
+        <pre><code class="plain">examples/essentials-webshop-demo    this app, Kotlin, 24 slices
 examples/essentials-trading-demo    snapshots, closing books, CDC
 LLM/LLM-kotlin-eventsourcing.md     Decider, Evolver, tests</code></pre>
       </figure>
@@ -1735,7 +2074,7 @@ LLM/LLM-kotlin-eventsourcing.md     Decider, Evolver, tests</code></pre>
     var secs = Math.floor((performance.now() - timerStart) / 1000);
     var mm = String(Math.floor(secs / 60)).padStart(2, "0");
     var ss = String(secs % 60).padStart(2, "0");
-    el.textContent = mm + ":" + ss + " / 36:00";
+    el.textContent = mm + ":" + ss + " / 38:00";
   }
   setInterval(tickTimer, 1000);
 

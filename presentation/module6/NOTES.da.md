@@ -1,7 +1,7 @@
 # Talernoter — Modul 6, Begreber Og Svar
 
 Begreberne fra *Simplifying with Event Modeling, Event Sourcing and CQRS*, hvert efterfulgt af den
-Essentials-kode der implementerer det. 32 slides, 36 minutter, derefter spørgsmål.
+Essentials-kode der implementerer det. 33 slides, 38 minutter, derefter spørgsmål.
 
 Hver slide har sin egen note i decket — tryk `N`. Denne fil er kørselsplanen, hvorfor parrene er parrene,
 og hvad der blev udeladt. Den engelske `NOTES.md` er den fulde version; denne er tættere.
@@ -18,6 +18,13 @@ Timens værdi ligger i den anden slide i hvert par, så brug aldrig mere end cir
 Formatet forklares **ikke** på en slide ud over én linje på kortet. Det forklarer sig selv første gang en
 grå slide følges af en orange.
 
+Én slide står uden for rytmen: **slide 3, kortet over applikationen**. Hver orange slide efter den er et
+uddrag skåret ud af netop den webshop, og et rum der har set hele formen én gang holder op med at spørge
+"hvor hører det her til?" ved hver af de tretten. To minutter brugt for at spare tretten afbrydelser.
+Diagrammet er samme billede som `examples/essentials-webshop-demo/docs/ui-flow.md` — den fil er Mermaid,
+som decket ikke kan rendere, så sliden bærer en håndtegnet SVG af det. **Hold de to i trit** når demoens
+slices ændrer sig.
+
 ## Betjening
 
 | Tast | Gør |
@@ -28,7 +35,7 @@ grå slide følges af en orange.
 | `N` | talernote til denne slide |
 | `L` | English / Dansk |
 | `H` | handout-tilstand — lys palet, til print og lyse lokaler |
-| `T` | start / nulstil taler-uret (tæller mod 36:00) |
+| `T` | start / nulstil taler-uret (tæller mod 38:00) |
 | `?` | tastelisten |
 
 Decket kræver ingen server, men det kræver sin `images/`-mappe ved siden af — seks diagrammer hentet fra
@@ -53,13 +60,43 @@ modulets egen pptx (se `images/README.md`).
 | 13 | Composite UI og automatiseringer | slides 73–74 — én skærm fra mange views, og en to-do-liste | én række fra fire streams; en policy der ejer sin tilstand | 2,75 |
 | — | Bonus: dual write | slides 86–88 — problemet, og modulets eget diagram | én lokal transaktion, så publicerer et subscription | 2,5 |
 
-Plus titlen, kortet ("fire spørgsmål, i den rækkefølge man møder dem"), "udeladt med vilje" og afslutningen: 2 minutter.
+Før parrene: titlen, kortet ("fire spørgsmål, i den rækkefølge man møder dem") og **kortet over appen**
+(2 min, se nedenfor). På kortet: læs de fire spørgsmål og intet andet — de fjorten nummererede linjer ved
+siden af står der så rummet kan læse forud, ikke så du kan referere dem, og tallene er dem skinnen viser
+hele oplægget igennem. Efter dem: "udeladt med vilje" og afslutningen. 3,5 minutter i alt, og 34,5 i parrene.
 
 **Er du bagud ved par 8**, drop par 11 (rækkefølge/levering/idempotens) og par 12's begrebsslide. Begge er
 støttemateriale. Drop ikke par 13 eller dual write — dér gør Essentials mest arbejde for dig.
 
 **Er du foran**, er de to slides der belønner ekstra tid par 6's svar (decideren) og par 13's svar
 (automatiseringen, og fejlen i dens gloss).
+
+## Slide 3 — kortet over appen
+
+Læs ikke kasserne op. Fire kolonner og en snes etiketter læser sig selv hurtigere end du kan sige dem.
+
+Følg **én** vej med fingeren i stedet, og sig den som en sætning: *tryk Package i lageret — det er én
+kommando; den tilføjer ét event til én stream; en projektion gør den stream til en tabel; et panel viser
+tabellen.* Stop så og sig den linje resten af oplægget hviler på: **der er ingen pil tilbage.** Intet i de
+venstre kolonner har en reference til en skærm. Derfor kan højre kolonne genopbygges, udskiftes eller
+udvides uden at røre venstre, og hvert senere par er en detalje af netop den egenskab.
+
+Derefter de **orange pile**, det eneste på sliden der er værd at pege på to gange. `order_summary` er én
+række foldet af fire streams på tværs af alle tre bounded contexts, og lagerets arbejdsliste af tre. Sig at
+du vender tilbage til det — det gør du, ved par 13, og så genkender rummet billedet i stedet for at møde
+det koldt med halvandet minut tilbage.
+
+To svar du skal have klar:
+
+- *"Hvad er endpointsene?"* — ét `GET` pr. panel, og det er det hele. Bevidst ikke på sliden: en liste af
+  URL'er lærer ikke noget som kolonneoverskriften ikke siger, og den inviterer til en REST-diskussion i
+  tredje minut.
+- *"Hvorfor har Checkout ingen læsemodel?"* — den skriver kun. Den viser det ordre-id browseren dannede og
+  intet andet, så ingen projektion peger på den. Det er slidens ene undtagelse og ti sekunder værd, fordi
+  den viser at reglen er strukturel frem for en konvention alle fulgte.
+
+Farven er den bounded context, og den er den samme på hver senere slide der har en: sales rav, payment
+rød, shipping grøn.
 
 ## Parrene, og hvad du siger
 
@@ -71,16 +108,22 @@ hvert gemt event.
 **2 — At opdage og modellere.** Dette er modulets eget event model, med legende. Gennemgå legenden fra
 venstre: UI/API/job, blå command, orange event, grøn view, derefter de fire Given/When/Then-mønstre
 nederst. Storming finder de orange sedler; modeling sætter dem i tid. Svarsliden gør de fire kasser til
-fire filer i én mappe, og tallet der skal siges højt er seksten.
+fire filer i én mappe, og tallet der skal siges højt er fireogtyve.
 
 **3 — De tre mønstre.** Sig "tre" og mén det: alt i systemet er ét af dem. Automation-mønstret er det
 ukendte. Svarslidens tabel er pointen — hvert mønster har sin egen basistype i frameworket, og typen
 bringer præcis det maskineri mønstret har brug for.
 
 **4 — Slices og capabilities.** To idéer på to skalaer. De tre wireframes er modulets egen Web App-bane.
-På svarsliden: sig hvad der krydser en grænse og hvad der ikke kan, derefter `shipping`-eksemplet — den
-lærer at en ordre findes ved at subscribe, kalder aldrig `sales`, og ville køre videre hvis `sales` var
-nede i en time.
+Svarsliden er et diagram frem for en mappeliste, og tag den i denne rækkefølge: den fyldte blok i hvert
+kort (`events/`, `types/` — de eneste to pakker en anden bane må importere), derefter den stiplede blok
+(privat, og compileren håndhæver det), derefter **de to røde kryds, som er hele sliden.** Der er ingen pil
+mellem kortene. Den eneste vej fra én bane til en anden går ned i store'en og op igen, og derfor ville
+`shipping` køre videre hvis `sales` var nede i en time.
+
+Spørger nogen hvordan `shipping` overhovedet kender event-klassen, så tag det — det er slidens bedste
+spørgsmål. Der sker to forskellige krydsninger: den *importerer* klassen på compile-tidspunktet, og
+*modtager* værdien på kørselstidspunktet fra store'en. Det den aldrig gør, er at **kalde** `sales`.
 
 **5 — Test kommer fra modellen.** Læs modulets Given/When/Then, derefter testen, og lad rummet bemærke at
 det er samme sætning. Tal: 30 tests, 0,3 sekunder, intet startet. Den fjerde test i glossen er den der
@@ -127,7 +170,7 @@ letter-køen.
 
 ## Ingen live demo, med vilje
 
-Fjorten par fylder de 36 minutter, så der er intet demo-segment i decket. Afslutningen fortæller rummet
+Fjorten par og kortet fylder de 38 minutter, så der er intet demo-segment i decket. Afslutningen fortæller rummet
 hvordan de selv kører den, og `demo-script.md` er stadig runbooken hvis du får et længere slot eller rummet
 beder om at se det.
 
@@ -169,4 +212,6 @@ invariant-tung konsistensgrænse — den stil viser trading-demoen.
 - [ ] `mvn verify -pl :essentials-webshop-demo` grøn, og én gang med `-Pjackson2 … -am`
 - [ ] decket åbnet offline med `images/` ved siden af, i begge sprog, handout-tilstand tjekket
 - [ ] de seks hentede diagrammer passer stadig til pptx'en, hvis modulet selv er blevet redigeret
+- [ ] slide 3's kort passer stadig til `examples/essentials-webshop-demo/docs/ui-flow.md` — en slice
+      tilføjet eller flyttet i demoen ændrer begge, og deckets kopi er håndtegnet SVG som intet genererer
 - [ ] uret startet med `T` på titelsliden

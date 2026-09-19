@@ -1,7 +1,7 @@
 # Speaker Notes — Module 6, Concepts And Answers
 
 The concepts of *Simplifying with Event Modeling, Event Sourcing and CQRS*, each followed by the
-Essentials code that implements it. 32 slides, 36 minutes, then questions.
+Essentials code that implements it. 33 slides, 38 minutes, then questions.
 
 Every slide carries its own note in the deck — press `N`. This file is the run of show, why the pairs are
 the pairs, and what was left out.
@@ -20,6 +20,13 @@ on a grey one.
 The format is **not** explained on a slide beyond one line on the roadmap. It explains itself the first
 time a grey slide is followed by an orange one, and a slide spent describing a slide is a slide wasted.
 
+One slide sits outside the rhythm: **slide 3, the map of the application**. Every orange slide after it is
+an excerpt cut from that one webshop, and a room that has seen the whole shape once stops asking "where
+does this bit live?" on each of the thirteen. It is two minutes spent to save thirteen interruptions. The
+diagram is the same picture as `examples/essentials-webshop-demo/docs/ui-flow.md` — that file is Mermaid,
+which the deck cannot render, so the slide carries a hand-drawn SVG of it. **Keep the two in step** when
+the demo's slices change.
+
 ## Deck controls
 
 | Key | Does |
@@ -30,7 +37,7 @@ time a grey slide is followed by an orange one, and a slide spent describing a s
 | `N` | speaker note for this slide |
 | `L` | English / Dansk |
 | `H` | handout mode — light palette, for print and bright rooms |
-| `T` | start / reset the talk timer (counts against 36:00) |
+| `T` | start / reset the talk timer (counts against 38:00) |
 | `?` | the key list |
 
 The deck needs no server. It does need its `images/` directory beside it — six diagrams extracted from
@@ -55,7 +62,11 @@ the module's own pptx (see `images/README.md`). The two web fonts degrade to sys
 | 13 | Composite UI and automations | slides 73–74 — one screen from many views, and a to-do list | one row from four streams; a policy that owns its state | 2.75 |
 | — | Bonus: the dual write | slides 86–88 — the problem, and the module's own diagram | one local transaction, then a subscription publishes | 2.5 |
 
-Plus the title, the roadmap ("four questions, in the order you hit them"), "left out on purpose", and the close: 2 minutes.
+Before the pairs: the title, the roadmap ("four questions, in the order you hit them"), and **the map of
+the app** (2 min, see below). On the roadmap, read the four questions and nothing else — the fourteen
+numbered lines beside them are there so the room can read ahead, not so you can narrate them, and the
+numbers are the ones the rail shows all talk. After them: "left out on purpose" and the close. 3.5 minutes in total, and
+34.5 in the pairs.
 
 **If you are behind at pair 8**, drop pair 11 (order/delivery/idempotence) and pair 12's concept slide.
 Both are supporting material. Do not drop pair 13 or the dual write — they are where Essentials does the
@@ -63,6 +74,35 @@ most work for you.
 
 **If you are ahead**, the two slides that reward extra time are pair 6's answer (the decider) and pair
 13's answer (the automation, and the mistake in its gloss).
+
+## Slide 3 — the map of the app
+
+Do not read the boxes out. Four columns and twenty-odd labels read themselves faster than you can say
+them, and a slide read aloud is a slide the room stops looking at.
+
+Trace **one** path with a finger instead, and say it as a sentence: *press Package in the warehouse — that
+is one command; it appends one event to one stream; a projection turns that stream into a table; a panel
+renders the table.* Then stop and say the line the rest of the talk rests on: **there is no arrow pointing
+back.** Nothing in the left-hand columns holds a reference to a screen. That is why the right-hand column
+can be rebuilt, replaced or added to without touching the left, and it is the property every later pair
+is a detail of.
+
+Then the **orange arrows**, which are the only thing on the slide worth pointing at twice.
+`order_summary` is one row folded from four streams across all three bounded contexts, and the warehouse's
+work list from three. Say that you will come back to it — you do, at pair 13, and the room recognises the
+picture rather than meeting it cold with ninety seconds left.
+
+Two answers to have ready:
+
+- *"What are the endpoints?"* — one `GET` per panel, and that is the whole of it. Deliberately not on the
+  slide: a list of URLs teaches nothing that the column heading does not, and it invites a discussion
+  about REST in the third minute of the talk.
+- *"Why does Checkout have no read model?"* — it only writes. It shows the order id the browser minted
+  and nothing else, so no projection points at it. It is the one exception on the slide and it is worth
+  ten seconds, because it shows the rule is structural rather than a convention everyone followed.
+
+Colour is the bounded context, and it stays the same colour on every later slide that has one: sales
+amber, payment red, shipping green.
 
 ## The pairs, and what to say
 
@@ -74,8 +114,8 @@ JSON contract, so renaming a field breaks every stored event.
 **2 — Discovering and modeling.** This is the module's own event model, legend and all. Walk the legend
 left to right: UI/API/job, blue command, orange event, green view, then the four Given/When/Then patterns
 at the bottom. Storming finds the orange stickies; modeling puts them in time. The answer slide turns
-those four boxes into four files in one directory, and the number to say out loud is sixteen — sixteen
-slices, no `services/`, no `repositories/`.
+those four boxes into four files in one directory, and the number to say out loud is twenty-four —
+twenty-four slices, no `services/`, no `repositories/`.
 
 **3 — The three patterns.** Say "three" and mean it: everything in the system is one of these. The
 automation pattern is the unfamiliar one. The answer slide's table is the point — each pattern has its own
@@ -84,9 +124,17 @@ function, a `ViewEventProcessor` brings an ordered replayable subscription, an `
 Inbox because an automation may call the outside world.
 
 **4 — Slices and capabilities.** Two ideas at two scales. The three wireframes are the module's own Web
-App lane. On the answer slide, say what crosses a boundary and what cannot, then the `shipping` example:
-it learns that an order exists by subscribing, never calls `sales`, and would keep working if `sales` were
-down for an hour.
+App lane. The answer slide is a diagram rather than a directory listing, and it is worth working in this
+order: the solid block in each card (`events/`, `types/` — the only two packages another lane may import),
+then the dashed block (private, and the compiler is what enforces it), then **the two red crosses, which
+are the whole slide.** There is no arrow between the cards. The only route from one lane to another goes
+down into the store and back up, which is why `shipping` would keep working if `sales` were down for an
+hour.
+
+If somebody asks how `shipping` knows the event class at all, take it — it is the best question on this
+slide. Two different crossings are happening: it *imports* the class at compile time, and *receives* the
+value at runtime from the store. What it never does is **call** `sales`. The diagram draws the second
+crossing and the dashed blocks imply the first.
 
 **5 — Tests come from the model.** Read the module's Given/When/Then, then the test, and let the room
 notice they are the same sentence. Numbers: 30 tests, 0.3 seconds, nothing started. The fourth test in the
@@ -144,7 +192,7 @@ business outcome simply never happens.
 
 ## No live demo, deliberately
 
-Fourteen pairs fill the 36 minutes, so there is no demo segment on the deck. The close tells the room how
+Fourteen pairs and the map fill the 38 minutes, so there is no demo segment on the deck. The close tells the room how
 to run it themselves, and `demo-script.md` is still the runbook if you get a longer slot or the room asks
 to see it — three beats, each with a fallback.
 
@@ -191,4 +239,6 @@ consistency boundary, and that is the style the trading demo shows.
 - [ ] `mvn verify -pl :essentials-webshop-demo` green, and once with `-Pjackson2 … -am`
 - [ ] deck opened offline with `images/` beside it, both languages, handout mode checked on the projector
 - [ ] the six extracted diagrams still match the pptx, if the module itself has been edited
+- [ ] slide 3's map still matches `examples/essentials-webshop-demo/docs/ui-flow.md` — a slice added or
+      moved in the demo changes both, and the deck's copy is hand-drawn SVG that nothing regenerates
 - [ ] timer started with `T` on the title slide

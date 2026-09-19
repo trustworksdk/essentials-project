@@ -103,7 +103,7 @@ docker run --rm --network host apache/kafka:4.3.1 \
 Say: *one local transaction wrote the event; a subscription published it afterwards. That is the dual
 write, answered.*
 
-**Fallback:** skip the consumer command and point at the dual-write pair instead (slides 29–30). The Kafka
+**Fallback:** skip the consumer command and point at the dual-write pair instead (slides 30–31). The Kafka
 image pull is the slowest thing in this runbook — pull it before the talk.
 
 ## Beat 3 — look behind it (about 45 seconds)
@@ -179,4 +179,4 @@ port 5432, so only one can run at a time.
 
 **Snapshots and closing books** were considered for this demo and deliberately left out: they are
 secondary mechanisms, and the trading demo already shows them properly. If somebody asks, answer from the
-"left out on purpose" slide (31) and offer `examples/essentials-trading-demo` afterwards.
+"left out on purpose" slide (32) and offer `examples/essentials-trading-demo` afterwards.
