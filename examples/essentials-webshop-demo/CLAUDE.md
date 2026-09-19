@@ -73,6 +73,10 @@ external_systems/<slice>/`, plus `events/ types/ routing/ config/` as context's 
 - **`RestClient.Builder` is not a bean here** (Boot 4 split its auto-configuration out); the gateway simulator
   uses `RestClient.create()`. Gateway dials are in `WebshopPaymentProperties`; ITs need `RANDOM_PORT` because
   the callback is a real HTTP call to our own port.
+- **Events here carry no causation** — `caused_by_event_id` and `correlation_id` are null on every row, because
+  the starter's default `PersistableEventMapper` sets neither (its javadoc says otherwise). So "which event
+  caused this one?" cannot be answered from the data, only inferred from the model. Framework proposal:
+  `docs/event-causation-and-correlation.md`.
 - **`OrderSummaryView.lastUpdated` is display-only.** It exists so the order-history panel can put the row you
   just touched at the top, and nothing decides anything from it — event ordering is `EventOrder` /
   `GlobalEventOrder`, never a timestamp. The history panel is the same read model as the summary queried without
