@@ -8,6 +8,10 @@
 > between now and then.
 >
 > Design rationale: `docs/constructor-ergonomics-and-optional-policy.md`.
+>
+> One item here is not about constructors: `types-springdata-jpa` now offers `numeric`-backed converters for `Amount`
+> and `Percentage`, and the default column type changes at the next major. That one involves a **schema** migration —
+> see [`types-springdata-jpa`: `Amount` and `Percentage` move to `numeric` columns](#types-springdata-jpa-amount-and-percentage-move-to-numeric-columns).
 
 ## What changed and why
 
@@ -180,6 +184,62 @@ Both defaults are now pinned by `PostgresqlDurableQueuesBuilderDefaultsTest` and
 asserting it and so pass whichever way it drifts.
 
 Everything else in this release is source- and binary-compatible.
+
+## `types-springdata-jpa`: `Amount` and `Percentage` move to `numeric` columns
+
+Separate from the constructor sweep above, and the only item in this guide that touches a **database schema** rather
+than a Java signature.
+
+`AmountAttributeConverter` and `PercentageAttributeConverter` map to a `double precision` column, because their shared
+base class, `BaseBigDecimalTypeAttributeConverter`, implements `AttributeConverter<T, Double>`. That is lossy twice
+over, and silently so:
+
+- **The scale of the value written is lost.** `Amount.of("1999.50")` reads back as `1999.5`. Numerically equal, but
+  `BigDecimal.equals` is scale-sensitive, so an assertion, a cache key or a `Map` lookup against the value that was
+  written fails.
+- **SQL arithmetic is floating point.** `sum`, `avg` and every comparison on the column are IEEE-754 operations. Sums
+  over many rows drift, and a value beyond roughly 15–17 significant digits cannot be represented at all.
+
+### Available now, opt-in
+
+`BaseBigDecimalTypeNumericAttributeConverter<T>` implements `AttributeConverter<T, BigDecimal>`, which Hibernate maps to
+an exact `numeric` column. Two concrete converters ship with it — `AmountNumericAttributeConverter` and
+`PercentageNumericAttributeConverter`. **Neither is `autoApply`**, so adding this release changes nothing: your columns
+keep their current type until you opt in per field.
+
+```java
+@Convert(converter = AmountNumericAttributeConverter.class)
+@Column(precision = 19, scale = 2)
+public Amount totalPrice;
+```
+
+An explicit `@Convert` takes precedence over an auto-applied converter, so this field is `numeric` even though
+`AmountAttributeConverter` is on the classpath. The converter imposes no precision or scale of its own — a framework
+converter cannot know your domain's scale — so declare `@Column` yourself; Hibernate's default is rarely what a monetary
+column wants.
+
+### What opting in does to an existing schema
+
+It changes the generated column type. An application on `hibernate.ddl-auto=validate` fails at startup until the column
+is migrated:
+
+```sql
+alter table <table> alter column <col> type numeric(19,2) using <col>::numeric(19,2);
+```
+
+**The cast is exact for values that fit, but it does not repair history.** A figure that floating-point accumulation has
+already corrupted, or precision a `double` never had room to hold, is gone — the migration preserves what is in the
+column, nothing more. If that matters for your data, reconcile against the source of truth before migrating, not after.
+
+### At the next major
+
+`numeric` becomes the default: `BaseBigDecimalTypeAttributeConverter`, `AmountAttributeConverter` and
+`PercentageAttributeConverter` are deprecated `forRemoval`, and the auto-applied `Amount`/`Percentage` converters map to
+`numeric`. At that point every `Amount` and `Percentage` column needs the migration above — so applications that care
+about exact money are better off opting in per field now, on their own schedule, than meeting all of it at once.
+
+Note that `types-springdata-jpa` is **EXPERIMENTAL** and may be discontinued; `types-jdbi` remains the recommended
+module for SQL persistence.
 
 ## Per-module reference
 

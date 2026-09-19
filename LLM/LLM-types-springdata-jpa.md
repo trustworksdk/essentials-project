@@ -48,7 +48,8 @@ Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 | SingleValueType | Base Converter | DB Type | Abstract Method |
 |-----------------|----------------|---------|-----------------|
 | `CharSequenceType` | `BaseCharSequenceTypeAttributeConverter<T>` | `String` | `getConcreteCharSequenceType()` |
-| `BigDecimalType` | `BaseBigDecimalTypeAttributeConverter<T>` | `Double` | `getConcreteBigDecimalType()` |
+| `BigDecimalType` | `BaseBigDecimalTypeAttributeConverter<T>` | `Double` → `double precision` (**lossy**, see below) | `getConcreteBigDecimalType()` |
+| `BigDecimalType` | `BaseBigDecimalTypeNumericAttributeConverter<T>` | `BigDecimal` → `numeric` (lossless, **prefer for money**) | `getConcreteBigDecimalType()` |
 | `IntegerType` | `BaseIntegerTypeAttributeConverter<T>` | `Integer` | `getConcreteIntegerType()` |
 | `LongType` | `BaseLongTypeAttributeConverter<T>` | `Long` | `getConcreteLongType()` |
 | `ShortType` | `BaseShortTypeAttributeConverter<T>` | `Short` | `getConcreteShortType()` |
@@ -63,6 +64,22 @@ Base package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 | `ZonedDateTimeType` | `BaseZonedDateTimeTypeAttributeConverter<T>` | `ZonedDateTime` | `getConcreteZonedDateTimeType()` |
 
 All `SingleValueType` classes from package: `dk.trustworks.essentials.types`
+
+### BigDecimal: `double precision` vs `numeric`
+
+`BaseBigDecimalTypeAttributeConverter` maps to a `double precision` column. That is lossy in two ways, and nothing warns:
+
+1. **Scale is lost.** `Amount.of("1999.50")` reads back as `1999.5`. Numerically equal, but `BigDecimal.equals` is
+   scale-sensitive, so an assertion, a cache key or a `Map` lookup against the value that was written fails.
+2. **SQL arithmetic is floating point.** `sum`, `avg` and every comparison on the column are IEEE-754 operations. Sums
+   over many rows drift, and a value beyond roughly 15-17 significant digits cannot be represented at all.
+
+`BaseBigDecimalTypeNumericAttributeConverter` maps to `BigDecimal` → an exact `numeric` column and round-trips losslessly.
+Use it for money, and for any rate that is compounded rather than merely displayed.
+
+It deliberately imposes no precision or scale — a framework converter cannot know the domain's scale — so declare the
+column yourself, exactly as you would for a plain `BigDecimal` property. Without an explicit `@Column`, Hibernate applies
+its own default precision and scale, which is rarely what a monetary column wants.
 
 ## API Signatures
 
@@ -133,6 +150,25 @@ public class LastUpdatedAttributeConverter extends BaseInstantTypeAttributeConve
     }
 }
 ```
+
+### Task: Store an `Amount` in an exact `numeric` column
+```java
+import dk.trustworks.essentials.types.Amount;
+import dk.trustworks.essentials.types.springdata.jpa.converters.AmountNumericAttributeConverter;
+import jakarta.persistence.*;
+
+@Entity
+@Table(name = "orders")
+public class Order {
+    @Convert(converter = AmountNumericAttributeConverter.class)
+    @Column(precision = 19, scale = 2)
+    public Amount totalPrice;
+}
+```
+`AmountNumericAttributeConverter` and `PercentageNumericAttributeConverter` are **not** `autoApply` — the `Double`-backed
+built-ins are, and two auto-applied converters for the same type would be ambiguous. An explicit `@Convert` takes
+precedence over an auto-applied converter, so the field above is `numeric` even with `AmountAttributeConverter` on the
+classpath.
 
 ### Task: Use in Entity (Non-ID Fields)
 ```java
@@ -221,16 +257,20 @@ public class OrderId extends LongType<OrderId> implements Identifier {
 
 Package: `dk.trustworks.essentials.types.springdata.jpa.converters`
 
-| Type | Converter |
-|------|-----------|
-| `Amount` | `AmountAttributeConverter` |
-| `Percentage` | `PercentageAttributeConverter` |
-| `CurrencyCode` | `CurrencyCodeAttributeConverter` |
-| `CountryCode` | `CountryCodeAttributeConverter` |
-| `EmailAddress` | `EmailAddressAttributeConverter` |
+| Type | Converter | Column | Auto-applied |
+|------|-----------|--------|--------------|
+| `Amount` | `AmountAttributeConverter` | `double precision` (lossy) | yes |
+| `Amount` | `AmountNumericAttributeConverter` | `numeric` (lossless) | no — opt in with `@Convert` |
+| `Percentage` | `PercentageAttributeConverter` | `double precision` (lossy) | yes |
+| `Percentage` | `PercentageNumericAttributeConverter` | `numeric` (lossless) | no — opt in with `@Convert` |
+| `CurrencyCode` | `CurrencyCodeAttributeConverter` | `varchar` | yes |
+| `CountryCode` | `CountryCodeAttributeConverter` | `varchar` | yes |
+| `EmailAddress` | `EmailAddressAttributeConverter` | `varchar` | yes |
 
 All types from: `dk.trustworks.essentials.types`
-All converters annotated with `@Converter(autoApply = true)`
+
+The `Double`-backed `Amount`/`Percentage` converters remain the auto-applied default so existing schemas keep working.
+The default changes to `numeric` at the next major — see [MIGRATION-NEXT_MAJOR.md](../docs/MIGRATION-NEXT_MAJOR.md).
 
 ## Integration Points
 
@@ -257,7 +297,10 @@ All converters annotated with `@Converter(autoApply = true)`
 - **No-arg constructor** - Use temp value (`-1L`) since `SingleValueType` cannot be null
 - **One converter per type** - Each `SingleValueType` needs own `AttributeConverter`
 - **autoApply = true required** - Auto-applies converter to all entity fields
-- **BigDecimal → Double** - Precision loss possible for high-precision calculations
+- **BigDecimal → Double** - The auto-applied `Amount`/`Percentage` converters map to `double precision`, which loses the
+  scale of the value written (`1999.50` reads back as `1999.5`, and `BigDecimal.equals` is scale-sensitive) and makes SQL
+  `sum`/`avg` floating point. Use `AmountNumericAttributeConverter` / `PercentageNumericAttributeConverter` via `@Convert`
+  for money
 - **Update both fields** - `@Embeddable` constructor must update `super()` + persistent field
 
 ## Test References

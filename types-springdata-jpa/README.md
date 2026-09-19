@@ -101,7 +101,8 @@ Extend these base classes to create converters for your types:
 | SingleValueType | Base Converter | Database Type | Abstract Method |
 |-----------------|----------------|---------------|-----------------|
 | `CharSequenceType` | `BaseCharSequenceTypeAttributeConverter` | `String` | `getConcreteCharSequenceType()` |
-| `BigDecimalType` | `BaseBigDecimalTypeAttributeConverter` | `Double` | `getConcreteBigDecimalType()` |
+| `BigDecimalType` | `BaseBigDecimalTypeAttributeConverter` | `Double` → `double precision` (lossy) | `getConcreteBigDecimalType()` |
+| `BigDecimalType` | `BaseBigDecimalTypeNumericAttributeConverter` | `BigDecimal` → `numeric` (lossless) | `getConcreteBigDecimalType()` |
 | `IntegerType` | `BaseIntegerTypeAttributeConverter` | `Integer` | `getConcreteIntegerType()` |
 | `LongType` | `BaseLongTypeAttributeConverter` | `Long` | `getConcreteLongType()` |
 | `ShortType` | `BaseShortTypeAttributeConverter` | `Short` | `getConcreteShortType()` |
@@ -214,15 +215,47 @@ public class OrderId extends LongType<OrderId> implements Identifier {
 
 Ready-to-use converters for common Essentials types:
 
-| Type | Converter |
-|------|-----------|
-| `Amount` | `AmountAttributeConverter` |
-| `Percentage` | `PercentageAttributeConverter` |
-| `CurrencyCode` | `CurrencyCodeAttributeConverter` |
-| `CountryCode` | `CountryCodeAttributeConverter` |
-| `EmailAddress` | `EmailAddressAttributeConverter` |
+| Type | Converter | Column | Auto-applied |
+|------|-----------|--------|--------------|
+| `Amount` | `AmountAttributeConverter` | `double precision` (lossy) | yes |
+| `Amount` | `AmountNumericAttributeConverter` | `numeric` (lossless) | no |
+| `Percentage` | `PercentageAttributeConverter` | `double precision` (lossy) | yes |
+| `Percentage` | `PercentageNumericAttributeConverter` | `numeric` (lossless) | no |
+| `CurrencyCode` | `CurrencyCodeAttributeConverter` | `varchar` | yes |
+| `CountryCode` | `CountryCodeAttributeConverter` | `varchar` | yes |
+| `EmailAddress` | `EmailAddressAttributeConverter` | `varchar` | yes |
 
-These are already annotated with `@Converter(autoApply = true)`.
+The auto-applied ones are annotated `@Converter(autoApply = true)` and need no wiring.
+
+### Storing money exactly
+
+`Amount` and `Percentage` are `BigDecimal`-backed, but the auto-applied converters map them to a `double precision`
+column. That loses the scale of the value written — `Amount.of("1999.50")` reads back as `1999.5`, and `BigDecimal.equals`
+is scale-sensitive — and it makes every SQL `sum`, `avg` and comparison on the column a floating-point operation.
+
+For monetary values, opt in to the `numeric`-backed converter per field:
+
+```java
+@Entity
+@Table(name = "orders")
+public class Order {
+    @Convert(converter = AmountNumericAttributeConverter.class)
+    @Column(precision = 19, scale = 2)
+    public Amount totalPrice;
+}
+```
+
+The numeric converters are deliberately not auto-applied: two auto-applied converters for the same type would be
+ambiguous, and changing the existing default would change the generated column type for every existing deployment. An
+explicit `@Convert` takes precedence over an auto-applied converter, so the field above is `numeric` even though
+`AmountAttributeConverter` is on the classpath.
+
+The converter imposes no precision or scale of its own — a framework converter cannot know your domain's scale — so
+declare `@Column(precision = …, scale = …)` yourself, exactly as you would for a plain `BigDecimal` property. Without it,
+Hibernate applies its own default, which is rarely what a monetary column wants.
+
+The default flips to `numeric` at the next major version; see
+[MIGRATION-NEXT_MAJOR.md](../docs/MIGRATION-NEXT_MAJOR.md) for what that means for an existing schema.
 
 ## Gotchas
 
@@ -240,7 +273,7 @@ These are already annotated with `@Converter(autoApply = true)`.
 
 - **autoApply = true** - Use `@Converter(autoApply = true)` to automatically apply converters to all entity fields of that type.
 
-- **BigDecimal stored as Double** - `BigDecimalType` values are stored as `Double`, which may lose precision for monetary calculations requiring more than double precision.
+- **BigDecimal stored as Double** - The auto-applied `Amount` and `Percentage` converters store values in a `double precision` column, which loses the written scale and performs SQL arithmetic in floating point. Use `AmountNumericAttributeConverter` / `PercentageNumericAttributeConverter` via `@Convert` for money — see [Storing money exactly](#storing-money-exactly).
 
 - **Consider alternatives** - Due to the complexity of ID handling, consider using [types-jdbi](../types-jdbi) for SQL database persistence instead.
 
