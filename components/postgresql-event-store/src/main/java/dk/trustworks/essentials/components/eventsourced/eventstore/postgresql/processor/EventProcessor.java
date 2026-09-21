@@ -188,6 +188,25 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  *     }
  * }
  * }</pre>
+ *
+ * <h3>Validation failures inside a {@code @MessageHandler} dead-letter the message immediately</h3>
+ * The {@link DurableQueueConsumer} classifies a set of exception types as permanent errors and marks the message as a
+ * Poison-Message/Dead-Letter-Message on the <em>first</em> delivery attempt, bypassing the {@link RedeliveryPolicy}
+ * entirely: {@code DurableQueueDeserializationException}, {@code MismatchedInputException},
+ * {@link NoClassDefFoundError}, {@link ClassCastException} and {@link IllegalArgumentException}.
+ * <p>
+ * {@link IllegalArgumentException} is the one that catches handler authors out.
+ * {@code FailFast.requireNonNull(...)} and {@code requireTrue(...)} — the validation idiom used throughout
+ * Essentials — both throw it, and so does Kotlin's {@code require(...)}. The built-in list is applied <em>after</em>
+ * the {@link RedeliveryPolicy}'s {@link MessageDeliveryErrorHandler} and wins over it, so
+ * {@code MessageDeliveryErrorHandler.builder().alwaysRetryOn(IllegalArgumentException.class)} does not prevent it.
+ * <p>
+ * Choose the exception type by whether the condition can ever become true: {@link IllegalArgumentException} when the
+ * message can never be processed, and a retryable exception when it may succeed later — a lookup against a view that
+ * has not caught up yet being the usual case.
+ * <p>
+ * Note also that only the outermost exception and the deepest root cause are examined, never the middle of the cause
+ * chain. See {@code LLM/LLM-foundation.md} for the full description.
  */
 public abstract class EventProcessor extends AbstractEventProcessor {
     protected final Logger log = LoggerFactory.getLogger(this.getClass());

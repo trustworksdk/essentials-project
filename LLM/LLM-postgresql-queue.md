@@ -25,6 +25,7 @@
 - [Polling Mechanisms](#polling-mechanisms)
 - [Polling Optimization](#polling-optimization)
 - [Database Schema](#database-schema)
+- [Dead-Letter Classification](#dead-letter-classification)
 - [Monitoring](#monitoring)
 - [Performance Tuning](#performance-tuning)
 - ⚠️ [Security](#security)
@@ -301,6 +302,30 @@ CREATE INDEX idx_*_ordered_head
 ```
 
 **Query pattern**: `FOR UPDATE SKIP LOCKED` for lock-free concurrent access.
+
+## Dead-Letter Classification
+
+A failed delivery is either retried according to the `RedeliveryPolicy` or dead-lettered immediately. The
+consumer decides by consulting the policy's `MessageDeliveryErrorHandler` first, then OR-ing its own built-in
+list of permanent error types — **the built-in list wins**, so no policy can remove a type from it.
+
+| Type | Matched on |
+|---|---|
+| `DurableQueueDeserializationException` | the thrown exception |
+| `MismatchedInputException` | the root cause |
+| `NoClassDefFoundError` | the thrown exception or the root cause |
+| `ClassCastException` | the thrown exception or the root cause |
+| `IllegalArgumentException` | the thrown exception or the root cause |
+
+`IllegalArgumentException` on that list is the common surprise: `FailFast.requireNonNull(...)` /
+`requireTrue(...)` and Kotlin's `require(...)` all throw it, so a `@MessageHandler` that guards its arguments
+dead-letters its message on the first delivery attempt, and `alwaysRetryOn(IllegalArgumentException.class)`
+does not change that.
+
+Only the outermost exception and the deepest root cause are examined, never the middle of the cause chain.
+
+See [LLM-foundation.md](./LLM-foundation.md) for `MessageDeliveryErrorHandler`, the `RedeliveryPolicy`
+strategies and the recipe for validating inside a handler.
 
 ## Monitoring
 

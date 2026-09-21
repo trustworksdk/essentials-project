@@ -16,7 +16,7 @@
 
 package dk.trustworks.essentials.components.foundation.messaging;
 
-import dk.trustworks.essentials.components.foundation.messaging.queue.QueuedMessage;
+import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.shared.Exceptions;
 
 import java.util.List;
@@ -31,12 +31,24 @@ public final class MessageDeliveryErrorHandlerBuilder {
     private List<Class<? extends Exception>> stopRedeliveryOnExceptions = List.of();
 
     /**
-     * The resulting {@link MessageDeliveryErrorHandler} will keep retrying message redelivery no matter how many times
-     * message handling experiences an exception for in the list of <code>exceptions</code>.<br>
+     * The resulting {@link MessageDeliveryErrorHandler} will not classify the listed <code>exceptions</code> as
+     * permanent errors, so message handling failures caused by them are retried according to the
+     * {@link RedeliveryPolicy} instead of being marked as a Poison-Message/Dead-Letter-Message immediately.<br>
      * It will first attempt to match directly on {@link Exception} class, next it will attempt to match on hierarchy (i.e.
      * a concrete error which is a subtype of an {@link Exception} found in the <code>exceptions</code> will also match)
+     * <p>
+     * <b>This does not mean unlimited redelivery.</b> Two limits still apply:
+     * <ul>
+     *     <li>The {@link RedeliveryPolicy}'s {@link RedeliveryPolicy#maximumNumberOfRedeliveries} cap is enforced by
+     *         the {@link DurableQueueConsumer} regardless of this setting, so a message that keeps failing is still
+     *         dead-lettered once its delivery attempts are exhausted.</li>
+     *     <li>The consumer applies its own built-in list of permanent error types <em>after</em> consulting this
+     *         handler, and that list wins. It contains {@code DurableQueueDeserializationException},
+     *         {@code MismatchedInputException}, {@code NoClassDefFoundError}, {@code ClassCastException} and
+     *         {@code IllegalArgumentException}, so listing one of those here currently has no effect.</li>
+     * </ul>
      *
-     * @param exceptions the exceptions where message redelivery will be continued no matter how many times this exception occurs
+     * @param exceptions the exceptions that this handler will not classify as permanent errors
      * @return this builder instance
      */
     @SafeVarargs
@@ -45,12 +57,18 @@ public final class MessageDeliveryErrorHandlerBuilder {
     }
 
     /**
-     * The resulting {@link MessageDeliveryErrorHandler} will keep retrying message redelivery no matter how many times
-     * message handling experiences an exception for in the list of <code>exceptions</code>.<br>
+     * The resulting {@link MessageDeliveryErrorHandler} will not classify the listed <code>exceptions</code> as
+     * permanent errors, so message handling failures caused by them are retried according to the
+     * {@link RedeliveryPolicy} instead of being marked as a Poison-Message/Dead-Letter-Message immediately.<br>
      * It will first attempt to match directly on {@link Exception} class, next it will attempt to match on hierarchy (i.e.
      * a concrete error which is a subtype of an {@link Exception} found in the <code>exceptions</code> will also match)
+     * <p>
+     * <b>This does not mean unlimited redelivery.</b> The {@link RedeliveryPolicy}'s
+     * {@link RedeliveryPolicy#maximumNumberOfRedeliveries} cap still applies, and the consumer's built-in list of
+     * permanent error types is applied after this handler and wins over it. See
+     * {@link #alwaysRetryOn(Class[])} for the full list.
      *
-     * @param exceptions the exceptions where message redelivery will be continued no matter how many times this exception occurs
+     * @param exceptions the exceptions that this handler will not classify as permanent errors
      * @return this builder instance
      */
     public MessageDeliveryErrorHandlerBuilder alwaysRetryOn(List<Class<? extends Exception>> exceptions) {

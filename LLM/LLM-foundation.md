@@ -245,6 +245,51 @@ MessageDeliveryErrorHandler.stopRedeliveryOn(
 )
 ```
 
+#### The built-in permanent-error list
+
+The consumer applies its own list of permanent error types **after** consulting your
+`MessageDeliveryErrorHandler`, and that list wins. A message failing with one of these is dead-lettered on the
+first delivery attempt, whatever the `RedeliveryPolicy` says:
+
+| Type | Matched on |
+|---|---|
+| `DurableQueueDeserializationException` | the thrown exception |
+| `MismatchedInputException` | the root cause |
+| `NoClassDefFoundError` | the thrown exception or the root cause |
+| `ClassCastException` | the thrown exception or the root cause |
+| `IllegalArgumentException` | the thrown exception or the root cause |
+
+`IllegalArgumentException` is the one that surprises people. `FailFast.requireNonNull(...)` and
+`requireTrue(...)` — the validation idiom used across this codebase — throw it, and so does Kotlin's
+`require(...)`. A `@MessageHandler` that guards its arguments that way dead-letters its message on the first
+delivery, and `MessageDeliveryErrorHandler.builder().alwaysRetryOn(IllegalArgumentException.class)` does not
+prevent it, because the built-in list is applied afterwards.
+
+Note also that only the outermost exception and the deepest root cause are examined, never the middle of the
+chain. A handler throw arrives wrapped (`UnitOfWorkException → ReflectionException → InvocationTargetException
+→ yours`), so your exception is normally the deepest one and decides the outcome — unless it carries a cause
+of its own, in which case classification silently uses that deeper type instead.
+
+#### Validating inside a message handler
+
+Pick the exception type by whether the condition can ever become true:
+
+```java
+@MessageHandler
+void handle(OrderShipped event) {
+    // The message can never be processed: the payload itself is wrong.
+    // IllegalArgumentException → dead-lettered immediately. This is what you want.
+    requireNonNull(event.orderId, "orderId is required");
+
+    var order = orderRepository.find(event.orderId);
+    if (order == null) {
+        // The projection may simply not have caught up yet. Throw something retryable,
+        // NOT IllegalArgumentException, or the message is dead-lettered on first delivery.
+        throw new IllegalStateException("Order " + event.orderId + " not projected yet");
+    }
+}
+```
+
 ### Dead Letter Queue
 
 ```java
