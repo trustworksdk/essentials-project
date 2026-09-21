@@ -38,6 +38,7 @@ Foundation classes used but not owned here (in `foundation` module):
 
 ## Extension Points
 
+- `DurableQueueMessageObserver` — implement to observe how deliveries *end* (handled / retried / dead-lettered / redelivery-requested); registered via `builder().setMessageObserver(...)`, or `PostgresqlDurableQueues.setMessageObserver(...)` after construction. Use `DurableQueueMessageObserver.composite(List)` for more than one. Always wrapped in `safe(...)` — it runs on delivery threads
 - `DurableQueuesInterceptor` — implement to intercept any queue operation; registered via `builder().addInterceptor(...)` or `durableQueues.addInterceptor(...)`; order controlled by `InterceptorOrder`
 - `QueuePollingOptimizer` — pluggable per-queue backoff strategy for traditional consumers (`setQueuePollingOptimizerFactory`)
 - `CentralizedQueuePollingOptimizer` (or custom `QueuePollingOptimizer`) — per-queue backoff for centralized fetcher (`setCentralizedQueuePollingOptimizerFactory`)

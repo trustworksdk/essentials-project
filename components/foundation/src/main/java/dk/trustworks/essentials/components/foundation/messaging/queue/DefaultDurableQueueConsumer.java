@@ -450,6 +450,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             // Keep track of the ordered message being handled, to ensure other threads on this node doesn't start processing messages related to the OrderedMessage#getKey
             orderedMessageDeliveryThreads.put(Thread.currentThread(), (OrderedMessage) queuedMessage.getMessage());
         }
+        var handlerStartedAtNanos = System.nanoTime();
         try {
             var operation = new HandleQueuedMessage(queuedMessage, consumeFromQueue.queueMessageHandler);
             newInterceptorChainForOperation(operation,
@@ -466,6 +467,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           queueName,
                           queuedMessage.getId(),
                           consumeFromQueue.consumerName);
+                durableQueues.getMessageObserver().messageRedeliveryRequested(queuedMessage);
                 return retryMessage(queuedMessage, null, queuedMessage.getRedeliveryDelay());
             } else {
                 LOG.debug("[{}:{}] {} - Message handled successfully. Deleting the message in the Queue Store message. Total attempts: {}, Redelivery Attempts: {}",
@@ -475,6 +477,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                           queuedMessage.getTotalDeliveryAttempts(),
                           queuedMessage.getRedeliveryAttempts());
                 durableQueues.acknowledgeMessageAsHandled(queuedMessage.getId());
+                // After the acknowledgement, so the count means "delivered and removed", not "the handler returned"
+                durableQueues.getMessageObserver()
+                             .messageHandled(queuedMessage, Duration.ofNanos(System.nanoTime() - handlerStartedAtNanos));
                 orderedMessageDeliveryThreads.remove(Thread.currentThread());
                 return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
             }
@@ -504,6 +509,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
 
                 try {
                     durableQueues.markAsDeadLetterMessage(queuedMessage.getId(), e);
+                    durableQueues.getMessageObserver().messageDeadLettered(queuedMessage, e);
                     orderedMessageDeliveryThreads.remove(Thread.currentThread());
                     return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
                 } catch (Throwable ex) {
@@ -555,6 +561,10 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             durableQueues.retryMessage(queuedMessage.getId(),
                                        e,
                                        redeliveryDelay);
+            if (e != null) {
+                // A null cause means the handler asked for redelivery, which messageRedeliveryRequested already reported
+                durableQueues.getMessageObserver().messageRetried(queuedMessage, e, redeliveryDelay);
+            }
             orderedMessageDeliveryThreads.remove(Thread.currentThread());
             return NO_POSTPROCESSING_AFTER_PROCESS_NEXT_MESSAGE;
         } catch (Throwable ex) {

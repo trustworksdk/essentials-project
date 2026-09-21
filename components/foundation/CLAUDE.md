@@ -11,6 +11,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `fencedlock` | `FencedLockManager` SPI, `DBFencedLockManager` base, `FencedLockStorage` SPI, `DBFencedLock` |
 | `messaging.queue` | `DurableQueues` SPI, `DefaultDurableQueueConsumer`, `CentralizedMessageFetcher`, `DurableQueuesInterceptor` chain |
 | `messaging.queue.operations` | Command objects for every queue operation (used by interceptor chain) |
+| `messaging.queue.observability` | `QueueStatisticsRegistry`, `QueueStatistics`, `StatisticsCollectingDurableQueueMessageObserver` — per-JVM delivery counters |
 | `messaging.eip.store_and_forward` | `Inbox`/`Outbox`/`Inboxes`/`Outboxes` SPIs, `PatternMatchingMessageHandler` |
 | `postgresql` | `ListenNotify`, `MultiTableChangeListener`, `PostgresqlUtil`, `NotificationDuplicationFilter` |
 | `postgresql.ttl` | Postgres-specific TTL job plumbing |
@@ -39,6 +40,9 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `CentralizedMessageFetcher` | Single-thread poller for Postgres; tracks in-process ordered-message keys to preserve ordering |
 | `DefaultDurableQueueConsumer` | Per-consumer worker thread pool; used by Mongo and Postgres (non-centralized) |
 | `DurableQueuesInterceptor` | Interceptor chain SPI wrapping every queue operation command object |
+| `DurableQueueMessageObserver` | SPI notified of how a delivery *ended* — handled / retried / dead-lettered / redelivery-requested. Multi-slot: `composite(List)`, `safe(...)`, `none()` |
+| `MessageDeliveryClassifier` | The single copy of the retry-vs-dead-letter rule, called by both consumers |
+| `QueueStatisticsRegistry` | In-memory per-`QueueName` delivery counters, capped by `maxTrackedQueues`. Shaped like the event store's `SubscriptionStatisticsRegistry` |
 | `Outbox` / `Inbox` | Transactional store-and-forward EIP patterns; forward to `DurableQueues` internally |
 | `PatternMatchingMessageHandler` | Reflective message dispatch by payload type (used by Inbox/Outbox consumers) |
 | `MultiTableChangeListener` | Single poll thread for multiple PG LISTEN/NOTIFY channels; fan-out via `EventBus` |
@@ -71,6 +75,7 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 | `FencedLockManager` / `FencedLockStorage` | Add a new DB backend for distributed locks |
 | `DurableQueues` | Add a new queue storage backend |
 | `DurableQueuesInterceptor` | Cross-cut all queue operations (metrics, tracing, auth) |
+| `DurableQueueMessageObserver` | Observe delivery outcomes (statistics, metrics). Set via `PostgresqlDurableQueuesBuilder.setMessageObserver` / `MongoDurableQueues.setMessageObserver` |
 | `JSONSerializer` | Swap Jackson for another serializer |
 | `TTLManager` | Add non-Postgres TTL backend |
 | `EssentialsScheduler` | Add scheduler backend beyond pg_cron / executor |
@@ -84,6 +89,9 @@ Cross-cutting infrastructure abstractions: transactions, distributed locking, du
 - `FencedLock.release()` does NOT stop an `acquireLockAsync` background acquirer — the next tick re-acquires the freed lock with the next token. Use `cancelAsyncLockAcquiring(lockName)` to hand a lock over. `releaseLock` is also not under the manager's `reentrantLock`, so the release and the re-acquire genuinely interleave
 - `CentralizedMessageFetcher` is Postgres-only; Mongo uses `DefaultDurableQueueConsumer`-per-thread approach — ordered-message key tracking differs between the two
 - `OrderedMessage` ordering across multiple cluster nodes is NOT guaranteed — only within a single node
+- **`DurableQueueMessageObserver` is notified from the two consumers, not from an interceptor.** An interceptor sees the operation, not the outcome: `chain.proceed()` on `HandleQueuedMessage` covers the handler invocation only, and `AcknowledgeMessageAsHandled`/`DeleteMessage` carry nothing but a `QueueEntryId`. An interceptor-based collector would need an in-flight map, a cap and a sweep. `messageHandled` fires *after* the acknowledgement, so it means "delivered and removed". Administrative operations (`deleteMessage`, `purgeQueue`) deliberately do not notify — counting them is how the removed statistics trigger reported a 100 000-row purge as 100 000 deliveries.
+- **The observer is always wrapped in `safe(...)` by the setters.** It runs on delivery threads, so it must never throw and must never block. First failure per observer logs at WARN, later ones at DEBUG.
+- **`QueueStatistics.lastFailureReason` renders the root cause, not the throwable as given.** A handler throw always arrives wrapped (`UnitOfWorkException → … → yours`), so rendering the outermost type would make every queue read "UnitOfWorkException: …".
 - **Delivery-failure classification lives in one place: `MessageDeliveryClassifier`.** `DefaultDurableQueueConsumer` and `CentralizedMessageFetcher` both call it; neither carries its own copy any more. It returns a `MessageDeliveryDecision` (outcome + which rule fired + matched type + cause-chain depth + attempt count), and `describe()` is what the consumers put in the dead-letter log line.
 - **The built-in permanent-error list is applied after the policy, and three of its five types are not overridable.** `DurableQueueDeserializationException`, `MismatchedInputException` and `NoClassDefFoundError` can never succeed on a later attempt, so a `MessageDeliveryVerdict.RETRY` cannot resurrect them — retrying one forever blocks the head of an ordered queue. `IllegalArgumentException` (incl. `NumberFormatException`) and `ClassCastException` *are* overridable by an explicit `alwaysRetryOn(...)`. That matters because `FailFast.requireNonNull`/`requireTrue` and Kotlin `require(...)` throw `IllegalArgumentException` across 2000+ call sites, so without the opt-out the house validation idiom dead-letters a message on first delivery.
 - **`alwaysRetry()` is not `alwaysRetryOn(everything)`.** It maps to `NO_OPINION`, so the built-in list still applies. Only the explicit `alwaysRetryOn(...)` list yields `RETRY`. Promoting the builder default would make deserialization failures retry forever in every existing application.

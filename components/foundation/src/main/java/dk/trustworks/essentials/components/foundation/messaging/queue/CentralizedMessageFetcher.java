@@ -333,6 +333,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
 
         // Submit message for processing
         registration.workerPool.submit(() -> {
+            var handlerStartedAtNanos = System.nanoTime();
             try {
                 var operation = new HandleQueuedMessage(message, registration.messageHandler);
                 newInterceptorChainForOperation(operation,
@@ -353,6 +354,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                         durableQueues.retryMessage(message.getId(),
                                                    null,
                                                    message.getRedeliveryDelay());
+                        durableQueues.getMessageObserver().messageRedeliveryRequested(message);
                     } catch (Exception ex) {
                         // If retry fails due to connectivity issues, then it will be picked up by resetMessagesStuckBeingDelivered
                         log.warn("[{}:{}] Could not manually mark message for redelivery: {}",
@@ -372,6 +374,10 @@ public class CentralizedMessageFetcher implements Lifecycle {
                             log.debug("[{}:{}] Message acknowledgment reported message already handled or deleted",
                                       queueName,
                                       message.getId());
+                        } else {
+                            // After the acknowledgement, so the count means "delivered and removed"
+                            durableQueues.getMessageObserver()
+                                         .messageHandled(message, Duration.ofNanos(System.nanoTime() - handlerStartedAtNanos));
                         }
                     } catch (Exception ex) {
                         // If acknowledgment fails due to connectivity issues, the message will be
@@ -396,6 +402,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   e);
 
                         durableQueues.markAsDeadLetterMessage(message.getId(), e);
+                        durableQueues.getMessageObserver().messageDeadLettered(message, e);
                     } else {
                         // Redelivery
                         var redeliveryDelay = registration.consumer.getRedeliveryPolicy()
@@ -408,6 +415,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   e.getMessage());
 
                         durableQueues.retryMessage(message.getId(), e, redeliveryDelay);
+                        durableQueues.getMessageObserver().messageRetried(message, e, redeliveryDelay);
                     }
                 } catch (Exception retryEx) {
                     log.error("[{}:{}] Error handling message failure: {}",

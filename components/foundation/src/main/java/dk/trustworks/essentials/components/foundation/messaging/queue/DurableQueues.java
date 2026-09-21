@@ -267,6 +267,19 @@ public interface DurableQueues extends Lifecycle {
     Optional<UnitOfWorkFactory<? extends UnitOfWork>> getUnitOfWorkFactory();
 
     /**
+     * The {@link DurableQueueMessageObserver} notified of how each delivery ended — handled, retried,
+     * dead-lettered or redelivery-requested.
+     * <p>
+     * A {@code default} method returning {@link DurableQueueMessageObserver#none()}, so no implementation has to
+     * grow a constructor parameter and one that does not care inherits the no-op.
+     *
+     * @return the observer; never {@code null}
+     */
+    default DurableQueueMessageObserver getMessageObserver() {
+        return DurableQueueMessageObserver.none();
+    }
+
+    /**
      * Start an asynchronous message consumer.<br>
      * Note: There can only be one {@link DurableQueueConsumer} per {@link QueueName} per {@link DurableQueues} instance<br>
      * Log levels of interest:

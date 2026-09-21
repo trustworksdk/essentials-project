@@ -107,6 +107,7 @@ public final class MongoDurableQueues implements DurableQueues {
     private final   ConcurrentMap<QueueName, MongoDurableQueueConsumer> durableQueueConsumers = new ConcurrentHashMap<>();
     private final   ConcurrentMap<QueueName, ReentrantLock>             localQueuePollLock    = new ConcurrentHashMap<>();
     private final   List<DurableQueuesInterceptor>                      interceptors          = new CopyOnWriteArrayList<>();
+    private volatile DurableQueueMessageObserver                        messageObserver       = DurableQueueMessageObserver.none();
     private final   MessageListenerContainer                            messageListenerContainer;
 
 
@@ -630,6 +631,22 @@ public final class MongoDurableQueues implements DurableQueues {
     @Override
     public final Optional<UnitOfWorkFactory<? extends UnitOfWork>> getUnitOfWorkFactory() {
         return Optional.ofNullable(unitOfWorkFactory);
+    }
+
+    @Override
+    public DurableQueueMessageObserver getMessageObserver() {
+        return messageObserver;
+    }
+
+    /**
+     * Set the {@link DurableQueueMessageObserver} notified of how each delivery ended. Wrapped in
+     * {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}, so a failure inside it can never
+     * affect message delivery.
+     *
+     * @param messageObserver the observer; use {@link DurableQueueMessageObserver#composite(java.util.List)} for several
+     */
+    public void setMessageObserver(DurableQueueMessageObserver messageObserver) {
+        this.messageObserver = DurableQueueMessageObserver.safe(requireNonNull(messageObserver, "No messageObserver provided"));
     }
 
     @Override

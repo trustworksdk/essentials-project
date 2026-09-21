@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.util.function.Function;
 
 import static dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME;
+import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
 /**
  * <u>Security</u><br>
@@ -66,6 +67,7 @@ public final class PostgresqlDurableQueuesBuilder {
     private boolean                                    useBatchedFetch                          = PostgresqlDurableQueues.DEFAULT_USE_BATCHED_FETCH;
     private int                                        batchedFetchSwitchThreshold              = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD;
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
+    private DurableQueueMessageObserver                messageObserver                          = DurableQueueMessageObserver.none();
 
     /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
@@ -243,19 +245,37 @@ public final class PostgresqlDurableQueuesBuilder {
 
     @SuppressWarnings("removal")
 
+    /**
+     * Set the {@link DurableQueueMessageObserver} notified of how each delivery ended — handled, retried,
+     * dead-lettered or redelivery-requested. Use {@link DurableQueueMessageObserver#composite(java.util.List)}
+     * to notify several, for example a statistics registry and a Micrometer observer.
+     * <p>
+     * The observer is wrapped in {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}, so a
+     * failure inside it can never affect message delivery. It runs on delivery threads, so it must not block.
+     *
+     * @param messageObserver the observer
+     * @return this builder instance
+     */
+    public PostgresqlDurableQueuesBuilder setMessageObserver(DurableQueueMessageObserver messageObserver) {
+        this.messageObserver = requireNonNull(messageObserver, "No messageObserver provided");
+        return this;
+    }
+
     public PostgresqlDurableQueues build() {
-        return new PostgresqlDurableQueues(unitOfWorkFactory,
-                                           jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
-                                           sharedQueueTableName,
-                                           multiTableChangeListener,
-                                           queuePollingOptimizerFactory,
-                                           transactionalMode,
-                                           messageHandlingTimeout,
-                                           useCentralizedMessageFetcher,
-                                           centralizedMessageFetcherPollingInterval,
-                                           centralizedQueuePollingOptimizerFactory,
-                                           useBatchedFetch,
-                                           batchedFetchSwitchThreshold,
-                                           batchedFetchWarnRowsThreshold);
+        var durableQueues = new PostgresqlDurableQueues(unitOfWorkFactory,
+                                                       jsonSerializer != null ? jsonSerializer : DurableQueuesSerialization.createDefaultJSONSerializer(),
+                                                       sharedQueueTableName,
+                                                       multiTableChangeListener,
+                                                       queuePollingOptimizerFactory,
+                                                       transactionalMode,
+                                                       messageHandlingTimeout,
+                                                       useCentralizedMessageFetcher,
+                                                       centralizedMessageFetcherPollingInterval,
+                                                       centralizedQueuePollingOptimizerFactory,
+                                                       useBatchedFetch,
+                                                       batchedFetchSwitchThreshold,
+                                                       batchedFetchWarnRowsThreshold);
+        durableQueues.setMessageObserver(messageObserver);
+        return durableQueues;
     }
 }

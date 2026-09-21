@@ -123,6 +123,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private final DurableQueuesSql           durableQueuesSql;
     private final DurableQueuesSerialization durableQueuesSerialization;
 
+    /**
+     * Notified of how each delivery ended. Set after construction the way interceptors are, so no constructor
+     * grows a parameter. Always wrapped in {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}.
+     */
+    private volatile DurableQueueMessageObserver messageObserver = DurableQueueMessageObserver.none();
+
     private   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory;
     /**
      * Only used if {@link #transactionalMode} has value {@link TransactionalMode#SingleOperationTransaction}
@@ -650,6 +656,22 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         handle.execute(bind(indexStatement,
                             arg("tableName", sharedQueueTableName))
                       );
+    }
+
+    @Override
+    public DurableQueueMessageObserver getMessageObserver() {
+        return messageObserver;
+    }
+
+    /**
+     * Set the {@link DurableQueueMessageObserver} notified of how each delivery ended. Wrapped in
+     * {@link DurableQueueMessageObserver#safe(DurableQueueMessageObserver)}, so a failure inside it can never
+     * affect message delivery.
+     *
+     * @param messageObserver the observer; use {@link DurableQueueMessageObserver#composite(List)} for several
+     */
+    public void setMessageObserver(DurableQueueMessageObserver messageObserver) {
+        this.messageObserver = DurableQueueMessageObserver.safe(requireNonNull(messageObserver, "No messageObserver provided"));
     }
 
     /**
