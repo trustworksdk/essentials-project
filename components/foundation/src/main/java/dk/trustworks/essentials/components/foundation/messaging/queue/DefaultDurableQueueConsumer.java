@@ -16,13 +16,11 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import dk.trustworks.essentials.components.foundation.IOExceptionUtil;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.queue.QueuedMessage.DeliveryMode;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import dk.trustworks.essentials.components.foundation.transaction.*;
-import dk.trustworks.essentials.shared.Exceptions;
 import dk.trustworks.essentials.shared.concurrent.ThreadFactoryBuilder;
 import org.slf4j.*;
 import reactor.core.publisher.Mono;
@@ -482,8 +480,9 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             }
         } catch (Throwable e) {
             rethrowIfCriticalError(e);
-            var isPermanentError = isPermanentError(queuedMessage, e);
-            if (isPermanentError || queuedMessage.getTotalDeliveryAttempts() >= consumeFromQueue.getRedeliveryPolicy().maximumNumberOfRedeliveries + 1) {
+            var outcome           = MessageDeliveryClassifier.classify(queuedMessage, e, consumeFromQueue.getRedeliveryPolicy());
+            var isPermanentError  = outcome == MessageDeliveryOutcome.PERMANENT_ERROR;
+            if (outcome.isDeadLetter()) {
                 // Dead letter message
                 if (isPermanentError) {
                     MESSAGE_HANDLING_FAILURE_LOG.error(msg("[{}:{}] {} - Marking Message as Dead Letter. Is Permanent Error: {}. Message: {}",
@@ -581,16 +580,6 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             // Note: Don't clean up orderedMessageDeliveryThreads yet
             return NO_POSTPROCESSING_AFTER_PROCESS_NEXT_MESSAGE;
         }
-    }
-
-    protected boolean isPermanentError(QueuedMessage queuedMessage, Throwable e) {
-        var rootCause = Exceptions.getRootCause(e);
-        return consumeFromQueue.getRedeliveryPolicy().isPermanentError(queuedMessage, e) ||
-                e instanceof DurableQueueDeserializationException ||
-                e instanceof ClassCastException || rootCause instanceof ClassCastException ||
-                e instanceof NoClassDefFoundError || rootCause instanceof NoClassDefFoundError ||
-                rootCause instanceof MismatchedInputException ||
-                e instanceof IllegalArgumentException || rootCause instanceof IllegalArgumentException;
     }
 
     @Override

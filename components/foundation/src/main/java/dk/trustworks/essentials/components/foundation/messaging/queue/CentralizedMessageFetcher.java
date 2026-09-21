@@ -15,10 +15,8 @@
  */
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import dk.trustworks.essentials.components.foundation.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
-import dk.trustworks.essentials.shared.Exceptions;
 import org.slf4j.*;
 
 import java.util.*;
@@ -381,8 +379,8 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 rethrowIfCriticalError(e);
 
                 try {
-                    boolean isPermanentError = isPermanentError(message, e);
-                    if (isPermanentError || message.getTotalDeliveryAttempts() >= registration.consumer.getRedeliveryPolicy().getMaximumNumberOfRedeliveries() + 1) {
+                    var outcome = classify(message, e);
+                    if (outcome.isDeadLetter()) {
                         log.error("[{}:{}] Marking message as dead letter due to error: {}",
                                   queueName,
                                   message.getId(),
@@ -463,22 +461,19 @@ public class CentralizedMessageFetcher implements Lifecycle {
     }
 
     /**
-     * Determine if an error is permanent and should mark the message as a dead letter
+     * Decide what to do with a message whose handler threw, delegating to {@link MessageDeliveryClassifier} so
+     * this fetcher and {@link DefaultDurableQueueConsumer} cannot drift apart.
+     * <p>
+     * The one thing that is decided here rather than there: if the consumer registration has gone, there is no
+     * {@link dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy} to classify against, and
+     * the message is dead-lettered rather than left stuck.
      */
-    private boolean isPermanentError(QueuedMessage queuedMessage, Throwable e) {
+    private MessageDeliveryOutcome classify(QueuedMessage queuedMessage, Throwable e) {
         DurableQueueConsumerRegistration registration = consumerRegistrations.get(queuedMessage.getQueueName());
         if (registration == null) {
-            // If registration is gone, treat as permanent to avoid message being stuck
-            return true;
+            return MessageDeliveryOutcome.PERMANENT_ERROR;
         }
-
-        var rootCause = Exceptions.getRootCause(e);
-        return registration.consumer.getRedeliveryPolicy().isPermanentError(queuedMessage, e) ||
-                e instanceof DurableQueueDeserializationException ||
-                e instanceof ClassCastException || rootCause instanceof ClassCastException ||
-                e instanceof NoClassDefFoundError || rootCause instanceof NoClassDefFoundError ||
-                rootCause instanceof MismatchedInputException ||
-                e instanceof IllegalArgumentException || rootCause instanceof IllegalArgumentException;
+        return MessageDeliveryClassifier.classify(queuedMessage, e, registration.consumer.getRedeliveryPolicy());
     }
 
     public boolean containsConsumerFor(QueueName queueName) {
