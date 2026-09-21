@@ -21,7 +21,6 @@ PostgreSQL-backed durable queue — `FOR UPDATE SKIP LOCKED` polling, ordered/un
 | `SingleOperationTransactionDurableQueuesInterceptor` | Wraps each `DurableQueues` operation in its own UoW when mode = `SingleOperationTransaction` |
 | `QueueTableNotification` | Deserialization target for PG LISTEN/NOTIFY payloads from the `durable_queues` trigger |
 | `QueueNameDuplicationFilter` | Collapses N notifications for same `queue_name` in a single poll batch into 1 → reduces redundant wakeups |
-| `PostgresqlDurableQueuesStatistics` | Separate bean; implements `DurableQueuesStatistics`; owns its own table + TTL job for delivery logs |
 
 Foundation classes used but not owned here (in `foundation` module):
 - `CentralizedMessageFetcher` — single poll thread across all queues, dispatches to worker threads
@@ -55,3 +54,4 @@ Foundation classes used but not owned here (in `foundation` module):
 - **`QueueNameDuplicationFilter` deduplicates within one poll batch only** — not across polls. 100 queued messages for same queue → 1 notification per poll cycle, not permanently collapsed.
 - **`DurableQueueDeserializationException` keeps message in queue**: deserialization failure does not auto-DLQ the message; consumer must handle/re-throw to trigger redelivery policy.
 - **Bootstrap lock**: `initializeQueueTables()` acquires `PostgresqlUtil.acquireBootstrapLock` → serializes DDL on multi-node startup; do not hold external locks that could deadlock this.
+- **`dropLegacyQueueStatistics` must stay one-shot.** Removes the 0.5x statistics trigger, function and table. Gated on the trigger existing, and drops the trigger first, so later startups issue nothing. Do not "simplify" it to an unconditional `DROP TABLE`: the statistics table name was configurable, so a drop re-issued every boot would destroy a table a later deployment created under that name. The configured name is recovered from the trigger function body (`pg_proc.prosrc`), and the table is dropped only when its columns match `LEGACY_QUEUE_STATISTICS_COLUMNS`. Covered by `LegacyQueueStatisticsRemovalIT`. Delete the whole method once no supported upgrade path starts below 0.60 — or fold it into a one-shot change when the schema harness lands (`docs/database-schema-harness.md`).

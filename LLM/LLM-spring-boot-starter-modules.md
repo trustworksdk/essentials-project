@@ -55,7 +55,6 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 **Components:**
 - `PostgresqlFencedLockManager` - Distributed locks
 - `PostgresqlDurableQueues` - Durable message queuing
-- `PostgresqlDurableQueuesStatistics` - Queue statistics (when enabled)
 - `Inboxes`, `Outboxes` - Store-and-forward patterns
 - `DurableLocalCommandBus` - Command bus with durable delivery
 - `MultiTableChangeListener` - PostgreSQL NOTIFY/LISTEN optimization
@@ -193,7 +192,6 @@ Prefix: `essentials.durable-queues`
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |
-| `enable-queue-statistics` | `false` | Collect statistics |
 | `shared-queue-statistics-table-name` | `durable_queues_statistics` | Stats table - see [Security](#security) |
 | `enable-queue-statistics-ttl` | `false` | Auto-cleanup stats |
 | `queue-statistics-ttl-duration` | `90` | Days |
@@ -585,7 +583,6 @@ While Essentials applies naming convention validation as an initial defense laye
 **Affected Properties:**
 - `fenced-locks-table-name` / `fenced-locks-collection-name`
 - `shared-queue-table-name` / `shared-queue-collection-name`
-- `shared-queue-statistics-table-name`
 - All custom table/column/function/index and collection names
 - All custom `AggregateType` values
 
@@ -667,7 +664,6 @@ public PostgresqlDurableQueues postgresqlDurableQueues(...) {
 - ⚠️ **Lifecycle Start**: Set `start-life-cycles=false` to manually control lifecycle
 - ⚠️ **MongoDB CharSequenceTypes**: Must register types using ObjectId values or used as Map keys
 - ⚠️ **Flush Publishing**: Enable only if sagas need per-event coordination (impacts transaction semantics)
-- ⚠️ **Queue Statistics**: Extra DB overhead when enabled, use TTL to prevent unbounded growth
 - ⚠️ **Admin UI**: Requires both `EssentialsAuthenticatedUser` implementation AND Spring Security config (not auto-configured)
 
 ---

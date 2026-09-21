@@ -27,10 +27,6 @@ essentials:
     max-polling-interval: 2s
     transactional-mode: singleoperationtransaction
     verbose-tracing: false
-    enable-queue-statistics: true
-    shared-queue-statistics-table-name: durable_queues_statistics
-    enable-queue-statistics-ttl: true
-    queue-statistics-ttl-duration: 90
   fenced-lock-manager:
     fenced-locks-table-name: fenced_locks
     lock-confirmation-interval: 5s

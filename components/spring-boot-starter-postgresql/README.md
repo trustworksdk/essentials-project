@@ -100,7 +100,6 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 | Bean | Description |
 |------|-------------|
 | `PostgresqlDurableQueues` | Durable message queuing via PostgreSQL. See [DurableQueues documentation](../foundation/README.md#durablequeues-messaging) |
-| `PostgresqlDurableQueuesStatistics` | Queue statistics (when `enable-queue-statistics=true`) |
 | `Inboxes` | Store-and-forward for incoming messages. See [Inbox Pattern](../foundation/README.md#inbox-pattern) |
 | `Outboxes` | Store-and-forward for outgoing messages. See [Outbox Pattern](../foundation/README.md#outbox-pattern) |
 | `DurableLocalCommandBus` | Command bus with durable message delivery. See [DurableLocalCommandBus](../foundation/README.md#durablelocalcommandbus) |
@@ -194,10 +193,6 @@ essentials.durable-queues.centralized-polling-delay-back-off-factor=1.5
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
 essentials.durable-queues.verbose-tracing=false
-essentials.durable-queues.enable-queue-statistics=false
-essentials.durable-queues.shared-queue-statistics-table-name=durable_queues_statistics
-essentials.durable-queues.enable-queue-statistics-ttl=false
-essentials.durable-queues.queue-statistics-ttl-duration=90
 ```
 
 | Property | Default | Description                                                                 |

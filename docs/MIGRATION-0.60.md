@@ -62,3 +62,45 @@ bootstrap transaction while the framework holds its advisory lock, so a concurre
 
 The four remaining indexes (`idx_<table>_ordered_msg`, `idx_<table>_ordered_ready`,
 `idx_<table>_unordered_ready`, `idx_<table>_ordered_head`) are unchanged.
+
+### The queue statistics feature is removed
+
+The delivery-statistics feature — a trigger on the queue table that wrote a row per acknowledged message into a
+separate statistics table — is removed entirely, along with its SPI, its DTOs, its admin API operation and its
+configuration properties. A replacement modelled on the event store's `SubscriptionStatisticsRegistry` follows
+separately.
+
+**Removed:**
+
+| Element | Where |
+|---|---|
+| `PostgresqlDurableQueuesStatistics` | `postgresql-queue` |
+| `DurableQueuesStatistics`, `NoOpDurableQueuesStatistics` | `foundation` (`…messaging.queue.stats`, package removed) |
+| `QueueStatistics`, `QueuedStatisticsMessage`, `DefaultQueuedStatisticsMessage`, `DefaultQueuedStatisticsMessageBuilder` | `foundation` (`…messaging.queue.stats`, package removed) |
+| `ApiQueuedStatistics` | `foundation` (`…messaging.queue.api`) |
+| `DurableQueuesApi.getQueuedStatistics(…)`, and the `DurableQueuesStatistics` constructor parameter of `DefaultDurableQueuesApi` | `foundation` (`…messaging.queue.api`) |
+| `GET /durable-queues/queues/{queueName}/statistics` | admin API |
+| `essentials.durable-queues.enable-queue-statistics` | `spring-boot-starter-postgresql` |
+| `essentials.durable-queues.shared-queue-statistics-table-name` | `spring-boot-starter-postgresql` |
+| `essentials.durable-queues.enable-queue-statistics-ttl` | `spring-boot-starter-postgresql` |
+| `essentials.durable-queues.queue-statistics-ttl-duration` | `spring-boot-starter-postgresql` |
+| the `durableQueuesStatistics` bean | `spring-boot-starter-postgresql` |
+
+**What to do:** delete the properties and any reference to the removed types. A caller constructing
+`DefaultDurableQueuesApi` directly drops the fourth argument. A caller of the REST operation has no replacement
+until the new statistics API ships.
+
+**The database objects are removed for you, once.** On its first startup after the upgrade
+`PostgresqlDurableQueues` drops the `trg_log_message_delivery_stats` trigger from the queue table, the
+`log_message_delivery_stats()` function, and the statistics table the function wrote to. The statistics table
+name was configurable, so it is recovered from the trigger function's own body rather than assumed to be
+`durable_queues_statistics`, and it is only dropped when its columns match the shape the feature created.
+
+The whole removal is gated on the trigger still existing and the trigger is dropped first, so it runs exactly
+once and later startups issue no statements. Two consequences worth knowing:
+
+- A deployment that never enabled the feature has no trigger, so nothing happens.
+- If the trigger was already removed by hand but the table was left behind, the table survives. Drop it
+  yourself.
+
+**Take a backup before upgrading** if the statistics data matters to you. Nothing exports it first.

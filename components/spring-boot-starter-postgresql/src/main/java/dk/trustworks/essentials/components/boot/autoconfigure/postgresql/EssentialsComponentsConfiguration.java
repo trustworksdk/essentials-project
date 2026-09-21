@@ -39,7 +39,6 @@ import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_fo
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
 import dk.trustworks.essentials.components.foundation.postgresql.api.*;
 import dk.trustworks.essentials.components.foundation.postgresql.micrometer.RecordSqlExecutionTimeLogger;
@@ -312,22 +311,6 @@ public class EssentialsComponentsConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public DurableQueuesStatistics durableQueuesStatistics(HandleAwareUnitOfWorkFactory<? extends HandleAwareUnitOfWork> unitOfWorkFactory,
-                                                           JSONSerializer jsonSerializer,
-                                                           EssentialsComponentsProperties properties) {
-        if (properties.getDurableQueues().isEnableQueueStatistics()) {
-            return new PostgresqlDurableQueuesStatistics(
-                    unitOfWorkFactory,
-                    jsonSerializer,
-                    properties.getDurableQueues().getSharedQueueTableName(),
-                    properties.getDurableQueues().getSharedQueueStatisticsTableName()
-            );
-        }
-        return new NoOpDurableQueuesStatistics();
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
     public MultiTableChangeListener<TableChangeNotification> multiTableChangeListener(Jdbi jdbi,
                                                                                       JSONSerializer jsonSerializer,
                                                                                       EventBus eventBus,
@@ -593,12 +576,10 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingBean
     public DurableQueuesApi durableQueuesApi(EssentialsSecurityProvider securityProvider,
                                              DurableQueues durableQueues,
-                                             JSONSerializer jsonSerializer,
-                                             DurableQueuesStatistics durableQueuesStatistics) {
+                                             JSONSerializer jsonSerializer) {
         return new DefaultDurableQueuesApi(securityProvider,
                 durableQueues,
-                jsonSerializer,
-                durableQueuesStatistics);
+                jsonSerializer);
     }
 
     @Bean

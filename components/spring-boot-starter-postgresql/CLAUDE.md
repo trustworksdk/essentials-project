@@ -24,17 +24,16 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 5. `FencedLockManager` (`PostgresqlFencedLockManager`) — distributed lock coordination
 6. `MultiTableChangeListener` — LISTEN/NOTIFY bridge for queue wake-ups
 7. `DurableQueues` (`PostgresqlDurableQueues`) — message storage; centralized fetcher enabled by default
-8. `DurableQueuesStatistics` — optional stats table; `NoOpDurableQueuesStatistics` when disabled
-9. `Inboxes` / `Outboxes` — EIP patterns backed by `DurableQueues` + `FencedLockManager`
-10. `DurableLocalCommandBus` — named `essentialsCommandBus`; auto-adds `UnitOfWorkControllingCommandBusInterceptor` unless already present
-11. `LocalEventBus` — named `essentialsEventBus`; skipped if `EventStoreEventBus` on classpath
-12. `LifecycleManager` (`DefaultLifecycleManager`) — triggers `JdbiConfigurationCallback` on `ContextRefreshedEvent`
-13. `EssentialsScheduler` (`DefaultEssentialsScheduler`) — optional; gated on `essentials.scheduler.enabled=true`
-14. `PostgresqlTTLManager` + `TTLJobBeanPostProcessor` — only when scheduler present
-15. API beans: `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `SchedulerApi`
-16. Security defaults: `NoAccessSecurityProvider` + `NoAccessAuthenticatedUser` — override in app to grant real access
-17. Micrometer interceptors: `RecordExecutionTimeMessageHandlerInterceptor`, `RecordExecutionTimeCommandBusInterceptor`, `RecordExecutionTimeDurableQueueInterceptor`
-18. Tracing: `DurableQueuesMicrometerTracingInterceptor` + `DurableQueuesMicrometerInterceptor` — conditional on `management.tracing.enabled=true`
+8. `Inboxes` / `Outboxes` — EIP patterns backed by `DurableQueues` + `FencedLockManager`
+9. `DurableLocalCommandBus` — named `essentialsCommandBus`; auto-adds `UnitOfWorkControllingCommandBusInterceptor` unless already present
+10. `LocalEventBus` — named `essentialsEventBus`; skipped if `EventStoreEventBus` on classpath
+11. `LifecycleManager` (`DefaultLifecycleManager`) — triggers `JdbiConfigurationCallback` on `ContextRefreshedEvent`
+12. `EssentialsScheduler` (`DefaultEssentialsScheduler`) — optional; gated on `essentials.scheduler.enabled=true`
+13. `PostgresqlTTLManager` + `TTLJobBeanPostProcessor` — only when scheduler present
+14. API beans: `DBFencedLockApi`, `DurableQueuesApi`, `PostgresqlQueryStatisticsApi`, `SchedulerApi`
+15. Security defaults: `NoAccessSecurityProvider` + `NoAccessAuthenticatedUser` — override in app to grant real access
+16. Micrometer interceptors: `RecordExecutionTimeMessageHandlerInterceptor`, `RecordExecutionTimeCommandBusInterceptor`, `RecordExecutionTimeDurableQueueInterceptor`
+17. Tracing: `DurableQueuesMicrometerTracingInterceptor` + `DurableQueuesMicrometerInterceptor` — conditional on `management.tracing.enabled=true`
 
 ## Test Structure
 

@@ -224,10 +224,9 @@ views.queues = async () => {
         dead ? api(`/durable-queues/queues/${encodeURIComponent(q)}/dead-letter-messages?sortOrder=${sort}&startIndex=0&pageSize=100`)
              : api(`/durable-queues/queues/${encodeURIComponent(q)}/messages?sortOrder=${sort}&startIndex=0&pageSize=100`),
         api(`/durable-queues/queues/${encodeURIComponent(q)}/messages/count`),
-        api(`/durable-queues/queues/${encodeURIComponent(q)}/dead-letter-messages/count`),
-        api(`/durable-queues/queues/${encodeURIComponent(q)}/statistics`)
+        api(`/durable-queues/queues/${encodeURIComponent(q)}/dead-letter-messages/count`)
     ]);
-    const [messages, queuedCount, deadCount, stats] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const [messages, queuedCount, deadCount] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
 
     const msgRow = (m) => `<tr data-msg="${esc(m.id)}">
       <td><button class="link" data-msg="${esc(m.id)}">${esc(String(m.id).slice(0, 18))}…</button></td>
@@ -276,10 +275,6 @@ views.queues = async () => {
     <div class="kpi-row">
       ${tile('Queued', queuedCount ? num(queuedCount.total) : nil())}
       ${tile('Dead letters', deadCount ? num(deadCount.total) : nil(), null, deadCount ? deadCount.total > 0 : false)}
-      ${tile('Delivered', stats ? num(stats.totalMessagesDelivered) : nil())}
-      ${tile('Avg delivery latency', stats ? `${stats.avgDeliveryLatencyMs} <span class="tile-sub" style="font-size:13px">ms</span>` : nil())}
-      ${tile('Last delivery', stats ? esc(String(stats.lastDelivery).slice(11, 19)) : nil(),
-             stats ? esc(String(stats.lastDelivery).slice(0, 10)) : null)}
     </div>
 
     ${card(dead ? 'Dead-letter messages' : 'Queued messages',

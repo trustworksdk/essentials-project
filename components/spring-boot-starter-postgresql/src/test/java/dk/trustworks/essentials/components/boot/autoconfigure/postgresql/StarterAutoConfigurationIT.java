@@ -20,6 +20,8 @@ import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLoc
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
+import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
+import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -58,14 +60,24 @@ public class StarterAutoConfigurationIT {
                             EssentialsComponentsConfiguration.class
                     ))
                     .withBean(EssentialsSecurityProvider.AllAccessSecurityProvider.class)
+                    // The starter itself registers no @TTLJob bean since the queue statistics feature was
+                    // removed in 0.60, so verify_api_beans supplies one — otherwise its executor-jobs
+                    // assertion would pass vacuously against an empty scheduler.
+                    .withBean(TestTtlJob.class)
                     .withInitializer(ctx -> TestPropertyValues.of(
                             "spring.datasource.url=" + postgreSQLContainer.getJdbcUrl(),
                             "spring.datasource.username=" + postgreSQLContainer.getUsername(),
                             "spring.datasource.password=" + postgreSQLContainer.getPassword(),
-                            "essentials.durable-queues.enable-queue-statistics=true",
-                            "essentials.durable-queues.shared-queue-statistics-table-name=durable_queues_statistics",
                             "essentials.scheduler.enabled=true"
                     ).applyTo(ctx.getEnvironment())); // needed
+
+    /** A minimal {@code @TTLJob} bean, pointed at the queue table the starter creates anyway. */
+    @TTLJob(name = "starter_autoconfiguration_it_ttl",
+            tableName = PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME,
+            timestampColumn = "added_ts",
+            defaultTtlDays = 90)
+    static class TestTtlJob {
+    }
 
     @Test
     void verify_api_beans() {
@@ -85,7 +97,9 @@ public class StarterAutoConfigurationIT {
             assertThat(ctx).hasSingleBean(SchedulerApi.class);
             SchedulerApi schedulerApi = ctx.getBean(SchedulerApi.class);
             List<ApiExecutorJob> executorJobs = schedulerApi.getExecutorJobs("principal", 0, 10);
-            assertThat(executorJobs).isNotEmpty();
+            assertThat(executorJobs)
+                    .as("TestTtlJob must have been registered with the scheduler")
+                    .isNotEmpty();
         });
     }
 

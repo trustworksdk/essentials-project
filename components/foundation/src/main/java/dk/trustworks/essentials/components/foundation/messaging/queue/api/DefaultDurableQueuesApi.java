@@ -19,10 +19,7 @@ package dk.trustworks.essentials.components.foundation.messaging.queue.api;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues.QueueingSortOrder;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.DurableQueuesStatistics;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.lang.Nullable;
 
 import java.time.Duration;
 import java.util.*;
@@ -41,22 +38,18 @@ import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidat
  * - EssentialsSecurityProvider for access control and role validation.
  * - DurableQueues to interact with the underlying queue mechanism.
  * - JSONSerializer for serializing message payloads.
- * - DurableQueuesStatistics (optional) for retrieving queue statistics.
  */
 public class DefaultDurableQueuesApi implements DurableQueuesApi {
 
     private final EssentialsSecurityProvider securityProvider;
     private final DurableQueues durableQueues;
     private final JSONSerializer jsonSerializer;
-    private final DurableQueuesStatistics durableQueuesStatistics;
 
     public DefaultDurableQueuesApi(EssentialsSecurityProvider securityProvider,
                                    DurableQueues durableQueues,
-                                   JSONSerializer jsonSerializer,
-                                   @Autowired(required = false) @Nullable DurableQueuesStatistics durableQueuesStatistics) {
+                                   JSONSerializer jsonSerializer) {
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.durableQueues = requireNonNull(durableQueues, "durableQueues must not be null");
-        this.durableQueuesStatistics = durableQueuesStatistics;
         this.jsonSerializer = requireNonNull(jsonSerializer, "jsonSerializer must not be null");
     }
 
@@ -145,15 +138,5 @@ public class DefaultDurableQueuesApi implements DurableQueuesApi {
     public int purgeQueue(Object principal, QueueName queueName) {
         validateQueueWriterRole(principal);
         return durableQueues.purgeQueue(queueName);
-    }
-
-    @Override
-    public Optional<ApiQueuedStatistics> getQueuedStatistics(Object principal, QueueName queueName) {
-        validateQueueReaderRole(principal);
-        if (durableQueuesStatistics != null) {
-            return durableQueuesStatistics.getQueueStatistics(queueName).map(ApiQueuedStatistics::from);
-        }
-
-        return Optional.empty();
     }
 }

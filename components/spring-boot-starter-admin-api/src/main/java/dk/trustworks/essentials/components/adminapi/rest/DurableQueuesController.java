@@ -127,14 +127,6 @@ public class DurableQueuesController {
         return new PurgeResult(purged);
     }
 
-    @GetMapping("/durable-queues/queues/{queueName}/statistics")
-    public ApiQueuedStatistics getQueuedStatistics(@PathVariable String queueName) {
-        return durableQueuesApi.getQueuedStatistics(principalResolver.requireAuthenticatedPrincipal(),
-                                                   QueueName.of(queueName))
-                               .orElseThrow(() -> new AdminApiResourceNotFoundException(
-                                       "No statistics available for queue '" + queueName + "'."));
-    }
-
     private static AdminApiResourceNotFoundException noSuchMessage(String queueEntryId) {
         return new AdminApiResourceNotFoundException("No queued message with queue entry id '" + queueEntryId + "'.");
     }

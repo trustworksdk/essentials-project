@@ -28,22 +28,33 @@ import java.util.stream.Collectors;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Backwards-compatibility gate for the current major. The freshly generated contract is diffed against the
- * checked-in baseline (the last released {@code v1} contract). Removing/renaming an endpoint or field, tightening
- * a type, or any other breaking change within the same major fails this test.
+ * Backwards-compatibility gate for the major currently under development. The freshly generated contract is
+ * diffed against {@link #BASELINE}. Removing/renaming an endpoint or field, tightening a type, or any other
+ * breaking change within that major fails this test.
  * <p>
  * Additive changes (new endpoints, new optional fields) are compatible and pass; promote them into the baseline
- * at release time by copying {@code essentials-admin-api.yaml} over {@code baseline/essentials-admin-api-v1.yaml}.
- * A genuinely breaking change must instead be introduced under a new {@code /v2} contract served side-by-side.
+ * at release time by copying {@code essentials-admin-api.yaml} over the baseline file.
+ * <h2>Why the baseline is {@code v2}</h2>
+ * 0.60 removes admin operations, which is breaking against the released {@code v1} contract by construction.
+ * Leaving the gate pointed at {@code v1} would have left it failing for the whole release, and a permanently
+ * red gate catches nothing — so it was re-seeded to {@code v2} once 0.60's first breaking change landed.
+ * {@code baseline/essentials-admin-api-v1.yaml} is kept unchanged as the record of the last released contract.
+ * <p>
+ * A further deliberate breaking change during 0.60 therefore means re-seeding {@code v2} as a reviewed act, in
+ * the same commit as the change. Do not re-seed it to silence a failure you did not intend.
+ * <p>
+ * Note that {@code EssentialsAdminApiSpec.BASE_PATH} and {@code CONTRACT_VERSION} still say {@code v1} /
+ * {@code 1.0.0}. Bumping those changes the URL every consumer calls and is a release decision, not part of
+ * moving this gate.
  */
 class OpenApiContractCompatibilityTest {
 
-    private static final Path BASELINE = Path.of("openapi", "baseline", "essentials-admin-api-v1.yaml");
+    private static final Path BASELINE = Path.of("openapi", "baseline", "essentials-admin-api-v2.yaml");
 
     @Test
-    void current_contract_is_backwards_compatible_with_the_released_baseline() throws IOException {
+    void current_contract_is_backwards_compatible_with_the_baseline() throws IOException {
         assertThat(Files.exists(BASELINE))
-                .as("Baseline %s is missing — seed it from the released contract.", BASELINE)
+                .as("Baseline %s is missing — seed it from the current contract.", BASELINE)
                 .isTrue();
 
         String baseline = Files.readString(BASELINE, StandardCharsets.UTF_8);
@@ -52,12 +63,12 @@ class OpenApiContractCompatibilityTest {
         ChangedOpenApi diff = OpenApiCompare.fromContents(baseline, current);
 
         assertThat(diff.isIncompatible())
-                .as("The admin API contract introduces a BREAKING change versus the released v1 baseline:%n%s%n"
-                            + "Either restore compatibility, or introduce the change under a new /v2 contract. "
-                            + "If this change is additive and intended for the next release, promote it by copying%n"
+                .as("The admin API contract introduces a BREAKING change versus the current baseline:%n%s%n"
+                            + "Either restore compatibility, or — if the break is deliberate and part of this major — "
+                            + "re-seed the baseline in the same commit by copying%n"
                             + "  components/admin-api-spec/openapi/essentials-admin-api.yaml%n"
                             + "over%n"
-                            + "  components/admin-api-spec/openapi/baseline/essentials-admin-api-v1.yaml",
+                            + "  components/admin-api-spec/openapi/baseline/essentials-admin-api-v2.yaml",
                     describeBreakingChanges(diff))
                 .isFalse();
     }

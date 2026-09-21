@@ -178,19 +178,4 @@ public interface DurableQueuesApi {
      * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
      */
     int purgeQueue(Object principal, QueueName queueName);
-
-    /**
-     * Retrieves statistics about the messages queued in a specific durable queue.
-     * The statistics include details such as the total messages delivered, average
-     * delivery latency, and the timestamps of the first and last deliveries.
-     *
-     * @param principal the entity (user or system) making the request; used for
-     *                  authorization and context
-     * @param queueName the name of the queue for which statistics are to be retrieved
-     * @return an {@code Optional} containing the {@code ApiQueuedStatistics} for the
-     *         specified queue if the principal has access and data is available, or
-     *         an empty {@code Optional} if access is denied or statistics cannot be found
-     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
-     */
-    Optional<ApiQueuedStatistics> getQueuedStatistics(Object principal, QueueName queueName);
 }

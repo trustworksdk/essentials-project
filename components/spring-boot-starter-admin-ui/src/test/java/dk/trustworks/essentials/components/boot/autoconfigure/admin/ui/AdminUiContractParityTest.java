@@ -66,7 +66,7 @@ class AdminUiContractParityTest {
     /** Keeps the comparisons below from passing vacuously. */
     @Test
     void both_sides_are_discovered() {
-        assertThat(contractPaths).hasSize(38);
+        assertThat(contractPaths).hasSize(37);
         assertThat(calledPaths()).isNotEmpty();
     }
 

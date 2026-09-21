@@ -43,7 +43,6 @@ Base package: `dk.trustworks.essentials.components.queue.postgresql`
 |-------|---------|
 | `PostgresqlDurableQueues` | Main implementation |
 | `PostgresqlDurableQueuesBuilder` | Builder via `PostgresqlDurableQueues.builder()` |
-| `PostgresqlDurableQueuesStatistics` | Extended statistics API |
 | `PostgresqlDurableQueueConsumer` | Traditional per-consumer polling |
 
 Foundation classes (package: `dk.trustworks.essentials.components.foundation.messaging.queue`):
@@ -358,28 +357,6 @@ var durableQueues = PostgresqlDurableQueues.builder()
 | `DurableQueuesMicrometerInterceptor` | Queue size gauges, counters (processed, handled, retries, DLQ) |
 | `DurableQueuesMicrometerTracingInterceptor` | Distributed tracing via Micrometer Observation |
 | `RecordExecutionTimeDurableQueueInterceptor` | Operation execution time |
-
-### PostgreSQL-Specific Statistics
-
-Package: `dk.trustworks.essentials.components.foundation.messaging.queue.stats`
-
-```java
-import dk.trustworks.essentials.components.queue.postgresql.PostgresqlDurableQueues;
-import dk.trustworks.essentials.components.foundation.messaging.queue.stats.*;
-
-PostgresqlDurableQueues queues = (PostgresqlDurableQueues) durableQueues;
-DurableQueuesStatistics stats = queues.getStatistics();
-
-// Queue statistics
-Optional<QueueStatistics> queueStats = stats.getQueueStatistics(queueName);
-queueStats.ifPresent(s -> {
-    log.info("Total: {}, DLQ: {}, Earliest: {}",
-        s.getTotalMessages(), s.getDeadLetterMessages(), s.getEarliestMessageTimestamp());
-});
-
-// Individual message statistics
-Optional<QueuedStatisticsMessage> msgStats = stats.getQueueStatisticsMessage(queueEntryId);
-```
 
 ### Logging
 

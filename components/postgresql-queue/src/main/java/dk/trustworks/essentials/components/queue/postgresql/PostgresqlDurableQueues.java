@@ -37,6 +37,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static dk.trustworks.essentials.shared.FailFast.*;
@@ -531,6 +532,8 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             createIndex(durableQueuesSql.getCreateOrderedMessageHeadIndexSql(),
                         handleAwareUnitOfWork.handle());
 
+            dropLegacyQueueStatistics(handleAwareUnitOfWork.handle());
+
             multiTableChangeListener.ifPresent(listener -> {
                 ListenNotify.addChangeNotificationTriggerToTable(handleAwareUnitOfWork.handle(),
                                                                  sharedQueueTableName,
@@ -539,6 +542,101 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
             });
         });
     }
+
+    /**
+     * Column names unique enough to identify a table as the queue-statistics table created by the removed
+     * {@code PostgresqlDurableQueuesStatistics}, so a table that merely shares its name is never dropped.
+     */
+    private static final List<String> LEGACY_QUEUE_STATISTICS_COLUMNS = List.of("delivery_latency",
+                                                                                "deletion_ts",
+                                                                                "redelivery_attempts",
+                                                                                "delivery_mode");
+
+    /**
+     * Remove the queue statistics feature that was deleted in 0.60: the {@code AFTER DELETE} trigger it installed
+     * on <em>this</em> queue table, the function that trigger called, and the statistics table that function wrote
+     * to.
+     * <p>
+     * Left in place, the trigger keeps executing on every acknowledged message for a table nothing reads.
+     * <p>
+     * <b>This runs once.</b> It is gated on the trigger still existing, and the trigger is the first thing it
+     * drops, so every subsequent startup skips the whole block without issuing a statement. That matters because
+     * the statistics table name was configurable: a {@code DROP TABLE} re-issued on every boot would destroy a
+     * table that a later deployment happened to create under the same name. The configured name is recovered from
+     * the trigger function's own body rather than assumed to be the default, and the table is only dropped when
+     * its columns match the shape the statistics feature created.
+     *
+     * @param handle the handle to use, already holding the framework's bootstrap lock
+     */
+    private void dropLegacyQueueStatistics(Handle handle) {
+        var triggerExists = handle.createQuery("""
+                                               SELECT EXISTS (SELECT 1 FROM pg_trigger t
+                                                              JOIN pg_class c ON c.oid = t.tgrelid
+                                                              WHERE t.tgname = 'trg_log_message_delivery_stats'
+                                                                AND c.relname = :queueTableName)
+                                               """)
+                                 .bind("queueTableName", sharedQueueTableName)
+                                 .mapTo(Boolean.class)
+                                 .one();
+        if (!triggerExists) {
+            return;
+        }
+
+        log.info("Removing the queue statistics trigger, function and table removed in 0.60");
+
+        var statisticsTableName = handle.createQuery("SELECT prosrc FROM pg_proc WHERE proname = 'log_message_delivery_stats'")
+                                        .mapTo(String.class)
+                                        .findFirst()
+                                        .flatMap(PostgresqlDurableQueues::extractStatisticsTableNameFrom);
+
+        handle.execute(bind("DROP TRIGGER IF EXISTS trg_log_message_delivery_stats ON {:tableName}",
+                            arg("tableName", sharedQueueTableName)));
+        handle.execute("DROP FUNCTION IF EXISTS log_message_delivery_stats()");
+
+        if (statisticsTableName.isEmpty()) {
+            log.warn("Could not determine the queue statistics table name from the trigger function. " +
+                             "The trigger and function are removed; drop the statistics table by hand");
+            return;
+        }
+        dropLegacyQueueStatisticsTable(handle, statisticsTableName.get());
+    }
+
+    private void dropLegacyQueueStatisticsTable(Handle handle, String statisticsTableName) {
+        var columns = handle.createQuery("SELECT column_name FROM information_schema.columns WHERE table_name = :tableName")
+                            .bind("tableName", statisticsTableName)
+                            .mapTo(String.class)
+                            .list();
+        if (!columns.containsAll(LEGACY_QUEUE_STATISTICS_COLUMNS)) {
+            log.warn("Table '{}' does not have the shape of a queue statistics table, so it was left alone. " +
+                             "The statistics trigger and function are removed; drop the table by hand if it is the old one",
+                     statisticsTableName);
+            return;
+        }
+        handle.execute(bind("DROP TABLE IF EXISTS {:tableName}", arg("tableName", statisticsTableName)));
+        log.info("Dropped the queue statistics table '{}'", statisticsTableName);
+    }
+
+    /**
+     * Recover the statistics table name from the trigger function's body, which inserts into it.
+     */
+    private static Optional<String> extractStatisticsTableNameFrom(String triggerFunctionSource) {
+        var matcher = LEGACY_STATISTICS_INSERT_TARGET.matcher(triggerFunctionSource);
+        if (!matcher.find()) {
+            return Optional.empty();
+        }
+        var tableName = matcher.group(1);
+        try {
+            PostgresqlUtil.checkIsValidTableOrColumnName(tableName);
+        } catch (RuntimeException e) {
+            log.warn("Ignoring '{}' recovered from the queue statistics trigger function: not a valid table name",
+                     tableName, e);
+            return Optional.empty();
+        }
+        return Optional.of(tableName);
+    }
+
+    private static final Pattern LEGACY_STATISTICS_INSERT_TARGET = Pattern.compile("INSERT\\s+INTO\\s+([A-Za-z0-9_]+)\\s*\\(",
+                                                                                   Pattern.CASE_INSENSITIVE);
 
     private void createIndex(String indexStatement, Handle handle) {
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);

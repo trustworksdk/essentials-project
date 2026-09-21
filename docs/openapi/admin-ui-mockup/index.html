@@ -530,10 +530,6 @@ const fx = {
   // GET /durable-queues → string[]
   queueNames: ['OrderEvents', 'ShipmentCommands', 'EmailOutbox', 'PaymentInbox'],
 
-  // GET /durable-queues/queues/{queueName}/statistics → ApiQueuedStatistics
-  queueStats: {
-    OrderEvents: { queueName: 'OrderEvents', fromTimestamp: '2026-07-24T00:00:00Z', totalMessagesDelivered: 184203, avgDeliveryLatencyMs: 34, firstDelivery: '2026-07-24T00:00:11Z', lastDelivery: '2026-07-31T12:04:28Z' }
-  },
   queueCounts: { OrderEvents: { queued: 128, deadLetters: 3 } },
 
   // GET /durable-queues/queues/{queueName}/messages → ApiQueuedMessage[]
@@ -839,7 +835,6 @@ views.locks = () => {
 };
 
 views.queues = () => {
-  const stats = fx.queueStats.OrderEvents;
   const counts = fx.queueCounts.OrderEvents;
 
   const msgRow = (m) => `<tr data-msg="${esc(m.id)}">
@@ -886,9 +881,6 @@ views.queues = () => {
     <div class="kpi-row">
       ${tile('Queued', n(counts.queued))}
       ${tile('Dead letters', n(counts.deadLetters), 'oldest 08:11', counts.deadLetters > 0)}
-      ${tile('Delivered', n(stats.totalMessagesDelivered), 'since ' + ts(stats.fromTimestamp).slice(0, 10))}
-      ${tile('Avg delivery latency', stats.avgDeliveryLatencyMs + ' <span class="tile-sub" style="font-size:13px">ms</span>')}
-      ${tile('Last delivery', ts(stats.lastDelivery).slice(11), ts(stats.lastDelivery).slice(0, 10))}
     </div>
 
     <div id="qQueued">
@@ -1357,7 +1349,7 @@ views.states = () => `
 const titles = {
   overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
   locks: ['Fenced locks', 'Distributed locks held across service instances'],
-  queues: ['Durable queues', 'Queued and dead-letter messages, delivery statistics'],
+  queues: ['Durable queues', 'Queued and dead-letter messages'],
   scheduler: ['Scheduler', 'pg_cron jobs, run history and executor jobs'],
   subscriptions: ['Subscriptions', 'Event-store subscription resume points'],
   cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],
