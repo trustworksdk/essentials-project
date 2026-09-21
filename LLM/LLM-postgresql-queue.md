@@ -104,7 +104,6 @@ Created via `PostgresqlDurableQueues.builder()`.
 | `transactionMode` | `TransactionMode` | `SingleOperationTransaction` | See [Transaction Modes](#transaction-modes) |
 | `useCentralizedMessageFetcher` | `boolean` | `true` | Centralized vs per-consumer |
 | `centralizedMessageFetcherPollingInterval` | `Duration` | 20ms | Polling interval |
-| `useOrderedUnorderedQuery` | `boolean` | `false` | Query optimization |
 | `queuePollingOptimizerFactory` | `Function<ConsumeFromQueue,QueuePollingOptimizer>` | null | For `DefaultDurableQueueConsumer` |
 | `centralizedQueuePollingOptimizerFactory` | `Function<QueueName,QueuePollingOptimizer>` | null | For `CentralizedMessageFetcher` |
 | `multiTableChangeListener` | `MultiTableChangeListener` | null | LISTEN/NOTIFY support |
@@ -273,22 +272,13 @@ Auto-created. `*` = table name.
 CREATE INDEX idx_*_ordered_msg
   ON durable_queues (queue_name, key, key_order);
 
--- Next message to deliver
-CREATE INDEX idx_*_next_msg
-  ON durable_queues (queue_name, is_dead_letter_message, is_being_delivered, next_delivery_ts);
-
--- Ready messages (general)
-CREATE INDEX idx_*_ready
-  ON durable_queues (queue_name, next_delivery_ts, key, key_order)
-  WHERE is_dead_letter_message = FALSE AND is_being_delivered = FALSE;
-
--- Ordered messages ready (when useOrderedUnorderedQuery=true)
+-- Ordered messages ready
 CREATE INDEX idx_*_ordered_ready
   ON durable_queues (key, queue_name, key_order, next_delivery_ts)
   INCLUDE (id)
   WHERE key IS NOT NULL AND NOT is_dead_letter_message AND NOT is_being_delivered;
 
--- Unordered messages ready (when useOrderedUnorderedQuery=true)
+-- Unordered messages ready
 CREATE INDEX idx_*_unordered_ready
   ON durable_queues (queue_name, next_delivery_ts)
   INCLUDE (id)
@@ -446,7 +436,6 @@ PostgresqlDurableQueues.builder()
     .setUnitOfWorkFactory(unitOfWorkFactory)
     .setUseCentralizedMessageFetcher(true)
     .setCentralizedMessageFetcherPollingInterval(Duration.ofMillis(5))
-    .setUseOrderedUnorderedQuery(true)
     .setMultiTableChangeListener(multiTableChangeListener)
     .setCentralizedQueuePollingOptimizerFactory(queueName ->
         new CentralizedQueuePollingOptimizer(queueName, 5, 10000, 1.5, 0.1))

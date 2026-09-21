@@ -190,7 +190,6 @@ Prefix: `essentials.durable-queues`
 | `use-centralized-message-fetcher` | `true` | Recommended |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base interval |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff multiplier |
-| `use-ordered-unordered-query` | `true` | Optimize mixed ordering |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy (centralized=false) |
 | `max-polling-interval` | `2s` | Max backoff |
 | `verbose-tracing` | `false` | Include all ops in traces |

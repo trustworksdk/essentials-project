@@ -120,7 +120,6 @@ public DurableQueues durableQueues(
 | `transactionMode` | `SingleOperationTransaction` | Transaction behavior |
 | `useCentralizedMessageFetcher` | `true` | Polling mechanism |
 | `centralizedMessageFetcherPollingInterval` | 20ms | Polling interval |
-| `useOrderedUnorderedQuery` | `false` | Optimized query approach |
 
 ### Transaction Modes
 

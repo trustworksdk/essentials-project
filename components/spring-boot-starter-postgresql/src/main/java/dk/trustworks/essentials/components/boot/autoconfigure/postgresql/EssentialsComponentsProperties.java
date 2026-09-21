@@ -297,7 +297,6 @@ public class EssentialsComponentsProperties {
         private boolean enableQueueStatistics      = false;
         private boolean enableQueueStatisticsTtl   = false;
         private int     queueStatisticsTtlDuration = 90;
-        private boolean useOrderedUnorderedQuery   = true;
 
         /**
          * Should the Tracing produces only include all operations or only top level operations (default false)
@@ -702,23 +701,6 @@ public class EssentialsComponentsProperties {
             this.batchedFetchWarnRowsThreshold = batchedFetchWarnRowsThreshold;
         }
 
-        /**
-         * Is the ordered-unordered query mode is enabled?<br>
-         * When {@code true}, enables a specialized query strategy that can improve performance for mixed, ordered and unordered message processing scenarios
-         */
-        public boolean isUseOrderedUnorderedQuery() {
-            return useOrderedUnorderedQuery;
-        }
-
-        /**
-         * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
-         * performance for mixed, ordered and unordered message processing scenarios
-         *
-         * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
-         */
-        public void setUseOrderedUnorderedQuery(boolean useOrderedUnorderedQuery) {
-            this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
-        }
     }
 
     public static class FencedLockManagerProperties {

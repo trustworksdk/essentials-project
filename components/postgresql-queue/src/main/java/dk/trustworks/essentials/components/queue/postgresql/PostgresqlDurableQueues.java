@@ -90,13 +90,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * Row count above which a single batched fetch is logged as a warning.
      */
     static final         int     DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD = 5000;
-    /**
-     * Use the separate ordered/unordered fetch queries (and their partial indexes) rather than the single
-     * unified query.
-     * <p>
-     * On by default.
-     */
-    static final         boolean DEFAULT_USE_ORDERED_UNORDERED_QUERY       = true;
 
     private static final Object NO_PAYLOAD = new Object();
 
@@ -122,7 +115,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * {@link DefaultDurableQueueConsumer} approach for handling messages
      */
     private final boolean                   useCentralizedMessageFetcher;
-    private final boolean                   useOrderedUnorderedQuery;
     private final boolean                   useBatchedFetch;
     private final int                       batchedFetchSwitchThreshold;
     private final int                       batchedFetchWarnRowsThreshold;
@@ -341,7 +333,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              true,  // Use centralized message fetcher by default
              Duration.ofMillis(20), // With a 20ms polling interval by default
              null,
-             DEFAULT_USE_ORDERED_UNORDERED_QUERY,
              DEFAULT_USE_BATCHED_FETCH,
              DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
              DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD);
@@ -397,8 +388,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      *                                                   <li>Polling interval increase factor: 1.5 (50% increase per empty poll)</li>
      *                                                   <li>Polling interval decrease factor: 0.1 (90% decrease when messages found)</li>
      *                                                 </ul>
-     * @param useOrderedUnorderedQuery                 a boolean flag that determines whether to use the ordered/unordered query optimization for message fetching. When {@code true}, enables a specialized query strategy that can improve
-     *                                                 performance for mixed, ordered and unordered message processing scenarios
      * @deprecated Use {@link #builder()}. This constructor declares an {@code Optional} parameter and/or more than five parameters; the builder names every argument and accepts both plain values and {@code Optional}s. It is unchanged and remains the implementation the builder delegates to.
      */
     @Deprecated(forRemoval = true, since = "0.40.x")
@@ -411,8 +400,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                    Duration messageHandlingTimeout,
                                    boolean useCentralizedMessageFetcher,
                                    Duration centralizedMessageFetcherPollingInterval,
-                                   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
-                                   boolean useOrderedUnorderedQuery) {
+                                   Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory) {
         this(unitOfWorkFactory,
              jsonSerializer,
              sharedQueueTableName,
@@ -423,7 +411,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
              useCentralizedMessageFetcher,
              centralizedMessageFetcherPollingInterval,
              centralizedQueuePollingOptimizerFactory,
-             useOrderedUnorderedQuery,
              DEFAULT_USE_BATCHED_FETCH,
              DEFAULT_BATCHED_FETCH_SWITCH_THRESHOLD,
              DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD);
@@ -443,7 +430,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      * @param useCentralizedMessageFetcher             Whether to use the {@link CentralizedMessageFetcher} (true) or fallback to the traditional {@link DefaultDurableQueueConsumer} (false)
      * @param centralizedMessageFetcherPollingInterval Set the polling interval for the {@link CentralizedMessageFetcher}
      * @param centralizedQueuePollingOptimizerFactory  Optional factory function that creates a {@link QueuePollingOptimizer} for each queue when using centralized message fetching
-     * @param useOrderedUnorderedQuery                 whether to use the ordered/unordered query optimization for message fetching
      * @param useBatchedFetch                          opt in to batched fetching in the {@link CentralizedMessageFetcher}. Defaults to {@code false} everywhere else;
      *                                                 when {@code false} every poll uses per-queue fetching and {@code batchedFetchSwitchThreshold} is ignored
      * @param batchedFetchSwitchThreshold              only consulted when {@code useBatchedFetch} is {@code true}: per-queue fetch for active
@@ -462,7 +448,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                    boolean useCentralizedMessageFetcher,
                                    Duration centralizedMessageFetcherPollingInterval,
                                    Function<QueueName, QueuePollingOptimizer> centralizedQueuePollingOptimizerFactory,
-                                   boolean useOrderedUnorderedQuery,
                                    boolean useBatchedFetch,
                                    int batchedFetchSwitchThreshold,
                                    int batchedFetchWarnRowsThreshold) {
@@ -471,7 +456,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         this.sharedQueueTableName = requireNonNull(sharedQueueTableName, "No sharedQueueTableName provided").toLowerCase(Locale.ROOT);
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
         this.useCentralizedMessageFetcher = useCentralizedMessageFetcher;
-        this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
         requireTrue(batchedFetchSwitchThreshold >= 0, "batchedFetchSwitchThreshold must be >= 0");
         requireTrue(batchedFetchWarnRowsThreshold >= 0, "batchedFetchWarnRowsThreshold must be >= 0");
         this.useBatchedFetch = useBatchedFetch;
@@ -531,12 +515,14 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                       handleAwareUnitOfWork.handle());
             dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_is_being_delivered",
                       handleAwareUnitOfWork.handle());
+            // Served the unified claim query, removed in 0.60. Reclaims the write amplification of maintaining
+            // two indexes for a statement that no longer exists.
+            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_next_msg",
+                      handleAwareUnitOfWork.handle());
+            dropIndex("DROP INDEX IF EXISTS idx_{:tableName}_ready",
+                      handleAwareUnitOfWork.handle());
 
             createIndex(durableQueuesSql.getCreateOrderedMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateNextMessageIndexSql(),
-                        handleAwareUnitOfWork.handle());
-            createIndex(durableQueuesSql.getCreateNextReadyMessageIndexSql(),
                         handleAwareUnitOfWork.handle());
             createIndex(durableQueuesSql.getCreateOrderedMessageReadyIndexSql(),
                         handleAwareUnitOfWork.handle());
@@ -584,16 +570,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
      */
     DurableQueuesSql getDurableQueuesSql() {
         return durableQueuesSql;
-    }
-
-    /**
-     * Whether the separate ordered/unordered fetch queries are in use, as opposed to the single unified
-     * query.
-     * {@link PostgresqlDurableQueuesBuilder#setUseOrderedUnorderedQuery(boolean)}.
-     * <p>
-     */
-    public boolean isUseOrderedUnorderedQuery() {
-        return useOrderedUnorderedQuery;
     }
 
     /**
@@ -1284,12 +1260,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     @Override
     public Optional<QueuedMessage> getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery operation) {
         requireNonNull(operation, "You must provide a GetNextMessageReadyForDelivery instance");
-        return getNextMessageReadyForDelivery(operation, useOrderedUnorderedQuery);
-    }
-
-    public Optional<QueuedMessage> getNextMessageReadyForDelivery(GetNextMessageReadyForDelivery operation,
-                                                                  boolean useOrderedUnorderedQuery) {
-        requireNonNull(operation, "You must specify a GetNextMessageReadyForDelivery instance");
         log.trace("[{}] Entered GetNextMessageReadyForDelivery", operation.queueName);
 
         return newInterceptorChainForOperation(operation,
@@ -1304,11 +1274,7 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                            : List.of();
 
                                                    try {
-                                                       if (useOrderedUnorderedQuery) {
-                                                           return fetchNextMessageReadyForDeliveryOrderedUnordered(operation.queueName, excludes, now);
-                                                       } else {
-                                                           return fetchNextMessageReadyForDelivery(operation.queueName, excludes, now);
-                                                       }
+                                                       return fetchNextMessageReadyForDeliveryOrderedUnordered(operation.queueName, excludes, now);
                                                    } catch (DurableQueueDeserializationException e) {
                                                        log.error("[{}] Marking Message as DeadLetterMessage due to DurableQueueDeserializationException "
                                                                          + "while deserializing message with id '{}'",
@@ -1350,23 +1316,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                      .findOne();
     }
 
-
-    private Optional<QueuedMessage> fetchNextMessageReadyForDelivery(QueueName queueName, Collection<String> excludes, Instant now) {
-        var sql = durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excludes);
-        var query = unitOfWorkFactory
-                .getRequiredUnitOfWork()
-                .handle()
-                .createQuery(sql)
-                .bind("queueName", queueName)
-                .bind("now", now)
-                .bind("limit", 1);
-
-        if (!excludes.isEmpty()) {
-            query.bindList("excludedKeys", excludes);
-        }
-        log.trace("[{}] Executing fetchNextMessageReadyForDelivery sql", queueName);
-        return query.map(queuedMessageMapper).findOne();
-    }
 
     /**
      * This operation will scan for messages that has been marked as {@link QueuedMessage#isBeingDelivered()} for longer
@@ -1603,13 +1552,6 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
         requireNonNull(excludeKeysPerQueue, "No excludeKeysPerQueue provided");
         requireNonNull(availableWorkerSlotsPerQueue, "No availableWorkerSlotsPerQueue provided");
 
-        return fetchNextBatchOfMessages(queueNames, excludeKeysPerQueue, availableWorkerSlotsPerQueue, useOrderedUnorderedQuery);
-    }
-
-    public List<QueuedMessage> fetchNextBatchOfMessages(Collection<QueueName> queueNames,
-                                                        Map<QueueName, Set<String>> excludeKeysPerQueue,
-                                                        Map<QueueName, Integer> availableWorkerSlotsPerQueue,
-                                                        boolean useOrderedUnorderedQuery) {
         log.trace("Fetching batch of messages for queues: {}", queueNames);
         if (queueNames.isEmpty()) {
             return Collections.emptyList();
@@ -1643,36 +1585,24 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                     List<QueuedMessage>  messagesForQueue;
                     MessageMappingResult mappingResult;
 
-                    if (useOrderedUnorderedQuery) {
-                        var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
-                        var orderedQ = uow.handle().createQuery(orderedSql)
-                                          .bind("queueName", queueName)
-                                          .bind("now", now)
-                                          .bind("limit", availableWorkerSlotsForThisQueue);
-                        if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
+                    var orderedSql = durableQueuesSql.buildOrderedSqlStatement(!excluded.isEmpty());
+                    var orderedQ = uow.handle().createQuery(orderedSql)
+                                      .bind("queueName", queueName)
+                                      .bind("now", now)
+                                      .bind("limit", availableWorkerSlotsForThisQueue);
+                    if (!excluded.isEmpty()) orderedQ.bindList("excludeKeys", excluded);
 
-                        mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
-                        messagesForQueue = mappingResult.successfulMessages();
-                        handleFailedMappings(queueName, mappingResult);
+                    mappingResult = mapQueryResultsWithExceptionHandling(orderedQ);
+                    messagesForQueue = mappingResult.successfulMessages();
+                    handleFailedMappings(queueName, mappingResult);
 
-                        if (messagesForQueue.isEmpty()) {
-                            var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
-                            var unorderedQ = uow.handle().createQuery(unorderedSql)
-                                                .bind("queueName", queueName)
-                                                .bind("now", now)
-                                                .bind("limit", availableWorkerSlotsForThisQueue);
-                            mappingResult = mapQueryResultsWithExceptionHandling(unorderedQ);
-                            messagesForQueue = mappingResult.successfulMessages();
-                            handleFailedMappings(queueName, mappingResult);
-                        }
-                    } else {
-                        var sql = durableQueuesSql.buildGetNextMessageReadyForDeliverySqlStatement(excluded);
-                        var query = uow.handle().createQuery(sql)
-                                       .bind("queueName", queueName)
-                                       .bind("now", now)
-                                       .bind("limit", availableWorkerSlotsForThisQueue);
-                        if (!excluded.isEmpty()) query.bindList("excludedKeys", new ArrayList<>(excluded));
-                        mappingResult = mapQueryResultsWithExceptionHandling(query);
+                    if (messagesForQueue.isEmpty()) {
+                        var unorderedSql = durableQueuesSql.buildUnorderedSqlStatement();
+                        var unorderedQ = uow.handle().createQuery(unorderedSql)
+                                            .bind("queueName", queueName)
+                                            .bind("now", now)
+                                            .bind("limit", availableWorkerSlotsForThisQueue);
+                        mappingResult = mapQueryResultsWithExceptionHandling(unorderedQ);
                         messagesForQueue = mappingResult.successfulMessages();
                         handleFailedMappings(queueName, mappingResult);
                     }

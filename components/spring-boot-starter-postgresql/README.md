@@ -191,7 +191,6 @@ essentials.durable-queues.message-handling-timeout=30s
 essentials.durable-queues.use-centralized-message-fetcher=true
 essentials.durable-queues.centralized-message-fetcher-polling-interval=20ms
 essentials.durable-queues.centralized-polling-delay-back-off-factor=1.5
-essentials.durable-queues.use-ordered-unordered-query=true
 essentials.durable-queues.polling-delay-interval-increment-factor=0.5
 essentials.durable-queues.max-polling-interval=2s
 essentials.durable-queues.verbose-tracing=false
@@ -209,7 +208,6 @@ essentials.durable-queues.queue-statistics-ttl-duration=90
 | `use-centralized-message-fetcher` | `true` | Use optimized centralized message fetching                                  |
 | `centralized-message-fetcher-polling-interval` | `20ms` | Base polling interval for centralized fetcher                               |
 | `centralized-polling-delay-back-off-factor` | `1.5` | Backoff factor when no messages found                                       |
-| `use-ordered-unordered-query` | `true` | Enable specialized query for mixed message ordering                         |
 | `polling-delay-interval-increment-factor` | `0.5` | Legacy backoff factor (when not using centralized fetcher)                  |
 | `max-polling-interval` | `2s` | Maximum polling delay                                                       |
 | `verbose-tracing` | `false` | Include all operations in traces (not just top-level)                       |

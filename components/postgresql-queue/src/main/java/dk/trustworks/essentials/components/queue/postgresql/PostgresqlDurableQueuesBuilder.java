@@ -68,12 +68,6 @@ public final class PostgresqlDurableQueuesBuilder {
     private int                                        batchedFetchWarnRowsThreshold            = PostgresqlDurableQueues.DEFAULT_BATCHED_FETCH_WARN_ROWS_THRESHOLD;
 
     /**
-     * Use the separate ordered/unordered fetch queries rather than the single unified query. Default is
-     * {@code true} — see {@link #setUseOrderedUnorderedQuery(boolean)}.
-     */
-    private boolean useOrderedUnorderedQuery = PostgresqlDurableQueues.DEFAULT_USE_ORDERED_UNORDERED_QUERY;
-
-    /**
      * @param unitOfWorkFactory the {@link UnitOfWorkFactory} needed to access the database
      * @return this builder instance
      */
@@ -247,21 +241,6 @@ public final class PostgresqlDurableQueuesBuilder {
         return this;
     }
 
-    /**
-     * Sets whether to use the ordered/unordered query optimization for message fetching. When {@code true}
-     * (the default) separate fetch queries and partial indexes are used for ordered and unordered messages;
-     * when {@code false} a single unified query serves both.
-     * <p>
-     * Leave this on unless you have a measured reason not to.
-     *
-     * @param useOrderedUnorderedQuery flag to enable/disable the query optimization
-     * @return this builder instance
-     */
-    public PostgresqlDurableQueuesBuilder setUseOrderedUnorderedQuery(boolean useOrderedUnorderedQuery) {
-        this.useOrderedUnorderedQuery = useOrderedUnorderedQuery;
-        return this;
-    }
-
     @SuppressWarnings("removal")
 
     public PostgresqlDurableQueues build() {
@@ -275,7 +254,6 @@ public final class PostgresqlDurableQueuesBuilder {
                                            useCentralizedMessageFetcher,
                                            centralizedMessageFetcherPollingInterval,
                                            centralizedQueuePollingOptimizerFactory,
-                                           useOrderedUnorderedQuery,
                                            useBatchedFetch,
                                            batchedFetchSwitchThreshold,
                                            batchedFetchWarnRowsThreshold);

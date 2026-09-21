@@ -305,7 +305,6 @@ public class EssentialsComponentsConfiguration {
                                                             properties.getDurableQueues().getCentralizedPollingDelayBackOffFactor(),
                                                             0.1
                                                     ))
-                                                    .setUseOrderedUnorderedQuery(properties.getDurableQueues().isUseOrderedUnorderedQuery())
                                                     .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;
