@@ -248,27 +248,45 @@ MessageDeliveryErrorHandler.stopRedeliveryOn(
 #### The built-in permanent-error list
 
 The consumer applies its own list of permanent error types **after** consulting your
-`MessageDeliveryErrorHandler`, and that list wins. A message failing with one of these is dead-lettered on the
-first delivery attempt, whatever the `RedeliveryPolicy` says:
+`MessageDeliveryErrorHandler`. A message failing with one of these is dead-lettered on the first delivery
+attempt, whatever the `RedeliveryPolicy`'s backoff says — unless the handler explicitly asks to retry that
+type and the type allows it:
 
-| Type | Matched on |
-|---|---|
-| `DurableQueueDeserializationException` | the thrown exception |
-| `MismatchedInputException` | the root cause |
-| `NoClassDefFoundError` | the thrown exception or the root cause |
-| `ClassCastException` | the thrown exception or the root cause |
-| `IllegalArgumentException` | the thrown exception or the root cause |
+| Type | Overridable by `alwaysRetryOn` | Why |
+|---|---|---|
+| `DurableQueueDeserializationException` | No | The stored bytes will not parse on the hundredth attempt either |
+| `MismatchedInputException` | No | Same |
+| `NoClassDefFoundError` | No | A missing class is a deployment fault, not a transient one |
+| `IllegalArgumentException` (incl. `NumberFormatException`) | **Yes** | The house guard idiom, frequently thrown about data that may be valid later |
+| `ClassCastException` | **Yes** | Usually a genuine bug, but a cast against a projection that has not caught up is legitimately transient |
 
-`IllegalArgumentException` is the one that surprises people. `FailFast.requireNonNull(...)` and
+`IllegalArgumentException` on that list is the one that surprises people. `FailFast.requireNonNull(...)` and
 `requireTrue(...)` — the validation idiom used across this codebase — throw it, and so does Kotlin's
-`require(...)`. A `@MessageHandler` that guards its arguments that way dead-letters its message on the first
-delivery, and `MessageDeliveryErrorHandler.builder().alwaysRetryOn(IllegalArgumentException.class)` does not
-prevent it, because the built-in list is applied afterwards.
+`require(...)`. A `@MessageHandler` that guards its arguments dead-letters its message on the first delivery
+attempt unless you opt out:
 
-Note also that only the outermost exception and the deepest root cause are examined, never the middle of the
-chain. A handler throw arrives wrapped (`UnitOfWorkException → ReflectionException → InvocationTargetException
-→ yours`), so your exception is normally the deepest one and decides the outcome — unless it carries a cause
-of its own, in which case classification silently uses that deeper type instead.
+```java
+RedeliveryPolicy.exponentialBackoff()
+    // ...
+    .setDeliveryErrorHandler(MessageDeliveryErrorHandler.builder()
+                                                        .alwaysRetryOn(IllegalArgumentException.class)
+                                                        .build())
+    .build();
+```
+
+Two limits on that opt-out. It cannot override the three types marked "No" above, and it does not lift
+`maximumNumberOfRedeliveries` — the message is still dead-lettered once its attempts are used up. Note also
+that `MessageDeliveryErrorHandler.alwaysRetry()` is *not* the same thing: it means "I have no opinion", so the
+built-in list still applies. Only the explicit `alwaysRetryOn(...)` list overrides it.
+
+The whole cause chain is examined, not just its ends. A handler throw arrives wrapped
+(`UnitOfWorkException → ReflectionException → InvocationTargetException → yours`), and a match anywhere in that
+chain counts — so classification no longer depends on whether your exception happens to carry a cause of its
+own.
+
+The dead-letter log line names which rule fired, the matched type, its depth in the cause chain, and the
+attempt count, e.g.
+`PERMANENT_ERROR (built-in permanent list matched IllegalArgumentException at cause-chain depth 3; attempt 1 of 6)`.
 
 #### Validating inside a message handler
 
@@ -278,7 +296,7 @@ Pick the exception type by whether the condition can ever become true:
 @MessageHandler
 void handle(OrderShipped event) {
     // The message can never be processed: the payload itself is wrong.
-    // IllegalArgumentException → dead-lettered immediately. This is what you want.
+    // IllegalArgumentException -> dead-lettered immediately, unless you opted out above.
     requireNonNull(event.orderId, "orderId is required");
 
     var order = orderRepository.find(event.orderId);

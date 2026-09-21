@@ -295,26 +295,26 @@ CREATE INDEX idx_*_ordered_head
 ## Dead-Letter Classification
 
 A failed delivery is either retried according to the `RedeliveryPolicy` or dead-lettered immediately. The
-consumer decides by consulting the policy's `MessageDeliveryErrorHandler` first, then OR-ing its own built-in
-list of permanent error types — **the built-in list wins**, so no policy can remove a type from it.
+consumer asks the policy's `MessageDeliveryErrorHandler` first, then applies its own built-in list of permanent
+error types. Two of the five can be overridden by an explicit `alwaysRetryOn(...)`; three cannot:
 
-| Type | Matched on |
+| Type | Overridable by `alwaysRetryOn` |
 |---|---|
-| `DurableQueueDeserializationException` | the thrown exception |
-| `MismatchedInputException` | the root cause |
-| `NoClassDefFoundError` | the thrown exception or the root cause |
-| `ClassCastException` | the thrown exception or the root cause |
-| `IllegalArgumentException` | the thrown exception or the root cause |
+| `DurableQueueDeserializationException` | No |
+| `MismatchedInputException` | No |
+| `NoClassDefFoundError` | No |
+| `IllegalArgumentException` (incl. `NumberFormatException`) | **Yes** |
+| `ClassCastException` | **Yes** |
 
 `IllegalArgumentException` on that list is the common surprise: `FailFast.requireNonNull(...)` /
 `requireTrue(...)` and Kotlin's `require(...)` all throw it, so a `@MessageHandler` that guards its arguments
-dead-letters its message on the first delivery attempt, and `alwaysRetryOn(IllegalArgumentException.class)`
-does not change that.
+dead-letters its message on the first delivery attempt unless the policy opts out.
 
-Only the outermost exception and the deepest root cause are examined, never the middle of the cause chain.
+The whole cause chain is examined, not just the thrown exception and the deepest root cause. Overriding does
+not lift `maximumNumberOfRedeliveries`.
 
-See [LLM-foundation.md](./LLM-foundation.md) for `MessageDeliveryErrorHandler`, the `RedeliveryPolicy`
-strategies and the recipe for validating inside a handler.
+See [LLM-foundation.md](./LLM-foundation.md) for `MessageDeliveryErrorHandler`, the opt-out, the
+`RedeliveryPolicy` strategies and the recipe for validating inside a handler.
 
 ## Monitoring
 

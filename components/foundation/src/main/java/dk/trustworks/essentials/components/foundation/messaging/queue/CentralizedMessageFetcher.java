@@ -386,11 +386,12 @@ public class CentralizedMessageFetcher implements Lifecycle {
                 rethrowIfCriticalError(e);
 
                 try {
-                    var outcome = classify(message, e);
-                    if (outcome.isDeadLetter()) {
-                        log.error("[{}:{}] Marking message as dead letter due to error: {}",
+                    var decision = classify(message, e);
+                    if (decision.isDeadLetter()) {
+                        log.error("[{}:{}] Marking message as dead letter. {}. Error: {}",
                                   queueName,
                                   message.getId(),
+                                  decision.describe(),
                                   e.getMessage(),
                                   e);
 
@@ -475,10 +476,15 @@ public class CentralizedMessageFetcher implements Lifecycle {
      * {@link dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy} to classify against, and
      * the message is dead-lettered rather than left stuck.
      */
-    private MessageDeliveryOutcome classify(QueuedMessage queuedMessage, Throwable e) {
+    private MessageDeliveryDecision classify(QueuedMessage queuedMessage, Throwable e) {
         DurableQueueConsumerRegistration registration = consumerRegistrations.get(queuedMessage.getQueueName());
         if (registration == null) {
-            return MessageDeliveryOutcome.PERMANENT_ERROR;
+            return new MessageDeliveryDecision(MessageDeliveryOutcome.PERMANENT_ERROR,
+                                               MessageDeliveryDecision.MessageDeliveryRule.POLICY_VERDICT,
+                                               "",
+                                               -1,
+                                               queuedMessage.getTotalDeliveryAttempts(),
+                                               0);
         }
         return MessageDeliveryClassifier.classify(queuedMessage, e, registration.consumer.getRedeliveryPolicy());
     }

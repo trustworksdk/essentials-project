@@ -104,3 +104,68 @@ once and later startups issue no statements. Two consequences worth knowing:
   yourself.
 
 **Take a backup before upgrading** if the statistics data matters to you. Nothing exports it first.
+
+### Dead-letter classification changes
+
+Two rules that decide whether a failed message is retried or dead-lettered changed in the same release. Both
+are behaviour changes for an application that configured nothing, so read this one even if you never touched
+a `RedeliveryPolicy`.
+
+#### `alwaysRetryOn(...)` now works
+
+`MessageDeliveryErrorHandler.builder().alwaysRetryOn(IllegalArgumentException.class)` previously had no
+effect: the handler answered "not permanent", the consumer OR-ed its built-in permanent-error list on top, and
+the message was dead-lettered on its first delivery anyway. The API offered a knob that could not move.
+
+`MessageDeliveryErrorHandler` gains a three-valued `verdict(...)` — `PERMANENT_ERROR`, `RETRY`, `NO_OPINION` —
+as a `default` method mapping the existing `isPermanentError` onto `PERMANENT_ERROR` / `NO_OPINION`. **Every
+existing implementation keeps compiling and behaving exactly as before**, because a handler that has not
+considered `RETRY` means "no opinion" when it answers `false`, not "retry this".
+
+Only the builder's product answers `RETRY`, and only for the types passed to `alwaysRetryOn(...)`. What that
+now overrides:
+
+| Built-in permanent type | Overridable by `alwaysRetryOn` |
+|---|---|
+| `DurableQueueDeserializationException` | No |
+| `MismatchedInputException` | No |
+| `NoClassDefFoundError` | No |
+| `IllegalArgumentException` (incl. `NumberFormatException`) | **Yes** |
+| `ClassCastException` | **Yes** |
+
+The three that cannot be overridden can never succeed on a later attempt, and retrying one forever blocks the
+head of an ordered queue.
+
+`MessageDeliveryErrorHandler.alwaysRetry()` deliberately keeps meaning `NO_OPINION`. It is the builder's
+default, so promoting it would make deserialization failures retry forever in every existing application.
+
+**What to do:** if you worked around this by catching and rewrapping `IllegalArgumentException` inside your
+handlers, you can drop the workaround and list the type in `alwaysRetryOn(...)` instead. If you relied on a
+message being dead-lettered despite listing its type in `alwaysRetryOn(...)`, it will now be retried.
+
+#### The whole cause chain is examined
+
+Classification used to test the thrown exception and the deepest root cause, and nothing between. A
+`@MessageHandler` throw arrives wrapped (`UnitOfWorkException → ReflectionException →
+InvocationTargetException → yours`), so your exception was normally the deepest one and decided the outcome —
+unless it carried a cause of its own, at which point classification silently switched to that deeper type.
+Two handlers differing only in whether they passed a cause got different dead-letter behaviour.
+
+Every link is now examined, outermost match first.
+
+**What to do:** a handler that wraps a built-in permanent type in the middle of a chain — for example throwing
+`new ProcessingException("...", new IllegalArgumentException(...))` inside another cause — previously retried
+and will now be dead-lettered. Re-check handlers that construct multi-level cause chains.
+
+#### Telling the two apart
+
+Because both rules changed at once, the dead-letter log line now names which rule fired, the type it matched,
+how deep in the cause chain it was found, and where the message stood against its cap:
+
+```
+PERMANENT_ERROR (built-in permanent list matched IllegalArgumentException at cause-chain depth 3; attempt 1 of 6)
+```
+
+Jackson's `MismatchedInputException` is now matched by class name rather than `instanceof`, so it is
+recognised under both Jackson 2 and Jackson 3. Under Jackson 3 it previously matched nothing, because the
+class moved to `tools.jackson.databind.exc`.

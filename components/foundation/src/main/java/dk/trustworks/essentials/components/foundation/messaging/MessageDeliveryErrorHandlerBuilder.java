@@ -37,16 +37,16 @@ public final class MessageDeliveryErrorHandlerBuilder {
      * It will first attempt to match directly on {@link Exception} class, next it will attempt to match on hierarchy (i.e.
      * a concrete error which is a subtype of an {@link Exception} found in the <code>exceptions</code> will also match)
      * <p>
-     * <b>This does not mean unlimited redelivery.</b> Two limits still apply:
-     * <ul>
-     *     <li>The {@link RedeliveryPolicy}'s {@link RedeliveryPolicy#maximumNumberOfRedeliveries} cap is enforced by
-     *         the {@link DurableQueueConsumer} regardless of this setting, so a message that keeps failing is still
-     *         dead-lettered once its delivery attempts are exhausted.</li>
-     *     <li>The consumer applies its own built-in list of permanent error types <em>after</em> consulting this
-     *         handler, and that list wins. It contains {@code DurableQueueDeserializationException},
-     *         {@code MismatchedInputException}, {@code NoClassDefFoundError}, {@code ClassCastException} and
-     *         {@code IllegalArgumentException}, so listing one of those here currently has no effect.</li>
-     * </ul>
+     * The listed types answer {@link MessageDeliveryVerdict#RETRY}, which overrides the consumer's built-in
+     * permanent-error list for {@link IllegalArgumentException} (including {@link NumberFormatException}) and
+     * {@link ClassCastException}. It does <em>not</em> override {@code DurableQueueDeserializationException},
+     * {@code MismatchedInputException} or {@link NoClassDefFoundError}: those can never succeed on a later
+     * attempt, and retrying one forever would block the head of an ordered queue.
+     * <p>
+     * <b>This does not mean unlimited redelivery.</b> The {@link RedeliveryPolicy}'s
+     * {@link RedeliveryPolicy#maximumNumberOfRedeliveries} cap is enforced by the {@link DurableQueueConsumer}
+     * regardless of this setting, so a message that keeps failing is still dead-lettered once its delivery
+     * attempts are exhausted.
      *
      * @param exceptions the exceptions that this handler will not classify as permanent errors
      * @return this builder instance
@@ -63,10 +63,8 @@ public final class MessageDeliveryErrorHandlerBuilder {
      * It will first attempt to match directly on {@link Exception} class, next it will attempt to match on hierarchy (i.e.
      * a concrete error which is a subtype of an {@link Exception} found in the <code>exceptions</code> will also match)
      * <p>
-     * <b>This does not mean unlimited redelivery.</b> The {@link RedeliveryPolicy}'s
-     * {@link RedeliveryPolicy#maximumNumberOfRedeliveries} cap still applies, and the consumer's built-in list of
-     * permanent error types is applied after this handler and wins over it. See
-     * {@link #alwaysRetryOn(Class[])} for the full list.
+     * <b>This does not mean unlimited redelivery</b>, and it does not override every built-in permanent-error
+     * type. See {@link #alwaysRetryOn(Class[])} for both limits.
      *
      * @param exceptions the exceptions that this handler will not classify as permanent errors
      * @return this builder instance
@@ -124,6 +122,26 @@ public final class MessageDeliveryErrorHandlerBuilder {
                     return false;
                 }
                 return stopRedeliveryOnHandler.isPermanentError(queuedMessage, error);
+            }
+
+            /**
+             * Unlike the default mapping, an {@code alwaysRetryOn} match answers {@link MessageDeliveryVerdict#RETRY}
+             * rather than {@link MessageDeliveryVerdict#NO_OPINION} — that is the whole point of listing a type
+             * there, and without it the consumer's built-in permanent list would still dead-letter the message.
+             * <p>
+             * Note that only the explicit {@code alwaysRetryOn} list yields {@code RETRY}. An empty list — which
+             * is the builder's default, and what {@link MessageDeliveryErrorHandler#alwaysRetry()} amounts to —
+             * keeps answering {@code NO_OPINION}, so deserialization failures do not suddenly retry forever in
+             * applications that never asked for it.
+             */
+            @Override
+            public MessageDeliveryVerdict verdict(QueuedMessage queuedMessage, Throwable error) {
+                if (shouldAlwaysRetryOn(error)) {
+                    return MessageDeliveryVerdict.RETRY;
+                }
+                return stopRedeliveryOnHandler.isPermanentError(queuedMessage, error)
+                       ? MessageDeliveryVerdict.PERMANENT_ERROR
+                       : MessageDeliveryVerdict.NO_OPINION;
             }
 
             private boolean shouldAlwaysRetryOn(Throwable error) {

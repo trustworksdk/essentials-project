@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.foundation.messaging.queue;
 
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import dk.trustworks.essentials.components.foundation.messaging.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.MessageDeliveryDecision.MessageDeliveryRule;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -40,6 +41,21 @@ class MessageDeliveryClassifierTest {
         return RedeliveryPolicy.fixedBackoff(Duration.ofMillis(10), maximumNumberOfRedeliveries);
     }
 
+    private static RedeliveryPolicy policyWith(MessageDeliveryErrorHandler errorHandler) {
+        return RedeliveryPolicy.builder()
+                               .setInitialRedeliveryDelay(Duration.ofMillis(10))
+                               .setFollowupRedeliveryDelay(Duration.ofMillis(10))
+                               .setFollowupRedeliveryDelayMultiplier(1.0d)
+                               .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofMillis(10))
+                               .setMaximumNumberOfRedeliveries(5)
+                               .setDeliveryErrorHandler(errorHandler)
+                               .build();
+    }
+
+    private static RedeliveryPolicy policyRetrying(Class<? extends Exception> type) {
+        return policyWith(MessageDeliveryErrorHandler.builder().alwaysRetryOn(type).build());
+    }
+
     @SuppressWarnings("removal")
     private static QueuedMessage messageWithDeliveryAttempts(int totalDeliveryAttempts) {
         return new DefaultQueuedMessage(QueueEntryId.random(),
@@ -53,6 +69,10 @@ class MessageDeliveryClassifierTest {
                                         totalDeliveryAttempts,
                                         false,
                                         false);
+    }
+
+    private static MessageDeliveryOutcome outcomeOf(Throwable error, RedeliveryPolicy policy, int attempts) {
+        return MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(attempts), error, policy).outcome();
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -70,130 +90,194 @@ class MessageDeliveryClassifierTest {
     @ParameterizedTest
     @MethodSource("builtInPermanentErrors")
     void a_built_in_permanent_error_is_dead_lettered_on_the_first_attempt(Throwable error) {
-        var outcome = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1), error, policyAllowing(5));
-
-        assertThat(outcome).isEqualTo(PERMANENT_ERROR);
-        assertThat(outcome.isDeadLetter()).isTrue();
-    }
-
-    /**
-     * The list is not symmetric. {@code DurableQueueDeserializationException} is matched on the thrown
-     * exception only; {@code MismatchedInputException} on the root cause only; the rest on either.
-     */
-    static Stream<Throwable> builtInPermanentErrorsMatchedAsRootCause() {
-        return Stream.of(new ClassCastException("boom"),
-                         new NoClassDefFoundError("boom"),
-                         new IllegalArgumentException("boom"),
-                         new NumberFormatException("boom"));
+        assertThat(outcomeOf(error, policyAllowing(5), 1)).isEqualTo(PERMANENT_ERROR);
     }
 
     @ParameterizedTest
-    @MethodSource("builtInPermanentErrorsMatchedAsRootCause")
-    void a_built_in_permanent_error_matches_as_the_root_cause_too(Throwable error) {
+    @MethodSource("builtInPermanentErrors")
+    void a_built_in_permanent_error_is_found_anywhere_in_the_cause_chain(Throwable error) {
         var wrapped = new RuntimeException("outer", new IllegalStateException("middle", error));
 
-        assertThat(MessageDeliveryClassifier.isBuiltInPermanentError(wrapped)).isTrue();
+        assertThat(outcomeOf(wrapped, policyAllowing(5), 1)).isEqualTo(PERMANENT_ERROR);
     }
 
     @Test
-    void a_deserialization_exception_is_matched_only_when_it_is_the_thrown_exception() {
-        var thrown  = new DurableQueueDeserializationException("boom", QUEUE_NAME, QueueEntryId.random());
-        var wrapped = new RuntimeException("outer", thrown);
-
-        assertThat(MessageDeliveryClassifier.isBuiltInPermanentError(thrown)).isTrue();
-        assertThat(MessageDeliveryClassifier.isBuiltInPermanentError(wrapped))
-                .as("DurableQueueDeserializationException is not on the root-cause half of the list")
-                .isFalse();
-    }
-
-    @Test
-    void mismatched_input_exception_is_permanent_as_a_root_cause() {
-        var mismatchedInput = MismatchedInputException.from((com.fasterxml.jackson.core.JsonParser) null,
-                                                            String.class,
-                                                            "boom");
-
-        assertThat(MessageDeliveryClassifier.isBuiltInPermanentError(new RuntimeException("outer", mismatchedInput)))
-                .isTrue();
-    }
-
-    @Test
-    void the_middle_of_the_cause_chain_is_not_examined() {
-        // The built-in type sits between the outermost exception and the root cause, so it is invisible to the
-        // classifier. Documented behaviour, not an accident — see MessageDeliveryClassifier's javadoc.
+    void the_middle_of_the_cause_chain_is_examined_too() {
+        // Before 0.60 only the thrown exception and the deepest root cause were tested, so this retried.
         var middleIsPermanent = new RuntimeException("outer",
                                                      new IllegalArgumentException("middle",
                                                                                   new IllegalStateException("root")));
 
-        assertThat(MessageDeliveryClassifier.isBuiltInPermanentError(middleIsPermanent)).isFalse();
+        var decision = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1), middleIsPermanent, policyAllowing(5));
+
+        assertThat(decision.outcome()).isEqualTo(PERMANENT_ERROR);
+        assertThat(decision.rule()).isEqualTo(MessageDeliveryRule.BUILT_IN_PERMANENT_LIST);
+        assertThat(decision.matchedType()).isEqualTo("IllegalArgumentException");
+        assertThat(decision.causeChainDepth()).isEqualTo(1);
+    }
+
+    @Test
+    void the_outermost_match_wins_when_the_chain_holds_several() {
+        var chain = new IllegalArgumentException("outer", new NoClassDefFoundError("root"));
+
+        var decision = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1), chain, policyAllowing(5));
+
+        assertThat(decision.matchedType()).isEqualTo("IllegalArgumentException");
+        assertThat(decision.causeChainDepth()).isZero();
+    }
+
+    @Test
+    void a_cyclic_cause_chain_terminates() {
+        // Throwable.initCause rejects self-causation but not a longer cycle, so the walk needs its own guard.
+        var first  = new IllegalStateException("first");
+        var second = new IllegalStateException("second");
+        first.initCause(second);
+        second.initCause(first);
+
+        assertThat(outcomeOf(first, policyAllowing(5), 1)).isEqualTo(RETRY);
+    }
+
+    @Test
+    void jackson_2_mismatched_input_is_matched_by_name() {
+        var mismatchedInput = MismatchedInputException.from((com.fasterxml.jackson.core.JsonParser) null,
+                                                            String.class,
+                                                            "boom");
+
+        var decision = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1),
+                                                          new RuntimeException("outer", mismatchedInput),
+                                                          policyAllowing(5));
+
+        assertThat(decision.outcome()).isEqualTo(PERMANENT_ERROR);
+        assertThat(decision.matchedType()).isEqualTo("MismatchedInputException");
     }
 
     // ------------------------------------------------------------------------------------------------
-    // The policy, and the fact that the built-in list beats it
+    // D1 — what a RETRY verdict can and cannot override
+    // ------------------------------------------------------------------------------------------------
+
+    @Test
+    void always_retry_on_now_overrides_illegal_argument_exception() {
+        // The headline fix: FailFast.requireNonNull and Kotlin require(...) both throw IllegalArgumentException,
+        // and before 0.60 the documented opt-out could not win against the built-in list.
+        var decision = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1),
+                                                          new IllegalArgumentException("boom"),
+                                                          policyRetrying(IllegalArgumentException.class));
+
+        assertThat(decision.outcome()).isEqualTo(RETRY);
+        assertThat(decision.rule()).isEqualTo(MessageDeliveryRule.POLICY_RETRY_OVERRIDE);
+    }
+
+    @Test
+    void always_retry_on_overrides_class_cast_exception() {
+        assertThat(outcomeOf(new ClassCastException("boom"), policyRetrying(ClassCastException.class), 1))
+                .isEqualTo(RETRY);
+    }
+
+    @Test
+    void always_retry_on_cannot_override_a_deserialization_failure() {
+        var error = new DurableQueueDeserializationException("boom", QUEUE_NAME, QueueEntryId.random());
+
+        assertThat(outcomeOf(error, policyRetrying(DurableQueueDeserializationException.class), 1))
+                .isEqualTo(PERMANENT_ERROR);
+    }
+
+    @Test
+    void always_retry_on_cannot_override_a_missing_class() {
+        // NoClassDefFoundError is an Error, so it cannot even be named to alwaysRetryOn; retrying every
+        // RuntimeException still must not resurrect it.
+        assertThat(outcomeOf(new NoClassDefFoundError("boom"), policyRetrying(RuntimeException.class), 1))
+                .isEqualTo(PERMANENT_ERROR);
+    }
+
+    @Test
+    void a_retry_verdict_does_not_lift_the_redelivery_cap() {
+        assertThat(outcomeOf(new IllegalArgumentException("boom"), policyRetrying(IllegalArgumentException.class), 6))
+                .isEqualTo(REDELIVERIES_EXHAUSTED);
+    }
+
+    @Test
+    void always_retry_keeps_meaning_no_opinion() {
+        // alwaysRetry() is the builder default, so promoting it to RETRY would make deserialization failures
+        // retry forever in every existing application.
+        var error = new DurableQueueDeserializationException("boom", QUEUE_NAME, QueueEntryId.random());
+
+        assertThat(outcomeOf(error, policyWith(MessageDeliveryErrorHandler.alwaysRetry()), 1))
+                .isEqualTo(PERMANENT_ERROR);
+    }
+
+    @Test
+    void a_handler_that_only_implements_is_permanent_error_still_works() {
+        // The default verdict mapping: true -> PERMANENT_ERROR, false -> NO_OPINION.
+        MessageDeliveryErrorHandler legacyHandler = (queuedMessage, error) -> error instanceof IllegalStateException;
+
+        assertThat(outcomeOf(new IllegalStateException("boom"), policyWith(legacyHandler), 1)).isEqualTo(PERMANENT_ERROR);
+        assertThat(outcomeOf(new RuntimeException("boom"), policyWith(legacyHandler), 1)).isEqualTo(RETRY);
+        assertThat(outcomeOf(new IllegalArgumentException("boom"), policyWith(legacyHandler), 1))
+                .as("false must keep meaning 'no opinion', so the built-in list still applies")
+                .isEqualTo(PERMANENT_ERROR);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // The policy verdict and the attempt cap
     // ------------------------------------------------------------------------------------------------
 
     @Test
     void a_policy_that_classifies_the_error_as_permanent_dead_letters_it() {
-        var policy = RedeliveryPolicy.builder()
-                                     .setInitialRedeliveryDelay(Duration.ofMillis(10))
-                                     .setFollowupRedeliveryDelay(Duration.ofMillis(10))
-                                     .setFollowupRedeliveryDelayMultiplier(1.0d)
-                                     .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofMillis(10))
-                                     .setMaximumNumberOfRedeliveries(5)
-                                     .setDeliveryErrorHandler(MessageDeliveryErrorHandler.stopRedeliveryOn(IllegalStateException.class))
-                                     .build();
+        var decision = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1),
+                                                          new IllegalStateException("boom"),
+                                                          policyWith(MessageDeliveryErrorHandler.stopRedeliveryOn(IllegalStateException.class)));
 
-        assertThat(MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1), new IllegalStateException("boom"), policy))
-                .isEqualTo(PERMANENT_ERROR);
+        assertThat(decision.outcome()).isEqualTo(PERMANENT_ERROR);
+        assertThat(decision.rule()).isEqualTo(MessageDeliveryRule.POLICY_VERDICT);
     }
-
-    @Test
-    void always_retry_on_does_not_override_the_built_in_list() {
-        // The documented opt-out does not work for a type on the built-in list, because the list is OR-ed on
-        // afterwards. This is the behaviour D1 changes; until then, pin it so the change is visible.
-        var policy = RedeliveryPolicy.builder()
-                                     .setInitialRedeliveryDelay(Duration.ofMillis(10))
-                                     .setFollowupRedeliveryDelay(Duration.ofMillis(10))
-                                     .setFollowupRedeliveryDelayMultiplier(1.0d)
-                                     .setMaximumFollowupRedeliveryDelayThreshold(Duration.ofMillis(10))
-                                     .setMaximumNumberOfRedeliveries(5)
-                                     .setDeliveryErrorHandler(MessageDeliveryErrorHandler.builder()
-                                                                                         .alwaysRetryOn(IllegalArgumentException.class)
-                                                                                         .build())
-                                     .build();
-
-        assertThat(MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1), new IllegalArgumentException("boom"), policy))
-                .isEqualTo(PERMANENT_ERROR);
-    }
-
-    // ------------------------------------------------------------------------------------------------
-    // The attempt cap
-    // ------------------------------------------------------------------------------------------------
 
     @Test
     void a_retryable_error_with_attempts_remaining_is_redelivered() {
-        assertThat(MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(3), new IllegalStateException("boom"), policyAllowing(5)))
-                .isEqualTo(RETRY);
+        assertThat(outcomeOf(new IllegalStateException("boom"), policyAllowing(5), 3)).isEqualTo(RETRY);
     }
 
     @Test
     void a_retryable_error_is_dead_lettered_once_the_attempts_are_used_up() {
-        // maximumNumberOfRedeliveries + 1 is the first delivery plus its redeliveries.
-        var outcome = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(6), new IllegalStateException("boom"), policyAllowing(5));
-
-        assertThat(outcome).isEqualTo(REDELIVERIES_EXHAUSTED);
-        assertThat(outcome.isDeadLetter()).isTrue();
+        assertThat(outcomeOf(new IllegalStateException("boom"), policyAllowing(5), 6)).isEqualTo(REDELIVERIES_EXHAUSTED);
     }
 
     @Test
     void the_last_attempt_before_the_cap_still_retries() {
-        assertThat(MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(5), new IllegalStateException("boom"), policyAllowing(5)))
-                .isEqualTo(RETRY);
+        assertThat(outcomeOf(new IllegalStateException("boom"), policyAllowing(5), 5)).isEqualTo(RETRY);
     }
 
     @Test
     void a_permanent_error_is_reported_as_permanent_even_when_the_attempts_are_also_used_up() {
-        // Precedence matters for the operator-facing reason and, later, for D3's metric tag.
-        assertThat(MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(99), new IllegalArgumentException("boom"), policyAllowing(5)))
-                .isEqualTo(PERMANENT_ERROR);
+        assertThat(outcomeOf(new IllegalArgumentException("boom"), policyAllowing(5), 99)).isEqualTo(PERMANENT_ERROR);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // D3 piece 2 — the explanation that goes in the dead-letter log line
+    // ------------------------------------------------------------------------------------------------
+
+    @Test
+    void the_explanation_names_the_rule_the_type_the_depth_and_the_attempt() {
+        var wrapped = new RuntimeException("outer", new IllegalArgumentException("inner"));
+
+        var describe = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(2), wrapped, policyAllowing(5))
+                                                .describe();
+
+        assertThat(describe).contains("PERMANENT_ERROR")
+                            .contains("built-in permanent list matched IllegalArgumentException")
+                            .contains("cause-chain depth 1")
+                            .contains("attempt 2 of 6");
+    }
+
+    @Test
+    void the_explanation_distinguishes_a_retry_override_from_an_ordinary_retry() {
+        var overridden = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1),
+                                                            new IllegalArgumentException("boom"),
+                                                            policyRetrying(IllegalArgumentException.class));
+        var ordinary = MessageDeliveryClassifier.classify(messageWithDeliveryAttempts(1),
+                                                          new IllegalStateException("boom"),
+                                                          policyAllowing(5));
+
+        assertThat(overridden.describe()).contains("overrode the built-in permanent list");
+        assertThat(ordinary.describe()).contains("no rule classified the error as permanent");
     }
 }

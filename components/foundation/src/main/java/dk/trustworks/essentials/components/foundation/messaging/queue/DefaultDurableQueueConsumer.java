@@ -480,24 +480,24 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
             }
         } catch (Throwable e) {
             rethrowIfCriticalError(e);
-            var outcome           = MessageDeliveryClassifier.classify(queuedMessage, e, consumeFromQueue.getRedeliveryPolicy());
-            var isPermanentError  = outcome == MessageDeliveryOutcome.PERMANENT_ERROR;
-            if (outcome.isDeadLetter()) {
+            var decision         = MessageDeliveryClassifier.classify(queuedMessage, e, consumeFromQueue.getRedeliveryPolicy());
+            var isPermanentError = decision.outcome() == MessageDeliveryOutcome.PERMANENT_ERROR;
+            if (decision.isDeadLetter()) {
                 // Dead letter message
                 if (isPermanentError) {
-                    MESSAGE_HANDLING_FAILURE_LOG.error(msg("[{}:{}] {} - Marking Message as Dead Letter. Is Permanent Error: {}. Message: {}",
+                    MESSAGE_HANDLING_FAILURE_LOG.error(msg("[{}:{}] {} - Marking Message as Dead Letter. {}. Message: {}",
                                                            queueName,
                                                            queuedMessage.getId(),
                                                            consumeFromQueue.consumerName,
-                                                           isPermanentError,
+                                                           decision.describe(),
                                                            queuedMessage),
                                                        e);
                 } else {
-                    MESSAGE_HANDLING_FAILURE_LOG.warn(msg("[{}:{}] {} - Too many deliveries, marking Message as Dead Letter. Is Permanent Error: {}. Message: {}",
+                    MESSAGE_HANDLING_FAILURE_LOG.warn(msg("[{}:{}] {} - Too many deliveries, marking Message as Dead Letter. {}. Message: {}",
                                                           queueName,
                                                           queuedMessage.getId(),
                                                           consumeFromQueue.consumerName,
-                                                          isPermanentError,
+                                                          decision.describe(),
                                                           queuedMessage),
                                                       e);
                 }
@@ -508,11 +508,11 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
                     return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
                 } catch (Throwable ex) {
                     rethrowIfCriticalError(e);
-                    var msg = msg("[{}:{}] {} - Failed to mark the Message as a Dead Letter Message. Details: Is Permanent Error: {}. Message: {}",
+                    var msg = msg("[{}:{}] {} - Failed to mark the Message as a Dead Letter Message. Details: {}. Message: {}",
                                   queueName,
                                   queuedMessage.getId(),
                                   consumeFromQueue.consumerName,
-                                  isPermanentError,
+                                  decision.describe(),
                                   queuedMessage);
                     MESSAGE_HANDLING_FAILURE_LOG.error(msg, ex);
                     if (durableQueues.getTransactionalMode() == TransactionalMode.FullyTransactional) {

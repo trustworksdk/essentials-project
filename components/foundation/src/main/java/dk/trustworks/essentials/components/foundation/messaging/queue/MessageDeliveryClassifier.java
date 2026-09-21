@@ -16,9 +16,11 @@
 
 package dk.trustworks.essentials.components.foundation.messaging.queue;
 
-import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import dk.trustworks.essentials.components.foundation.messaging.*;
-import dk.trustworks.essentials.shared.Exceptions;
+import dk.trustworks.essentials.components.foundation.messaging.queue.MessageDeliveryDecision.MessageDeliveryRule;
+import org.slf4j.*;
+
+import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
 
@@ -27,24 +29,62 @@ import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
  * delivery attempts are used up, or redeliver it.
  * <p>
  * This logic used to be copied verbatim into {@link DefaultDurableQueueConsumer} and
- * {@link CentralizedMessageFetcher} — both the classification and the
- * {@code isPermanentError || attempts >= max + 1} condition that consumed it. Two copies of a rule that is
- * being changed are two copies free to drift, so both consumers now call this instead.
+ * {@link CentralizedMessageFetcher}; both consumers now call this instead.
  *
- * <h2>The policy is consulted first, then the built-in list wins</h2>
- * The {@link RedeliveryPolicy}'s {@link MessageDeliveryErrorHandler} is asked first, and the built-in list of
- * permanent error types is OR-ed on top. The consequence is that no policy can remove a type from the built-in
- * list — notably {@link IllegalArgumentException}, which {@code FailFast.requireNonNull} / {@code requireTrue}
- * and Kotlin's {@code require(...)} all throw, so a handler that validates its arguments dead-letters its
- * message on the first delivery attempt. See {@code LLM/LLM-foundation.md}.
+ * <h2>The rules, in order</h2>
+ * <ol>
+ *   <li>The {@link RedeliveryPolicy}'s {@link MessageDeliveryErrorHandler} is asked for a
+ *       {@link MessageDeliveryVerdict}. {@link MessageDeliveryVerdict#PERMANENT_ERROR} dead-letters the message
+ *       immediately.</li>
+ *   <li>The built-in list of always-permanent error types is matched against the cause chain. A match
+ *       dead-letters the message — <em>unless</em> the handler answered {@link MessageDeliveryVerdict#RETRY}
+ *       and the matched type is one the list allows to be overridden.</li>
+ *   <li>Otherwise the {@link RedeliveryPolicy#maximumNumberOfRedeliveries} cap applies.</li>
+ * </ol>
  *
- * <h2>Only the ends of the cause chain are examined</h2>
- * Matching tests the thrown exception and {@link Exceptions#getRootCause(Throwable)}, never the middle. A
- * handler throw arrives wrapped ({@code UnitOfWorkException → ReflectionException → InvocationTargetException
- * → yours}), so the handler's own exception is normally the deepest and decides — unless it carries a cause of
- * its own, at which point classification silently switches to that deeper type.
+ * <h2>What {@code RETRY} can and cannot override</h2>
+ * A {@code RETRY} verdict must not be able to resurrect a failure that can never succeed, or a poison message
+ * at the head of an ordered queue blocks everything behind it forever:
+ * <table>
+ *   <caption>The built-in permanent-error list</caption>
+ *   <tr><th>Type</th><th>Overridable by {@code RETRY}</th><th>Why</th></tr>
+ *   <tr><td>{@code DurableQueueDeserializationException}</td><td>No</td>
+ *       <td>The stored bytes will not parse on the hundredth attempt either</td></tr>
+ *   <tr><td>{@code MismatchedInputException}</td><td>No</td><td>Same</td></tr>
+ *   <tr><td>{@link NoClassDefFoundError}</td><td>No</td>
+ *       <td>A missing class is a deployment fault, not a transient one</td></tr>
+ *   <tr><td>{@link IllegalArgumentException} (incl. {@link NumberFormatException})</td><td>Yes</td>
+ *       <td>The house guard idiom, frequently thrown about data that may be valid later</td></tr>
+ *   <tr><td>{@link ClassCastException}</td><td>Yes</td>
+ *       <td>Usually a genuine bug, but a cast against a projection that has not caught up is legitimately
+ *           transient, and an explicit {@code alwaysRetryOn} is a deliberate statement</td></tr>
+ * </table>
+ *
+ * <h2>The whole cause chain is examined</h2>
+ * Matching walks every link from the thrown exception to the root cause. It used to test only the two ends,
+ * which made classification depend on whether a handler happened to attach a cause: a {@code @MessageHandler}
+ * throw arrives wrapped ({@code UnitOfWorkException → ReflectionException → InvocationTargetException →
+ * yours}), so the handler's own exception was normally the deepest and decided — but if it carried a cause of
+ * its own, classification silently switched to that deeper type. Two handlers differing only in whether they
+ * pass a cause got different dead-letter behaviour.
  */
 public final class MessageDeliveryClassifier {
+    private static final Logger log = LoggerFactory.getLogger(MessageDeliveryClassifier.class);
+
+    /**
+     * Jackson's {@code MismatchedInputException}, named rather than referenced. Jackson 2 and Jackson 3 ship
+     * the same type under different packages and only one is on a given runtime's classpath, so an
+     * {@code instanceof} against either would match nothing under the other major — and would fail to link at
+     * all on a runtime carrying only the other one.
+     */
+    private static final Set<String> MISMATCHED_INPUT_CLASS_NAMES =
+            Set.of("com.fasterxml.jackson.databind.exc.MismatchedInputException",
+                   "tools.jackson.databind.exc.MismatchedInputException");
+
+    /**
+     * Guards against a self-referencing cause chain, which {@link Throwable#initCause} does not prevent.
+     */
+    private static final int MAX_CAUSE_CHAIN_DEPTH = 100;
 
     private MessageDeliveryClassifier() {
     }
@@ -55,58 +95,142 @@ public final class MessageDeliveryClassifier {
      * @param queuedMessage    the message whose delivery failed
      * @param error            the error the handler threw
      * @param redeliveryPolicy the policy in force for the consumer that was delivering the message
-     * @return the outcome the consumer should apply
+     * @return the decision, including why it was reached
      */
-    public static MessageDeliveryOutcome classify(QueuedMessage queuedMessage,
-                                                  Throwable error,
-                                                  RedeliveryPolicy redeliveryPolicy) {
+    public static MessageDeliveryDecision classify(QueuedMessage queuedMessage,
+                                                   Throwable error,
+                                                   RedeliveryPolicy redeliveryPolicy) {
         requireNonNull(queuedMessage, "No queuedMessage provided");
         requireNonNull(error, "No error provided");
         requireNonNull(redeliveryPolicy, "No redeliveryPolicy provided");
 
-        if (isPermanentError(queuedMessage, error, redeliveryPolicy)) {
-            return MessageDeliveryOutcome.PERMANENT_ERROR;
+        var attempts = queuedMessage.getTotalDeliveryAttempts();
+        var maxRedeliveries = redeliveryPolicy.getMaximumNumberOfRedeliveries();
+        var verdict = redeliveryPolicy.verdict(queuedMessage, error);
+
+        if (verdict == MessageDeliveryVerdict.PERMANENT_ERROR) {
+            return decision(MessageDeliveryOutcome.PERMANENT_ERROR, MessageDeliveryRule.POLICY_VERDICT,
+                            "", -1, attempts, maxRedeliveries);
         }
-        if (queuedMessage.getTotalDeliveryAttempts() >= redeliveryPolicy.getMaximumNumberOfRedeliveries() + 1) {
-            return MessageDeliveryOutcome.REDELIVERIES_EXHAUSTED;
+
+        var builtIn = findBuiltInPermanentError(error);
+        if (builtIn.isPresent()) {
+            var match = builtIn.get();
+            if (verdict == MessageDeliveryVerdict.RETRY && match.overridable()) {
+                // Fall through to the redelivery cap — the handler asked for this type to be retried.
+                if (attempts < maxRedeliveries + 1) {
+                    return decision(MessageDeliveryOutcome.RETRY, MessageDeliveryRule.POLICY_RETRY_OVERRIDE,
+                                    match.type(), match.depth(), attempts, maxRedeliveries);
+                }
+                return decision(MessageDeliveryOutcome.REDELIVERIES_EXHAUSTED, MessageDeliveryRule.REDELIVERY_CAP,
+                                match.type(), match.depth(), attempts, maxRedeliveries);
+            }
+            return decision(MessageDeliveryOutcome.PERMANENT_ERROR, MessageDeliveryRule.BUILT_IN_PERMANENT_LIST,
+                            match.type(), match.depth(), attempts, maxRedeliveries);
         }
-        return MessageDeliveryOutcome.RETRY;
+
+        if (attempts >= maxRedeliveries + 1) {
+            return decision(MessageDeliveryOutcome.REDELIVERIES_EXHAUSTED, MessageDeliveryRule.REDELIVERY_CAP,
+                            "", -1, attempts, maxRedeliveries);
+        }
+        return decision(MessageDeliveryOutcome.RETRY, MessageDeliveryRule.NONE, "", -1, attempts, maxRedeliveries);
+    }
+
+    private static MessageDeliveryDecision decision(MessageDeliveryOutcome outcome,
+                                                    MessageDeliveryRule rule,
+                                                    String matchedType,
+                                                    int causeChainDepth,
+                                                    int attempts,
+                                                    int maxRedeliveries) {
+        var decision = new MessageDeliveryDecision(outcome, rule, matchedType, causeChainDepth, attempts, maxRedeliveries);
+        if (log.isDebugEnabled()) {
+            log.debug("Classified delivery failure as {}", decision.describe());
+        }
+        return decision;
     }
 
     /**
-     * Whether {@code error} is classified as permanent — by the policy's {@link MessageDeliveryErrorHandler}, or
-     * by the built-in list which is applied afterwards and cannot be overridden.
+     * Whether {@code error} is classified as permanent, ignoring the redelivery cap. Retained for callers that
+     * only need the yes/no answer; {@link #classify} is what the consumers use.
      *
      * @param queuedMessage    the message whose delivery failed
      * @param error            the error the handler threw
      * @param redeliveryPolicy the policy in force for the consumer that was delivering the message
-     * @return true if the message should be dead-lettered without consuming a delivery attempt
+     * @return true if the message would be dead-lettered without consuming a delivery attempt
      */
     public static boolean isPermanentError(QueuedMessage queuedMessage,
                                            Throwable error,
                                            RedeliveryPolicy redeliveryPolicy) {
-        return redeliveryPolicy.isPermanentError(queuedMessage, error) || isBuiltInPermanentError(error);
+        return classify(queuedMessage, error, redeliveryPolicy).outcome() == MessageDeliveryOutcome.PERMANENT_ERROR;
     }
 
     /**
-     * The framework's own list of error types that are always permanent, whatever the {@link RedeliveryPolicy}
-     * says.
-     * <p>
-     * <b>{@link MismatchedInputException} is Jackson 2's.</b> Under a Jackson 3 runtime the deserializer throws
-     * {@code tools.jackson.databind.exc.MismatchedInputException} instead, which this does not match, and on a
-     * runtime carrying only Jackson 3 the {@code instanceof} cannot even link. The reference is kept here
-     * unchanged because extracting this method must not change behaviour; it is the built-in list's own problem
-     * to fix, not the extraction's.
+     * Walk the cause chain looking for a type on the built-in always-permanent list.
      *
      * @param error the error the handler threw
-     * @return true if {@code error}, or its root cause, is one of the always-permanent types
+     * @return the first match, outermost first, or empty when the chain contains none
      */
-    public static boolean isBuiltInPermanentError(Throwable error) {
-        var rootCause = Exceptions.getRootCause(error);
-        return error instanceof DurableQueueDeserializationException ||
-                error instanceof ClassCastException || rootCause instanceof ClassCastException ||
-                error instanceof NoClassDefFoundError || rootCause instanceof NoClassDefFoundError ||
-                rootCause instanceof MismatchedInputException ||
-                error instanceof IllegalArgumentException || rootCause instanceof IllegalArgumentException;
+    public static Optional<BuiltInPermanentError> findBuiltInPermanentError(Throwable error) {
+        requireNonNull(error, "No error provided");
+
+        var seen  = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+        var depth = 0;
+        for (var current = error; current != null && depth < MAX_CAUSE_CHAIN_DEPTH; current = current.getCause()) {
+            if (!seen.add(current)) {
+                break;
+            }
+            var match = matchBuiltIn(current, depth);
+            if (match.isPresent()) {
+                return match;
+            }
+            depth++;
+        }
+        return Optional.empty();
+    }
+
+    private static Optional<BuiltInPermanentError> matchBuiltIn(Throwable candidate, int depth) {
+        if (candidate instanceof DurableQueueDeserializationException) {
+            return Optional.of(new BuiltInPermanentError("DurableQueueDeserializationException", depth, false));
+        }
+        if (isMismatchedInput(candidate)) {
+            return Optional.of(new BuiltInPermanentError("MismatchedInputException", depth, false));
+        }
+        if (candidate instanceof NoClassDefFoundError) {
+            return Optional.of(new BuiltInPermanentError("NoClassDefFoundError", depth, false));
+        }
+        if (candidate instanceof IllegalArgumentException) {
+            return Optional.of(new BuiltInPermanentError(candidate.getClass().getSimpleName(), depth, true));
+        }
+        if (candidate instanceof ClassCastException) {
+            return Optional.of(new BuiltInPermanentError("ClassCastException", depth, true));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Matches Jackson's {@code MismatchedInputException} and its subtypes by walking the candidate's own
+     * superclass chain, which loads nothing that is not already loaded — unlike an {@code instanceof} against a
+     * class that may not be on this runtime's classpath at all.
+     */
+    private static boolean isMismatchedInput(Throwable candidate) {
+        for (Class<?> type = candidate.getClass(); type != null; type = type.getSuperclass()) {
+            if (MISMATCHED_INPUT_CLASS_NAMES.contains(type.getName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A type on the built-in always-permanent list, found in a failure's cause chain.
+     *
+     * @param type        the simple name of the matched type
+     * @param depth       how deep in the cause chain it was found; 0 is the thrown exception
+     * @param overridable whether a {@link MessageDeliveryVerdict#RETRY} verdict is allowed to override it
+     */
+    public record BuiltInPermanentError(String type, int depth, boolean overridable) {
+        public BuiltInPermanentError {
+            requireNonNull(type, "No type provided");
+        }
     }
 }

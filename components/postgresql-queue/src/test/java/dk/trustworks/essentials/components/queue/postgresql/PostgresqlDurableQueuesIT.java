@@ -17,23 +17,16 @@
 package dk.trustworks.essentials.components.queue.postgresql;
 
 import dk.trustworks.essentials.components.foundation.json.*;
-import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
-import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.test.messaging.queue.DurableQueuesIT;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.GenericHandleAwareUnitOfWorkFactory.GenericHandleAwareUnitOfWork;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
-import dk.trustworks.essentials.components.foundation.types.CorrelationId;
-import dk.trustworks.essentials.components.queue.postgresql.test_data.*;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
-import org.assertj.core.api.AssertionsForClassTypes;
-import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
-import java.time.Duration;
 import java.util.*;
 
 import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;

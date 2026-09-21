@@ -196,6 +196,18 @@ public final class RedeliveryPolicy {
         return deliveryErrorHandler.isPermanentError(queuedMessage, error);
     }
 
+    /**
+     * The three-valued form of {@link #isPermanentError(QueuedMessage, Throwable)}, which the
+     * {@link dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueConsumer} consults.
+     *
+     * @param queuedMessage The message being processed by the message handler
+     * @param error         the exception that occurred
+     * @return this policy's {@link MessageDeliveryErrorHandler}'s verdict on the failure
+     */
+    public MessageDeliveryVerdict verdict(QueuedMessage queuedMessage, Throwable error) {
+        return deliveryErrorHandler.verdict(queuedMessage, error);
+    }
+
     public Duration getInitialRedeliveryDelay() {
         return initialRedeliveryDelay;
     }
