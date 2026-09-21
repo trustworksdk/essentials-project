@@ -425,10 +425,12 @@ public interface DurableQueues extends Lifecycle {
      * @see OrderedMessage
      */
     default QueueEntryId queueMessage(QueueName queueName, Message message, Optional<Exception> causeOfEnqueuing, Optional<Duration> deliveryDelay) {
-        return queueMessage(new QueueMessage(queueName,
-                                             message,
-                                             causeOfEnqueuing,
-                                             deliveryDelay));
+        return queueMessage(QueueMessage.builder()
+                                        .setQueueName(queueName)
+                                        .setMessage(message)
+                                        .setCauseOfEnqueuing(causeOfEnqueuing)
+                                        .setDeliveryDelay(deliveryDelay)
+                                        .build());
     }
 
     /**
@@ -486,9 +488,11 @@ public interface DurableQueues extends Lifecycle {
      * @return the unique entry id's for the messages queued ordered in the same order as the payloads that were queued
      */
     default List<QueueEntryId> queueMessages(QueueName queueName, List<? extends Message> messages, Optional<Duration> deliveryDelay) {
-        return queueMessages(new QueueMessages(queueName,
-                                               messages,
-                                               deliveryDelay));
+        return queueMessages(QueueMessages.builder()
+                                          .setQueueName(queueName)
+                                          .setMessages(messages)
+                                          .setDeliveryDelay(deliveryDelay)
+                                          .build());
     }
 
     /**

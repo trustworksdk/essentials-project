@@ -75,8 +75,10 @@ class MongoDuplicateConsumptionDurableQueuesIT extends DuplicateConsumptionDurab
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory) {
         // Use SingleOperationTransaction mode with messageHandlingTimeout
         // This avoids write conflicts that occur with FullyTransactional mode
-        return new MongoDurableQueues(mongoTemplate,
-                                      Duration.ofMillis(getMessageHandlingTimeoutMs()));
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setMessageHandlingTimeout(Duration.ofMillis(getMessageHandlingTimeoutMs()))
+                                  .build();
     }
 
     @Override

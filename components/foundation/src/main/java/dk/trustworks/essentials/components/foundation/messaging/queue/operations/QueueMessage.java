@@ -56,37 +56,13 @@ public final class QueueMessage {
      * @param causeOfEnqueuing the optional reason for the message being queued
      * @param deliveryDelay    the Optional delay for the first delivery of the message to the {@link DurableQueueConsumer}
      * @see OrderedMessage
-     * @deprecated Use {@link #builder()}, whose {@code setCauseOfEnqueuing}/{@code setDeliveryDelay} setters accept both
-     *         plain values and {@code Optional}s. Behaviour is unchanged.
      */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public QueueMessage(QueueName queueName, Message message, Optional<Exception> causeOfEnqueuing, Optional<Duration> deliveryDelay) {
+    QueueMessage(QueueName queueName, Message message, Optional<Exception> causeOfEnqueuing, Optional<Duration> deliveryDelay) {
         this.queueName = requireNonNull(queueName, "No queueName provided");
         this.message = requireNonNull(message, "No message provided");
         this.causeOfEnqueuing = requireNonNull(causeOfEnqueuing, "No causeOfEnqueuing option provided");
         this.deliveryDelay = requireNonNull(deliveryDelay, "No deliveryDelay option provided");
 
-    }
-
-    /**
-     * Queue a message for asynchronous delivery optional delay to a {@link DurableQueueConsumer}<br>
-     * Note this method MUST be called within an existing {@link UnitOfWork} IF
-     * using {@link TransactionalMode#FullyTransactional}
-     *
-     * @param queueName        the name of the Queue the message is added to
-     * @param message          the message being queued  ({@link Message}/{@link OrderedMessage})
-     * @param causeOfEnqueuing the optional reason for the message being queued
-     * @param deliveryDelay    the Optional delay for the first delivery of the message to the {@link DurableQueueConsumer}
-     * @see OrderedMessage
-     * @deprecated Use {@link #builder()}, whose {@code setCauseOfEnqueuing}/{@code setDeliveryDelay} setters accept both
-     *         plain values and {@code Optional}s. Behaviour is unchanged.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public QueueMessage(QueueName queueName, Message message, Exception causeOfEnqueuing, Duration deliveryDelay) {
-        this(queueName,
-             message,
-             Optional.ofNullable(causeOfEnqueuing),
-             Optional.ofNullable(deliveryDelay));
     }
 
     /**

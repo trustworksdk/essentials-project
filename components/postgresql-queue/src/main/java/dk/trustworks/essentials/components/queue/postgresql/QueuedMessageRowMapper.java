@@ -75,16 +75,18 @@ public class QueuedMessageRowMapper implements RowMapper<QueuedMessage> {
                 throw new IllegalStateException(msg("Unsupported deliveryMode '{}'", deliveryMode));
         }
 
-        return new DefaultQueuedMessage(queueEntryId,
-                                        queueName,
-                                        message,
-                                        rs.getObject("added_ts", OffsetDateTime.class),
-                                        rs.getObject("next_delivery_ts", OffsetDateTime.class),
-                                        rs.getObject("delivery_ts", OffsetDateTime.class),
-                                        rs.getString("last_delivery_error"),
-                                        rs.getInt("total_attempts"),
-                                        rs.getInt("redelivery_attempts"),
-                                        rs.getBoolean("is_dead_letter_message"),
-                                        rs.getBoolean("is_being_delivered"));
+        return DefaultQueuedMessage.builder()
+                                   .setId(queueEntryId)
+                                   .setQueueName(queueName)
+                                   .setMessage(message)
+                                   .setAddedTimestamp(rs.getObject("added_ts", OffsetDateTime.class))
+                                   .setNextDeliveryTimestamp(rs.getObject("next_delivery_ts", OffsetDateTime.class))
+                                   .setDeliveryTimestamp(rs.getObject("delivery_ts", OffsetDateTime.class))
+                                   .setLastDeliveryError(rs.getString("last_delivery_error"))
+                                   .setTotalDeliveryAttempts(rs.getInt("total_attempts"))
+                                   .setRedeliveryAttempts(rs.getInt("redelivery_attempts"))
+                                   .setDeadLetterMessage(rs.getBoolean("is_dead_letter_message"))
+                                   .setBeingDelivered(rs.getBoolean("is_being_delivered"))
+                                   .build();
     }
 }

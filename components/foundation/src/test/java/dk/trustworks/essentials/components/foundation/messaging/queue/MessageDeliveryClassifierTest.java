@@ -56,19 +56,17 @@ class MessageDeliveryClassifierTest {
         return policyWith(MessageDeliveryErrorHandler.builder().alwaysRetryOn(type).build());
     }
 
-    @SuppressWarnings("removal")
     private static QueuedMessage messageWithDeliveryAttempts(int totalDeliveryAttempts) {
-        return new DefaultQueuedMessage(QueueEntryId.random(),
-                                        QUEUE_NAME,
-                                        Message.of("a-payload"),
-                                        OffsetDateTime.now(),
-                                        OffsetDateTime.now(),
-                                        OffsetDateTime.now(),
-                                        null,
-                                        totalDeliveryAttempts,
-                                        totalDeliveryAttempts,
-                                        false,
-                                        false);
+        return DefaultQueuedMessage.builder()
+                                   .setId(QueueEntryId.random())
+                                   .setQueueName(QUEUE_NAME)
+                                   .setMessage(Message.of("a-payload"))
+                                   .setAddedTimestamp(OffsetDateTime.now())
+                                   .setNextDeliveryTimestamp(OffsetDateTime.now())
+                                   .setDeliveryTimestamp(OffsetDateTime.now())
+                                   .setTotalDeliveryAttempts(totalDeliveryAttempts)
+                                   .setRedeliveryAttempts(totalDeliveryAttempts)
+                                   .build();
     }
 
     private static MessageDeliveryOutcome outcomeOf(Throwable error, RedeliveryPolicy policy, int attempts) {

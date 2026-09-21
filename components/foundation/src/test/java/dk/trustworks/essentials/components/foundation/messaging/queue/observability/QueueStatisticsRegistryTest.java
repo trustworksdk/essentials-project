@@ -38,19 +38,17 @@ class QueueStatisticsRegistryTest {
         observer = new StatisticsCollectingDurableQueueMessageObserver(registry);
     }
 
-    @SuppressWarnings("removal")
     private static QueuedMessage message(QueueName queueName) {
-        return new DefaultQueuedMessage(QueueEntryId.random(),
-                                        queueName,
-                                        Message.of("a-payload"),
-                                        OffsetDateTime.now(),
-                                        OffsetDateTime.now(),
-                                        OffsetDateTime.now(),
-                                        null,
-                                        1,
-                                        0,
-                                        false,
-                                        false);
+        return DefaultQueuedMessage.builder()
+                                   .setId(QueueEntryId.random())
+                                   .setQueueName(queueName)
+                                   .setMessage(Message.of("a-payload"))
+                                   .setAddedTimestamp(OffsetDateTime.now())
+                                   .setNextDeliveryTimestamp(OffsetDateTime.now())
+                                   .setDeliveryTimestamp(OffsetDateTime.now())
+                                   .setTotalDeliveryAttempts(1)
+                                   .setRedeliveryAttempts(0)
+                                   .build();
     }
 
     @Test

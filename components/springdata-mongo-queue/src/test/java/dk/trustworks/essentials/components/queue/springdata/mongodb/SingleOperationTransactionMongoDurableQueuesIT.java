@@ -61,9 +61,11 @@ class SingleOperationTransactionMongoDurableQueuesIT extends DurableQueuesIT<Mon
     @Override
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                                                      JSONSerializer jsonSerializer) {
-        return new MongoDurableQueues(mongoTemplate,
-                                      jsonSerializer,
-                                      Duration.ofSeconds(5));
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setJsonSerializer(jsonSerializer)
+                                  .setMessageHandlingTimeout(Duration.ofSeconds(5))
+                                  .build();
     }
 
     @Override

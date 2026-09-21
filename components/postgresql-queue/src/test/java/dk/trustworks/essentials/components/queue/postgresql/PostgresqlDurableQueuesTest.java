@@ -31,53 +31,49 @@ class PostgresqlDurableQueuesTest {
 
     @Test
     void initializeWithDefaultTableName() {
-        var durableQueues = new PostgresqlDurableQueues(
-                mock(HandleAwareUnitOfWorkFactory.class),
-                mock(JSONSerializer.class),
-                PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME,
-                null,
-                null,
-                TransactionalMode.FullyTransactional,
-                Duration.ofSeconds(30));
+        var durableQueues = PostgresqlDurableQueues.builder()
+                                           .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                           .setJsonSerializer(mock(JSONSerializer.class))
+                                           .setSharedQueueTableName(PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME)
+                                           .setTransactionalMode(TransactionalMode.FullyTransactional)
+                                           .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                           .build();
         assertThat(durableQueues.getSharedQueueTableName()).isEqualTo(PostgresqlDurableQueues.DEFAULT_DURABLE_QUEUES_TABLE_NAME);
     }
 
     @Test
     void initializeWithOverriddenTableName() {
         var overriddenTableName = "overridden_table_name";
-        var durableQueues = new PostgresqlDurableQueues(
-                mock(HandleAwareUnitOfWorkFactory.class),
-                mock(JSONSerializer.class),
-                overriddenTableName,
-                null,
-                null,
-                TransactionalMode.FullyTransactional,
-                Duration.ofSeconds(30));
+        var durableQueues = PostgresqlDurableQueues.builder()
+                                           .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                           .setJsonSerializer(mock(JSONSerializer.class))
+                                           .setSharedQueueTableName(overriddenTableName)
+                                           .setTransactionalMode(TransactionalMode.FullyTransactional)
+                                           .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                           .build();
         assertThat(durableQueues.getSharedQueueTableName()).isEqualTo(overriddenTableName);
     }
 
     @Test
     void initializeWithInvalidOverriddenTableName() {
         assertThatThrownBy(() ->
-                                   new PostgresqlDurableQueues(
-                                           mock(HandleAwareUnitOfWorkFactory.class),
-                                           mock(JSONSerializer.class),
-                                           "where",
-                                           null,
-                                           null,
-                                           TransactionalMode.FullyTransactional,
-                                           Duration.ofSeconds(30)))
+                                   PostgresqlDurableQueues.builder()
+                                           .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                           .setJsonSerializer(mock(JSONSerializer.class))
+                                           .setSharedQueueTableName("where")
+                                           .setTransactionalMode(TransactionalMode.FullyTransactional)
+                                           .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                           .build())
                 .isInstanceOf(InvalidTableOrColumnNameException.class);
 
         assertThatThrownBy(() ->
-                                   new PostgresqlDurableQueues(
-                                           mock(HandleAwareUnitOfWorkFactory.class),
-                                           mock(JSONSerializer.class),
-                                           "OR 1=1",
-                                           null,
-                                           null,
-                                           TransactionalMode.FullyTransactional,
-                                           Duration.ofSeconds(30)))
+                                   PostgresqlDurableQueues.builder()
+                                           .setUnitOfWorkFactory(mock(HandleAwareUnitOfWorkFactory.class))
+                                           .setJsonSerializer(mock(JSONSerializer.class))
+                                           .setSharedQueueTableName("OR 1=1")
+                                           .setTransactionalMode(TransactionalMode.FullyTransactional)
+                                           .setMessageHandlingTimeout(Duration.ofSeconds(30))
+                                           .build())
                 .isInstanceOf(InvalidTableOrColumnNameException.class);
     }
 }

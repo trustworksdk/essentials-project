@@ -38,19 +38,17 @@ class MicrometerDurableQueueMessageObserverTest {
         observer = new MicrometerDurableQueueMessageObserver(meterRegistry, "TestModule");
     }
 
-    @SuppressWarnings("removal")
     private static QueuedMessage message(Object payload) {
-        return new DefaultQueuedMessage(QueueEntryId.random(),
-                                        QUEUE,
-                                        Message.of(payload),
-                                        OffsetDateTime.now(),
-                                        OffsetDateTime.now(),
-                                        OffsetDateTime.now(),
-                                        null,
-                                        1,
-                                        0,
-                                        false,
-                                        false);
+        return DefaultQueuedMessage.builder()
+                                   .setId(QueueEntryId.random())
+                                   .setQueueName(QUEUE)
+                                   .setMessage(Message.of(payload))
+                                   .setAddedTimestamp(OffsetDateTime.now())
+                                   .setNextDeliveryTimestamp(OffsetDateTime.now())
+                                   .setDeliveryTimestamp(OffsetDateTime.now())
+                                   .setTotalDeliveryAttempts(1)
+                                   .setRedeliveryAttempts(0)
+                                   .build();
     }
 
     private double countFor(String reason) {

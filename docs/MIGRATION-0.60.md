@@ -255,3 +255,44 @@ off.
 A health indicator reporting dead letters is **not** included. A dead letter is a business-process incident,
 not an availability one — on by default, one poison message fails a readiness probe and, under Kubernetes,
 cycles pods that are working correctly.
+
+### The 0.40.x `forRemoval` constructors are gone from the queue modules
+
+Every constructor marked `@Deprecated(forRemoval = true, since = "0.40.x")` in `foundation`'s messaging
+packages, `postgresql-queue` and `springdata-mongo-queue` has been removed from the public API. Each already
+had a replacement named in its own `@deprecated` tag, and behaviour is unchanged.
+
+| Type | Replacement |
+|---|---|
+| `RedeliveryPolicy` (6-arg) | `RedeliveryPolicy.builder()` and the `fixedBackoff` / `linearBackoff` / `exponentialBackoff` factories |
+| `DefaultQueuedMessage` (11-arg) | `DefaultQueuedMessage.builder()` |
+| `ConsumeFromQueue` (3 overloads) | `ConsumeFromQueue.builder()` |
+| `QueueMessage`, `QueueMessages` (2 overloads each) | `QueueMessage.builder()` / `QueueMessages.builder()` |
+| `DefaultDurableQueueConsumer`, `PostgresqlDurableQueueConsumer`, `MongoDurableQueueConsumer` (7-arg) | the `(ConsumeFromQueue, DurableQueueConsumerDependencies)` constructor — see `DurableQueueConsumerDependencies.builder()` |
+| `PostgresqlDurableQueues` (2 wide overloads) | `PostgresqlDurableQueues.builder()` |
+| `MongoDurableQueues` (9 overloads) | `MongoDurableQueues.builder()` |
+
+Two constructors survive for the all-defaults case, as their deprecation notes promised:
+`PostgresqlDurableQueues(unitOfWorkFactory, …)`'s short forms and
+`MongoDurableQueues(mongoTemplate, messageHandlingTimeout)`.
+
+The constructor each builder delegates to is still there, demoted to package-private — it is an implementation
+detail now, not API.
+
+**What to do:** switch to the builder named above. A builder call names every argument, which is the point:
+the widest removed constructor took 14 positional parameters, four of them adjacent `boolean`s.
+
+#### `QueueMessage.builder().setMessage(…)` no longer discards ordering
+
+Worth calling out on its own because it was a silent bug, not just a deprecation.
+`QueueMessageBuilder.setMessage(message)` used to split the message into its payload and metadata and rebuild
+a plain `Message` in `build()`. Handed an `OrderedMessage`, it dropped the key and the order — so the message
+was queued as unordered, with no error anywhere, and ordering guarantees quietly did not apply. The builder
+now carries the message through as given.
+
+If you used `QueueMessage.builder().setMessage(anOrderedMessage)`, your messages were being delivered
+unordered. They now respect their ordering, which may change the order your handlers observe.
+
+#### `QueueMessagesBuilder.setMessages` accepts `List<? extends Message>`
+
+Widened from `List<Message>`, so a `List<OrderedMessage>` no longer needs a copy or a cast at the call site.

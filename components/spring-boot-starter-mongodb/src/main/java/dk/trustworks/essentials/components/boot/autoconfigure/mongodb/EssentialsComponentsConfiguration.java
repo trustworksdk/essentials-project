@@ -325,17 +325,21 @@ public class EssentialsComponentsConfiguration {
                 );
         MongoDurableQueues durableQueues;
         if (properties.getDurableQueues().getTransactionalMode() == TransactionalMode.FullyTransactional) {
-            durableQueues = new MongoDurableQueues(mongoTemplate,
-                                                   unitOfWorkFactory,
-                                                   jsonSerializer,
-                                                   properties.getDurableQueues().getSharedQueueCollectionName(),
-                                                   pollingOptimizerFactory);
+            durableQueues = MongoDurableQueues.builder()
+                                              .setMongoTemplate(mongoTemplate)
+                                              .setUnitOfWorkFactory(unitOfWorkFactory)
+                                              .setJsonSerializer(jsonSerializer)
+                                              .setSharedQueueCollectionName(properties.getDurableQueues().getSharedQueueCollectionName())
+                                              .setQueuePollingOptimizerFactory(pollingOptimizerFactory)
+                                              .build();
         } else {
-            durableQueues = new MongoDurableQueues(mongoTemplate,
-                                                   properties.getDurableQueues().getMessageHandlingTimeout(),
-                                                   jsonSerializer,
-                                                   properties.getDurableQueues().getSharedQueueCollectionName(),
-                                                   pollingOptimizerFactory);
+            durableQueues = MongoDurableQueues.builder()
+                                              .setMongoTemplate(mongoTemplate)
+                                              .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
+                                              .setJsonSerializer(jsonSerializer)
+                                              .setSharedQueueCollectionName(properties.getDurableQueues().getSharedQueueCollectionName())
+                                              .setQueuePollingOptimizerFactory(pollingOptimizerFactory)
+                                              .build();
         }
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;

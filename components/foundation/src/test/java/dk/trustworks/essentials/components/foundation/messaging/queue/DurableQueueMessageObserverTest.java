@@ -30,19 +30,17 @@ import static org.assertj.core.api.Assertions.*;
 class DurableQueueMessageObserverTest {
     private static final QueueName QUEUE = QueueName.of("TestQueue");
 
-    @SuppressWarnings("removal")
     private static QueuedMessage message() {
-        return new DefaultQueuedMessage(QueueEntryId.random(),
-                                        QUEUE,
-                                        Message.of("a-payload"),
-                                        OffsetDateTime.now(),
-                                        OffsetDateTime.now(),
-                                        OffsetDateTime.now(),
-                                        null,
-                                        1,
-                                        0,
-                                        false,
-                                        false);
+        return DefaultQueuedMessage.builder()
+                                   .setId(QueueEntryId.random())
+                                   .setQueueName(QUEUE)
+                                   .setMessage(Message.of("a-payload"))
+                                   .setAddedTimestamp(OffsetDateTime.now())
+                                   .setNextDeliveryTimestamp(OffsetDateTime.now())
+                                   .setDeliveryTimestamp(OffsetDateTime.now())
+                                   .setTotalDeliveryAttempts(1)
+                                   .setRedeliveryAttempts(0)
+                                   .build();
     }
 
     private static final class Recording implements DurableQueueMessageObserver {

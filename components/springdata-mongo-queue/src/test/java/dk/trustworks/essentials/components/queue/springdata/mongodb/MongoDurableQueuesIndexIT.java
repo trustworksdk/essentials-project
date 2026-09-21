@@ -66,8 +66,10 @@ public class MongoDurableQueuesIndexIT {
 
 
         // Create DurableQueues to ensure indexes
-        var durableQueues = new MongoDurableQueues(mongoTemplate,
-                                                   Duration.ofSeconds(10));
+        var durableQueues = MongoDurableQueues.builder()
+                                               .setMongoTemplate(mongoTemplate)
+                                               .setMessageHandlingTimeout(Duration.ofSeconds(10))
+                                               .build();
 
         indexes = mongoTemplate.getCollection(MongoDurableQueues.DEFAULT_DURABLE_QUEUES_COLLECTION_NAME).listIndexes();
         indexNames = StreamSupport.stream(indexes.spliterator(), false)

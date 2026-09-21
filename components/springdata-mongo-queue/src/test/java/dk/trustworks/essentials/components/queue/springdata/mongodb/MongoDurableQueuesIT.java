@@ -60,9 +60,11 @@ class MongoDurableQueuesIT extends DurableQueuesIT<MongoDurableQueues, SpringMon
     @Override
     protected MongoDurableQueues createDurableQueues(SpringMongoTransactionAwareUnitOfWorkFactory unitOfWorkFactory,
                                                      JSONSerializer jsonSerializer) {
-        return new MongoDurableQueues(mongoTemplate,
-                                      unitOfWorkFactory,
-                                      jsonSerializer);
+        return MongoDurableQueues.builder()
+                                  .setMongoTemplate(mongoTemplate)
+                                  .setUnitOfWorkFactory(unitOfWorkFactory)
+                                  .setJsonSerializer(jsonSerializer)
+                                  .build();
     }
 
     @Override

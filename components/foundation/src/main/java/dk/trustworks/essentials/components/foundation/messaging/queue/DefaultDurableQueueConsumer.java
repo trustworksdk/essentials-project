@@ -137,38 +137,6 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
 
     }
 
-    /**
-     * @param consumeFromQueue           what to consume
-     * @param unitOfWorkFactory          the {@link UnitOfWorkFactory}, required only in {@link TransactionalMode#FullyTransactional}
-     * @param durableQueues              the {@link DurableQueues} instance this consumer belongs to
-     * @param removeDurableQueueConsumer callback invoked when the consumer stops
-     * @param pollingIntervalMs          how often to poll for new messages
-     * @param queuePollingOptimizer      the polling optimizer, or {@code null} for {@link QueuePollingOptimizer#None()}
-     * @param interceptors               the interceptor chain applied to every queue operation
-     * @deprecated Use {@link #DefaultDurableQueueConsumer(ConsumeFromQueue, DurableQueueConsumerDependencies)}. The
-     *         five collaborator arguments are the same for every {@link DurableQueues} implementation, so they belong
-     *         in one {@link DurableQueueConsumerDependencies} bundle rather than being repeated positionally in each
-     *         subclass. This constructor delegates and behaves identically.
-     */
-    @Deprecated(forRemoval = true, since = "0.40.x")
-    public DefaultDurableQueueConsumer(ConsumeFromQueue consumeFromQueue,
-                                       UOW_FACTORY unitOfWorkFactory,
-                                       DURABLE_QUEUES durableQueues,
-                                       Consumer<DurableQueueConsumer> removeDurableQueueConsumer,
-                                       long pollingIntervalMs,
-                                       QueuePollingOptimizer queuePollingOptimizer,
-                                       List<DurableQueuesInterceptor> interceptors) {
-        this(consumeFromQueue,
-             DurableQueueConsumerDependencies.<DURABLE_QUEUES, UOW, UOW_FACTORY>builder()
-                                             .setUnitOfWorkFactory(unitOfWorkFactory)
-                                             .setDurableQueues(durableQueues)
-                                             .setRemoveDurableQueueConsumer(removeDurableQueueConsumer)
-                                             .setPollingIntervalMs(pollingIntervalMs)
-                                             .setQueuePollingOptimizer(queuePollingOptimizer)
-                                             .setInterceptors(interceptors)
-                                             .build());
-    }
-
     @Override
     public void start() {
         if (!started) {
