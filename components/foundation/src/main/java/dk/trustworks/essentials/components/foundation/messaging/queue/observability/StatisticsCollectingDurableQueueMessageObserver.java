@@ -64,7 +64,7 @@ public class StatisticsCollectingDurableQueueMessageObserver implements DurableQ
     }
 
     @Override
-    public void messageDeadLettered(QueuedMessage message, Throwable cause) {
+    public void messageDeadLettered(QueuedMessage message, Throwable cause, MessageDeliveryOutcome outcome) {
         statisticsFor(message).ifPresent(statistics -> statistics.recordDeadLettered(cause));
     }
 

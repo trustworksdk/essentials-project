@@ -64,7 +64,7 @@ class DurableQueueMessageObserverTest {
         }
 
         @Override
-        public void messageDeadLettered(QueuedMessage message, Throwable cause) {
+        public void messageDeadLettered(QueuedMessage message, Throwable cause, MessageDeliveryOutcome outcome) {
             calls.add("deadLettered");
         }
     }
@@ -76,7 +76,7 @@ class DurableQueueMessageObserverTest {
         }
 
         @Override
-        public void messageDeadLettered(QueuedMessage message, Throwable cause) {
+        public void messageDeadLettered(QueuedMessage message, Throwable cause, MessageDeliveryOutcome outcome) {
             throw new IllegalStateException("observer is broken");
         }
     }
@@ -96,7 +96,7 @@ class DurableQueueMessageObserverTest {
         assertThatCode(() -> {
             safe.messageHandled(message(), Duration.ofMillis(1));
             safe.messageHandled(message(), Duration.ofMillis(1));
-            safe.messageDeadLettered(message(), new IllegalStateException("boom"));
+            safe.messageDeadLettered(message(), new IllegalStateException("boom"), MessageDeliveryOutcome.PERMANENT_ERROR);
         }).doesNotThrowAnyException();
     }
 
@@ -108,7 +108,7 @@ class DurableQueueMessageObserverTest {
         var composite = DurableQueueMessageObserver.composite(List.of(first, second));
         composite.messageHandled(message(), Duration.ofMillis(1));
         composite.messageRetried(message(), new IllegalStateException("boom"), Duration.ofSeconds(1));
-        composite.messageDeadLettered(message(), new IllegalStateException("boom"));
+        composite.messageDeadLettered(message(), new IllegalStateException("boom"), MessageDeliveryOutcome.PERMANENT_ERROR);
         composite.messageRedeliveryRequested(message());
 
         assertThat(first.calls).containsExactly("handled", "retried", "deadLettered", "redeliveryRequested");

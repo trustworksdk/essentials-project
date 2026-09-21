@@ -402,7 +402,7 @@ public class CentralizedMessageFetcher implements Lifecycle {
                                   e);
 
                         durableQueues.markAsDeadLetterMessage(message.getId(), e);
-                        durableQueues.getMessageObserver().messageDeadLettered(message, e);
+                        durableQueues.getMessageObserver().messageDeadLettered(message, e, decision.outcome());
                     } else {
                         // Redelivery
                         var redeliveryDelay = registration.consumer.getRedeliveryPolicy()

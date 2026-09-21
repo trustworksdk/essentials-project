@@ -85,8 +85,12 @@ public interface DurableQueueMessageObserver {
      *
      * @param message the message that was dead-lettered
      * @param cause   the error the handler threw
+     * @param outcome why: {@link MessageDeliveryOutcome#PERMANENT_ERROR} — the failure was never going to
+     *                succeed — or {@link MessageDeliveryOutcome#REDELIVERIES_EXHAUSTED} — it was retried the
+     *                configured number of times and kept failing. An operator needs to tell these apart, and a
+     *                metric needs it as a tag
      */
-    default void messageDeadLettered(QueuedMessage message, Throwable cause) {
+    default void messageDeadLettered(QueuedMessage message, Throwable cause, MessageDeliveryOutcome outcome) {
     }
 
     /**
@@ -172,8 +176,8 @@ public interface DurableQueueMessageObserver {
         }
 
         @Override
-        public void messageDeadLettered(QueuedMessage message, Throwable cause) {
-            observers.forEach(observer -> observer.messageDeadLettered(message, cause));
+        public void messageDeadLettered(QueuedMessage message, Throwable cause, MessageDeliveryOutcome outcome) {
+            observers.forEach(observer -> observer.messageDeadLettered(message, cause, outcome));
         }
 
         @Override
@@ -211,8 +215,8 @@ public interface DurableQueueMessageObserver {
         }
 
         @Override
-        public void messageDeadLettered(QueuedMessage message, Throwable cause) {
-            guard("messageDeadLettered", () -> delegate.messageDeadLettered(message, cause));
+        public void messageDeadLettered(QueuedMessage message, Throwable cause, MessageDeliveryOutcome outcome) {
+            guard("messageDeadLettered", () -> delegate.messageDeadLettered(message, cause, outcome));
         }
 
         private void guard(String callback, Runnable notification) {

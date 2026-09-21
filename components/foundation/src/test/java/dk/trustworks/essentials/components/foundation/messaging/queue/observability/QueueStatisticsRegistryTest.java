@@ -74,7 +74,7 @@ class QueueStatisticsRegistryTest {
 
     @Test
     void durations_are_absent_rather_than_zero_when_nothing_was_handled() {
-        observer.messageDeadLettered(message(QUEUE), new IllegalStateException("boom"));
+        observer.messageDeadLettered(message(QUEUE), new IllegalStateException("boom"), MessageDeliveryOutcome.PERMANENT_ERROR);
 
         var delivery = registry.findStatistics(QUEUE).orElseThrow().delivery();
 
@@ -87,7 +87,7 @@ class QueueStatisticsRegistryTest {
     @Test
     void failures_are_counted_separately_and_the_last_reason_is_rendered_text() {
         observer.messageRetried(message(QUEUE), new IllegalStateException("try later"), Duration.ofSeconds(1));
-        observer.messageDeadLettered(message(QUEUE), new IllegalArgumentException("never"));
+        observer.messageDeadLettered(message(QUEUE), new IllegalArgumentException("never"), MessageDeliveryOutcome.PERMANENT_ERROR);
         observer.messageRedeliveryRequested(message(QUEUE));
 
         var outcomes = registry.findStatistics(QUEUE).orElseThrow().outcomes();
@@ -101,7 +101,7 @@ class QueueStatisticsRegistryTest {
 
     @Test
     void a_long_failure_message_is_truncated_so_the_registry_does_not_become_a_log() {
-        observer.messageDeadLettered(message(QUEUE), new IllegalStateException("x".repeat(10_000)));
+        observer.messageDeadLettered(message(QUEUE), new IllegalStateException("x".repeat(10_000)), MessageDeliveryOutcome.PERMANENT_ERROR);
 
         assertThat(registry.findStatistics(QUEUE).orElseThrow().outcomes().lastFailureReason())
                 .hasSize(512);

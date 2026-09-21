@@ -509,7 +509,7 @@ public abstract class DefaultDurableQueueConsumer<DURABLE_QUEUES extends Durable
 
                 try {
                     durableQueues.markAsDeadLetterMessage(queuedMessage.getId(), e);
-                    durableQueues.getMessageObserver().messageDeadLettered(queuedMessage, e);
+                    durableQueues.getMessageObserver().messageDeadLettered(queuedMessage, e, decision.outcome());
                     orderedMessageDeliveryThreads.remove(Thread.currentThread());
                     return () -> queuePollingOptimizer.queuePollingReturnedMessage(queuedMessage);
                 } catch (Throwable ex) {

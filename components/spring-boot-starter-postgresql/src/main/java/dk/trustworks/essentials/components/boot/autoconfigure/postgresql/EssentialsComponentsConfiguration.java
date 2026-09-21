@@ -37,6 +37,7 @@ import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.MicrometerDurableQueueMessageObserver;
 import dk.trustworks.essentials.components.foundation.messaging.queue.observability.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
@@ -330,6 +331,19 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingBean(StatisticsCollectingDurableQueueMessageObserver.class)
     public StatisticsCollectingDurableQueueMessageObserver statisticsCollectingDurableQueueMessageObserver(QueueStatisticsRegistry queueStatisticsRegistry) {
         return new StatisticsCollectingDurableQueueMessageObserver(queueStatisticsRegistry);
+    }
+
+    /**
+     * The dead-letter counter, registered whenever a {@link MeterRegistry} is present and deliberately
+     * <em>not</em> gated behind {@code essentials.metrics.durable-queues.enabled}: that switch controls
+     * execution-time measurement, and a timing switch must not turn an incident counter off.
+     */
+    @Bean
+    @ConditionalOnBean(MeterRegistry.class)
+    @ConditionalOnMissingBean(MicrometerDurableQueueMessageObserver.class)
+    public MicrometerDurableQueueMessageObserver micrometerDurableQueueMessageObserver(MeterRegistry meterRegistry,
+                                                                                        EssentialsComponentsProperties properties) {
+        return new MicrometerDurableQueueMessageObserver(meterRegistry, properties.getTracingProperties().getModuleTag());
     }
 
     @Bean

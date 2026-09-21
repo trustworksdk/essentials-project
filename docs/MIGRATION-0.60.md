@@ -229,3 +229,29 @@ The two additions are what make a depth reading actionable. Both PostgreSQL and 
 by equality, must be updated — `oldestReadyMessageTimestamp` is data from the queue, so an equality comparison
 against a hand-built expected value is no longer a good way to assert on counts. Assert on the components you
 care about instead.
+
+
+### A dead-letter counter you can alert on
+
+`essentials.messaging.durable_queues.dead_lettered` is incremented once per dead letter, tagged:
+
+| Tag | Values |
+|---|---|
+| `queue_name` | the queue |
+| `message_payload_type` | the payload's type name |
+| `reason` | `permanent_error` or `redeliveries_exhausted` |
+
+Before 0.60 a dead letter produced one `log.error`, a row in the dead-letter table, and nothing else — no
+failed test, no failing request, no health change. The only metric was
+`essentials.messaging.durable_queues.mark_as_dead_letter_message`, a timer measuring how long the *marking*
+took, carrying no reason and gated behind `essentials.metrics.durable-queues.enabled`.
+
+The new counter is registered whenever a `MeterRegistry` bean is present and is deliberately **not** behind
+that property: it controls execution-time measurement, and a timing switch must not turn an incident counter
+off.
+
+**What to do:** alert on this counter. Nothing needs configuring to get it.
+
+A health indicator reporting dead letters is **not** included. A dead letter is a business-process incident,
+not an availability one — on by default, one poison message fails a readiness probe and, under Kubernetes,
+cycles pods that are working correctly.

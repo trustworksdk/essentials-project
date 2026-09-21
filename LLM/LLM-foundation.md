@@ -344,6 +344,15 @@ delivery threads, so it must not block.
 
 `deleteMessage` and `purgeQueue` deliberately do **not** notify. They are administrative, not deliveries.
 
+**Dead-letter metric.** `MicrometerDurableQueueMessageObserver` increments
+`essentials.messaging.durable_queues.dead_lettered` once per dead letter, tagged `queue_name`,
+`message_payload_type` and `reason` (`permanent_error` | `redeliveries_exhausted`). The Spring Boot starter
+registers it whenever a `MeterRegistry` is present — deliberately *not* behind
+`essentials.metrics.durable-queues.enabled`, which controls execution-time measurement. A timing switch must
+not turn an incident counter off. This is the counter to alert on; the pre-existing
+`essentials.messaging.durable_queues.mark_as_dead_letter_message` timer measures how long the marking took and
+carries no reason.
+
 ⚠️ **`QueueStatisticsRegistry` is per-JVM and resets on restart.** The queued and dead-letter counts from
 `getQueuedMessageCountsFor` are cluster-wide. Do not present them as one set of numbers — see
 `ApiQueueStatistics`, which keeps the two halves apart for exactly this reason.
