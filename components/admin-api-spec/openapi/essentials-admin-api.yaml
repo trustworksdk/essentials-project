@@ -1049,6 +1049,54 @@ paths:
       x-required-roles:
       - essentials_queue_reader
       - essentials_admin
+  /durable-queues/queues/{queueName}/statistics:
+    get:
+      tags:
+      - durable-queues
+      summary: Get cluster-wide depth and this instance's delivery statistics for
+        a queue.
+      operationId: getQueueStatistics
+      parameters:
+      - name: queueName
+        in: path
+        description: The queue name.
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: 200 — The queue statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiQueueStatistics"
+        "400":
+          description: "Malformed or out-of-range parameter, or invalid request body."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Caller lacks one of the required roles.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      x-required-roles:
+      - essentials_queue_reader
+      - essentials_admin
   /event-store/aggregate-types/{aggregateType}/highest-global-event-order:
     get:
       tags:
@@ -2549,6 +2597,18 @@ components:
         meanTime:
           type: number
           format: double
+    ApiQueueStatistics:
+      required:
+      - depth
+      - queueName
+      type: object
+      properties:
+        queueName:
+          type: string
+        depth:
+          $ref: "#/components/schemas/Depth"
+        instance:
+          $ref: "#/components/schemas/InstanceDelivery"
     ApiQueuedMessage:
       required:
       - id
@@ -2869,6 +2929,25 @@ components:
         deleted:
           type: boolean
       description: Outcome of a message deletion.
+    Depth:
+      required:
+      - deadLetterMessages
+      - messagesBeingDelivered
+      - queuedMessages
+      type: object
+      properties:
+        queuedMessages:
+          type: integer
+          format: int64
+        deadLetterMessages:
+          type: integer
+          format: int64
+        messagesBeingDelivered:
+          type: integer
+          format: int64
+        oldestReadyMessageAgeMillis:
+          type: integer
+          format: int64
     Error:
       required:
       - error
@@ -2897,6 +2976,43 @@ components:
           type: integer
           format: int64
       description: A persisted global event order value.
+    InstanceDelivery:
+      required:
+      - messagesDeadLettered
+      - messagesHandled
+      - messagesRetried
+      - redeliveryRequests
+      type: object
+      properties:
+        statisticsSince:
+          type: string
+          format: date-time
+        messagesHandled:
+          type: integer
+          format: int64
+        messagesRetried:
+          type: integer
+          format: int64
+        messagesDeadLettered:
+          type: integer
+          format: int64
+        redeliveryRequests:
+          type: integer
+          format: int64
+        averageHandlerDurationMillis:
+          type: integer
+          format: int64
+        maxHandlerDurationMillis:
+          type: integer
+          format: int64
+        lastHandledAt:
+          type: string
+          format: date-time
+        lastFailureAt:
+          type: string
+          format: date-time
+        lastFailureReason:
+          type: string
     PurgeResult:
       required:
       - purgedCount

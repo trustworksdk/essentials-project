@@ -308,6 +308,46 @@ void handle(OrderShipped event) {
 }
 ```
 
+### Delivery observability
+
+**Interface**: `dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueueMessageObserver`
+
+Notified of how each delivery *ended*. Not an interceptor: an interceptor sees the operation, not the outcome.
+
+```java
+var registry = new QueueStatisticsRegistry();
+
+PostgresqlDurableQueues.builder()
+    .setUnitOfWorkFactory(unitOfWorkFactory)
+    .setMessageObserver(new StatisticsCollectingDurableQueueMessageObserver(registry))
+    .build();
+
+// Per-queue, this JVM only
+registry.findStatistics(queueName).ifPresent(stats -> {
+    stats.delivery().messagesHandled();
+    stats.delivery().averageHandlerDuration();
+    stats.outcomes().messagesDeadLettered();
+    stats.outcomes().lastFailureReason();
+});
+```
+
+| Callback | When |
+|---|---|
+| `messageHandled(message, handlerDuration)` | after the acknowledgement — "delivered and removed", not "the handler returned" |
+| `messageRetried(message, cause, redeliveryDelay)` | a failed delivery that will be redelivered |
+| `messageDeadLettered(message, cause)` | a delivery that ended as a dead letter |
+| `messageRedeliveryRequested(message)` | the handler asked for redelivery; not a failure |
+
+Use `DurableQueueMessageObserver.composite(List)` for more than one observer — it is not a single-slot SPI. The
+queue wraps whatever it is given in `safe(...)`, so an observer that throws cannot break delivery; it runs on
+delivery threads, so it must not block.
+
+`deleteMessage` and `purgeQueue` deliberately do **not** notify. They are administrative, not deliveries.
+
+⚠️ **`QueueStatisticsRegistry` is per-JVM and resets on restart.** The queued and dead-letter counts from
+`getQueuedMessageCountsFor` are cluster-wide. Do not present them as one set of numbers — see
+`ApiQueueStatistics`, which keeps the two halves apart for exactly this reason.
+
 ### Dead Letter Queue
 
 ```java

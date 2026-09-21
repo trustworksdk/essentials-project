@@ -99,6 +99,7 @@ All beans use `@ConditionalOnMissingBean` for easy overriding.
 
 | Bean | Description |
 |------|-------------|
+| `QueueStatisticsRegistry` | Per-JVM queue delivery statistics, fed by `StatisticsCollectingDurableQueueMessageObserver` |
 | `PostgresqlDurableQueues` | Durable message queuing via PostgreSQL. See [DurableQueues documentation](../foundation/README.md#durablequeues-messaging) |
 | `Inboxes` | Store-and-forward for incoming messages. See [Inbox Pattern](../foundation/README.md#inbox-pattern) |
 | `Outboxes` | Store-and-forward for outgoing messages. See [Outbox Pattern](../foundation/README.md#outbox-pattern) |

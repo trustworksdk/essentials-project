@@ -340,7 +340,11 @@ public class DurableQueuesSql {
         return bind("""
                     SELECT
                     COUNT(*) FILTER (WHERE is_dead_letter_message = FALSE) AS regular_count,
-                    COUNT(*) FILTER (WHERE is_dead_letter_message = TRUE) AS dead_letter_count
+                    COUNT(*) FILTER (WHERE is_dead_letter_message = TRUE) AS dead_letter_count,
+                    COUNT(*) FILTER (WHERE is_dead_letter_message = FALSE AND is_being_delivered = TRUE) AS being_delivered_count,
+                    MIN(next_delivery_ts) FILTER (WHERE is_dead_letter_message = FALSE
+                                                    AND is_being_delivered = FALSE
+                                                    AND next_delivery_ts <= :now) AS oldest_ready_ts
                     FROM {:tableName}
                     WHERE
                     queue_name = :queueName

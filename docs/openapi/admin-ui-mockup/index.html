@@ -532,6 +532,19 @@ const fx = {
 
   queueCounts: { OrderEvents: { queued: 128, deadLetters: 3 } },
 
+  // GET /durable-queues/queues/{queueName}/statistics → ApiQueueStatistics
+  // Two halves, deliberately not merged: depth is cluster-wide, instance is this JVM only.
+  queueStats: {
+    OrderEvents: {
+      queueName: 'OrderEvents',
+      depth: { queuedMessages: 128, deadLetterMessages: 3, messagesBeingDelivered: 4, oldestReadyMessageAgeMillis: 18400 },
+      instance: { statisticsSince: '2026-07-31T06:00:00Z', messagesHandled: 9021, messagesRetried: 44,
+                  messagesDeadLettered: 3, redeliveryRequests: 0, averageHandlerDurationMillis: 34,
+                  maxHandlerDurationMillis: 910, lastHandledAt: '2026-07-31T12:04:28Z',
+                  lastFailureAt: '2026-07-31T11:58:02Z', lastFailureReason: 'PaymentGatewayTimeoutException: no response after 30s' }
+    }
+  },
+
   // GET /durable-queues/queues/{queueName}/messages → ApiQueuedMessage[]
   queued: [
     { id: '018f2c11-9a1e-7c3d-b0f1-2a5c9e11aa01', queueName: 'OrderEvents', payload: '{"orderId":"ORD-99213","total":149.95}', addedTimestamp: '2026-07-31T12:04:20Z', nextDeliveryTimestamp: '2026-07-31T12:04:35Z', deliveryTimestamp: null, lastDeliveryError: null, totalDeliveryAttempts: 0, redeliveryAttempts: 0, isDeadLetterMessage: false, isBeingDelivered: false },
@@ -836,6 +849,7 @@ views.locks = () => {
 
 views.queues = () => {
   const counts = fx.queueCounts.OrderEvents;
+  const stats = fx.queueStats.OrderEvents;
 
   const msgRow = (m) => `<tr data-msg="${esc(m.id)}">
       <td><button class="link" data-msg="${esc(m.id)}">${esc(m.id.slice(0, 18))}…</button></td>
@@ -881,6 +895,18 @@ views.queues = () => {
     <div class="kpi-row">
       ${tile('Queued', n(counts.queued))}
       ${tile('Dead letters', n(counts.deadLetters), 'oldest 08:11', counts.deadLetters > 0)}
+      ${tile('In flight', n(stats.depth.messagesBeingDelivered), 'cluster-wide')}
+      ${tile('Oldest ready', `${n(stats.depth.oldestReadyMessageAgeMillis)} ms`, 'cluster-wide')}
+    </div>
+
+    <div class="notice"><strong>Delivery figures below cover this instance only.</strong> The queue is shared
+      through the database, so another instance may be draining it while these read zero.</div>
+
+    <div class="kpi-row">
+      ${tile('Handled', n(stats.instance.messagesHandled), 'this instance')}
+      ${tile('Retried', n(stats.instance.messagesRetried), 'this instance')}
+      ${tile('Avg handler time', `${n(stats.instance.averageHandlerDurationMillis)} ms`, 'this instance')}
+      ${tile('Last handled', ts(stats.instance.lastHandledAt).slice(11), 'this instance')}
     </div>
 
     <div id="qQueued">
@@ -1349,7 +1375,7 @@ views.states = () => `
 const titles = {
   overview: ['Dashboard', 'Current state of the Essentials infrastructure'],
   locks: ['Fenced locks', 'Distributed locks held across service instances'],
-  queues: ['Durable queues', 'Queued and dead-letter messages'],
+  queues: ['Durable queues', 'Queued and dead-letter messages, delivery statistics'],
   scheduler: ['Scheduler', 'pg_cron jobs, run history and executor jobs'],
   subscriptions: ['Subscriptions', 'Event-store subscription resume points'],
   cdc: ['Change Data Capture', 'Replication slot, tailer and dispatcher state'],

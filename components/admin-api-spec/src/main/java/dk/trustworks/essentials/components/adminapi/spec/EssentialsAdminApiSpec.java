@@ -73,6 +73,7 @@ final class EssentialsAdminApiSpec {
             ApiTableActivityStatistics.class,
             ApiTableCacheHitRatio.class,
             ApiQueuedMessage.class,
+            ApiQueueStatistics.class,
             ApiSubscription.class,
             ApiSubscriptionStatistics.class,
             ApiCdcStatus.class,
@@ -97,6 +98,7 @@ final class EssentialsAdminApiSpec {
     static final Map<String, Set<String>> ALWAYS_PRESENT_PROPERTIES = Map.of(
             "ApiDBFencedLock", Set.of("lockName"),
             "ApiQueuedMessage", Set.of("id", "queueName"),
+            "ApiQueueStatistics", Set.of("queueName", "depth"),
             "ApiSubscription", Set.of("subscriberId", "aggregateType"),
             "ApiSubscriptionStatistics", Set.of("subscriberId", "aggregateType", "statisticsSince",
                                                 "lifecycle", "eventHandling", "polling", "lock", "reset"),
@@ -290,6 +292,13 @@ final class EssentialsAdminApiSpec {
          .queryParam("sortOrder", sortOrderSchema(), false, "Sort order by queue entry id.")
          .pagination()
          .responseArray("ApiQueuedMessage");
+
+        b.operation(DurableQueuesApi.class, "getQueueStatistics")
+         .tag("durable-queues").get("/durable-queues/queues/{queueName}/statistics")
+         .summary("Get cluster-wide depth and this instance's delivery statistics for a queue.")
+         .roles(QUEUE_R, ADMIN)
+         .pathParam("queueName", new StringSchema(), "The queue name.")
+         .responseRef("ApiQueueStatistics", "The queue statistics.");
 
         b.operation(DurableQueuesApi.class, "purgeQueue")
          .tag("durable-queues").delete("/durable-queues/queues/{queueName}/messages")

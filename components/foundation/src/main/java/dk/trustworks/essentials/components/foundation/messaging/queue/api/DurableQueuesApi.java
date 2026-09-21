@@ -178,4 +178,19 @@ public interface DurableQueuesApi {
      * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
      */
     int purgeQueue(Object principal, QueueName queueName);
+
+    /**
+     * Retrieve what is known about a queue: how much work it is holding cluster-wide, and what this instance's
+     * consumers have done with it.
+     * <p>
+     * The two halves are reported separately on purpose — see {@link ApiQueueStatistics}. The per-instance half is
+     * absent when this instance has delivered nothing from the queue, which is not the same as the queue being
+     * idle.
+     *
+     * @param principal the entity (user or system) making the request; used for authorization and context
+     * @param queueName the name of the queue
+     * @return the statistics for the queue
+     * @throws dk.trustworks.essentials.shared.security.EssentialsSecurityException if the principal is not authorized to access
+     */
+    ApiQueueStatistics getQueueStatistics(Object principal, QueueName queueName);
 }

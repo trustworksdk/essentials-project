@@ -644,6 +644,13 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
     private static final Pattern LEGACY_STATISTICS_INSERT_TARGET = Pattern.compile("INSERT\\s+INTO\\s+([A-Za-z0-9_]+)\\s*\\(",
                                                                                    Pattern.CASE_INSENSITIVE);
 
+    /**
+     * {@code MIN(...) FILTER (...)} yields SQL NULL when nothing matches, which JDBC reports as a null Timestamp.
+     */
+    private static Instant toInstant(java.sql.Timestamp timestamp) {
+        return timestamp != null ? timestamp.toInstant() : null;
+    }
+
     private void createIndex(String indexStatement, Handle handle) {
         PostgresqlUtil.checkIsValidTableOrColumnName(sharedQueueTableName);
         handle.execute(bind(indexStatement,
@@ -1509,9 +1516,12 @@ public final class PostgresqlDurableQueues implements BatchMessageFetchingCapabl
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> unitOfWorkFactory.withUnitOfWork(handleAwareUnitOfWork -> handleAwareUnitOfWork.handle().createQuery(durableQueuesSql.getQueuedMessageCountsForSql())
                                                                                                                                     .bind("queueName", operation.queueName)
+                                                                                                                                    .bind("now", Instant.now())
                                                                                                                                     .map((rs, ctx) -> new QueuedMessageCounts(operation.queueName,
                                                                                                                                                                               rs.getLong("regular_count"),
-                                                                                                                                                                              rs.getLong("dead_letter_count")))
+                                                                                                                                                                              rs.getLong("dead_letter_count"),
+                                                                                                                                                                              rs.getLong("being_delivered_count"),
+                                                                                                                                                                              toInstant(rs.getTimestamp("oldest_ready_ts"))))
                                                                                                                                     .one()))
                 .proceed();
     }

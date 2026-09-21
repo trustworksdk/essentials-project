@@ -87,8 +87,9 @@ separately.
 | the `durableQueuesStatistics` bean | `spring-boot-starter-postgresql` |
 
 **What to do:** delete the properties and any reference to the removed types. A caller constructing
-`DefaultDurableQueuesApi` directly drops the fourth argument. A caller of the REST operation has no replacement
-until the new statistics API ships.
+`DefaultDurableQueuesApi` directly replaces its fourth argument — the removed `DurableQueuesStatistics` — with a
+`QueueStatisticsRegistry` (see the replacement below). The REST operation keeps its path and gains a different,
+richer response body.
 
 **The database objects are removed for you, once.** On its first startup after the upgrade
 `PostgresqlDurableQueues` drops the `trg_log_message_delivery_stats` trigger from the queue table, the
@@ -169,3 +170,62 @@ PERMANENT_ERROR (built-in permanent list matched IllegalArgumentException at cau
 Jackson's `MismatchedInputException` is now matched by class name rather than `instanceof`, so it is
 recognised under both Jackson 2 and Jackson 3. Under Jackson 3 it previously matched nothing, because the
 class moved to `tools.jackson.databind.exc`.
+
+
+### Queue statistics are replaced, not restored
+
+The same path serves a different body:
+
+```
+GET /durable-queues/queues/{queueName}/statistics   ->  ApiQueueStatistics
+```
+
+The old `ApiQueuedStatistics` reported `totalMessagesDelivered`, `avgDeliveryLatencyMs`, `firstDelivery` and
+`lastDelivery`, all read from the statistics table, all cluster-wide, and all wrong whenever a queue was purged
+— the trigger counted a purge as a delivery.
+
+`ApiQueueStatistics` splits into two halves that are **not** interchangeable:
+
+| Half | Source | Scope | Fields |
+|---|---|---|---|
+| `depth` | the queue table, one statement | cluster-wide | `queuedMessages`, `deadLetterMessages`, `messagesBeingDelivered`, `oldestReadyMessageAgeMillis` |
+| `instance` | in-memory registry | **this JVM only**, resets on restart | `messagesHandled`, `messagesRetried`, `messagesDeadLettered`, `redeliveryRequests`, `averageHandlerDurationMillis`, `maxHandlerDurationMillis`, `lastHandledAt`, `lastFailureAt`, `lastFailureReason` |
+
+`instance` is absent when this instance has delivered nothing from the queue. That is not the same as the queue
+being idle — another instance may be draining it. `depth.messagesBeingDelivered` and
+`depth.oldestReadyMessageAgeMillis` are what distinguish the two, and they are the reason the halves are joined
+rather than the registry being exposed alone.
+
+**Field mapping, for anyone who consumed the old body:**
+
+| Old | New | Note |
+|---|---|---|
+| `totalMessagesDelivered` | `instance.messagesHandled` | now per-instance, and a purge no longer inflates it |
+| `avgDeliveryLatencyMs` | `instance.averageHandlerDurationMillis` | **a different quantity** — handler duration, not time since enqueue |
+| `firstDelivery` | `instance.statisticsSince` | when this instance started counting |
+| `lastDelivery` | `instance.lastHandledAt` | |
+
+Durations cross the contract as milliseconds, matching `ApiSubscriptionStatistics`.
+
+**Collection is on by default and costs nothing durable.** The Spring Boot starter registers a
+`QueueStatisticsRegistry` and a `StatisticsCollectingDurableQueueMessageObserver`, and hands the observer to the
+queue. There is no table, no trigger, no TTL job and no property to enable — which is the point: the feature
+this replaces was off by default because it wrote a row per acknowledged message inside the queue's own
+transaction.
+
+To collect nothing, define your own `QueueStatisticsRegistry` bean and no observer bean; to add your own
+observer alongside, just declare it as a bean — the starter composes every `DurableQueueMessageObserver` it
+finds.
+
+### `QueuedMessageCounts` gains two components
+
+`QueuedMessageCounts` is now
+`(queueName, numberOfQueuedMessages, numberOfQueuedDeadLetterMessages, numberOfMessagesBeingDelivered,
+oldestReadyMessageTimestamp)`.
+
+The two additions are what make a depth reading actionable. Both PostgreSQL and MongoDB populate them.
+
+**What to do:** a caller that only reads the record is unaffected. A caller that constructs one, or compares one
+by equality, must be updated — `oldestReadyMessageTimestamp` is data from the queue, so an equality comparison
+against a hand-built expected value is no longer a good way to assert on counts. Assert on the components you
+care about instead.

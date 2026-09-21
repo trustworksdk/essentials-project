@@ -37,6 +37,7 @@ import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.observability.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.*;
 import dk.trustworks.essentials.components.foundation.postgresql.*;
@@ -277,8 +278,10 @@ public class EssentialsComponentsConfiguration {
                                        JSONSerializer jsonSerializer,
                                        Optional<MultiTableChangeListener<TableChangeNotification>> optionalMultiTableChangeListener,
                                        EssentialsComponentsProperties properties,
-                                       List<DurableQueuesInterceptor> durableQueuesInterceptors) {
+                                       List<DurableQueuesInterceptor> durableQueuesInterceptors,
+                                       List<DurableQueueMessageObserver> durableQueueMessageObservers) {
         var durableQueues = PostgresqlDurableQueues.builder()
+                                                   .setMessageObserver(DurableQueueMessageObserver.composite(durableQueueMessageObservers))
                                                    .setUnitOfWorkFactory(unitOfWorkFactory)
                                                    .setMessageHandlingTimeout(properties.getDurableQueues().getMessageHandlingTimeout())
                                                    .setTransactionalMode(properties.getDurableQueues().getTransactionalMode())
@@ -307,6 +310,26 @@ public class EssentialsComponentsConfiguration {
                                                     .build();
         durableQueues.addInterceptors(durableQueuesInterceptors);
         return durableQueues;
+    }
+
+    /**
+     * The in-memory replacement for the queue statistics feature removed in 0.60.
+     * <p>
+     * The dependency direction is deliberately the reverse of the old one: the registry is created first and the
+     * queue is handed an observer that writes into it. Statistics no longer receive the queue and then run
+     * {@code CREATE TRIGGER} on its table, so enabling them is a configuration change rather than a schema
+     * migration.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public QueueStatisticsRegistry queueStatisticsRegistry() {
+        return new QueueStatisticsRegistry();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(StatisticsCollectingDurableQueueMessageObserver.class)
+    public StatisticsCollectingDurableQueueMessageObserver statisticsCollectingDurableQueueMessageObserver(QueueStatisticsRegistry queueStatisticsRegistry) {
+        return new StatisticsCollectingDurableQueueMessageObserver(queueStatisticsRegistry);
     }
 
     @Bean
@@ -576,10 +599,12 @@ public class EssentialsComponentsConfiguration {
     @ConditionalOnMissingBean
     public DurableQueuesApi durableQueuesApi(EssentialsSecurityProvider securityProvider,
                                              DurableQueues durableQueues,
-                                             JSONSerializer jsonSerializer) {
+                                             JSONSerializer jsonSerializer,
+                                             QueueStatisticsRegistry queueStatisticsRegistry) {
         return new DefaultDurableQueuesApi(securityProvider,
                 durableQueues,
-                jsonSerializer);
+                jsonSerializer,
+                queueStatisticsRegistry);
     }
 
     @Bean

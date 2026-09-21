@@ -358,6 +358,26 @@ var durableQueues = PostgresqlDurableQueues.builder()
 | `DurableQueuesMicrometerTracingInterceptor` | Distributed tracing via Micrometer Observation |
 | `RecordExecutionTimeDurableQueueInterceptor` | Operation execution time |
 
+### Queue statistics
+
+The trigger-based statistics table was removed in 0.60. Delivery figures now come from an in-memory
+`QueueStatisticsRegistry` fed by a `DurableQueueMessageObserver`, joined with the cluster-wide queue depth at
+the API layer:
+
+```
+GET /durable-queues/queues/{queueName}/statistics   ->  ApiQueueStatistics
+```
+
+| Half | Source | Scope |
+|---|---|---|
+| `depth` | the queue table, one statement | **cluster-wide** — queued, dead letters, in flight, oldest ready age |
+| `instance` | `QueueStatisticsRegistry` | **this JVM only** — handled, retried, dead-lettered, handler durations, last failure. `null` when this instance has delivered nothing |
+
+`depth.messagesBeingDelivered` and `depth.oldestReadyMessageAgeMillis` are what separate "nothing to do" from
+"stalled": zero handled on this instance means nothing on its own.
+
+See [LLM-foundation.md](./LLM-foundation.md) for the observer contract.
+
 ### Logging
 
 | Logger | Purpose |

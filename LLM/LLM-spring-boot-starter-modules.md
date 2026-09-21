@@ -55,6 +55,7 @@ See [spring-boot-starter-postgresql README](../components/spring-boot-starter-po
 **Components:**
 - `PostgresqlFencedLockManager` - Distributed locks
 - `PostgresqlDurableQueues` - Durable message queuing
+- `QueueStatisticsRegistry` + `StatisticsCollectingDurableQueueMessageObserver` - per-JVM delivery statistics
 - `Inboxes`, `Outboxes` - Store-and-forward patterns
 - `DurableLocalCommandBus` - Command bus with durable delivery
 - `MultiTableChangeListener` - PostgreSQL NOTIFY/LISTEN optimization

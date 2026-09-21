@@ -19,10 +19,12 @@ package dk.trustworks.essentials.components.queue.postgresql;
 import dk.trustworks.essentials.components.foundation.json.EssentialsObjectMappers;
 import dk.trustworks.essentials.components.foundation.messaging.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.api.DefaultDurableQueuesApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.observability.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.ConsumeFromQueue;
 import dk.trustworks.essentials.components.foundation.test.EssentialsTestContainers;
 import dk.trustworks.essentials.components.foundation.transaction.jdbi.JdbiUnitOfWorkFactory;
+import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.awaitility.Awaitility;
 import org.jdbi.v3.core.Jdbi;
 import org.junit.jupiter.api.*;
@@ -146,6 +148,52 @@ class DurableQueueMessageObserverIT {
         assertThat(statistics.delivery().messagesHandled()).isZero();
         assertThat(statistics.outcomes().messagesRetried()).isZero();
         assertThat(statistics.outcomes().lastFailureReason()).isEqualTo("IllegalArgumentException: never valid");
+    }
+
+    @Test
+    void the_api_joins_the_cluster_wide_depth_with_this_instance_s_delivery_statistics() {
+        var queueName = QueueName.of("ObserverApiQueue");
+        durableQueues.purgeQueue(queueName);
+        var api = new DefaultDurableQueuesApi(new EssentialsSecurityProvider.AllAccessSecurityProvider(),
+                                              durableQueues,
+                                              EssentialsObjectMappers.createJSONSerializer(),
+                                              registry);
+
+        unitOfWorkFactory.usingUnitOfWork(() -> {
+            durableQueues.queueMessage(queueName, Message.of("handled"));
+            durableQueues.queueMessage(queueName, Message.of("waiting"), Duration.ofHours(1));
+        });
+
+        // Before any consumer runs: the queue holds work, but this instance has delivered nothing. The two
+        // halves must be distinguishable — "0 handled here" is not "this queue is idle".
+        var beforeConsuming = api.getQueueStatistics("principal", queueName);
+        assertThat(beforeConsuming.depth().queuedMessages()).isEqualTo(2);
+        assertThat(beforeConsuming.depth().messagesBeingDelivered()).isZero();
+        assertThat(beforeConsuming.depth().oldestReadyMessageAgeMillis())
+                .as("one message is ready now, the other is delayed an hour")
+                .isNotNull();
+        assertThat(beforeConsuming.instance())
+                .as("this instance has delivered nothing from the queue")
+                .isNull();
+
+        consumeWith(queueName, message -> {
+        }, 3);
+
+        Awaitility.waitAtMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            var statistics = api.getQueueStatistics("principal", queueName);
+            assertThat(statistics.instance()).isNotNull();
+            assertThat(statistics.instance().messagesHandled()).isEqualTo(1);
+        });
+
+        var afterConsuming = api.getQueueStatistics("principal", queueName);
+        assertThat(afterConsuming.depth().queuedMessages())
+                .as("the delayed message is still queued cluster-wide")
+                .isEqualTo(1);
+        assertThat(afterConsuming.depth().oldestReadyMessageAgeMillis())
+                .as("nothing is ready any more - the remaining message is delayed")
+                .isNull();
+        assertThat(afterConsuming.instance().averageHandlerDurationMillis()).isNotNull();
+        assertThat(afterConsuming.instance().statisticsSince()).isNotNull();
     }
 
     @Test

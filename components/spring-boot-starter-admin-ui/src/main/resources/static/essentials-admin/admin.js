@@ -58,6 +58,7 @@ async function api(path, options = {}) {
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const nil = (t = '—') => `<span class="nil" title="not set">${t}</span>`;
 const num = (v) => (v == null ? nil() : Number(v).toLocaleString('en-US'));
+const millis = (v) => (v == null ? nil() : `${num(v)} ms`);
 const ts = (v) => (v == null ? nil() : esc(String(v).replace('T', ' ').replace(/(\.\d+)?Z?$/, '')));
 const epoch = (ms) => (ms == null ? nil() : ts(new Date(ms).toISOString().slice(0, 19)));
 
@@ -224,9 +225,10 @@ views.queues = async () => {
         dead ? api(`/durable-queues/queues/${encodeURIComponent(q)}/dead-letter-messages?sortOrder=${sort}&startIndex=0&pageSize=100`)
              : api(`/durable-queues/queues/${encodeURIComponent(q)}/messages?sortOrder=${sort}&startIndex=0&pageSize=100`),
         api(`/durable-queues/queues/${encodeURIComponent(q)}/messages/count`),
-        api(`/durable-queues/queues/${encodeURIComponent(q)}/dead-letter-messages/count`)
+        api(`/durable-queues/queues/${encodeURIComponent(q)}/dead-letter-messages/count`),
+        api(`/durable-queues/queues/${encodeURIComponent(q)}/statistics`)
     ]);
-    const [messages, queuedCount, deadCount] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
+    const [messages, queuedCount, deadCount, stats] = settled.map((r) => (r.status === 'fulfilled' ? r.value : null));
 
     const msgRow = (m) => `<tr data-msg="${esc(m.id)}">
       <td><button class="link" data-msg="${esc(m.id)}">${esc(String(m.id).slice(0, 18))}…</button></td>
@@ -273,9 +275,25 @@ views.queues = async () => {
     </div>
 
     <div class="kpi-row">
-      ${tile('Queued', queuedCount ? num(queuedCount.total) : nil())}
-      ${tile('Dead letters', deadCount ? num(deadCount.total) : nil(), null, deadCount ? deadCount.total > 0 : false)}
+      ${tile('Queued', queuedCount ? num(queuedCount.total) : nil(), 'cluster-wide')}
+      ${tile('Dead letters', deadCount ? num(deadCount.total) : nil(), 'cluster-wide', deadCount ? deadCount.total > 0 : false)}
+      ${tile('In flight', stats ? num(stats.depth.messagesBeingDelivered) : nil(), 'cluster-wide')}
+      ${tile('Oldest ready', stats ? millis(stats.depth.oldestReadyMessageAgeMillis) : nil(),
+             'cluster-wide', !!(stats && stats.depth.oldestReadyMessageAgeMillis && stats.depth.messagesBeingDelivered === 0))}
     </div>
+
+    <div class="notice"><strong>Delivery figures below cover this instance only.</strong> The queue itself is shared
+      through the database, so another instance may be draining it while these read zero. A restart resets them.</div>
+
+    <div class="kpi-row">
+      ${tile('Handled', stats && stats.instance ? num(stats.instance.messagesHandled) : nil(), 'this instance')}
+      ${tile('Retried', stats && stats.instance ? num(stats.instance.messagesRetried) : nil(), 'this instance')}
+      ${tile('Dead-lettered', stats && stats.instance ? num(stats.instance.messagesDeadLettered) : nil(), 'this instance')}
+      ${tile('Avg handler time', stats && stats.instance ? millis(stats.instance.averageHandlerDurationMillis) : nil(), 'this instance')}
+    </div>
+    ${stats && stats.instance && stats.instance.lastFailureReason
+      ? `<div class="notice">Last failure on this instance ${ts(stats.instance.lastFailureAt)}: ${esc(stats.instance.lastFailureReason)}</div>`
+      : ''}
 
     ${card(dead ? 'Dead-letter messages' : 'Queued messages',
         messages ? table(cols, messages.map(msgRow), { empty: dead ? 'No dead-letter messages' : 'No queued messages' })
@@ -671,7 +689,6 @@ async function openSubscriptionDrawer(subscriberId, aggregateType) {
         <div class="field-label"><span>${esc(label)}</span></div>
         <div class="kv" style="grid-template-columns:1fr">${items.join('')}</div>
       </div>`;
-    const millis = (v) => (v == null ? nil() : `${num(v)} ms`);
 
     drawer.innerHTML = `
     <div class="drawer-head">

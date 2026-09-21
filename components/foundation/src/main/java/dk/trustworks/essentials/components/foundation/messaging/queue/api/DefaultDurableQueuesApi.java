@@ -19,9 +19,10 @@ package dk.trustworks.essentials.components.foundation.messaging.queue.api;
 import dk.trustworks.essentials.components.foundation.json.JSONSerializer;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.DurableQueues.QueueingSortOrder;
+import dk.trustworks.essentials.components.foundation.messaging.queue.observability.QueueStatisticsRegistry;
 import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 
-import java.time.Duration;
+import java.time.*;
 import java.util.*;
 
 import static dk.trustworks.essentials.shared.FailFast.requireNonNull;
@@ -38,19 +39,24 @@ import static dk.trustworks.essentials.shared.security.EssentialsSecurityValidat
  * - EssentialsSecurityProvider for access control and role validation.
  * - DurableQueues to interact with the underlying queue mechanism.
  * - JSONSerializer for serializing message payloads.
+ * - QueueStatisticsRegistry holding this instance's delivery statistics. Pass an empty one when the application
+ *   does not collect them; an empty registry simply reports no per-instance figures.
  */
 public class DefaultDurableQueuesApi implements DurableQueuesApi {
 
     private final EssentialsSecurityProvider securityProvider;
     private final DurableQueues durableQueues;
-    private final JSONSerializer jsonSerializer;
+    private final JSONSerializer          jsonSerializer;
+    private final QueueStatisticsRegistry queueStatisticsRegistry;
 
     public DefaultDurableQueuesApi(EssentialsSecurityProvider securityProvider,
                                    DurableQueues durableQueues,
-                                   JSONSerializer jsonSerializer) {
+                                   JSONSerializer jsonSerializer,
+                                   QueueStatisticsRegistry queueStatisticsRegistry) {
         this.securityProvider = requireNonNull(securityProvider, "securityProvider must not be null");
         this.durableQueues = requireNonNull(durableQueues, "durableQueues must not be null");
         this.jsonSerializer = requireNonNull(jsonSerializer, "jsonSerializer must not be null");
+        this.queueStatisticsRegistry = requireNonNull(queueStatisticsRegistry, "queueStatisticsRegistry must not be null");
     }
 
     private void validateQueueReaderRole(Object principal) {
@@ -138,5 +144,23 @@ public class DefaultDurableQueuesApi implements DurableQueuesApi {
     public int purgeQueue(Object principal, QueueName queueName) {
         validateQueueWriterRole(principal);
         return durableQueues.purgeQueue(queueName);
+    }
+
+    /**
+     * Joins the two sources at the API layer rather than in storage: the cluster-wide counts come from the queue
+     * itself in one statement, and the per-instance figures from the in-memory
+     * {@link QueueStatisticsRegistry}. No table, and therefore nothing to migrate or expire.
+     * <p>
+     * The registry is an explicit dependency rather than something discovered through
+     * {@link DurableQueues#getMessageObserver()}: the queue wraps whatever observer it is given in
+     * {@code DurableQueueMessageObserver.safe(...)}, so the collector is not reachable by type from there.
+     */
+    @Override
+    public ApiQueueStatistics getQueueStatistics(Object principal, QueueName queueName) {
+        validateQueueReaderRole(principal);
+        requireNonNull(queueName, "No queueName provided");
+        return ApiQueueStatistics.from(durableQueues.getQueuedMessageCountsFor(queueName),
+                                       queueStatisticsRegistry.findStatistics(queueName).orElse(null),
+                                       Instant.now());
     }
 }

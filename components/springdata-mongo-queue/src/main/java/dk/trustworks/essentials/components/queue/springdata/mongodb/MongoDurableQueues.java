@@ -1422,6 +1422,7 @@ public final class MongoDurableQueues implements DurableQueues {
                                                interceptors,
                                                (interceptor, interceptorChain) -> interceptor.intercept(operation, interceptorChain),
                                                () -> {
+                                                   var now            = Instant.now();
                                                    var matchOperation = Aggregation.match(Criteria.where("queueName").is(operation.queueName));
                                                    var aggregation = Aggregation.newAggregation(
                                                            matchOperation,
@@ -1443,7 +1444,29 @@ public final class MongoDurableQueues implements DurableQueues {
                                                        }
                                                    }
 
-                                                   return new QueuedMessageCounts(operation.queueName, numberOfQueuedMessages, numberOfQueuedDeadLetterMessages);
+                                                   var beingDelivered = mongoTemplate.count(
+                                                           Query.query(Criteria.where("queueName").is(operation.queueName)
+                                                                               .and("isDeadLetterMessage").is(false)
+                                                                               .and("isBeingDelivered").is(true)),
+                                                           this.sharedQueueCollectionName);
+
+                                                   var oldestReady = mongoTemplate.findOne(
+                                                           Query.query(Criteria.where("queueName").is(operation.queueName)
+                                                                               .and("isDeadLetterMessage").is(false)
+                                                                               .and("isBeingDelivered").is(false)
+                                                                               .and("nextDeliveryTimestamp").lte(now))
+                                                                .with(Sort.by(Sort.Direction.ASC, "nextDeliveryTimestamp"))
+                                                                .limit(1),
+                                                           DurableQueuedMessage.class,
+                                                           this.sharedQueueCollectionName);
+
+                                                   return new QueuedMessageCounts(operation.queueName,
+                                                                                  numberOfQueuedMessages,
+                                                                                  numberOfQueuedDeadLetterMessages,
+                                                                                  beingDelivered,
+                                                                                  oldestReady != null && oldestReady.getNextDeliveryTimestamp() != null
+                                                                                  ? oldestReady.getNextDeliveryTimestamp().toInstant()
+                                                                                  : null);
                                                })
                 .proceed();
     }

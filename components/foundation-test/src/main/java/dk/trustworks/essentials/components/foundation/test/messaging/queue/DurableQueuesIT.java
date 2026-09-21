@@ -131,7 +131,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
 
         // Then
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(3);
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, 3, 0));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(3);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(0);
 
         var queuedMessages = durableQueues.getQueuedMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 20);
         assertThat(queuedMessages).hasSize(3);
@@ -198,7 +199,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         // Then
         assertThat(numberOfDeletedMessages).isEqualTo(3);
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0);
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, 0, 0));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(0);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(0);
     }
 
     @Test
@@ -224,7 +226,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
 
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(3);
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(0);
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, 3, 0));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(3);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(0);
         var recordingQueueMessageHandler = new RecordingQueuedMessageHandler();
 
         // When
@@ -246,7 +249,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         Awaitility.waitAtMost(Duration.ofSeconds(2))
                   .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0));
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(0);
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, 0, 0));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(0);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(0);
 
         var messages = new ArrayList<>(recordingQueueMessageHandler.messages);
         assertThat(messages.get(0)).usingRecursiveComparison().isEqualTo(message1);
@@ -273,7 +277,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
 
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0);
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(1);
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, 0, 1));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(0);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(1);
         var deadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 20);
         assertThat(deadLetterMessages).hasSize(1);
         assertThat((CharSequence) deadLetterMessages.get(0).getId()).isEqualTo(idMsg1);
@@ -337,7 +342,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         var deadLetterMessages = durableQueues.getDeadLetterMessages(queueName, DurableQueues.QueueingSortOrder.ASC, 0, 20);
         assertThat(deadLetterMessages).hasSize(1);
         assertThat(deadLetterMessages.get(0).getPayload()).isEqualTo(key1Messages.get(2));
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, expectedQueueMessageCount, 1));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(expectedQueueMessageCount);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(1);
         var key1Msg3EntryId = deadLetterMessages.get(0).getId();
 
         // When
@@ -579,7 +585,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         var message1Id = withDurableQueue(() -> durableQueues.queueMessage(queueName, message1));
 
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(1);
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, 1, 0));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(1);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(0);
 
         AtomicInteger deliveryCountForMessage1 = new AtomicInteger();
         var           totalExpectedDeliveries  = 1 + 5 + 3;
@@ -644,7 +651,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0); // Message was delivered
         var deadLetterMessage = withDurableQueue(() -> durableQueues.getDeadLetterMessage(message1Id));
         assertThat(deadLetterMessage).isEmpty();
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, 0, 0));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(0);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(0);
 
 
         consumer.cancel();
@@ -769,7 +777,8 @@ public abstract class DurableQueuesIT<DURABLE_QUEUES extends DurableQueues, UOW 
         Awaitility.waitAtMost(Duration.ofSeconds(2))
                   .untilAsserted(() -> assertThat(durableQueues.getTotalMessagesQueuedFor(queueName)).isEqualTo(0));
         assertThat(durableQueues.getTotalDeadLetterMessagesQueuedFor(queueName)).isEqualTo(0);
-        assertThat(durableQueues.getQueuedMessageCountsFor(queueName)).isEqualTo(new QueuedMessageCounts(queueName, 0, 0));
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedMessages()).isEqualTo(0);
+        assertThat(durableQueues.getQueuedMessageCountsFor(queueName).numberOfQueuedDeadLetterMessages()).isEqualTo(0);
 
 
         assertThat(msgHandler.messages.get(0).getLastDeliveryError()).isNull();
