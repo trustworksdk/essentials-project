@@ -19,6 +19,7 @@ import dk.trustworks.essentials.components.foundation.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.operations.*;
 import org.slf4j.*;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
@@ -312,10 +313,16 @@ public class CentralizedMessageFetcher implements Lifecycle {
 
         var registration = consumerRegistrations.get(queueName);
         if (registration == null) {
-            log.warn("[{}] Received message for unregistered consumer - will retry the message", queueName);
+            // The consumer was cancelled between the poll that claimed this message and now. There is no
+            // RedeliveryPolicy left to take a delay from, so retry after one polling interval — by which time
+            // either a consumer has registered again or the message is simply claimed and released once more.
+            log.warn("[{}] Received message {} for unregistered consumer - will retry the message in {} ms",
+                     queueName,
+                     message.getId(),
+                     pollingIntervalMs);
             durableQueues.retryMessage(message.getId(),
                                        null,
-                                       registration.consumer.getRedeliveryPolicy().initialRedeliveryDelay);
+                                       Duration.ofMillis(pollingIntervalMs));
             return;
         }
 
