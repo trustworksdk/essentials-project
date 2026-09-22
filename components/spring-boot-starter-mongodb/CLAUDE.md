@@ -37,6 +37,7 @@ Beans wired (in order of dependency):
 12. Measurement interceptors: `RecordExecutionTime*Interceptor` for queues, command bus, message handlers
 13. `ReactiveHandlersBeanPostProcessor` — auto-registers `@EventHandler`/`@CommandHandler` beans; disable via `essentials.reactive-bean-post-processor-enabled=false`
 14. `SpringBootDevToolsClassLoaderChangeContextRefreshedListener` — conditional on DevTools presence; resets Jackson classloader on context refresh
+15. `DurableQueuesHealthIndicator` — dead-letter counts on `/actuator/health` under `durableQueues`; on by default, `UP` until `essentials.durable-queues.health.dead-letter-threshold` is set positive
 
 ## Test Structure
 
@@ -63,4 +64,5 @@ No tests in this module (pure auto-configuration glue). Integration tests live i
 - Collection names (`fencedLocksCollectionName`, `sharedQueueCollectionName`) are used verbatim in MongoDB queries → `MongoUtil#checkIsValidCollectionName` is first-line defense only; never source these from untrusted input.
 - `SpringBootDevToolsClassLoaderChangeContextRefreshedListener` resets the Jackson `ObjectMapper` classloader on every `ContextRefreshedEvent` — relevant only in dev; production classloaders are stable.
 - `UnitOfWorkControllingCommandBusInterceptor` is added to command bus automatically unless user's interceptor list already contains an instance of that class — checked by `isAssignableFrom`, so subclassing also suppresses auto-add.
+- **This starter registers `DurableQueuesHealthIndicator` but none of the queue observability wiring the Postgres starter has** — no `QueueStatisticsRegistry`, no `StatisticsCollectingDurableQueueMessageObserver`, no `MicrometerDurableQueueMessageObserver`, and `durableQueues` here does not collect `List<DurableQueueMessageObserver>` beans. The health indicator works anyway because it reads storage counts through the `DurableQueues` SPI and needs no observer. Closing the rest of the gap is outstanding work, not a decision.
 - `essentials.reactive.event-bus-parallel-threads` defaults to `min(availableProcessors, 4)` — on high-core machines this caps throughput; tune explicitly for high-volume event processing.

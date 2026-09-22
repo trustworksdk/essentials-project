@@ -18,6 +18,7 @@ package dk.trustworks.essentials.components.boot.autoconfigure.postgresql;
 
 import dk.trustworks.essentials.components.foundation.fencedlock.api.DBFencedLockApi;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.DurableQueuesApi;
+import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
 import dk.trustworks.essentials.components.foundation.postgresql.api.PostgresqlQueryStatisticsApi;
 import dk.trustworks.essentials.components.foundation.scheduler.api.*;
 import dk.trustworks.essentials.components.foundation.ttl.TTLJob;
@@ -26,12 +27,14 @@ import dk.trustworks.essentials.shared.security.EssentialsSecurityProvider;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.jdbc.autoconfigure.*;
+import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.test.context.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.*;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -110,6 +113,42 @@ public class StarterAutoConfigurationIT {
                 .run(ctx -> {
                     EssentialsComponentsProperties props = ctx.getBean(EssentialsComponentsProperties.class);
                     assertThat(props.isImmutableJacksonModuleEnabled()).isTrue();
+                });
+    }
+
+    @Test
+    void the_dead_letter_health_indicator_is_registered_by_default_and_reports_up() {
+        contextRunner.run(ctx -> {
+            assertThat(ctx).hasSingleBean(DurableQueuesHealthIndicator.class);
+
+            var health = ctx.getBean(DurableQueuesHealthIndicator.class).health();
+            assertThat(health.getStatus())
+                    .as("no threshold is configured by default, so the indicator must never be able to fail a probe")
+                    .isEqualTo(Status.UP);
+            assertThat(health.getDetails()).containsEntry(DurableQueuesHealthIndicator.DETAIL_DEAD_LETTER_THRESHOLD, 0L)
+                                           .containsKey(DurableQueuesHealthIndicator.DETAIL_TOTAL_DEAD_LETTER_MESSAGES);
+        });
+    }
+
+    @Test
+    void the_dead_letter_health_indicator_can_be_turned_off() {
+        contextRunner
+                .withPropertyValues("management.health.durable-queues.enabled=false")
+                .run(ctx -> assertThat(ctx).doesNotHaveBean(DurableQueuesHealthIndicator.class));
+    }
+
+    @Test
+    void the_dead_letter_threshold_is_bound_from_properties() {
+        contextRunner
+                .withPropertyValues("essentials.durable-queues.health.dead-letter-threshold=25",
+                                    "essentials.durable-queues.health.cache-time-to-live=1s")
+                .run(ctx -> {
+                    var health = ctx.getBean(EssentialsComponentsProperties.class).getDurableQueues().getHealth();
+                    assertThat(health.getDeadLetterThreshold()).isEqualTo(25L);
+                    assertThat(health.getCacheTimeToLive()).isEqualTo(Duration.ofSeconds(1));
+
+                    assertThat(ctx.getBean(DurableQueuesHealthIndicator.class).health().getDetails())
+                            .containsEntry(DurableQueuesHealthIndicator.DETAIL_DEAD_LETTER_THRESHOLD, 25L);
                 });
     }
 }

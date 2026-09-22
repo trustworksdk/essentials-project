@@ -308,10 +308,33 @@ construction — a timing switch must not turn an incident counter off. Tags: `q
 **Piece 2 — the log line.** Specified by D1b above, and emitted from the classifier that made the decision rather
 than from each consumer.
 
-**Piece 3 — the health indicator: off by default.** A dead letter is a business-process incident, not an
-availability one. On by default, one poison message fails a readiness probe and, under Kubernetes, cycles pods
-that are working correctly. The counter is what an operator should alert on. `CdcHealthIndicator` is the precedent
-for the shape when someone enables it.
+**Piece 3 — the health indicator: registered by default, but unable to report `DOWN` until asked.** *(Revised
+during implementation; the original text read "off by default", and the reasoning below is why it changed.)*
+
+The objection to shipping it on was never that dead letters should be invisible — it was that a
+`HealthIndicator` is not only a signal. It contributes to the composite `/actuator/health` status, and
+deployments routinely point a Kubernetes readiness or liveness probe at that endpoint, so one poison message
+would cycle pods that are working correctly and remove the consumers that would drain the queue behind it.
+
+That objection is answered by the status rule, not by the registration. `DurableQueuesHealthIndicator` is
+registered by default and puts per-queue dead-letter counts in the payload, but reports `UP` regardless of
+those counts until `essentials.durable-queues.health.dead-letter-threshold` is set to a positive number. It is
+exactly the `CdcHealthIndicator` shape: that indicator reports `DOWN` for a failed CDC subscription only when
+the operator declared CDC mandatory with `CdcMode.REQUIRE`. Visible to everyone; actuating only for those who
+asked.
+
+Three further choices, each of which could have gone the other way:
+
+- **The threshold is per queue, not per total.** A total makes the number an operator picks mean something
+  different in an application with more queues.
+- **The result is cached** (`…health.cache-time-to-live`, default 10s). One query for the queue names plus one
+  count per queue, multiplied by probe frequency and instance count, is real database load for a number that
+  barely moves between probes.
+- **A read failure is `UNKNOWN`, not `DOWN`.** An unreachable database is not a statement about dead letters
+  and is already the `DataSource` indicator's subject; reporting `DOWN` would fail probes twice for one fault.
+
+The Micrometer counter from piece 1 remains the thing to alert on: it cannot actuate anything, so it needs no
+threshold and no opt-in.
 
 ### D4 — Document the interaction
 
@@ -433,7 +456,7 @@ dependency.
 | 9 | **§5.1** — retire `TransactionalMode` | After 4; rewrites the same methods |
 | 10 | Index-scan measurement on the four surviving indexes; remove what takes zero scans | After 2 |
 | 11 | OpenAPI v2 baseline, client regeneration, admin UI wording, migration guide | Release |
-| 12 | **D3 piece 3** — health indicator, off by default | Demand |
+| 12 | **D3 piece 3** — health indicator, registered by default, `DOWN` only above an opt-in per-queue threshold | Done |
 | — | **Deferred:** durable statistics sink, `retryIndefinitelyOn(…)` | Additive whenever wanted |
 
 Steps 1, 2 and 5 are independent of each other.
@@ -449,7 +472,7 @@ Steps 1, 2 and 5 are independent of each other.
 | 3 | D2: honour the "no matter how many times" promise, or keep the cap? | **Keep the cap**, fix the docs. `retryIndefinitelyOn(…)` deferred |
 | 4 | Is `ClassCastException` overridable by a `RETRY` verdict? | **Yes** |
 | 5 | Examine the middle of the cause chain? | **Yes, with D1**, with the log line as mandatory mitigation |
-| 6 | Does a dead letter affect health? | **Off by default**; the Micrometer counter is the alertable signal |
+| 6 | Does a dead letter affect health? | **Visible by default, actuating only on request.** The indicator is registered by default and reports the counts; it can only report `DOWN` once `essentials.durable-queues.health.dead-letter-threshold` is set positive, per queue. The Micrometer counter remains the alertable signal, because it cannot fail a probe |
 | 7 | Build a durable statistics sink? | **Deferred, not rejected** — additive on the observer whenever wanted |
 | 8 | Target release | **0.60**, alongside breaking changes in many other modules |
 
@@ -636,6 +659,11 @@ Three pieces, in increasing order of intrusiveness:
    `DOWN`/degraded above a configurable threshold. `CdcHealthIndicator` is the precedent. Off by default
    because a dead letter is a business-process incident rather than an availability one, and a demo app
    should not go unhealthy for one poison message.
+
+   > *Superseded — see §4 D3 piece 3.* As shipped, the indicator is registered by default and reports `UP`
+   > regardless of the counts until a per-queue threshold is configured. The concern this paragraph raises is
+   > about the *status*, not the registration, and moving the opt-in to the threshold answers it while still
+   > making the counts visible to everyone.
 
 #### Tests
 

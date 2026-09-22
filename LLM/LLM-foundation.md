@@ -353,6 +353,29 @@ not turn an incident counter off. This is the counter to alert on; the pre-exist
 `essentials.messaging.durable_queues.mark_as_dead_letter_message` timer measures how long the marking took and
 carries no reason.
 
+**Dead-letter health indicator.** `DurableQueuesHealthIndicator` reports per-queue dead-letter counts under
+`durableQueues` on `/actuator/health`. Both Spring Boot starters register it by default.
+
+```properties
+# Reports UP regardless of the counts unless this is set to a positive number
+essentials.durable-queues.health.dead-letter-threshold=100
+# How long a computed result is reused before the counts are read again (default 10s)
+essentials.durable-queues.health.cache-time-to-live=10s
+# Do not register the indicator at all
+management.health.durable-queues.enabled=false
+```
+
+⚠️ **The default never reports `DOWN`, and that is the point.** A `HealthIndicator` contributes to the
+composite `/actuator/health` status, which readiness and liveness probes are routinely pointed at — so an
+indicator that went `DOWN` on the first dead letter would take working pods out of service, or restart them,
+leaving fewer consumers to drain the queue behind the poison message. Set a threshold only if a queue reaching
+that count really does mean the instance should stop taking traffic. This is the same rule `CdcHealthIndicator`
+follows with `CdcMode.REQUIRE`. To alert without touching a probe, use the Micrometer counter above.
+
+The threshold applies **per queue**, not to the total, so the number does not silently mean something else in
+an application with more queues. A failure reading the counts reports `UNKNOWN`, not `DOWN` — that is the
+`DataSource` indicator's job, and `UNKNOWN` does not drag the aggregated status down on its own.
+
 ⚠️ **`QueueStatisticsRegistry` is per-JVM and resets on restart.** The queued and dead-letter counts from
 `getQueuedMessageCountsFor` are cluster-wide. Do not present them as one set of numbers — see
 `ApiQueueStatistics`, which keeps the two halves apart for exactly this reason.

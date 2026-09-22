@@ -112,6 +112,15 @@
             <version>${spring-boot.version}</version>
             <optional>true</optional>
         </dependency>
+        <!-- Spring Boot 4 moved the health contributor API out of spring-boot-actuator-autoconfigure into the
+             separate spring-boot-health module. Only DurableQueuesDeadLetterHealthIndicator needs it, and only
+             the Spring Boot starters register that, so it is optional in the same way Micrometer is. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-health</artifactId>
+            <version>${spring-boot.version}</version>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>

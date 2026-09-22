@@ -37,6 +37,7 @@ import dk.trustworks.essentials.components.foundation.lifecycle.*;
 import dk.trustworks.essentials.components.foundation.messaging.RedeliveryPolicy;
 import dk.trustworks.essentials.components.foundation.messaging.eip.store_and_forward.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.*;
+import dk.trustworks.essentials.components.foundation.messaging.queue.health.DurableQueuesHealthIndicator;
 import dk.trustworks.essentials.components.foundation.messaging.queue.micrometer.MicrometerDurableQueueMessageObserver;
 import dk.trustworks.essentials.components.foundation.messaging.queue.observability.*;
 import dk.trustworks.essentials.components.foundation.messaging.queue.api.*;
@@ -71,6 +72,8 @@ import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.*;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.health.autoconfigure.contributor.ConditionalOnEnabledHealthIndicator;
+import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.event.*;
@@ -343,6 +346,25 @@ public class EssentialsComponentsConfiguration {
     public MicrometerDurableQueueMessageObserver micrometerDurableQueueMessageObserver(MeterRegistry meterRegistry,
                                                                                         EssentialsComponentsProperties properties) {
         return new MicrometerDurableQueueMessageObserver(meterRegistry, properties.getTracingProperties().getModuleTag());
+    }
+
+    /**
+     * Surfaces dead-letter counts on {@code /actuator/health}. Registered by default, and reports {@code UP}
+     * regardless of the counts until {@code essentials.durable-queues.health.dead-letter-threshold} is set to a
+     * positive number — see {@link DurableQueuesHealthIndicator} for why that default is not timidity.
+     * <p>
+     * Turn it off entirely with {@code management.health.durable-queues.enabled=false}.
+     */
+    @Bean
+    @ConditionalOnClass(HealthIndicator.class)
+    @ConditionalOnEnabledHealthIndicator("durablequeues")
+    @ConditionalOnMissingBean(DurableQueuesHealthIndicator.class)
+    public DurableQueuesHealthIndicator durableQueuesHealthIndicator(DurableQueues durableQueues,
+                                                                                         EssentialsComponentsProperties properties) {
+        var health = properties.getDurableQueues().getHealth();
+        return new DurableQueuesHealthIndicator(durableQueues,
+                                                          health.getDeadLetterThreshold(),
+                                                          health.getCacheTimeToLive());
     }
 
     @Bean

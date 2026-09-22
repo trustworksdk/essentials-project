@@ -263,9 +263,62 @@ off.
 
 **What to do:** alert on this counter. Nothing needs configuring to get it.
 
-A health indicator reporting dead letters is **not** included. A dead letter is a business-process incident,
-not an availability one — on by default, one poison message fails a readiness probe and, under Kubernetes,
-cycles pods that are working correctly.
+### A dead-letter health indicator, which cannot fail a probe unless you ask it to
+
+Both Spring Boot starters now register a `DurableQueuesHealthIndicator`, which reports dead-letter
+counts under `durableQueues` on `/actuator/health`:
+
+```json
+{
+  "status": "UP",
+  "details": {
+    "deadLetterThreshold": 0,
+    "totalDeadLetterMessages": 3,
+    "deadLetterMessagesPerQueue": { "OrdersQueue": 3 },
+    "queuesAtOrAboveThreshold": []
+  }
+}
+```
+
+**It reports `UP` no matter how many dead letters there are, until you opt in.** This is the important part.
+A `HealthIndicator` is not only a signal — it contributes to the composite `/actuator/health` status, and
+plenty of deployments point a Kubernetes readiness or liveness probe straight at that endpoint. An indicator
+that went `DOWN` on the first dead letter would take working pods out of service, or restart them, because one
+message could not be handled — leaving fewer consumers to drain the queue behind it.
+
+To make it able to report `DOWN`, set a threshold:
+
+```properties
+# A single queue reaching 100 dead letters means this instance should stop taking traffic
+essentials.durable-queues.health.dead-letter-threshold=100
+```
+
+The threshold applies **per queue**, not to the total, so the number you choose does not quietly mean
+something different in an application with more queues. `queuesAtOrAboveThreshold` names the queues that
+caused a `DOWN`.
+
+This follows the same rule as `CdcHealthIndicator`, which reports `DOWN` for a failed CDC subscription only
+when the operator declared CDC mandatory with `CdcMode.REQUIRE`.
+
+Two further settings:
+
+| Property | Default | Meaning |
+|---|---|---|
+| `essentials.durable-queues.health.dead-letter-threshold` | `0` | Per-queue dead-letter count at which the status becomes `DOWN`. `0` means never |
+| `essentials.durable-queues.health.cache-time-to-live` | `10s` | How long a computed result is reused before the counts are read again |
+| `management.health.durable-queues.enabled` | `true` | Set to `false` to not register the indicator at all |
+
+The cache exists because computing the answer costs one query for the queue names plus one count per queue.
+Probes poll on a timer from every instance, so without it the added database load would scale with probe
+frequency for a number that barely changes between probes.
+
+If the counts cannot be read — an unreachable database, say — the indicator reports `UNKNOWN` rather than
+`DOWN`. That is not a statement about dead letters, and Spring Boot's own `DataSource` indicator already
+reports it; `UNKNOWN` does not drag the aggregated status down on its own.
+
+**What to do:** nothing, to get the visibility. Set a threshold only if a queue reaching a given dead-letter
+count really does mean the instance should stop receiving traffic. To alert on dead letters without touching
+any probe, use the Micrometer counter above instead.
 
 ### The 0.40.x `forRemoval` constructors are gone from the queue modules
 

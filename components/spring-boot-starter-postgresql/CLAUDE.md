@@ -35,6 +35,7 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 16. Security defaults: `NoAccessSecurityProvider` + `NoAccessAuthenticatedUser` — override in app to grant real access
 17. Micrometer interceptors: `RecordExecutionTimeMessageHandlerInterceptor`, `RecordExecutionTimeCommandBusInterceptor`, `RecordExecutionTimeDurableQueueInterceptor`
 18. Tracing: `DurableQueuesMicrometerTracingInterceptor` + `DurableQueuesMicrometerInterceptor` — conditional on `management.tracing.enabled=true`
+19. `DurableQueuesHealthIndicator` — dead-letter counts on `/actuator/health` under `durableQueues`; on by default, `UP` until an opt-in threshold is set
 
 ## Test Structure
 
@@ -63,4 +64,5 @@ Single package: `dk.trustworks.essentials.components.boot.autoconfigure.postgres
 - **Spring Boot DevTools classloader**: `SpringBootDevToolsClassLoaderChangeContextRefreshedListener` updates the Jackson `TypeFactory` classloader on hot reload — present only when DevTools on classpath. Without it, hot reload breaks deserialization.
 - **Centralized message fetcher on by default** (`useCentralizedMessageFetcher=true`): `pollingDelayIntervalIncrementFactor` / `maxPollingInterval` only apply when fetcher disabled.
 - **`immutable-jackson-module-enabled` default is `true` in properties class** but the `@ConditionalOnProperty` requires `havingValue="true"` with no `matchIfMissing` — bean created only if Objenesis on classpath AND property explicitly set to true.
+- **The health indicator's enable key is `management.health.durable-queues.enabled`, and that only works because the annotation name is lowercase.** `@ConditionalOnEnabledHealthIndicator` looks the key up with the *literal* name it is given, and a camelCase lookup does not resolve a hyphenated source key even with `ConfigurationPropertySources` attached — only a lowercase lookup does. Hence `@ConditionalOnEnabledHealthIndicator("durablequeues")`, matching Boot's own `("diskspace")`. The bean method name is separately load-bearing: `HealthContributorNameGenerator` strips the `HealthIndicator` suffix, so `durableQueuesHealthIndicator` is what puts the entry under `durableQueues` in the payload. Rename either and the two silently stop agreeing.
 - **`EssentialsScheduler` is enabled by default** (`SchedulerProperties.enabled=true`), but bean creation requires `essentials.scheduler.enabled=true` property — property default in Spring context is absent, so scheduler does NOT auto-start without explicit config.
